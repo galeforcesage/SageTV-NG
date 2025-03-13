@@ -62381,6 +62381,23 @@
             </Panel>
            </Conditional>
           </Action>
+          <Action Name="&quot;REM Auto check for SageTV Updates?&quot;" Sym="OPUS4B-645">
+           <Panel Name="Auto check for SageTV Updates" Sym="OPUS4B-646">
+            <Text Name="Automatically check GitHub for SageTV Update Releases" Sym="OPUS4B-647"/>
+            <Item Name="Toggle" Sym="OPUS4B-648">
+             <Action Name="If( GetServerProperty(&quot;wizard/githubReleaseCheckDisabled&quot;, false), &quot;Disabled&quot;, &quot;Enabled&quot; )" Sym="OPUS4B-649">
+              <Text Name="" Sym="OPUS4B-650"/>
+             </Action>
+             <Action Name="SetServerProperty(&quot;wizard/githubReleaseCheckDisabled&quot;, !GetServerProperty(&quot;wizard/githubReleaseCheckDisabled&quot;, false))" Sym="OPUS4B-651">
+              <Action Name="Refresh()" Sym="OPUS4B-652"/>
+             </Action>
+             <Attribute Name="HelpText" Sym="OPUS4B-653">
+              <Value>"Choose whether to periodically check GitHub for newer SageTV releases."</Value>
+             </Attribute>
+            </Item>
+            <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+           </Panel>
+          </Action>
           <Action Name="&quot;REM Sync System Clock.&quot;" Sym="OPUS4A-211260">
            <Conditional Name="!IsEmbeddedSystem()" Sym="OPUS4A-211261">
             <Panel Name="Sync System Clock" Sym="BASE-72721">
@@ -81060,6 +81077,21 @@
             <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
            </Panel>
           </Conditional>
+          <Panel Name="Extra Schedules Direct EPG Options" Sym="OPUS4B-568">
+           <Text Name="Extra Schedules Direct EPG Options" Sym="OPUS4B-569">
+            <AnchorX>0.0</AnchorX>
+            <AnchorY>0.5</AnchorY>
+            <FixedWidth>1.0</FixedWidth>
+            <Insets>0.0,0.0,0.0,0.01</Insets>
+            <AutosizeText>false</AutosizeText>
+            <WrapText>true</WrapText>
+            <TextAlignment>0.5</TextAlignment>
+            <TextShadow>true</TextShadow>
+            <DisableFontScaling>false</DisableFontScaling>
+            <IgnoreThemeProps>true</IgnoreThemeProps>
+           </Text>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
           <Panel Name="Use Alternative Schedules Direct Channel Logos" Sym="ZCMRJ-4057">
            <Text Name="Enable the use of alternative Schedules Direct channel logos when available." Sym="ZCMRJ-4058"/>
            <Item Name="Configure" Sym="ZCMRJ-4059">
@@ -81104,6 +81136,115 @@
             </Action>
             <Attribute Name="HelpText" Sym="ZCMRJ-4064">
              <Value>"Choose whether Schedules Direct will always use the default channel logos or alternative channel logos when available."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="Bypass Schedules Direct program images" Sym="OPUS4B-573">
+           <Text Name="Enable use of Program images from Schedules Direct" Sym="OPUS4B-574"/>
+           <Item Name="Configure" Sym="OPUS4B-576">
+            <Action Name="If( GetServerProperty(&quot;sdepg_core/bypassProgramImages&quot;, false), &quot;No&quot;, &quot;Yes&quot; )" Sym="OPUS4B-578">
+             <Text Name="" Sym="OPUS4B-579"/>
+            </Action>
+            <Action Name="SetServerProperty(&quot;sdepg_core/bypassProgramImages&quot;, !GetServerProperty(&quot;sdepg_core/bypassProgramImages&quot;, false))" Sym="OPUS4B-582">
+             <Action Name="Refresh()" Sym="OPUS4B-583"/>
+            </Action>
+            <Attribute Name="HelpText" Sym="OPUS4B-586">
+             <Value>"Choose whether Schedules Direct will download links to Program images during EPG updates."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="Bypass Schedules Direct celebrity images" Sym="OPUS4B-571">
+           <Text Name="Enable use of Celebrity images from Schedules Direct" Sym="OPUS4B-575"/>
+           <Item Name="Configure" Sym="OPUS4B-577">
+            <Action Name="If( GetServerProperty(&quot;sdepg_core/bypassCelebrityImages&quot;, false), &quot;No&quot;, &quot;Yes&quot; )" Sym="OPUS4B-580">
+             <Text Name="" Sym="OPUS4B-581"/>
+            </Action>
+            <Action Name="SetServerProperty(&quot;sdepg_core/bypassCelebrityImages&quot;, !GetServerProperty(&quot;sdepg_core/bypassCelebrityImages&quot;, false))" Sym="OPUS4B-584">
+             <Action Name="Refresh()" Sym="OPUS4B-585"/>
+            </Action>
+            <Attribute Name="HelpText" Sym="OPUS4B-587">
+             <Value>"Choose whether Schedules Direct will download links to Celebrity images during EPG updates."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="Enable Schedules Direct EPG Updates" Sym="OPUS4B-590">
+           <Text Name="Enable Schedules Direct EPG Updates" Sym="OPUS4B-591"/>
+           <Item Name="Configure" Sym="OPUS4B-592">
+            <Action Name="If( GetServerProperty(&quot;sdepg_core/bypassEPGUpdates&quot;, false), &quot;No - DISABLED&quot;, &quot;Yes&quot; )" Sym="OPUS4B-593">
+             <Text Name="" Sym="OPUS4B-594"/>
+            </Action>
+            <Action Name="SetServerProperty(&quot;sdepg_core/bypassEPGUpdates&quot;, !GetServerProperty(&quot;sdepg_core/bypassEPGUpdates&quot;, false))" Sym="OPUS4B-595">
+             <Action Name="Refresh()" Sym="OPUS4B-596"/>
+            </Action>
+            <Attribute Name="HelpText" Sym="OPUS4B-597">
+             <Value>"Choose whether Schedules Direct will perform EPG updates. IF DISABLED, YOUR EPG LISTINGS WILL NOT UPDATE!"</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="Schedules Direct EPG Update Hour" Sym="OPUS4B-599">
+           <Text Name="Schedules Direct EPG Update Hour" Sym="OPUS4B-600"/>
+           <Item Name="Configure" Sym="OPUS4B-601">
+            <Action Name="&quot;REM Display the time of EPG updates, if it is enabled&quot;" Sym="OPUS4B-602">
+             <Conditional Name="GetServerProperty(&quot;sdepg_core/bypassEPGUpdates&quot;, false)" Sym="OPUS4B-603">
+              <Branch Name="true" Sym="OPUS4B-604">
+               <Text Name="DISABLED" Sym="OPUS4B-607"/>
+              </Branch>
+              <Branch Name="else" Sym="OPUS4B-605">
+               <Conditional Name="GetServerProperty(&quot;wizard/scheduled_maintenance&quot;, false)" Sym="OPUS4B-608">
+                <Branch Name="true" Sym="OPUS4B-609">
+                 <Action Name="&quot;Hour &quot; + GetServerProperty(&quot;wizard/scheduled_maintenance_offset&quot;, 1)" Sym="OPUS4B-613">
+                  <Text Name="" Sym="OPUS4B-614"/>
+                 </Action>
+                </Branch>
+                <Branch Name="else" Sym="OPUS4B-610">
+                 <Text Name="Automatic" Sym="OPUS4B-611"/>
+                </Branch>
+               </Conditional>
+              </Branch>
+             </Conditional>
+            </Action>
+            <Action Name="&quot;REM Configure the time, if Schedules Direct EPG updates are enabled.&quot;" Sym="OPUS4B-615">
+             <Conditional Name="GetServerProperty(&quot;sdepg_core/bypassEPGUpdates&quot;, false)" Sym="OPUS4B-617">
+              <Branch Name="true" Sym="OPUS4B-618">
+               <Action Name="&quot;REM EPG updates are disabled. Do a lot of nothing.&quot;" Sym="OPUS4B-620"/>
+              </Branch>
+              <Branch Name="else" Sym="OPUS4B-619">
+               <Action Name="&quot;REM Set up the current value before asking what it should be changed to&quot;" Sym="OPUS4B-628">
+                <Action Name="OldNum = If( GetServerProperty(&quot;wizard/scheduled_maintenance&quot;, false), GetServerProperty(&quot;wizard/scheduled_maintenance_offset&quot;, 1), 0)" Sym="OPUS4B-625">
+                 <Action Name="NewNum = OldNum" Sym="OPUS4B-643">
+                  <OptionsMenu Ref="5367" Name="GetNewNum (NonNegative..."/>
+                  <Action Name="NewNum = If( NewNum &gt; 23, OldNum, If( NewNum &lt; 1, 0, NewNum) )" Sym="OPUS4B-627">
+                   <Conditional Name="OldNum != NewNum" Sym="OPUS4B-644">
+                    <Conditional Name="NewNum" Sym="OPUS4B-629">
+                     <Branch Name="0" Sym="OPUS4B-630">
+                      <Action Name="SetServerProperty(&quot;wizard/scheduled_maintenance&quot;, false)" Sym="OPUS4B-632">
+                       <Action Name="SetServerProperty(&quot;wizard/scheduled_maintenance_offset&quot;, 0)" Sym="OPUS4B-633"/>
+                      </Action>
+                     </Branch>
+                     <Branch Name="else" Sym="OPUS4B-631">
+                      <Action Name="SetServerProperty(&quot;wizard/scheduled_maintenance&quot;, true)" Sym="OPUS4B-638">
+                       <Action Name="SetServerProperty(&quot;wizard/scheduled_maintenance_offset&quot;, NewNum)" Sym="OPUS4B-639"/>
+                      </Action>
+                     </Branch>
+                    </Conditional>
+                    <Action Name="Refresh()" Sym="OPUS4B-636"/>
+                   </Conditional>
+                  </Action>
+                 </Action>
+                </Action>
+               </Action>
+              </Branch>
+             </Conditional>
+            </Action>
+            <Attribute Name="HelpText" Sym="OPUS4B-616">
+             <Value>"Choose what time of day the Schedules Direct EPG update will occur, or allow it to choose automatically."</Value>
+            </Attribute>
+            <Attribute Name="Title" Sym="OPUS4B-621">
+             <Value>"At what hour of the day should this system update its Schedules Direct EPG data?\nEnter 1-23 to choose an hour, or 0 to let the system decide when to update."</Value>
             </Attribute>
            </Item>
            <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
@@ -84538,12 +84679,6 @@
     </Branch>
    </Conditional>
   </Listener>
-  <Attribute Name="STVversionNumberX" Sym="BASE-54701">
-   <Value>"6.4.3.1"</Value>
-  </Attribute>
-  <Attribute Name="STVversionTextX" Sym="BASE-54702">
-   <Value>"May 13, 2008"</Value>
-  </Attribute>
   <Listener Name="" Sym="BASE-54703">
    <ListenerEvent>Watched</ListenerEvent>
    <Action Name="&quot;REM Test morphing from one dialog to another.&quot;" Sym="BASE-54704">
@@ -210089,7 +210224,7 @@
    <Value>"SageTV7"</Value>
   </Attribute>
   <Attribute Name="STVVersion" Sym="OPUS4A-179706">
-   <Value>"9.2.6.1"</Value>
+   <Value>"9.2.9.2"</Value>
   </Attribute>
  </Theme>
  <Theme ID="72659" Name="ShowPictureDialogTheme" Sym="OPUS4A-123643">
@@ -212663,8 +212798,8 @@
    <Action ID="31200" Name="&quot;REM Determine the STV version currently in use.&quot;" Sym="OPUS4-90073">
     <Action Name="&quot;REM Remember to check the STV variables under the Global theme when changing version info.&quot;" Sym="OPUS4A-177763"/>
     <Action Name="AddGlobalContext( &quot;STVversionNumber&quot;, GetSTVVersion() )" Sym="OPUS4-90076"/>
-    <Action Name="AddGlobalContext( &quot;STVversionText&quot;, &quot;Aug 13, 2021&quot; )" Sym="OPUS4-90077"/>
-    <Action Name="AddGlobalContext( &quot;ThisSTVSetVersionNum&quot;, &quot;2021081301&quot; )" Sym="OPUS4-90075">
+    <Action Name="AddGlobalContext( &quot;STVversionText&quot;, &quot;Mar 7, 2025&quot; )" Sym="OPUS4-90077"/>
+    <Action Name="AddGlobalContext( &quot;ThisSTVSetVersionNum&quot;, &quot;2025030701&quot; )" Sym="OPUS4-90075">
      <Action Name="DebugLog( &quot;ThisSTVSetVersionNum=&quot; + ThisSTVSetVersionNum + &quot;, STV File=&quot; + GetCurrentSTVFile() )" Sym="OPUS4-106549"/>
     </Action>
     <Action Name="&quot;REM Set the property defining which version is in use. Use the newer of the STV's number or the properties file number.&quot;" Sym="OPUS4-90078">
