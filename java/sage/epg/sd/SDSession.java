@@ -440,10 +440,10 @@ public abstract class SDSession
         //The token is good for 24 hours, and now includes the expiration time in UTC
         //the expiration should be the value of the JSON element
         tokenExpiration = tokenExpiryElement.getAsLong();
-        if(Sage.DBG && debugEnabled()) System.out.println("SDSession/authenticate: retreived token:" + token + " with passed expiry:" + tokenExpiration);
+        if(Sage.DBG && debugEnabled()) System.out.println("SDSession/authenticate: retrieved token:" + token + " with passed expiry:" + tokenExpiration);
     }else{
         tokenExpiration = (System.currentTimeMillis()/1000) + (Sage.MILLIS_PER_DAY/1000) / 2;
-        if(Sage.DBG && debugEnabled()) System.out.println("SDSession/authenticate: retreived token:" + token + " with calculated expiry:" + tokenExpiration);
+        if(Sage.DBG && debugEnabled()) System.out.println("SDSession/authenticate: retrieved token:" + token + " with calculated expiry:" + tokenExpiration);
     }
 
   }

@@ -409,7 +409,7 @@ compileJava.dependsOn updateBuildNumber
 sageJar.dependsOn cleanSageJar, classes, test
 miniclientJar.dependsOn clean, miniclientClasses, cleanMiniJar
 linuxMiniClientRelease.dependsOn miniclientJar
-//sageJar.finalizedBy restoreSageConstants
+sageJar.finalizedBy restoreSageConstants
 
 // Eclipse project setup
 eclipse {
