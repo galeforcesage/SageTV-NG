@@ -687,6 +687,9 @@ public final class EPG implements Runnable
           }
         }
         if(Sage.getBoolean("sdepg_core/bypassEPGUpdates", false)){
+            if(minWait==0){
+                minWait = MAINTENANCE_FREQ;  //wait 24 hours to check again as the user disabled the updates
+            }
             if (Sage.DBG) System.out.println("SD EPG Updates are disabled by sdepg_core/bypassEPGUpdates setting. Check again in " + (minWait/60000) + " minutes");
             if (minWait > 0)
             {

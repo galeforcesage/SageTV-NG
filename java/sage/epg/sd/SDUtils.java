@@ -113,10 +113,13 @@ public class SDUtils
       if (SDSession.debugEnabled())
       {
           SDSession.writeDebugLine("HTTP 403 received. Processing");
-          SDSession.writeDebugLine("HTTP 403 Disabling debug_sd_support.  Process will restart");
           if(Sage.getBoolean("debug_sd_support", false)){
+              SDSession.writeDebugLine("HTTP 403 Disabling debug_sd_support.  Process will restart");
               Sage.putBoolean("debug_sd_support", false);
-          }
+            }
+      }
+      if(Sage.getBoolean("debug_sd_support", false)){
+          Sage.putBoolean("debug_sd_support", false);
       }
 
       //stop processing
@@ -169,6 +172,23 @@ public class SDUtils
       {
         JsonElement codeElement = ((JsonObject) errorElement).get("code");
         int code = codeElement != null ? codeElement.getAsInt() : -1;
+        
+        if (code==2055){
+          if (SDSession.debugEnabled())
+          {
+              SDSession.writeDebugLine("HTTP 400 received with ERROR 2055. Disabling debug_sd_support.  Process will restart");
+          }
+          if(Sage.getBoolean("debug_sd_support", false)){
+              Sage.putBoolean("debug_sd_support", false);
+          }
+        }else if (code==4009){
+          if (SDSession.debugEnabled())
+          {
+              SDSession.writeDebugLine("HTTP 400 received with ERROR 4009. Process will restart");
+              //NEED TO ADD A WAIT
+              
+          }
+        }        
 
         SDErrors.throwErrorForCode(code);
       }

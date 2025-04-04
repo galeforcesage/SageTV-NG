@@ -158,6 +158,13 @@ public class SDSageSession extends SDSession
       // because another program is using the same account, so we try once to get the token back.
       if (retry && connection.getResponseCode() == 403)
       {
+      if (SDSession.debugEnabled())
+        {
+            SDSession.writeDebugLine("POST response 403 received. Skipping retry.");
+        }
+      //2025-03-28 jusjoken remove the retry as it used to be needed for expired tokens but since we get 
+      //           a new token if expired then this just causes an infinite loop of 403 errors
+      /*
         token = null;
       if (SDSession.debugEnabled())
         {
@@ -179,6 +186,7 @@ public class SDSageSession extends SDSession
               SDSession.writeDebugLine("POST retry after authenticate call. token = '" + token + "'");
           }
         return post(url, sendBytes, off, len, false);
+      */
       }
 
       // We can timeout just getting the InputStream.
@@ -229,6 +237,13 @@ public class SDSageSession extends SDSession
     // because another program is using the same account, so we try once to get the token back.
     if (retry && connection.getResponseCode() == 403)
     {
+      if (SDSession.debugEnabled())
+        {
+            SDSession.writeDebugLine("GET response 403 received. Skipping retry.");
+        }
+      //2025-03-28 jusjoken remove the retry as it used to be needed for expired tokens but since we get 
+      //           a new token if expired then this just causes an infinite loop of 403 errors
+      /*
       token = null;
       if (SDSession.debugEnabled())
         {
@@ -250,6 +265,7 @@ public class SDSageSession extends SDSession
             SDSession.writeDebugLine("GET retry after authenticate call. token = '" + token + "'");
         }
       return get(url, false);
+      */
     }
 
     try
