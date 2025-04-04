@@ -81,8 +81,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import static sage.epg.sd.SDErrors.ACCOUNT_DISABLED;
@@ -1775,7 +1773,7 @@ public class SDRipper extends EPGDataSource
                     break;
                   }
                 }
-
+                
                 // We have to do >= 500 programs because we could be anywhere from 500 to ~600. The
                 // limit is 5000 and a typical request is a little over 500 combined between several
                 // stations, so this should never be a problem. The most I have ever seen added for
@@ -1820,9 +1818,17 @@ public class SDRipper extends EPGDataSource
                       String removeSeries = SDUtils.getSeriesForEpisode(extID);
                       if (removeSeries != null) needSeriesDetails.remove(removeSeries);
                     }
+                    
+                    if (programDetail.getCode() == 6000){
+                      if (Sage.DBG) System.out.println("SDEPG 6000 ERROR: skipping id:" + programDetail.getProgramID());
+                      // Ensure we don't try to create an airing for this program.
+                      noProgramDetails.add(programDetail.getProgramID());
+                      continue;
+                    }
 
-                    if (schedule.getCode() != 0)
+                    if (programDetail.getCode() != 0)
                     {
+                      if (Sage.DBG) System.out.println("SDEPG NON ZERO ERROR " + programDetail.getProgramID() + " Error code:" + programDetail.getCode());
                       // Ensure we don't try to create an airing for this program.
                       noProgramDetails.add(programDetail.getProgramID());
                       continue;
@@ -2565,6 +2571,9 @@ public class SDRipper extends EPGDataSource
           break;
         case TOO_MANY_LOGINS:
           sage.msg.MsgManager.postMessage(sage.msg.SystemMessage.createSDTooManyLoginsMsg());
+          // Set this to an hour so we aren't too obnoxious about the authentication error messages
+          // and so we shouldn't accidentally lock the account out.
+          SDRipper.retryWait = Sage.time() + Sage.MILLIS_PER_HR;
           resetToken();
           break;
       }
@@ -3071,12 +3080,12 @@ public class SDRipper extends EPGDataSource
       } catch (SDException ex) {
           if (Sage.DBG)
           {
-            System.out.println("SDEPG invalid SD authentication - token reset so next call will get a new token");
+            System.out.println("SDEPG SDException. Invalid SD authentication - token reset so next call will get a new token: " + ex.getMessage());
           }
       } catch (IOException ex) {
           if (Sage.DBG)
           {
-            System.out.println("SDEPG invalid SD authentication - token reset so next call will get a new token");
+            System.out.println("SDEPG IOException. Invalid SD authentication - token reset so next call will get a new token: " + ex.getMessage());
           }
       }
       

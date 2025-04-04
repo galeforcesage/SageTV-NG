@@ -2,6 +2,9 @@
 
 ## Next
 
+## Version 9.2.10 (2025-04-04)
+* SD EPG changes to correct Error 6000, 4009 and some other login issues with SD
+
 ## Version 9.2.9 (2025-03-11)
 * Updated gradle script so that project could build in Netbeans
 * Updated the FFMPEGTranscoder to fallback to frame count instead of time to calculate progress
