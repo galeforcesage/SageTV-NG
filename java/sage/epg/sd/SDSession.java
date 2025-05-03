@@ -217,7 +217,7 @@ public abstract class SDSession
    *
    * @return The current token.
    */
-  public String getToken()
+  public synchronized String getToken()
   {
     return token;
   }
