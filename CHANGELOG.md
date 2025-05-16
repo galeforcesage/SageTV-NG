@@ -2,6 +2,9 @@
 
 ## Next
 
+## Version 9.2.11 (2025-05-15)
+* SD EPG changes to correct non-syncronized method causing use of old tokens
+
 ## Version 9.2.10 (2025-04-04)
 * SD EPG changes to correct Error 6000, 4009 and some other login issues with SD
 
