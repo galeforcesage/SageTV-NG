@@ -15,6 +15,8 @@
  */
 package sage.miniclient;
 
+import java.nio.Buffer;
+
 /**
  *
  * @author Narflex
@@ -1227,7 +1229,7 @@ public class DirectX9GFXCMD extends GFXCMD2
           {
             ImageLoadData ild = new ImageLoadData();
             ild.imageLoadBuff = java.nio.ByteBuffer.allocateDirect(width * height * 4);
-            ild.imageLoadBuff.clear();
+            ((Buffer)ild.imageLoadBuff).clear();
             ild.imageLoadBuffHandle = imghandle;
             ild.imageLoadBuffSize = new java.awt.Dimension(width, height);
             imageLoadBuffMap.put(new Integer(imghandle), ild);
@@ -1268,7 +1270,7 @@ public class DirectX9GFXCMD extends GFXCMD2
           }
           ImageLoadData ild = new ImageLoadData();
           ild.imageLoadBuff = java.nio.ByteBuffer.allocateDirect(width * height * 4);
-          ild.imageLoadBuff.clear();
+          ((Buffer)ild.imageLoadBuff).clear();
           ild.imageLoadBuffHandle = imghandle;
           ild.imageLoadBuffSize = new java.awt.Dimension(width, height);
           imageLoadBuffMap.put(new Integer(imghandle), ild);

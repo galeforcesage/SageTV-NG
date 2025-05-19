@@ -2,6 +2,9 @@
 
 ## Next
 
+## Version 9.2.12 (2025-05-18)
+* Fix for placeshifter on windows (also added optional logging)
+
 ## Version 9.2.11 (2025-05-15)
 * SD EPG changes to correct non-syncronized method causing use of old tokens
 
