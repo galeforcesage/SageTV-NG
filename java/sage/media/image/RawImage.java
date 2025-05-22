@@ -15,6 +15,8 @@
  */
 package sage.media.image;
 
+import java.nio.Buffer;
+
 /**
  *
  * @author Narflex
@@ -86,9 +88,9 @@ public class RawImage
   // For multithreading we need to give each caller a new buffer object to handle the positions; but share the same data
   public java.nio.ByteBuffer getROData()
   {
-    dataBuff.mark(); // GCJ needs this or it throws an exception
+    ((Buffer) dataBuff).mark(); // GCJ needs this or it throws an exception
     java.nio.ByteBuffer rv = dataBuff.asReadOnlyBuffer();
-    rv.rewind();
+    ((Buffer) rv).rewind();
     return rv;
   }
 

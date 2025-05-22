@@ -137,14 +137,27 @@ int APIENTRY WinMain(HINSTANCE hInstance,
 							(LPSTR)NULL		);
 
 	/*
-	 * Explicitly load jvm.dll by using the Windows Registry to locate the current version to use.
-	 */
+	* Optionally open a console window for debugging - dependent on "consolewin" in registry
+	*/
 	HKEY rootKey = HKEY_LOCAL_MACHINE;
-	char currVer[16];
 	HKEY myKey;
 	DWORD readType;
 	DWORD dwRead = 0;
 	DWORD hsize = sizeof(dwRead);
+	if (RegOpenKeyEx(rootKey, "Software\\Frey Technologies\\Common", 0, KEY_QUERY_VALUE, &myKey) == ERROR_SUCCESS)
+        {
+                if (RegQueryValueEx(myKey, "consolewin", 0, &readType, (LPBYTE)&dwRead, &hsize) == ERROR_SUCCESS)
+                {
+                        if (dwRead)
+                                AllocConsole();
+                }
+                RegCloseKey(myKey);
+        }
+
+	/*
+	 * Explicitly load jvm.dll by using the Windows Registry to locate the current version to use.
+	 */
+	char currVer[16];
 	hsize = sizeof(currVer);
 	HMODULE exeMod = GetModuleHandle(NULL);
 	LPTSTR appPath = new TCHAR[512];
