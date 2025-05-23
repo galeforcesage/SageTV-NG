@@ -15,11 +15,6 @@
  */
 package sage.miniclient;
 
-import java.io.BufferedOutputStream;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
-import java.io.PrintStream;
-
 public class MiniClient
 {
   public static boolean WINDOWS_OS = false;
@@ -29,7 +24,6 @@ public class MiniClient
   public static boolean fsStartup = false;
   public static Integer irKillCode = null;
   public static final String BYTE_CHARSET = "ISO8859_1";
-  public static final String redirectLogProp = "write_output_to_miniClient_log";
   static
   {
     System.out.println("Starting MiniClient");
@@ -166,18 +160,7 @@ public class MiniClient
       }
     };
 
-    if (myProperties.getProperty(redirectLogProp, "false").equalsIgnoreCase("true")){
-        try {
-            PrintStream printStream = new PrintStream(new BufferedOutputStream(new FileOutputStream(redirectLog)),true);
-            System.setOut(printStream);
-            System.setErr(printStream);
-        } catch (FileNotFoundException ex) {
-            ex.printStackTrace();
-        }
-    }else{
-        System.setOut(redir);
-    }
-
+    System.setOut(redir);
     mainArgs = args;
     boolean noretries = false;
     for (int i = 0; args != null && i < args.length; i++)
