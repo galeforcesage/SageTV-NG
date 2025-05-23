@@ -2,6 +2,9 @@
 
 ## Next
 
+## Version 9.2.13 (2025-05-23)
+* More fixes for placeshifter on windows (added consolewin registry optional logging to match client)
+
 ## Version 9.2.12 (2025-05-18)
 * Fix for placeshifter on windows (also added optional logging)
 
