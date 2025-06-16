@@ -2,6 +2,9 @@
 
 ## Next
 
+## Version 9.2.14 (2025-06-16)
+* Fix daily notification of new version.  Should only notify once when new version is available
+
 ## Version 9.2.13 (2025-05-23)
 * More fixes for placeshifter on windows (added consolewin registry optional logging to match client)
 

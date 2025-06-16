@@ -423,6 +423,7 @@ public class Wizard implements EPGDBPublic2
   static final String CLEAR_WATCHED = "clearwatched";
   private static final String NOSHOW_ID = "noshow_id";
   private static final String LAST_MAINTENANCE = "last_maintenance";
+  private static final String LAST_VER_NOTIFY = "last_ver_notify";
   private static final String NODATA_MAX_LEN = "nodata_max_len";
   private static final String NODATA_DUR_FOR_MAXRULE = "nodata_dur_for_maxrule";
 
@@ -7254,9 +7255,19 @@ public class Wizard implements EPGDBPublic2
       
       if(compareVersion(latestVersion, currentVersion)==1){
           if (Sage.DBG) System.out.println("checkForUpdate: currentVersion:" + currentVersion + " latestVersion:" + latestVersion + " New version is available");
-          //add notification of new version
-          sage.msg.MsgManager.postMessage(sage.msg.SystemMessage.createVersionUpdateMsg(latestVersion, url.toString()));
-          return true;
+          //check if we have already notified of this new version
+          
+          String lastNotifyVer = Sage.get(prefsRoot + LAST_VER_NOTIFY, "");
+          if (lastNotifyVer.length() == 0 || !latestVersion.equals(lastNotifyVer)){
+              //add notification of new version
+              sage.msg.MsgManager.postMessage(sage.msg.SystemMessage.createVersionUpdateMsg(latestVersion, url.toString()));
+              Sage.put(prefsRoot + LAST_VER_NOTIFY, latestVersion);
+              return true;
+          }else{
+              if (Sage.DBG) System.out.println("checkForUpdate: currentVersion:" + currentVersion + " latestVersion:" + latestVersion + " Notification already created.  Skipping");
+              return false;
+          }
+          
       }
       if (Sage.DBG) System.out.println("checkForUpdate: currentVersion:" + currentVersion + " latestVersion:" + latestVersion + " No new version is available");
       return false;
