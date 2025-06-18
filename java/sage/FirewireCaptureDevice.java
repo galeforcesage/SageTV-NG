@@ -15,8 +15,6 @@
  */
 package sage;
 
-import jtux.*;
-
 /**
  *
  * @author  Jean-Francois based on IVTV by Narflex
