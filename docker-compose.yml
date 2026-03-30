@@ -1,0 +1,24 @@
+services:
+  sagetv:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sagetv-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"   # Web UI
+      - "7818:7818"   # SageTV client connections
+      - "31099:31099" # Placeshifter
+    volumes:
+      - sagetv-config:/opt/sagetv/server
+      - media-videos:/var/media/videos
+      - media-pictures:/var/media/pictures
+      - media-music:/var/media/music
+    environment:
+      - JAVA_OPTS=-Xmx768m
+
+volumes:
+  sagetv-config:
+  media-videos:
+  media-pictures:
+  media-music:

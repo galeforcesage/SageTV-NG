@@ -3226,26 +3226,9 @@ public class Scheduler implements SchedulerInterface
     private boolean isDesired;
   }
 
-  private static class PotVec extends Vector<Airing> implements Comparator<Object>
+  private static class PotVec extends Vector<Airing>
   {
-    public PotVec()
-    {
-      super();
-    }
-    public void sort()
-    {
-      Arrays.sort(elementData, this);
-    }
-    // Unsynchronized for performance
-    public Airing elementAt(int index) {
-      if (index >= elementCount) {
-        throw new ArrayIndexOutOfBoundsException(index + " >= " + elementCount);
-      }
-
-      return (Airing)elementData[index];
-    }
-    public int compare(Object o1, Object o2)
-    {
+    private static final Comparator<Object> COMPARATOR = (o1, o2) -> {
       Airing a1 = (Airing) o1;
       Airing a2 = (Airing) o2;
       if ((a1 == null) && (a2 == null)) return 0;
@@ -3258,6 +3241,22 @@ public class Scheduler implements SchedulerInterface
       if (w1 < w2) return 1;
       else if (w1 == w2) return 0;
       else return -1;
+    };
+    public PotVec()
+    {
+      super();
+    }
+    public void sort()
+    {
+      Arrays.sort(elementData, COMPARATOR);
+    }
+    // Unsynchronized for performance
+    public Airing elementAt(int index) {
+      if (index >= elementCount) {
+        throw new ArrayIndexOutOfBoundsException(index + " >= " + elementCount);
+      }
+
+      return (Airing)elementData[index];
     }
   }
 

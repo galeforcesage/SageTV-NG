@@ -18720,6 +18720,11 @@
              <Theme Ref="6476" Name="OnlineServicesFontTheme"/>
             </Text>
            </Branch>
+           <Branch Name="&quot;xxWeatherMeteo&quot;" Sym="METEO-10001">
+            <Text Name="Weather Meteo" Sym="METEO-10002">
+             <Theme Ref="6476" Name="OnlineServicesFontTheme"/>
+            </Text>
+           </Branch>
            <Branch Name="&quot;xxTVEditorials&quot;" Sym="BASE-51789">
             <Text Name="TV Show Editorials" Sym="BASE-51790">
              <Theme Ref="6476" Name="OnlineServicesFontTheme"/>
@@ -18814,6 +18819,13 @@
             <Action Name="&quot;REM Jump to the Weather menu with its parent set as the Online Services Menu.&quot;" Sym="OPUS4A-185676">
              <Action Name="AddStaticContext(&quot;WeatherParentMenu&quot;, &quot;xOnlineServices&quot; )" Sym="OPUS4A-185677">
               <Menu Ref="770" Name="Weather"/>
+             </Action>
+            </Action>
+           </Branch>
+           <Branch Name="&quot;xxWeatherMeteo&quot;" Sym="METEO-10003">
+            <Action Name="&quot;REM Jump to the Weather Meteo menu.&quot;" Sym="METEO-10004">
+             <Action Name="AddStaticContext(&quot;WeatherParentMenu&quot;, &quot;xOnlineServices&quot; )" Sym="METEO-10005">
+              <Menu Ref="72300" Name="Weather Meteo"/>
              </Action>
             </Action>
            </Branch>
@@ -19899,6 +19911,11 @@
      <Action Name="&quot;REM Add Weather item&quot;" Sym="BASE-51989">
       <Conditional Name="true" Sym="OPUS4A-180542">
        <Action Name="MenuItemList = DataUnion(MenuItemList, &quot;xxWeather&quot; )" Sym="BASE-51990"/>
+      </Conditional>
+     </Action>
+     <Action Name="&quot;REM Add Weather Meteo item&quot;" Sym="METEO-10006">
+      <Conditional Name="true" Sym="METEO-10007">
+       <Action Name="MenuItemList = DataUnion(MenuItemList, &quot;xxWeatherMeteo&quot; )" Sym="METEO-10008"/>
       </Conditional>
      </Action>
      <Action Name="&quot;REM Add first 2 online video items&quot;" Sym="BASE-51976">
@@ -213084,4 +213101,880 @@
   <Item Ref="73981" Name="TV Viewing Mode"/>
   <Item Ref="73982" Name="Games Mode"/>
  </Panel>
+ <!-- ==================== Weather Meteo (Open-Meteo) ==================== -->
+ <Menu ID="72300" Name="Weather Meteo" Sym="METEO-20001">
+  <Theme Ref="7168" Name="Free Menu Layout with ..."/>
+  <Panel Name="Menu Content" Sym="METEO-20002">
+   <Theme Ref="7380" Name="Free Form Full Menu Co..."/>
+   <Panel Name="Buttons" Sym="METEO-20003">
+    <Layout>VerticalGrid</Layout>
+    <AnchorX>0.0</AnchorX>
+    <AnchorY>0.0</AnchorY>
+    <AnchorPointX>0.0</AnchorPointX>
+    <AnchorPointY>0.0</AnchorPointY>
+    <FixedWidth>0.4</FixedWidth>
+    <FixedHeight>0.18</FixedHeight>
+    <PadY>0.005</PadY>
+    <Insets>0.01,0,0.01,0</Insets>
+    <WrapHNav>false</WrapHNav>
+    <WrapVNav>false</WrapVNav>
+    <IgnoreThemeProps>false</IgnoreThemeProps>
+    <BackgroundComponent>false</BackgroundComponent>
+    <MouseTransparency>false</MouseTransparency>
+    <Item Name="7-Day Forecast" Sym="METEO-20004">
+     <Action Name="&quot;REM Jump to 7-day forecast.&quot;" Sym="METEO-20005">
+      <Action Name="AddStaticContext(&quot;WeatherParentMenu&quot;, WeatherParentMenu )" Sym="METEO-20006">
+       <Menu Ref="72301" Name="Weather Meteo - Extend..."/>
+      </Action>
+     </Action>
+    </Item>
+    <Item Name="Setup" Sym="METEO-20007">
+     <Action Name="&quot;REM Jump to setup screen.&quot;" Sym="METEO-20008">
+      <Menu Ref="72302" Name="Weather Meteo - Setup"/>
+     </Action>
+    </Item>
+    <Item Name="Back" Sym="METEO-20009">
+     <Conditional Name="WeatherParentMenu" Sym="METEO-20010">
+      <Branch Name="&quot;xOnlineServices&quot;" Sym="METEO-20011">
+       <Menu Ref="280" Name="Online Services"/>
+      </Branch>
+      <Branch Name="else" Sym="METEO-20012">
+       <Menu Ref="0" Name="Main Menu"/>
+      </Branch>
+     </Conditional>
+    </Item>
+    <Action Ref="32" Name="&quot;REM Handle Menu conte..."/>
+   </Panel>
+   <Panel Name="Current Weather" Sym="METEO-20100">
+    <AnchorX>0.0</AnchorX>
+    <AnchorY>0.18</AnchorY>
+    <AnchorPointX>0.0</AnchorPointX>
+    <AnchorPointY>0.0</AnchorPointY>
+    <FixedWidth>0.4</FixedWidth>
+    <FixedHeight>0.38</FixedHeight>
+    <Insets>0.01,0,0.01,0</Insets>
+    <WrapHNav>false</WrapHNav>
+    <WrapVNav>false</WrapVNav>
+    <IgnoreThemeProps>false</IgnoreThemeProps>
+    <BackgroundComponent>false</BackgroundComponent>
+    <MouseTransparency>true</MouseTransparency>
+    <Panel Name="Title" Sym="METEO-20101">
+     <AnchorX>0.0</AnchorX>
+     <AnchorY>0.0</AnchorY>
+     <AnchorPointX>0.0</AnchorPointX>
+     <AnchorPointY>0.0</AnchorPointY>
+     <FixedWidth>1.0</FixedWidth>
+     <FixedHeight>0.12</FixedHeight>
+     <WrapHNav>false</WrapHNav>
+     <WrapVNav>false</WrapVNav>
+     <IgnoreThemeProps>false</IgnoreThemeProps>
+     <BackgroundComponent>false</BackgroundComponent>
+     <Text Name="LocationTitle" Sym="METEO-20102">
+      <AnchorX>0.0</AnchorX>
+      <AnchorY>0.0</AnchorY>
+      <AnchorPointX>0.0</AnchorPointX>
+      <AnchorPointY>0.0</AnchorPointY>
+      <FixedWidth>1.0</FixedWidth>
+      <FixedHeight>1.0</FixedHeight>
+      <Font>Arial-bold-22</Font>
+      <ForegroundColor>-1</ForegroundColor>
+      <HorizontalAlignment>0.0</HorizontalAlignment>
+     </Text>
+    </Panel>
+    <Panel Name="CurrentRow" Sym="METEO-20110">
+     <AnchorX>0.0</AnchorX>
+     <AnchorY>0.12</AnchorY>
+     <AnchorPointX>0.0</AnchorPointX>
+     <AnchorPointY>0.0</AnchorPointY>
+     <FixedWidth>1.0</FixedWidth>
+     <FixedHeight>0.45</FixedHeight>
+     <WrapHNav>false</WrapHNav>
+     <WrapVNav>false</WrapVNav>
+     <IgnoreThemeProps>false</IgnoreThemeProps>
+     <BackgroundComponent>false</BackgroundComponent>
+     <Image Name="CurrentIcon" Sym="METEO-20111">
+      <AnchorX>0.0</AnchorX>
+      <AnchorY>0.0</AnchorY>
+      <AnchorPointX>0.0</AnchorPointX>
+      <AnchorPointY>0.0</AnchorPointY>
+      <FixedWidth>0.22</FixedWidth>
+      <FixedHeight>1.0</FixedHeight>
+      <PreserveAspectRatio>true</PreserveAspectRatio>
+      <ResizeImage>true</ResizeImage>
+     </Image>
+     <Text Name="CurrentTemp" Sym="METEO-20112">
+      <AnchorX>0.24</AnchorX>
+      <AnchorY>0.0</AnchorY>
+      <AnchorPointX>0.0</AnchorPointX>
+      <AnchorPointY>0.0</AnchorPointY>
+      <FixedWidth>0.76</FixedWidth>
+      <FixedHeight>0.4</FixedHeight>
+      <Font>Arial-bold-28</Font>
+      <ForegroundColor>-1</ForegroundColor>
+      <HorizontalAlignment>0.0</HorizontalAlignment>
+     </Text>
+     <Text Name="CurrentConditions" Sym="METEO-20113">
+      <AnchorX>0.24</AnchorX>
+      <AnchorY>0.4</AnchorY>
+      <AnchorPointX>0.0</AnchorPointX>
+      <AnchorPointY>0.0</AnchorPointY>
+      <FixedWidth>0.76</FixedWidth>
+      <FixedHeight>0.3</FixedHeight>
+      <Font>Arial-plain-16</Font>
+      <ForegroundColor>-1</ForegroundColor>
+      <HorizontalAlignment>0.0</HorizontalAlignment>
+     </Text>
+     <Text Name="CurrentWind" Sym="METEO-20114">
+      <AnchorX>0.24</AnchorX>
+      <AnchorY>0.7</AnchorY>
+      <AnchorPointX>0.0</AnchorPointX>
+      <AnchorPointY>0.0</AnchorPointY>
+      <FixedWidth>0.76</FixedWidth>
+      <FixedHeight>0.3</FixedHeight>
+      <Font>Arial-plain-14</Font>
+      <ForegroundColor>-1</ForegroundColor>
+      <HorizontalAlignment>0.0</HorizontalAlignment>
+     </Text>
+    </Panel>
+    <Panel Name="CurrentDetails" Sym="METEO-20120">
+     <AnchorX>0.0</AnchorX>
+     <AnchorY>0.57</AnchorY>
+     <AnchorPointX>0.0</AnchorPointX>
+     <AnchorPointY>0.0</AnchorPointY>
+     <FixedWidth>1.0</FixedWidth>
+     <FixedHeight>0.43</FixedHeight>
+     <WrapHNav>false</WrapHNav>
+     <WrapVNav>false</WrapVNav>
+     <IgnoreThemeProps>false</IgnoreThemeProps>
+     <BackgroundComponent>false</BackgroundComponent>
+     <Text Name="DetailLine1" Sym="METEO-20121">
+      <AnchorX>0.0</AnchorX>
+      <AnchorY>0.0</AnchorY>
+      <AnchorPointX>0.0</AnchorPointX>
+      <AnchorPointY>0.0</AnchorPointY>
+      <FixedWidth>1.0</FixedWidth>
+      <FixedHeight>0.25</FixedHeight>
+      <Font>Arial-plain-14</Font>
+      <ForegroundColor>-1</ForegroundColor>
+      <HorizontalAlignment>0.0</HorizontalAlignment>
+     </Text>
+     <Text Name="DetailLine2" Sym="METEO-20122">
+      <AnchorX>0.0</AnchorX>
+      <AnchorY>0.25</AnchorY>
+      <AnchorPointX>0.0</AnchorPointX>
+      <AnchorPointY>0.0</AnchorPointY>
+      <FixedWidth>1.0</FixedWidth>
+      <FixedHeight>0.25</FixedHeight>
+      <Font>Arial-plain-14</Font>
+      <ForegroundColor>-1</ForegroundColor>
+      <HorizontalAlignment>0.0</HorizontalAlignment>
+     </Text>
+     <Text Name="DetailLine3" Sym="METEO-20123">
+      <AnchorX>0.0</AnchorX>
+      <AnchorY>0.5</AnchorY>
+      <AnchorPointX>0.0</AnchorPointX>
+      <AnchorPointY>0.0</AnchorPointY>
+      <FixedWidth>1.0</FixedWidth>
+      <FixedHeight>0.25</FixedHeight>
+      <Font>Arial-plain-14</Font>
+      <ForegroundColor>-1</ForegroundColor>
+      <HorizontalAlignment>0.0</HorizontalAlignment>
+     </Text>
+     <Text Name="DetailLine4" Sym="METEO-20124">
+      <AnchorX>0.0</AnchorX>
+      <AnchorY>0.75</AnchorY>
+      <AnchorPointX>0.0</AnchorPointX>
+      <AnchorPointY>0.0</AnchorPointY>
+      <FixedWidth>1.0</FixedWidth>
+      <FixedHeight>0.25</FixedHeight>
+      <Font>Arial-plain-14</Font>
+      <ForegroundColor>-1</ForegroundColor>
+      <HorizontalAlignment>0.0</HorizontalAlignment>
+     </Text>
+    </Panel>
+   </Panel>
+   <Panel Name="Forecast" Sym="METEO-20200">
+    <AnchorX>0.0</AnchorX>
+    <AnchorY>0.56</AnchorY>
+    <AnchorPointX>0.0</AnchorPointX>
+    <AnchorPointY>0.0</AnchorPointY>
+    <FixedWidth>0.4</FixedWidth>
+    <FixedHeight>0.44</FixedHeight>
+    <Insets>0.01,0,0.01,0</Insets>
+    <WrapHNav>false</WrapHNav>
+    <WrapVNav>false</WrapVNav>
+    <IgnoreThemeProps>false</IgnoreThemeProps>
+    <BackgroundComponent>false</BackgroundComponent>
+    <MouseTransparency>true</MouseTransparency>
+    <Panel Name="Forecast day row" Sym="METEO-20201">
+     <AnchorX>0.0</AnchorX>
+     <AnchorY>0.0</AnchorY>
+     <AnchorPointX>0.0</AnchorPointX>
+     <AnchorPointY>0.0</AnchorPointY>
+     <FixedWidth>1.0</FixedWidth>
+     <FixedHeight>1.0</FixedHeight>
+     <WrapHNav>false</WrapHNav>
+     <WrapVNav>false</WrapVNav>
+     <IgnoreThemeProps>false</IgnoreThemeProps>
+     <BackgroundComponent>false</BackgroundComponent>
+     <Action Name="DayList = DataUnion(&quot;0&quot;,&quot;1&quot;,&quot;2&quot;)" Sym="METEO-20202">
+      <Table Name="MeteoForecastTable" Sym="METEO-20203">
+       <FixedWidth>1.0</FixedWidth>
+       <FixedHeight>1.0</FixedHeight>
+       <WrapHNav>false</WrapHNav>
+       <WrapVNav>false</WrapVNav>
+       <IgnoreThemeProps>false</IgnoreThemeProps>
+       <NumRows>3</NumRows>
+       <NumCols>1</NumCols>
+       <Dimensions>1</Dimensions>
+       <TableComponent Name="ForecastDayRow" Sym="METEO-20204">
+        <FixedWidth>1.0</FixedWidth>
+        <FixedHeight>1.0</FixedHeight>
+        <PadY>0.005</PadY>
+        <WrapHNav>false</WrapHNav>
+        <WrapVNav>false</WrapVNav>
+        <IgnoreThemeProps>false</IgnoreThemeProps>
+        <BackgroundComponent>false</BackgroundComponent>
+        <Item Name="ForecastDayItem" Sym="METEO-20205">
+         <IgnoreThemeProps>false</IgnoreThemeProps>
+         <Action Name="&quot;REM Display forecast for this day&quot;" Sym="METEO-20206">
+          <Panel Name="DayPanel" Sym="METEO-20207">
+           <FixedWidth>1.0</FixedWidth>
+           <FixedHeight>1.0</FixedHeight>
+           <WrapHNav>false</WrapHNav>
+           <WrapVNav>false</WrapVNav>
+           <IgnoreThemeProps>false</IgnoreThemeProps>
+           <BackgroundComponent>false</BackgroundComponent>
+           <Action Name="DayNumber = ForecastDayRow" Sym="METEO-20208">
+            <Action Name="DaySuffix = &quot;d&quot; + DayNumber" Sym="METEO-20209">
+             <Action Name="IconPath = gWeatherRelPath + &quot;\\Images\\&quot; + tv_sage_weather_OpenMeteo_getForecastCondition(MeteoInstance, &quot;icond&quot; + DayNumber) + &quot;.png&quot;" Sym="METEO-20210">
+              <Image Name="ForecastIcon" Sym="METEO-20211">
+               <AnchorX>0.0</AnchorX>
+               <AnchorY>0.0</AnchorY>
+               <AnchorPointX>0.0</AnchorPointX>
+               <AnchorPointY>0.0</AnchorPointY>
+               <FixedWidth>0.18</FixedWidth>
+               <FixedHeight>1.0</FixedHeight>
+               <PreserveAspectRatio>true</PreserveAspectRatio>
+               <ResizeImage>true</ResizeImage>
+              </Image>
+             </Action>
+             <Action Name="tv_sage_weather_OpenMeteo_getForecastCondition(MeteoInstance, &quot;date&quot; + DayNumber)" Sym="METEO-20212">
+              <Text Name="ForecastDate" Sym="METEO-20212a">
+               <AnchorX>0.2</AnchorX>
+               <AnchorY>0.0</AnchorY>
+               <AnchorPointX>0.0</AnchorPointX>
+               <AnchorPointY>0.0</AnchorPointY>
+               <FixedWidth>0.35</FixedWidth>
+               <FixedHeight>0.5</FixedHeight>
+               <Font>Arial-bold-14</Font>
+               <ForegroundColor>-1</ForegroundColor>
+               <HorizontalAlignment>0.0</HorizontalAlignment>
+              </Text>
+             </Action>
+             <Action Name="tv_sage_weather_OpenMeteo_getForecastCondition(MeteoInstance, &quot;conditionsd&quot; + DayNumber)" Sym="METEO-20213">
+              <Text Name="ForecastConditions" Sym="METEO-20213a">
+               <AnchorX>0.2</AnchorX>
+               <AnchorY>0.5</AnchorY>
+               <AnchorPointX>0.0</AnchorPointX>
+               <AnchorPointY>0.0</AnchorPointY>
+               <FixedWidth>0.35</FixedWidth>
+               <FixedHeight>0.5</FixedHeight>
+               <Font>Arial-plain-12</Font>
+               <ForegroundColor>-1</ForegroundColor>
+               <HorizontalAlignment>0.0</HorizontalAlignment>
+              </Text>
+             </Action>
+             <Action Name="tv_sage_weather_OpenMeteo_getForecastCondition(MeteoInstance, &quot;hi&quot; + DayNumber) + &quot; / &quot; + tv_sage_weather_OpenMeteo_getForecastCondition(MeteoInstance, &quot;low&quot; + DayNumber)" Sym="METEO-20214">
+              <Text Name="ForecastHiLo" Sym="METEO-20214a">
+               <AnchorX>0.56</AnchorX>
+               <AnchorY>0.0</AnchorY>
+               <AnchorPointX>0.0</AnchorPointX>
+               <AnchorPointY>0.0</AnchorPointY>
+               <FixedWidth>0.22</FixedWidth>
+               <FixedHeight>0.5</FixedHeight>
+               <Font>Arial-plain-13</Font>
+               <ForegroundColor>-1</ForegroundColor>
+               <HorizontalAlignment>0.0</HorizontalAlignment>
+              </Text>
+             </Action>
+             <Action Name="&quot;Precip: &quot; + tv_sage_weather_OpenMeteo_getForecastCondition(MeteoInstance, &quot;precipd&quot; + DayNumber)" Sym="METEO-20215">
+              <Text Name="ForecastPrecip" Sym="METEO-20215a">
+               <AnchorX>0.56</AnchorX>
+               <AnchorY>0.5</AnchorY>
+               <AnchorPointX>0.0</AnchorPointX>
+               <AnchorPointY>0.0</AnchorPointY>
+               <FixedWidth>0.22</FixedWidth>
+               <FixedHeight>0.5</FixedHeight>
+               <Font>Arial-plain-12</Font>
+               <ForegroundColor>-1</ForegroundColor>
+               <HorizontalAlignment>0.0</HorizontalAlignment>
+              </Text>
+             </Action>
+             <Action Name="tv_sage_weather_OpenMeteo_getForecastCondition(MeteoInstance, &quot;windd&quot; + DayNumber)" Sym="METEO-20216">
+              <Text Name="ForecastWind" Sym="METEO-20216a">
+               <AnchorX>0.78</AnchorX>
+               <AnchorY>0.0</AnchorY>
+               <AnchorPointX>0.0</AnchorPointX>
+               <AnchorPointY>0.0</AnchorPointY>
+               <FixedWidth>0.22</FixedWidth>
+               <FixedHeight>1.0</FixedHeight>
+               <Font>Arial-plain-12</Font>
+               <ForegroundColor>-1</ForegroundColor>
+               <HorizontalAlignment>0.0</HorizontalAlignment>
+              </Text>
+             </Action>
+            </Action>
+           </Action>
+          </Panel>
+         </Action>
+        </Item>
+       </TableComponent>
+      </Table>
+     </Action>
+    </Panel>
+   </Panel>
+   <Action Ref="32" Name="&quot;REM Handle Menu conte..."/>
+  </Panel>
+  <Hook Name="BeforeMenuLoad" Sym="METEO-20300">
+   <Action Name="MeteoInstance = tv_sage_weather_OpenMeteo_getInstance()" Sym="METEO-20301">
+    <Conditional Name="MeteoInstance" Sym="METEO-20302">
+     <Branch Name="null" Sym="METEO-20303">
+      <Action Name="&quot;REM Could not get instance, go back.&quot;" Sym="METEO-20304">
+       <Conditional Name="WeatherParentMenu" Sym="METEO-20305">
+        <Branch Name="&quot;xOnlineServices&quot;" Sym="METEO-20306">
+         <Menu Ref="280" Name="Online Services"/>
+        </Branch>
+        <Branch Name="else" Sym="METEO-20307">
+         <Menu Ref="0" Name="Main Menu"/>
+        </Branch>
+       </Conditional>
+      </Action>
+     </Branch>
+     <Branch Name="else" Sym="METEO-20308">
+      <Action Name="MeteoLat = tv_sage_weather_OpenMeteo_getLatitude(MeteoInstance)" Sym="METEO-20309">
+       <Conditional Name="MeteoLat" Sym="METEO-20310">
+        <Branch Name="null" Sym="METEO-20311">
+         <Action Name="&quot;REM No location set, go to setup.&quot;" Sym="METEO-20312">
+          <Menu Ref="72302" Name="Weather Meteo - Setup"/>
+         </Action>
+        </Branch>
+        <Branch Name="&quot;&quot;" Sym="METEO-20313">
+         <Action Name="&quot;REM Empty location, go to setup.&quot;" Sym="METEO-20314">
+          <Menu Ref="72302" Name="Weather Meteo - Setup"/>
+         </Action>
+        </Branch>
+        <Branch Name="else" Sym="METEO-20315">
+         <Action Name="tv_sage_weather_OpenMeteo_updateNow(MeteoInstance)" Sym="METEO-20316">
+          <Action Name="MeteoLocationName = tv_sage_weather_OpenMeteo_getLocationName(MeteoInstance)" Sym="METEO-20317">
+           <Action Name="SetAttribute(&quot;LocationTitle&quot;, (MeteoLocationName != null &amp;&amp; Size(MeteoLocationName) &gt; 0) ? MeteoLocationName : (&quot;Weather (&quot; + MeteoLat + &quot;, &quot; + tv_sage_weather_OpenMeteo_getLongitude(MeteoInstance) + &quot;)&quot;) )" Sym="METEO-20318">
+            <Action Name="SetAttribute(&quot;CurrentIcon&quot;, gWeatherRelPath + &quot;\\Images\\&quot; + tv_sage_weather_OpenMeteo_getCurrentCondition(MeteoInstance, &quot;curr_icon&quot;) + &quot;.png&quot;)" Sym="METEO-20319">
+             <Action Name="SetAttribute(&quot;CurrentTemp&quot;, tv_sage_weather_OpenMeteo_getCurrentCondition(MeteoInstance, &quot;curr_temp&quot;))" Sym="METEO-20320">
+              <Action Name="SetAttribute(&quot;CurrentConditions&quot;, tv_sage_weather_OpenMeteo_getCurrentCondition(MeteoInstance, &quot;curr_conditions&quot;))" Sym="METEO-20321">
+               <Action Name="MeteoShowWind = tv_sage_weather_OpenMeteo_getShowWindSpeed(MeteoInstance)" Sym="METEO-20322">
+                <Conditional Name="MeteoShowWind" Sym="METEO-20323">
+                 <Branch Name="true" Sym="METEO-20324">
+                  <Action Name="SetAttribute(&quot;CurrentWind&quot;, &quot;Wind: &quot; + tv_sage_weather_OpenMeteo_getCurrentCondition(MeteoInstance, &quot;curr_wind&quot;))" Sym="METEO-20325"/>
+                 </Branch>
+                 <Branch Name="else" Sym="METEO-20326">
+                  <Action Name="SetAttribute(&quot;CurrentWind&quot;, &quot;&quot;)" Sym="METEO-20327"/>
+                 </Branch>
+                </Conditional>
+               </Action>
+               <Action Name="MeteoDetailLine = &quot;&quot;" Sym="METEO-20330">
+                <Action Name="SetAttribute(&quot;DetailLine1&quot;, &quot;Humidity: &quot; + tv_sage_weather_OpenMeteo_getCurrentCondition(MeteoInstance, &quot;curr_humidity&quot;) + &quot;  |  Precip: &quot; + tv_sage_weather_OpenMeteo_getCurrentCondition(MeteoInstance, &quot;curr_precipitation&quot;))" Sym="METEO-20331">
+                 <Action Name="MeteoShowApparent = tv_sage_weather_OpenMeteo_getShowApparentTemp(MeteoInstance)" Sym="METEO-20332">
+                  <Conditional Name="MeteoShowApparent" Sym="METEO-20333">
+                   <Branch Name="true" Sym="METEO-20334">
+                    <Action Name="SetAttribute(&quot;DetailLine2&quot;, &quot;Feels Like: &quot; + tv_sage_weather_OpenMeteo_getCurrentCondition(MeteoInstance, &quot;curr_apparent_temp&quot;))" Sym="METEO-20335"/>
+                   </Branch>
+                   <Branch Name="else" Sym="METEO-20336">
+                    <Action Name="SetAttribute(&quot;DetailLine2&quot;, &quot;&quot;)" Sym="METEO-20337"/>
+                   </Branch>
+                  </Conditional>
+                 </Action>
+                 <Action Name="MeteoShowSun = tv_sage_weather_OpenMeteo_getShowSunriseSunset(MeteoInstance)" Sym="METEO-20340">
+                  <Conditional Name="MeteoShowSun" Sym="METEO-20341">
+                   <Branch Name="true" Sym="METEO-20342">
+                    <Action Name="SetAttribute(&quot;DetailLine3&quot;, &quot;Sunrise: &quot; + tv_sage_weather_OpenMeteo_getLocationInfo(MeteoInstance, &quot;curr_sunrise&quot;) + &quot;  Sunset: &quot; + tv_sage_weather_OpenMeteo_getLocationInfo(MeteoInstance, &quot;curr_sunset&quot;))" Sym="METEO-20343"/>
+                   </Branch>
+                   <Branch Name="else" Sym="METEO-20344">
+                    <Action Name="SetAttribute(&quot;DetailLine3&quot;, &quot;&quot;)" Sym="METEO-20345"/>
+                   </Branch>
+                  </Conditional>
+                 </Action>
+                 <Action Name="MeteoShowUV = tv_sage_weather_OpenMeteo_getShowUVIndex(MeteoInstance)" Sym="METEO-20350">
+                  <Conditional Name="MeteoShowUV" Sym="METEO-20351">
+                   <Branch Name="true" Sym="METEO-20352">
+                    <Action Name="SetAttribute(&quot;DetailLine4&quot;, &quot;UV Index: &quot; + tv_sage_weather_OpenMeteo_getForecastCondition(MeteoInstance, &quot;uv0&quot;) + &quot;  |  Updated: &quot; + tv_sage_weather_OpenMeteo_getCurrentCondition(MeteoInstance, &quot;curr_updated&quot;))" Sym="METEO-20353"/>
+                   </Branch>
+                   <Branch Name="else" Sym="METEO-20354">
+                    <Action Name="SetAttribute(&quot;DetailLine4&quot;, &quot;Updated: &quot; + tv_sage_weather_OpenMeteo_getCurrentCondition(MeteoInstance, &quot;curr_updated&quot;))" Sym="METEO-20355"/>
+                   </Branch>
+                  </Conditional>
+                 </Action>
+                </Action>
+               </Action>
+              </Action>
+             </Action>
+            </Action>
+           </Action>
+          </Action>
+         </Action>
+        </Branch>
+       </Conditional>
+      </Action>
+     </Branch>
+    </Conditional>
+   </Action>
+  </Hook>
+  <Hook Name="AfterMenuLoad" Sym="METEO-20400">
+   <Action Ref="2564" Name="MenuIsActive = true"/>
+  </Hook>
+  <Hook Name="BeforeMenuUnload" Sym="METEO-20401">
+   <Action Ref="2920" Name="MenuIsActive = false"/>
+  </Hook>
+  <Listener Name="Left - Back" Sym="METEO-20410">
+   <ListenerEvent>Left</ListenerEvent>
+   <Conditional Name="WeatherParentMenu" Sym="METEO-20411">
+    <Branch Name="&quot;xOnlineServices&quot;" Sym="METEO-20412">
+     <Menu Ref="280" Name="Online Services"/>
+    </Branch>
+    <Branch Name="else" Sym="METEO-20413">
+     <Menu Ref="0" Name="Main Menu"/>
+    </Branch>
+   </Conditional>
+  </Listener>
+  <Attribute Name="MeteoInstance" Sym="METEO-20420">
+   <Value>null</Value>
+  </Attribute>
+  <Attribute Ref="2927" Name="MenuIsActive"/>
+  <Attribute Name="MenuTitle" Sym="METEO-20421">
+   <Value>"Weather Meteo"</Value>
+  </Attribute>
+  <Attribute Ref="7165" Name="CurMenuBG"/>
+ </Menu>
+ <!-- ==================== Weather Meteo - Extended Forecast ==================== -->
+ <Menu ID="72301" Name="Weather Meteo - Extended Forecast" Sym="METEO-30001">
+  <Theme Ref="7168" Name="Free Menu Layout with ..."/>
+  <Panel Name="Menu Content" Sym="METEO-30002">
+   <Theme Ref="7380" Name="Free Form Full Menu Co..."/>
+   <Panel Name="Buttons" Sym="METEO-30003">
+    <Layout>VerticalGrid</Layout>
+    <AnchorX>0.0</AnchorX>
+    <AnchorY>0.0</AnchorY>
+    <AnchorPointX>0.0</AnchorPointX>
+    <AnchorPointY>0.0</AnchorPointY>
+    <FixedWidth>1.0</FixedWidth>
+    <FixedHeight>0.08</FixedHeight>
+    <PadY>0.005</PadY>
+    <Insets>0.01,0,0.01,0</Insets>
+    <WrapHNav>false</WrapHNav>
+    <WrapVNav>false</WrapVNav>
+    <IgnoreThemeProps>false</IgnoreThemeProps>
+    <BackgroundComponent>false</BackgroundComponent>
+    <MouseTransparency>false</MouseTransparency>
+    <Item Name="Back to Weather" Sym="METEO-30004">
+     <Action Name="AddStaticContext(&quot;WeatherParentMenu&quot;, WeatherParentMenu )" Sym="METEO-30005">
+      <Menu Ref="72300" Name="Weather Meteo"/>
+     </Action>
+    </Item>
+    <Action Ref="32" Name="&quot;REM Handle Menu conte..."/>
+   </Panel>
+   <Panel Name="7-Day Forecast" Sym="METEO-30100">
+    <AnchorX>0.0</AnchorX>
+    <AnchorY>0.08</AnchorY>
+    <AnchorPointX>0.0</AnchorPointX>
+    <AnchorPointY>0.0</AnchorPointY>
+    <FixedWidth>1.0</FixedWidth>
+    <FixedHeight>0.92</FixedHeight>
+    <Insets>0.01,0,0.01,0</Insets>
+    <WrapHNav>false</WrapHNav>
+    <WrapVNav>false</WrapVNav>
+    <IgnoreThemeProps>false</IgnoreThemeProps>
+    <BackgroundComponent>false</BackgroundComponent>
+    <MouseTransparency>true</MouseTransparency>
+    <Action Name="DayList = DataUnion(&quot;0&quot;,&quot;1&quot;,&quot;2&quot;,&quot;3&quot;,&quot;4&quot;,&quot;5&quot;,&quot;6&quot;)" Sym="METEO-30101">
+     <Table Name="ExtendedForecastTable" Sym="METEO-30102">
+      <FixedWidth>1.0</FixedWidth>
+      <FixedHeight>1.0</FixedHeight>
+      <WrapHNav>false</WrapHNav>
+      <WrapVNav>false</WrapVNav>
+      <IgnoreThemeProps>false</IgnoreThemeProps>
+      <NumRows>7</NumRows>
+      <NumCols>1</NumCols>
+      <Dimensions>1</Dimensions>
+      <TableComponent Name="ExtForecastDayRow" Sym="METEO-30103">
+       <FixedWidth>1.0</FixedWidth>
+       <FixedHeight>1.0</FixedHeight>
+       <PadY>0.003</PadY>
+       <WrapHNav>false</WrapHNav>
+       <WrapVNav>false</WrapVNav>
+       <IgnoreThemeProps>false</IgnoreThemeProps>
+       <BackgroundComponent>false</BackgroundComponent>
+       <Item Name="ExtForecastDayItem" Sym="METEO-30104">
+        <IgnoreThemeProps>false</IgnoreThemeProps>
+        <Action Name="&quot;REM Display extended forecast for this day&quot;" Sym="METEO-30105">
+         <Panel Name="ExtDayPanel" Sym="METEO-30106">
+          <FixedWidth>1.0</FixedWidth>
+          <FixedHeight>1.0</FixedHeight>
+          <WrapHNav>false</WrapHNav>
+          <WrapVNav>false</WrapVNav>
+          <IgnoreThemeProps>false</IgnoreThemeProps>
+          <BackgroundComponent>false</BackgroundComponent>
+          <Action Name="DayNumber = ExtForecastDayRow" Sym="METEO-30107">
+           <Action Name="IconPath = gWeatherRelPath + &quot;\\Images\\&quot; + tv_sage_weather_OpenMeteo_getForecastCondition(MeteoInstance, &quot;icond&quot; + DayNumber) + &quot;.png&quot;" Sym="METEO-30108">
+            <Image Name="ExtForecastIcon" Sym="METEO-30109">
+             <AnchorX>0.0</AnchorX>
+             <AnchorY>0.0</AnchorY>
+             <AnchorPointX>0.0</AnchorPointX>
+             <AnchorPointY>0.0</AnchorPointY>
+             <FixedWidth>0.06</FixedWidth>
+             <FixedHeight>1.0</FixedHeight>
+             <PreserveAspectRatio>true</PreserveAspectRatio>
+             <ResizeImage>true</ResizeImage>
+            </Image>
+           </Action>
+           <Action Name="tv_sage_weather_OpenMeteo_getForecastCondition(MeteoInstance, &quot;date&quot; + DayNumber)" Sym="METEO-30110">
+            <Text Name="ExtDate" Sym="METEO-30110a">
+             <AnchorX>0.07</AnchorX>
+             <AnchorY>0.0</AnchorY>
+             <AnchorPointX>0.0</AnchorPointX>
+             <AnchorPointY>0.0</AnchorPointY>
+             <FixedWidth>0.12</FixedWidth>
+             <FixedHeight>1.0</FixedHeight>
+             <Font>Arial-bold-14</Font>
+             <ForegroundColor>-1</ForegroundColor>
+             <HorizontalAlignment>0.0</HorizontalAlignment>
+             <VerticalAlignment>0.5</VerticalAlignment>
+            </Text>
+           </Action>
+           <Action Name="tv_sage_weather_OpenMeteo_getForecastCondition(MeteoInstance, &quot;conditionsd&quot; + DayNumber)" Sym="METEO-30111">
+            <Text Name="ExtConditions" Sym="METEO-30111a">
+             <AnchorX>0.2</AnchorX>
+             <AnchorY>0.0</AnchorY>
+             <AnchorPointX>0.0</AnchorPointX>
+             <AnchorPointY>0.0</AnchorPointY>
+             <FixedWidth>0.18</FixedWidth>
+             <FixedHeight>1.0</FixedHeight>
+             <Font>Arial-plain-13</Font>
+             <ForegroundColor>-1</ForegroundColor>
+             <HorizontalAlignment>0.0</HorizontalAlignment>
+             <VerticalAlignment>0.5</VerticalAlignment>
+            </Text>
+           </Action>
+           <Action Name="tv_sage_weather_OpenMeteo_getForecastCondition(MeteoInstance, &quot;hi&quot; + DayNumber) + &quot; / &quot; + tv_sage_weather_OpenMeteo_getForecastCondition(MeteoInstance, &quot;low&quot; + DayNumber)" Sym="METEO-30112">
+            <Text Name="ExtHiLo" Sym="METEO-30112a">
+             <AnchorX>0.39</AnchorX>
+             <AnchorY>0.0</AnchorY>
+             <AnchorPointX>0.0</AnchorPointX>
+             <AnchorPointY>0.0</AnchorPointY>
+             <FixedWidth>0.14</FixedWidth>
+             <FixedHeight>1.0</FixedHeight>
+             <Font>Arial-plain-13</Font>
+             <ForegroundColor>-1</ForegroundColor>
+             <HorizontalAlignment>0.0</HorizontalAlignment>
+             <VerticalAlignment>0.5</VerticalAlignment>
+            </Text>
+           </Action>
+           <Action Name="tv_sage_weather_OpenMeteo_getForecastCondition(MeteoInstance, &quot;precipd&quot; + DayNumber) + &quot; &quot; + tv_sage_weather_OpenMeteo_getForecastCondition(MeteoInstance, &quot;precip_amount&quot; + DayNumber)" Sym="METEO-30113">
+            <Text Name="ExtPrecip" Sym="METEO-30113a">
+             <AnchorX>0.54</AnchorX>
+             <AnchorY>0.0</AnchorY>
+             <AnchorPointX>0.0</AnchorPointX>
+             <AnchorPointY>0.0</AnchorPointY>
+             <FixedWidth>0.14</FixedWidth>
+             <FixedHeight>1.0</FixedHeight>
+             <Font>Arial-plain-12</Font>
+             <ForegroundColor>-1</ForegroundColor>
+             <HorizontalAlignment>0.0</HorizontalAlignment>
+             <VerticalAlignment>0.5</VerticalAlignment>
+            </Text>
+           </Action>
+           <Action Name="tv_sage_weather_OpenMeteo_getForecastCondition(MeteoInstance, &quot;windd&quot; + DayNumber)" Sym="METEO-30114">
+            <Text Name="ExtWind" Sym="METEO-30114a">
+             <AnchorX>0.69</AnchorX>
+             <AnchorY>0.0</AnchorY>
+             <AnchorPointX>0.0</AnchorPointX>
+             <AnchorPointY>0.0</AnchorPointY>
+             <FixedWidth>0.14</FixedWidth>
+             <FixedHeight>1.0</FixedHeight>
+             <Font>Arial-plain-12</Font>
+             <ForegroundColor>-1</ForegroundColor>
+             <HorizontalAlignment>0.0</HorizontalAlignment>
+             <VerticalAlignment>0.5</VerticalAlignment>
+            </Text>
+           </Action>
+           <Action Name="tv_sage_weather_OpenMeteo_getForecastCondition(MeteoInstance, &quot;sunrise&quot; + DayNumber) + &quot; / &quot; + tv_sage_weather_OpenMeteo_getForecastCondition(MeteoInstance, &quot;sunset&quot; + DayNumber)" Sym="METEO-30115">
+            <Text Name="ExtSunrise" Sym="METEO-30115a">
+             <AnchorX>0.84</AnchorX>
+             <AnchorY>0.0</AnchorY>
+             <AnchorPointX>0.0</AnchorPointX>
+             <AnchorPointY>0.0</AnchorPointY>
+             <FixedWidth>0.16</FixedWidth>
+             <FixedHeight>1.0</FixedHeight>
+             <Font>Arial-plain-11</Font>
+             <ForegroundColor>-1</ForegroundColor>
+             <HorizontalAlignment>0.0</HorizontalAlignment>
+             <VerticalAlignment>0.5</VerticalAlignment>
+            </Text>
+           </Action>
+          </Action>
+         </Panel>
+        </Action>
+       </Item>
+      </TableComponent>
+     </Table>
+    </Action>
+   </Panel>
+   <Action Ref="32" Name="&quot;REM Handle Menu conte..."/>
+  </Panel>
+  <Hook Name="BeforeMenuLoad" Sym="METEO-30200">
+   <Action Name="MeteoInstance = tv_sage_weather_OpenMeteo_getInstance()" Sym="METEO-30201">
+    <Action Name="tv_sage_weather_OpenMeteo_updateNow(MeteoInstance)" Sym="METEO-30202"/>
+   </Action>
+  </Hook>
+  <Hook Name="AfterMenuLoad" Sym="METEO-30300">
+   <Action Ref="2564" Name="MenuIsActive = true"/>
+  </Hook>
+  <Hook Name="BeforeMenuUnload" Sym="METEO-30301">
+   <Action Ref="2920" Name="MenuIsActive = false"/>
+  </Hook>
+  <Listener Name="Left - Back" Sym="METEO-30310">
+   <ListenerEvent>Left</ListenerEvent>
+   <Action Name="AddStaticContext(&quot;WeatherParentMenu&quot;, WeatherParentMenu )" Sym="METEO-30311">
+    <Menu Ref="72300" Name="Weather Meteo"/>
+   </Action>
+  </Listener>
+  <Attribute Name="MeteoInstance" Sym="METEO-30320">
+   <Value>null</Value>
+  </Attribute>
+  <Attribute Ref="2927" Name="MenuIsActive"/>
+  <Attribute Name="MenuTitle" Sym="METEO-30321">
+   <Value>"7-Day Forecast"</Value>
+  </Attribute>
+  <Attribute Ref="7165" Name="CurMenuBG"/>
+ </Menu>
+ <!-- ==================== Weather Meteo - Setup ==================== -->
+ <Menu ID="72302" Name="Weather Meteo - Setup" Sym="METEO-40001">
+  <Theme Ref="7168" Name="Free Menu Layout with ..."/>
+  <Panel Name="Menu Content" Sym="METEO-40002">
+   <Theme Ref="7380" Name="Free Form Full Menu Co..."/>
+   <Panel Name="Setup Panel" Sym="METEO-40003">
+    <Layout>VerticalGrid</Layout>
+    <AnchorX>0.0</AnchorX>
+    <AnchorY>0.0</AnchorY>
+    <AnchorPointX>0.0</AnchorPointX>
+    <AnchorPointY>0.0</AnchorPointY>
+    <FixedWidth>0.5</FixedWidth>
+    <FixedHeight>1.0</FixedHeight>
+    <PadY>0.008</PadY>
+    <Insets>0.02,0.02,0.02,0.02</Insets>
+    <WrapHNav>false</WrapHNav>
+    <WrapVNav>false</WrapVNav>
+    <IgnoreThemeProps>false</IgnoreThemeProps>
+    <BackgroundComponent>false</BackgroundComponent>
+    <MouseTransparency>false</MouseTransparency>
+    <Text Name="SetupTitle" Sym="METEO-40004">
+     <AnchorX>0.0</AnchorX>
+     <AnchorY>0.0</AnchorY>
+     <AnchorPointX>0.0</AnchorPointX>
+     <AnchorPointY>0.0</AnchorPointY>
+     <FixedWidth>1.0</FixedWidth>
+     <FixedHeight>0.06</FixedHeight>
+     <Font>Arial-bold-20</Font>
+     <ForegroundColor>-1</ForegroundColor>
+     <HorizontalAlignment>0.0</HorizontalAlignment>
+    </Text>
+    <Item Name="Search Location" Sym="METEO-40010">
+     <Action Name="&quot;REM Prompt user to enter a city name to search.&quot;" Sym="METEO-40011">
+      <Action Name="MeteoSearchQuery = ShowKeyboard(GetVariableFromContext(&quot;MeteoSearchQuery&quot;), &quot;Enter City Name:&quot;, 40)" Sym="METEO-40012">
+       <Conditional Name="MeteoSearchQuery != null &amp;&amp; Size(MeteoSearchQuery) &gt; 0" Sym="METEO-40013">
+        <Branch Name="true" Sym="METEO-40014">
+         <Action Name="MeteoSearchResults = tv_sage_weather_OpenMeteo_searchLocations(MeteoInstance, MeteoSearchQuery)" Sym="METEO-40015">
+          <Conditional Name="Size(MeteoSearchResults) &gt; 0" Sym="METEO-40016">
+           <Branch Name="true" Sym="METEO-40017">
+            <Action Name="MeteoResultKeys = java_util_Map_keySet(MeteoSearchResults)" Sym="METEO-40018">
+             <Action Name="MeteoChoice = ShowOptionsDialog(&quot;Select Location&quot;, &quot;&quot;, MeteoResultKeys)" Sym="METEO-40019">
+              <Conditional Name="MeteoChoice != null" Sym="METEO-40020">
+               <Branch Name="true" Sym="METEO-40021">
+                <Action Name="MeteoCoords = java_util_Map_get(MeteoSearchResults, MeteoChoice)" Sym="METEO-40022">
+                 <Action Name="MeteoCoordsArr = java_lang_String_split(MeteoCoords, &quot;,&quot;)" Sym="METEO-40023">
+                  <Action Name="tv_sage_weather_OpenMeteo_setLocation(MeteoInstance, GetElement(MeteoCoordsArr,0), GetElement(MeteoCoordsArr,1))" Sym="METEO-40024">
+                   <Action Name="tv_sage_weather_OpenMeteo_setLocationName(MeteoInstance, MeteoChoice)" Sym="METEO-40025">
+                    <Action Name="Refresh()" Sym="METEO-40026"/>
+                   </Action>
+                  </Action>
+                 </Action>
+                </Action>
+               </Branch>
+              </Conditional>
+             </Action>
+            </Action>
+           </Branch>
+           <Branch Name="else" Sym="METEO-40027">
+            <Action Name="ShowOptionsDialog(&quot;No Results&quot;, &quot;No locations found for: &quot; + MeteoSearchQuery, &quot;OK&quot;)" Sym="METEO-40028"/>
+           </Branch>
+          </Conditional>
+         </Action>
+        </Branch>
+       </Conditional>
+      </Action>
+     </Action>
+    </Item>
+    <Item Name="Temperature Unit" Sym="METEO-40030">
+     <Action Name="&quot;REM Toggle temperature unit.&quot;" Sym="METEO-40031">
+      <Action Name="MeteoTempUnit = tv_sage_weather_OpenMeteo_getTemperatureUnit(MeteoInstance)" Sym="METEO-40032">
+       <Conditional Name="MeteoTempUnit" Sym="METEO-40033">
+        <Branch Name="&quot;fahrenheit&quot;" Sym="METEO-40034">
+         <Action Name="tv_sage_weather_OpenMeteo_setTemperatureUnit(MeteoInstance, &quot;celsius&quot;)" Sym="METEO-40035">
+          <Action Name="Refresh()" Sym="METEO-40036"/>
+         </Action>
+        </Branch>
+        <Branch Name="else" Sym="METEO-40037">
+         <Action Name="tv_sage_weather_OpenMeteo_setTemperatureUnit(MeteoInstance, &quot;fahrenheit&quot;)" Sym="METEO-40038">
+          <Action Name="Refresh()" Sym="METEO-40039"/>
+         </Action>
+        </Branch>
+       </Conditional>
+      </Action>
+     </Action>
+    </Item>
+    <Item Name="Toggle Wind Speed" Sym="METEO-40040">
+     <Action Name="MeteoShowWind = tv_sage_weather_OpenMeteo_getShowWindSpeed(MeteoInstance)" Sym="METEO-40041">
+      <Action Name="tv_sage_weather_OpenMeteo_setShowWindSpeed(MeteoInstance, !MeteoShowWind)" Sym="METEO-40042">
+       <Action Name="Refresh()" Sym="METEO-40043"/>
+      </Action>
+     </Action>
+    </Item>
+    <Item Name="Toggle Sunrise/Sunset" Sym="METEO-40050">
+     <Action Name="MeteoShowSun = tv_sage_weather_OpenMeteo_getShowSunriseSunset(MeteoInstance)" Sym="METEO-40051">
+      <Action Name="tv_sage_weather_OpenMeteo_setShowSunriseSunset(MeteoInstance, !MeteoShowSun)" Sym="METEO-40052">
+       <Action Name="Refresh()" Sym="METEO-40053"/>
+      </Action>
+     </Action>
+    </Item>
+    <Item Name="Toggle UV Index" Sym="METEO-40060">
+     <Action Name="MeteoShowUV = tv_sage_weather_OpenMeteo_getShowUVIndex(MeteoInstance)" Sym="METEO-40061">
+      <Action Name="tv_sage_weather_OpenMeteo_setShowUVIndex(MeteoInstance, !MeteoShowUV)" Sym="METEO-40062">
+       <Action Name="Refresh()" Sym="METEO-40063"/>
+      </Action>
+     </Action>
+    </Item>
+    <Item Name="Toggle Feels Like Temp" Sym="METEO-40070">
+     <Action Name="MeteoShowApparent = tv_sage_weather_OpenMeteo_getShowApparentTemp(MeteoInstance)" Sym="METEO-40071">
+      <Action Name="tv_sage_weather_OpenMeteo_setShowApparentTemp(MeteoInstance, !MeteoShowApparent)" Sym="METEO-40072">
+       <Action Name="Refresh()" Sym="METEO-40073"/>
+      </Action>
+     </Action>
+    </Item>
+    <Item Name="Save &amp; View Weather" Sym="METEO-40080">
+     <Action Name="AddStaticContext(&quot;WeatherParentMenu&quot;, &quot;xOnlineServices&quot; )" Sym="METEO-40081">
+      <Menu Ref="72300" Name="Weather Meteo"/>
+     </Action>
+    </Item>
+    <Action Ref="32" Name="&quot;REM Handle Menu conte..."/>
+   </Panel>
+   <Panel Name="Settings Display" Sym="METEO-40100">
+    <AnchorX>0.5</AnchorX>
+    <AnchorY>0.0</AnchorY>
+    <AnchorPointX>0.0</AnchorPointX>
+    <AnchorPointY>0.0</AnchorPointY>
+    <FixedWidth>0.5</FixedWidth>
+    <FixedHeight>1.0</FixedHeight>
+    <Insets>0.02,0.02,0.02,0.02</Insets>
+    <WrapHNav>false</WrapHNav>
+    <WrapVNav>false</WrapVNav>
+    <IgnoreThemeProps>false</IgnoreThemeProps>
+    <BackgroundComponent>false</BackgroundComponent>
+    <MouseTransparency>true</MouseTransparency>
+    <Text Name="SettingsInfo" Sym="METEO-40101">
+     <AnchorX>0.0</AnchorX>
+     <AnchorY>0.0</AnchorY>
+     <AnchorPointX>0.0</AnchorPointX>
+     <AnchorPointY>0.0</AnchorPointY>
+     <FixedWidth>1.0</FixedWidth>
+     <FixedHeight>1.0</FixedHeight>
+     <Font>Arial-plain-14</Font>
+     <ForegroundColor>-1</ForegroundColor>
+     <HorizontalAlignment>0.0</HorizontalAlignment>
+     <VerticalAlignment>0.0</VerticalAlignment>
+    </Text>
+   </Panel>
+   <Action Ref="32" Name="&quot;REM Handle Menu conte..."/>
+  </Panel>
+  <Hook Name="BeforeMenuLoad" Sym="METEO-40200">
+   <Action Name="MeteoInstance = tv_sage_weather_OpenMeteo_getInstance()" Sym="METEO-40201">
+    <Action Name="SetAttribute(&quot;SetupTitle&quot;, &quot;Weather Meteo Setup&quot;)" Sym="METEO-40202">
+     <Action Name="MeteoLat = tv_sage_weather_OpenMeteo_getLatitude(MeteoInstance)" Sym="METEO-40203">
+      <Action Name="MeteoLon = tv_sage_weather_OpenMeteo_getLongitude(MeteoInstance)" Sym="METEO-40204">
+       <Action Name="MeteoLocName = tv_sage_weather_OpenMeteo_getLocationName(MeteoInstance)" Sym="METEO-40205">
+        <Action Name="MeteoTempUnit = tv_sage_weather_OpenMeteo_getTemperatureUnit(MeteoInstance)" Sym="METEO-40206">
+         <Action Name="MeteoShowWind = tv_sage_weather_OpenMeteo_getShowWindSpeed(MeteoInstance)" Sym="METEO-40207">
+          <Action Name="MeteoShowSun = tv_sage_weather_OpenMeteo_getShowSunriseSunset(MeteoInstance)" Sym="METEO-40208">
+           <Action Name="MeteoShowUV = tv_sage_weather_OpenMeteo_getShowUVIndex(MeteoInstance)" Sym="METEO-40209">
+            <Action Name="MeteoShowApparent = tv_sage_weather_OpenMeteo_getShowApparentTemp(MeteoInstance)" Sym="METEO-40210">
+             <Action Name="SetAttribute(&quot;Search Location&quot;, &quot;Search Location: &quot; + ((MeteoLocName != null &amp;&amp; Size(MeteoLocName) &gt; 0) ? MeteoLocName : ((MeteoLat != null) ? (MeteoLat + &quot;, &quot; + MeteoLon) : &quot;Not Set&quot;) ))" Sym="METEO-40211">
+              <Action Name="SetAttribute(&quot;Temperature Unit&quot;, &quot;Temperature: &quot; + ((&quot;celsius&quot; == MeteoTempUnit) ? &quot;Celsius&quot; : &quot;Fahrenheit&quot;))" Sym="METEO-40212">
+               <Action Name="SetAttribute(&quot;Toggle Wind Speed&quot;, &quot;Show Wind Speed: &quot; + ((MeteoShowWind) ? &quot;ON&quot; : &quot;OFF&quot;))" Sym="METEO-40213">
+                <Action Name="SetAttribute(&quot;Toggle Sunrise/Sunset&quot;, &quot;Show Sunrise/Sunset: &quot; + ((MeteoShowSun) ? &quot;ON&quot; : &quot;OFF&quot;))" Sym="METEO-40214">
+                 <Action Name="SetAttribute(&quot;Toggle UV Index&quot;, &quot;Show UV Index: &quot; + ((MeteoShowUV) ? &quot;ON&quot; : &quot;OFF&quot;))" Sym="METEO-40215">
+                  <Action Name="SetAttribute(&quot;Toggle Feels Like Temp&quot;, &quot;Show Feels Like Temp: &quot; + ((MeteoShowApparent) ? &quot;ON&quot; : &quot;OFF&quot;))" Sym="METEO-40216">
+                   <Action Name="SettingsText = &quot;Current Settings:\n\n&quot;" Sym="METEO-40220">
+                    <Action Name="SettingsText = SettingsText + &quot;Location: &quot; + ((MeteoLocName != null &amp;&amp; Size(MeteoLocName) &gt; 0) ? MeteoLocName : &quot;Not Set&quot;) + &quot;\n&quot;" Sym="METEO-40221">
+                     <Action Name="SettingsText = SettingsText + &quot;Coordinates: &quot; + ((MeteoLat != null) ? (MeteoLat + &quot;, &quot; + MeteoLon) : &quot;Not Set&quot;) + &quot;\n&quot;" Sym="METEO-40222">
+                      <Action Name="SettingsText = SettingsText + &quot;Temperature: &quot; + ((&quot;celsius&quot; == MeteoTempUnit) ? &quot;Celsius&quot; : &quot;Fahrenheit&quot;) + &quot;\n&quot;" Sym="METEO-40223">
+                       <Action Name="SettingsText = SettingsText + &quot;Wind Speed: &quot; + ((MeteoShowWind) ? &quot;ON&quot; : &quot;OFF&quot;) + &quot;\n&quot;" Sym="METEO-40224">
+                        <Action Name="SettingsText = SettingsText + &quot;Sunrise/Sunset: &quot; + ((MeteoShowSun) ? &quot;ON&quot; : &quot;OFF&quot;) + &quot;\n&quot;" Sym="METEO-40225">
+                         <Action Name="SettingsText = SettingsText + &quot;UV Index: &quot; + ((MeteoShowUV) ? &quot;ON&quot; : &quot;OFF&quot;) + &quot;\n&quot;" Sym="METEO-40226">
+                          <Action Name="SettingsText = SettingsText + &quot;Feels Like Temp: &quot; + ((MeteoShowApparent) ? &quot;ON&quot; : &quot;OFF&quot;) + &quot;\n&quot;" Sym="METEO-40227">
+                           <Action Name="SettingsText = SettingsText + &quot;\nPowered by Open-Meteo.com\nFree Weather API&quot;" Sym="METEO-40228">
+                            <Action Name="SetAttribute(&quot;SettingsInfo&quot;, SettingsText)" Sym="METEO-40229"/>
+                           </Action>
+                          </Action>
+                         </Action>
+                        </Action>
+                       </Action>
+                      </Action>
+                     </Action>
+                    </Action>
+                   </Action>
+                  </Action>
+                 </Action>
+                </Action>
+               </Action>
+              </Action>
+             </Action>
+            </Action>
+           </Action>
+          </Action>
+         </Action>
+        </Action>
+       </Action>
+      </Action>
+     </Action>
+    </Action>
+   </Action>
+  </Hook>
+  <Hook Name="AfterMenuLoad" Sym="METEO-40300">
+   <Action Ref="2564" Name="MenuIsActive = true"/>
+  </Hook>
+  <Hook Name="BeforeMenuUnload" Sym="METEO-40301">
+   <Action Ref="2920" Name="MenuIsActive = false"/>
+  </Hook>
+  <Listener Name="Left - Back" Sym="METEO-40310">
+   <ListenerEvent>Left</ListenerEvent>
+   <Action Name="AddStaticContext(&quot;WeatherParentMenu&quot;, &quot;xOnlineServices&quot; )" Sym="METEO-40311">
+    <Menu Ref="72300" Name="Weather Meteo"/>
+   </Action>
+  </Listener>
+  <Attribute Name="MeteoInstance" Sym="METEO-40320">
+   <Value>null</Value>
+  </Attribute>
+  <Attribute Ref="2927" Name="MenuIsActive"/>
+  <Attribute Name="MenuTitle" Sym="METEO-40321">
+   <Value>"Weather Meteo Setup"</Value>
+  </Attribute>
+  <Attribute Ref="7165" Name="CurMenuBG"/>
+ </Menu>
 </Module>

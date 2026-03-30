@@ -23,13 +23,11 @@ public class HDHomeRunCaptureManager implements CaptureDeviceManager
 {
   public HDHomeRunCaptureManager() throws Throwable
   {
-    try {
-      sage.Native.loadLibrary("HDHomeRunCapture");
-      hdhrEnabled = true;
-    } catch (Throwable t) {
-      System.out.println("Unable to load HDHomeRun capture manager: " + t);
-      throw t;
+    sage.Native.loadLibrary("HDHomeRunCapture");
+    if (Native.FAILED_NATIVES.contains("HDHomeRunCapture")) {
+      throw new UnsatisfiedLinkError("HDHomeRunCapture native library not available");
     }
+    hdhrEnabled = true;
 
     if(hdhrEnabled) {
       prefs = MMC.MMC_KEY + '/';

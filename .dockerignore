@@ -1,0 +1,21 @@
+# Ignore build outputs, IDE files, and large binaries not needed in Docker context
+buildoutput/
+.gradle/
+.idea/
+.eclipse/
+*.iml
+.buildnumber
+
+# Git metadata
+.git/
+.github/
+
+# Archived installers and firmware (not needed for build)
+archived-installers/
+archived-firmware/
+
+# Windows-only build files
+buildwin/
+
+# Pre-built binaries
+buildwin/prebuilt/

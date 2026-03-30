@@ -1,7 +1,7 @@
 import org.gradle.internal.os.OperatingSystem
 
 plugins {
-  id "com.github.breadmoirai.github-release" version "2.2.12"
+  id "com.github.breadmoirai.github-release" version "2.5.2"
 }
 
 apply plugin: "java"
@@ -56,20 +56,18 @@ buildDir = new File(rootProject.projectDir, sageBuildDir);
 
 repositories {
   mavenCentral()
-  jcenter()
 }
 
 configurations {
   miniclient.extendsFrom implementation
 }
 
-// Maybe someday we'll target >1.7 (hopefully)
-targetCompatibility = 1.7
-sourceCompatibility = 1.7
+targetCompatibility = JavaVersion.VERSION_21
+sourceCompatibility = JavaVersion.VERSION_21
 
 compileJava {
   options.warnings = false
-  options.compilerArgs.addAll(['--release', '8'])
+  options.compilerArgs.addAll(['--release', '21'])
   //options.incremental = true
   //options.debugOptions.debugLevel = "source,lines,vars"
 }
@@ -126,8 +124,8 @@ sourceSets {
 }
 
 dependencies {
-  testImplementation 'org.testng:testng:6.1.1'
-  testImplementation "org.mockito:mockito-core:1.9.5"
+  testImplementation 'org.testng:testng:7.9.0'
+  testImplementation "org.mockito:mockito-core:5.8.0"
 
   implementation files(
     'third_party/UPnPLib/sbbi-upnplib-1.0.3.jar',
@@ -149,7 +147,7 @@ dependencies {
 
 test {
   useTestNG()
-  reports.html.destination = file("$sageBuildDir/reports/testng")
+  reports.html.outputLocation = file("$sageBuildDir/reports/testng")
   systemProperty 'io_test_file', "delete-io-testng."
   systemProperty 'nio_test_file', "delete-nio-testng."
   systemProperty 'sage.testing', "true"
@@ -188,8 +186,8 @@ task cleanSageJar(type: Delete) {
 // build the Sage.jar
 task sageJar(type: Jar) {
   description = 'Build the Sage.jar'
-  archiveName = sageJarName
-  destinationDir = file(sageJarDestinationDir)
+  archiveFileName = sageJarName
+  destinationDirectory = file(sageJarDestinationDir)
   from files(sourceSets.main.output.classesDirs) {
     // exclude the Mac stuff for now
     excludes = [
@@ -220,8 +218,8 @@ task cleanMiniJar(type: Delete) {
 
 // build miniclient jar
 task miniclientJar(type: Jar) {
-  archiveName = miniJarName
-  destinationDir = file(miniJarDestinationDir)
+  archiveFileName = miniJarName
+  destinationDirectory = file(miniJarDestinationDir)
   from files(sourceSets.miniclient.output.classesDirs) {
   }
 
@@ -442,7 +440,7 @@ eclipse {
 // eclipse remote debugging on port 5005 to debug the app
 task linuxRunMiniClient(type: JavaExec) {
   description 'Run the MiniClient.  Be sure you have run linuxMiniClientRelease at once, to get the dependency jars into the build/clientrelease area.'
-  main = "sage.miniclient.MiniClient"
+  mainClass = "sage.miniclient.MiniClient"
   classpath = fileTree(miniclientReleaseDestinationDir) {
     include '*.jar'
     exclude 'MiniClient.jar'
@@ -465,7 +463,7 @@ linuxRunMiniClient.doFirst {
 // eclipse remote debugging on port 5005 to debug the app
 task linuxRunServer(type: JavaExec) {
   args '0', '0', 'x', 'sagetv Sage.properties'
-  main = "sage.Sage"
+  mainClass = "sage.Sage"
   classpath = sourceSets.main.runtimeClasspath
   classpath += files('images/SageTV/')
   classpath += files('i18n')
@@ -489,19 +487,19 @@ linuxRunServer.doFirst {
 // 
 githubRelease
 {
-  token System.getenv("OPENSAGETV_TOKEN") ?: 'null'
-  owner "OpenSageTV"
-  repo "sagetv-linux"
-  tagName "${version}"
-  targetCommitish "main"
-  body {"""\
+  token = System.getenv("OPENSAGETV_TOKEN") ?: 'null'
+  owner = "OpenSageTV"
+  repo = "sagetv-linux"
+  tagName = "${version}"
+  targetCommitish = "main"
+  body = """\
 # SageTV Version ${version} for Linux
 
 Changelog for this version:  https://github.com/google/sagetv/blob/master/CHANGELOG.md#${releaseVersion}
 
 Source code for SageTV:  https://github.com/google/sagetv
-""" }
-  releaseAssets = fileTree(dir: stageBuildDir, includes: ['*.tar.gz', '*.deb', '*.zip'])
+"""
+  releaseAssets(fileTree(dir: stageBuildDir, includes: ['*.tar.gz', '*.deb', '*.zip']))
 }
 
 // This get run when you call ./gradlew without any targets
