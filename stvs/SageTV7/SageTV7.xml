@@ -18825,7 +18825,7 @@
            <Branch Name="&quot;xxWeatherMeteo&quot;" Sym="METEO-10003">
             <Action Name="&quot;REM Jump to the Weather Meteo menu.&quot;" Sym="METEO-10004">
              <Action Name="AddStaticContext(&quot;WeatherParentMenu&quot;, &quot;xOnlineServices&quot; )" Sym="METEO-10005">
-              <Menu Ref="72300" Name="Weather Meteo"/>
+              <Menu Ref="99300" Name="Weather Meteo"/>
              </Action>
             </Action>
            </Branch>
@@ -213102,7 +213102,7 @@
   <Item Ref="73982" Name="Games Mode"/>
  </Panel>
  <!-- ==================== Weather Meteo (Open-Meteo) ==================== -->
- <Menu ID="72300" Name="Weather Meteo" Sym="METEO-20001">
+ <Menu ID="99300" Name="Weather Meteo" Sym="METEO-20001">
   <Theme Ref="7168" Name="Free Menu Layout with ..."/>
   <Panel Name="Menu Content" Sym="METEO-20002">
    <Theme Ref="7380" Name="Free Form Full Menu Co..."/>
@@ -213124,13 +213124,13 @@
     <Item Name="7-Day Forecast" Sym="METEO-20004">
      <Action Name="&quot;REM Jump to 7-day forecast.&quot;" Sym="METEO-20005">
       <Action Name="AddStaticContext(&quot;WeatherParentMenu&quot;, WeatherParentMenu )" Sym="METEO-20006">
-       <Menu Ref="72301" Name="Weather Meteo - Extend..."/>
+       <Menu Ref="99301" Name="Weather Meteo - Extend..."/>
       </Action>
      </Action>
     </Item>
     <Item Name="Setup" Sym="METEO-20007">
      <Action Name="&quot;REM Jump to setup screen.&quot;" Sym="METEO-20008">
-      <Menu Ref="72302" Name="Weather Meteo - Setup"/>
+      <Menu Ref="99302" Name="Weather Meteo - Setup"/>
      </Action>
     </Item>
     <Item Name="Back" Sym="METEO-20009">
@@ -213456,12 +213456,12 @@
        <Conditional Name="MeteoLat" Sym="METEO-20310">
         <Branch Name="null" Sym="METEO-20311">
          <Action Name="&quot;REM No location set, go to setup.&quot;" Sym="METEO-20312">
-          <Menu Ref="72302" Name="Weather Meteo - Setup"/>
+          <Menu Ref="99302" Name="Weather Meteo - Setup"/>
          </Action>
         </Branch>
         <Branch Name="&quot;&quot;" Sym="METEO-20313">
          <Action Name="&quot;REM Empty location, go to setup.&quot;" Sym="METEO-20314">
-          <Menu Ref="72302" Name="Weather Meteo - Setup"/>
+          <Menu Ref="99302" Name="Weather Meteo - Setup"/>
          </Action>
         </Branch>
         <Branch Name="else" Sym="METEO-20315">
@@ -213555,7 +213555,7 @@
   <Attribute Ref="7165" Name="CurMenuBG"/>
  </Menu>
  <!-- ==================== Weather Meteo - Extended Forecast ==================== -->
- <Menu ID="72301" Name="Weather Meteo - Extended Forecast" Sym="METEO-30001">
+ <Menu ID="99301" Name="Weather Meteo - Extended Forecast" Sym="METEO-30001">
   <Theme Ref="7168" Name="Free Menu Layout with ..."/>
   <Panel Name="Menu Content" Sym="METEO-30002">
    <Theme Ref="7380" Name="Free Form Full Menu Co..."/>
@@ -213576,7 +213576,7 @@
     <MouseTransparency>false</MouseTransparency>
     <Item Name="Back to Weather" Sym="METEO-30004">
      <Action Name="AddStaticContext(&quot;WeatherParentMenu&quot;, WeatherParentMenu )" Sym="METEO-30005">
-      <Menu Ref="72300" Name="Weather Meteo"/>
+      <Menu Ref="99300" Name="Weather Meteo"/>
      </Action>
     </Item>
     <Action Ref="32" Name="&quot;REM Handle Menu conte..."/>
@@ -213743,7 +213743,7 @@
   <Listener Name="Left - Back" Sym="METEO-30310">
    <ListenerEvent>Left</ListenerEvent>
    <Action Name="AddStaticContext(&quot;WeatherParentMenu&quot;, WeatherParentMenu )" Sym="METEO-30311">
-    <Menu Ref="72300" Name="Weather Meteo"/>
+    <Menu Ref="99300" Name="Weather Meteo"/>
    </Action>
   </Listener>
   <Attribute Name="MeteoInstance" Sym="METEO-30320">
@@ -213756,7 +213756,7 @@
   <Attribute Ref="7165" Name="CurMenuBG"/>
  </Menu>
  <!-- ==================== Weather Meteo - Setup ==================== -->
- <Menu ID="72302" Name="Weather Meteo - Setup" Sym="METEO-40001">
+ <Menu ID="99302" Name="Weather Meteo - Setup" Sym="METEO-40001">
   <Theme Ref="7168" Name="Free Menu Layout with ..."/>
   <Panel Name="Menu Content" Sym="METEO-40002">
    <Theme Ref="7380" Name="Free Form Full Menu Co..."/>
@@ -213870,7 +213870,7 @@
     </Item>
     <Item Name="Save &amp; View Weather" Sym="METEO-40080">
      <Action Name="AddStaticContext(&quot;WeatherParentMenu&quot;, &quot;xOnlineServices&quot; )" Sym="METEO-40081">
-      <Menu Ref="72300" Name="Weather Meteo"/>
+      <Menu Ref="99300" Name="Weather Meteo"/>
      </Action>
     </Item>
     <Action Ref="32" Name="&quot;REM Handle Menu conte..."/>
@@ -213965,7 +213965,7 @@
   <Listener Name="Left - Back" Sym="METEO-40310">
    <ListenerEvent>Left</ListenerEvent>
    <Action Name="AddStaticContext(&quot;WeatherParentMenu&quot;, &quot;xOnlineServices&quot; )" Sym="METEO-40311">
-    <Menu Ref="72300" Name="Weather Meteo"/>
+    <Menu Ref="99300" Name="Weather Meteo"/>
    </Action>
   </Listener>
   <Attribute Name="MeteoInstance" Sym="METEO-40320">
