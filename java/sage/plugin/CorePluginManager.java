@@ -803,8 +803,8 @@ public class CorePluginManager implements Runnable
       List<File> localFiles = new ArrayList<File>();
 
       // SageTV 7 Plugins
-      String sageTV7URL = repoValue("v7", REPO_URL_PROP_KEY, "http://download.sagetv.com/SageTVPlugins.xml");
-      String sageTV7MD5 = repoValue("v7", REPO_MD5_PROP_KEY, "http://download.sagetv.com/SageTVPlugins.md5.txt");
+      String sageTV7URL = repoValue("v7", REPO_URL_PROP_KEY, "https://download.sagetv.com/SageTVPlugins.xml");
+      String sageTV7MD5 = repoValue("v7", REPO_MD5_PROP_KEY, "https://download.sagetv.com/SageTVPlugins.md5.txt");
       String sageTV7Local = repoValue("v7", REPO_LOCALFILE_PROP_KEY, "SageTVPlugins.xml");
       localFiles.add(getLocalPluginFile(sageTV7Local));
       updateLocalPluginRepoFile(sageTV7URL, sageTV7MD5, sageTV7Local);

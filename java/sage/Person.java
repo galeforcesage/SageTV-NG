@@ -339,11 +339,11 @@ public class Person extends DBObject
 
     switch ( personId & PERSON_TYPE_MASK ) {
       case PERSON_TYPE_PERSON:
-        return "http://www.gstatic.com/tv/thumb/persons/"+tmsId+"/"+tmsId+"_v"+(getThumb?"2":"4")+"_"+imageIdString+".jpg";
+        return "https://www.gstatic.com/tv/thumb/persons/"+tmsId+"/"+tmsId+"_v"+(getThumb?"2":"4")+"_"+imageIdString+".jpg";
       case PERSON_TYPE_COLLEGE:
-        return "http://www.gstatic.com/tv/thumb/sportslogos/"+tmsId+"/u"+tmsId+"_l_h"+(getThumb?"5":"6")+"_"+imageIdString+".png";
+        return "https://www.gstatic.com/tv/thumb/sportslogos/"+tmsId+"/u"+tmsId+"_l_h"+(getThumb?"5":"6")+"_"+imageIdString+".png";
       case PERSON_TYPE_TEAM:
-        return "http://www.gstatic.com/tv/thumb/sportslogos/"+tmsId+"/t"+tmsId+"_l_h"+(getThumb?"5":"6")+"_"+imageIdString+".png";
+        return "https://www.gstatic.com/tv/thumb/sportslogos/"+tmsId+"/t"+tmsId+"_l_h"+(getThumb?"5":"6")+"_"+imageIdString+".png";
       default:
         return null;
     }

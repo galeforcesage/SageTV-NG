@@ -502,6 +502,7 @@ public class MediaServer implements Runnable
         // Check for UTF pathname conversion issues
         currFile = new java.io.File(new String(filename.getBytes(Sage.BYTE_CHARSET), Sage.I18N_CHARSET));
       }
+      currFile = currFile.getCanonicalFile(); // any relative path hacking is removed here
       lastRecFileSize = 0;
       if (checkFileAccess())
       {

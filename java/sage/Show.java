@@ -1151,21 +1151,21 @@ public final class Show extends DBObject
           switch (imageType)
           {
             case IMAGE_PHOTO_TALL:
-              return "http://download.sage.tv/epgimages/art/" + getExternalID() + "/PhotoTall-" + index + ".jpg";
+              return "https://download.sage.tv/epgimages/art/" + getExternalID() + "/PhotoTall-" + index + ".jpg";
             case IMAGE_PHOTO_WIDE:
-              return "http://download.sage.tv/epgimages/art/" + getExternalID() + "/PhotoWide-" + index + ".jpg";
+              return "https://download.sage.tv/epgimages/art/" + getExternalID() + "/PhotoWide-" + index + ".jpg";
             case IMAGE_PHOTO_THUMB_TALL:
-              return "http://download.sage.tv/epgimages/art/" + getExternalID() + "/PhotoTallThumb-" + index + ".jpg";
+              return "https://download.sage.tv/epgimages/art/" + getExternalID() + "/PhotoTallThumb-" + index + ".jpg";
             case IMAGE_PHOTO_THUMB_WIDE:
-              return "http://download.sage.tv/epgimages/art/" + getExternalID() + "/PhotoWideThumb-" + index + ".jpg";
+              return "https://download.sage.tv/epgimages/art/" + getExternalID() + "/PhotoWideThumb-" + index + ".jpg";
             case IMAGE_POSTER_TALL:
-              return "http://download.sage.tv/epgimages/art/" + getExternalID() + "/PosterTall-" + index + ".jpg";
+              return "https://download.sage.tv/epgimages/art/" + getExternalID() + "/PosterTall-" + index + ".jpg";
             case IMAGE_POSTER_WIDE:
-              return "http://download.sage.tv/epgimages/art/" + getExternalID() + "/PhotoWide-" + index + ".jpg";
+              return "https://download.sage.tv/epgimages/art/" + getExternalID() + "/PhotoWide-" + index + ".jpg";
             case IMAGE_POSTER_THUMB_TALL:
-              return "http://download.sage.tv/epgimages/art/" + getExternalID() + "/PosterTallThumb-" + index + ".jpg";
+              return "https://download.sage.tv/epgimages/art/" + getExternalID() + "/PosterTallThumb-" + index + ".jpg";
             case IMAGE_POSTER_THUMB_WIDE:
-              return "http://download.sage.tv/epgimages/art/" + getExternalID() + "/PosterWideThumb-" + index + ".jpg";
+              return "https://download.sage.tv/epgimages/art/" + getExternalID() + "/PosterWideThumb-" + index + ".jpg";
             default:
               return null;
           }

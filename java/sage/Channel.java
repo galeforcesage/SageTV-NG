@@ -289,11 +289,11 @@ public final class Channel extends DBObject
       switch (imageType)
       {
         case LOGO_SMALL:
-          return "http://download.sage.tv/epgimages/logos/" + (logoMask & LOGO_STATION_MASK) + "/Small-" + index + ".png";
+          return "https://download.sage.tv/epgimages/logos/" + (logoMask & LOGO_STATION_MASK) + "/Small-" + index + ".png";
         case LOGO_MED:
-          return "http://download.sage.tv/epgimages/logos/" + (logoMask & LOGO_STATION_MASK) + "/Med-" + index + ".png";
+          return "https://download.sage.tv/epgimages/logos/" + (logoMask & LOGO_STATION_MASK) + "/Med-" + index + ".png";
         case LOGO_LARGE:
-          return "http://download.sage.tv/epgimages/logos/" + (logoMask & LOGO_STATION_MASK) + "/Large-" + index + ".png";
+          return "https://download.sage.tv/epgimages/logos/" + (logoMask & LOGO_STATION_MASK) + "/Large-" + index + ".png";
         default:
           return null;
       }
