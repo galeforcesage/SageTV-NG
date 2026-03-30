@@ -112,6 +112,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openjdk-21-jre-headless \
     libasound2t64 \
     libfreetype6 \
+    libharfbuzz0b \
+    fontconfig \
+    fonts-dejavu-core \
     libx11-6 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
