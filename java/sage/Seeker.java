@@ -1597,11 +1597,9 @@ public class Seeker implements Hunter
       File iphotoData = new File(userDirs[u], "Pictures/iPhoto Library/AlbumData.xml");
       if (!iphotoData.isFile())
         continue;
-      java.io.BufferedReader is = null;
       String filePrefix = new File(userDirs[u], "Pictures/iPhoto Library/").toString();
-      try
+      try (java.io.BufferedReader is = new java.io.BufferedReader(new FileReader(iphotoData)))
       {
-        is = new java.io.BufferedReader(new FileReader(iphotoData));
         String currLine = is.readLine();
         while (currLine != null)
         {
@@ -1663,17 +1661,6 @@ public class Seeker implements Hunter
       catch (java.io.IOException e)
       {
         if (Sage.DBG) System.out.println("ERROR parsing iTunes iPhoto file of " + e);
-      }
-      finally
-      {
-        if (is != null)
-        {
-          try
-          {
-            is.close();
-          }catch (Exception e){}
-          is = null;
-        }
       }
     }
   }

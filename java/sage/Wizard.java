@@ -7917,6 +7917,7 @@ public class Wizard implements EPGDBPublic2
       return null;
   }
 
+  @SuppressWarnings("removal") // TODO: migrate to try-with-resources or explicit close
   protected void finalize() throws IOException
   {
     if (dbout != null) dbout.close();

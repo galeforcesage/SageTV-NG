@@ -134,7 +134,7 @@ public class FreetypeFont extends MetaFont
     return rv;
   }
 
-  // UGLY---FINALIZE!!!! BAD FOR PERFORMANCE
+  @SuppressWarnings("removal") // TODO: migrate to java.lang.ref.Cleaner for native resource cleanup
   protected void finalize()
   {
     releaseNativeFont();

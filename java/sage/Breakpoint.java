@@ -69,10 +69,8 @@ public class Breakpoint
     // 601 debug
     //        tv.sage.mod.Log.ger.info("saveBP:idMap.size = " + (idMap == null ? -1 : idMap.size()));
 
-    java.io.PrintWriter writer = null;
-    try
+    try (java.io.PrintWriter writer = new java.io.PrintWriter(new java.io.BufferedWriter(new java.io.FileWriter(theFile))))
     {
-      writer = new java.io.PrintWriter(new java.io.BufferedWriter(new java.io.FileWriter(theFile)));
       for (int i = 0; i < breaks.length; i++)
       {
         // 601
@@ -92,21 +90,13 @@ public class Breakpoint
         writer.println("" + id + "=" + breaks[i].myFlags + "," + breaks[i].enabled);
       }
     }
-    finally
-    {
-      if (writer != null)
-        writer.close();
-      writer = null;
-    }
   }
 
   public static java.util.Vector loadBreakpoints(java.io.File theFile, UIManager uiMgr) throws java.io.IOException
   {
-    java.io.BufferedReader reader = null;
     java.util.Vector rv = new java.util.Vector();
-    try
+    try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.FileReader(theFile)))
     {
-      reader = new java.io.BufferedReader(new java.io.FileReader(theFile));
       String line;
       while (true)
       {
@@ -138,12 +128,6 @@ public class Breakpoint
           breakie.setEnabled(false);
         rv.add(breakie);
       }
-    }
-    finally
-    {
-      if (reader != null)
-        reader.close();
-      reader = null;
     }
     return rv;
   }

@@ -61,12 +61,10 @@ public class SageProperties
     java.util.Properties defaultsPrefs = null;
     if (defaultsFile != null && defaultsFile.isFile())
     {
-      java.io.InputStream inStream = null;
       synchronized (GLOBAL_PROPERTY_LOCK)
       {
-        try
+        try (java.io.InputStream inStream = new java.io.BufferedInputStream(new java.io.FileInputStream(defaultsFile)))
         {
-          inStream = new java.io.BufferedInputStream(new java.io.FileInputStream(defaultsFile));
           defaultsPrefs = (nextLevelDefault != null) ?
               new FastProperties(nextLevelDefault.prefs) : new FastProperties();
               defaultsPrefs.load(inStream);
@@ -76,39 +74,23 @@ public class SageProperties
           System.err.println("Cannot load default preference file: " + defaultsFile);
           defaultsPrefs = null;
         }
-        finally
-        {
-          if (inStream != null)
-          {
-            try{inStream.close();}catch(Exception e){}
-          }
-        }
       }
     }
 
     prefs = new FastProperties(defaultsPrefs);
     if (prefFile.isFile() || crashFile.isFile())
     {
-      java.io.InputStream inStream = null;
       synchronized (GLOBAL_PROPERTY_LOCK)
       {
-        try
+        try (java.io.InputStream is = new java.io.BufferedInputStream(new java.io.FileInputStream(prefFile.isFile() ?
+            prefFile : crashFile)))
         {
-          inStream = new java.io.BufferedInputStream(new java.io.FileInputStream(prefFile.isFile() ?
-              prefFile : crashFile));
-          prefs.load(inStream);
+          prefs.load(is);
         }
         catch (java.io.IOException e)
         {
           System.out.println("Cannot load preference file: " + (prefFile.isFile() ? prefFile : crashFile) + " e=" + e);
           return;
-        }
-        finally
-        {
-          if (inStream != null)
-          {
-            try{inStream.close();}catch(Exception e){}
-          }
         }
       }
       // See if we loaded junk or not. This can happen if the system isn't shutdown right

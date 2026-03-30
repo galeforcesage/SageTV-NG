@@ -162,11 +162,13 @@ CMD ["java", \
      "--add-opens", "java.base/java.lang=ALL-UNNAMED", \
      "--add-opens", "java.base/java.lang.reflect=ALL-UNNAMED", \
      "--add-opens", "java.base/java.io=ALL-UNNAMED", \
-     "-Xmx768m", \
+     "-Xms768m", \
+     "-Xmx1536m", \
      "-XX:+UseG1GC", \
      "-XX:+UseStringDeduplication", \
      "-XX:+UseAdaptiveSizePolicy", \
-     "-XX:MaxGCPauseMillis=25", \
-     "-XX:GCTimeRatio=24", \
+     "-XX:MaxGCPauseMillis=50", \
+     "-XX:GCTimeRatio=19", \
+     "-XX:+ParallelRefProcEnabled", \
      "-cp", "Sage.jar:JARs/*", \
      "sage.Sage", "0", "0", "x", "sagetv Sage.properties"]

@@ -263,10 +263,8 @@ public class Catbert
           return 0;
       }
     });
-    PrintWriter bw = null;
-    try
+    try (PrintWriter bw = new PrintWriter(new BufferedWriter(new FileWriter(filename))))
     {
-      bw = new PrintWriter(new BufferedWriter(new FileWriter(filename)));
       for (int i = 0; i < allFuncs.length; i++)
       {
         if (allFuncs[i] instanceof PredefinedJEPFunction)
@@ -276,11 +274,6 @@ public class Catbert
           bw.println(foo.numCalls + " \t" + foo.getGroup() + "." + foo.getMethodName());
         }
       }
-    }
-    finally
-    {
-      if (bw != null)
-        bw.close();
     }
   }
 

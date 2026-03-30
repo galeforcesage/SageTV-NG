@@ -108,19 +108,13 @@ public class ModuleXMLParser
 
     xmlReader.setContentHandler(new Handler());
 
-    java.io.InputStream inputStream = new java.io.FileInputStream(xmlFile);
-
-    try
+    try (java.io.InputStream inputStream = new java.io.BufferedInputStream(new java.io.FileInputStream(xmlFile)))
     {
       org.xml.sax.InputSource inputSource = new org.xml.sax.InputSource(inputStream);
 
       //            inputSource.setEncoding("UTF-8");
 
       xmlReader.parse(inputSource);
-    }
-    finally
-    {
-      inputStream.close();
     }
     /*
 		java.io.FileInputStream fis = new java.io.FileInputStream(xmlFile);

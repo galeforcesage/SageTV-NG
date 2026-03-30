@@ -54,6 +54,12 @@ import sage.WidgetFidget;
  */
 public class XBMCSkinParser implements sage.WidgetConstants
 {
+	// Pre-compiled patterns for hot-path regex replacements
+	private static final java.util.regex.Pattern PAT_COLOR_TAG = java.util.regex.Pattern.compile("\\[\\/*COLOR[^\\]]*\\]", java.util.regex.Pattern.CASE_INSENSITIVE);
+	private static final java.util.regex.Pattern PAT_BOLD_TAG = java.util.regex.Pattern.compile("\\[\\/*B[^\\]]*\\]", java.util.regex.Pattern.CASE_INSENSITIVE);
+	private static final java.util.regex.Pattern PAT_UPPERCASE_OPEN = java.util.regex.Pattern.compile("\\[UPPERCASE\\]", java.util.regex.Pattern.CASE_INSENSITIVE);
+	private static final java.util.regex.Pattern PAT_UPPERCASE_CLOSE = java.util.regex.Pattern.compile("\\[\\/UPPERCASE\\]", java.util.regex.Pattern.CASE_INSENSITIVE);
+
 	public boolean FAST = false; // doesn't really matter; but writing OUR XML file takes about 4 seconds
 	/*
 	 * Default image filenames used by XBMC
@@ -7034,11 +7040,11 @@ defaultxboxdvd.png
 
 // NOTE: WE NEED TO SUPPORT THE COLOR TAGS IN LABELS!!!
 		// Now remove all of the [COLOR][/COLOR] tags since we don't support those yet; remove [B][/B] tags as well
-		expr = java.util.regex.Pattern.compile("\\[\\/*COLOR[^\\]]*\\]", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(expr).replaceAll("");
-		expr = java.util.regex.Pattern.compile("\\[\\/*B[^\\]]*\\]", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(expr).replaceAll("");
+		expr = PAT_COLOR_TAG.matcher(expr).replaceAll("");
+		expr = PAT_BOLD_TAG.matcher(expr).replaceAll("");
 
-		expr = java.util.regex.Pattern.compile("\\[UPPERCASE\\]", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(expr).replaceAll("\" + java_lang_String_toUpperCase(\"");
-		expr = java.util.regex.Pattern.compile("\\[\\/UPPERCASE\\]", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(expr).replaceAll("\") + \"");
+		expr = PAT_UPPERCASE_OPEN.matcher(expr).replaceAll("\" + java_lang_String_toUpperCase(\"");
+		expr = PAT_UPPERCASE_CLOSE.matcher(expr).replaceAll("\") + \"");
 
 		expr = expr.replace("[CR]", "\\n");
 		expr = expr.replace("\r\n", "\\n");

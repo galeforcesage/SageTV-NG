@@ -1384,8 +1384,6 @@ public class ZRoot extends java.awt.Canvas
     }
   }
 
-  protected void finalize() { cleanse(); }
-
   public void cleanse()
   {
   }

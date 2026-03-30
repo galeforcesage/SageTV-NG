@@ -340,10 +340,8 @@ public class ModuleGroup
   {
     try
     {
-      java.io.FileInputStream fis = new java.io.FileInputStream(file);
-
-      try
-      {
+    try (java.io.InputStream fis = new java.io.BufferedInputStream(new java.io.FileInputStream(file)))
+    {
         int b1 = fis.read();
         int b2 = fis.read();
         int b3 = fis.read();
@@ -354,11 +352,7 @@ public class ModuleGroup
         }
 
         return (false);
-      }
-      finally
-      {
-        fis.close();
-      }
+    }
     }
     catch (Exception x)
     {

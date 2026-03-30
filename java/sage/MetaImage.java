@@ -2276,6 +2276,7 @@ public class MetaImage
       return new Dimension(width[imageIndex], height[imageIndex]);
   }
 
+  @SuppressWarnings("removal") // TODO: migrate to java.lang.ref.Cleaner for native resource cleanup
   @Override
   protected void finalize()
   {
@@ -3629,11 +3630,7 @@ public class MetaImage
     {
       return waitObj;
     }
-    @Override
-    public void finalize()
-    {
-      // We don't want to clean anything up for waiter objects
-    }
+    // Removed empty finalize() override — no cleanup needed for waiter objects
     public MetaImage getBase()
     {
       return base;

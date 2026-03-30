@@ -105,16 +105,10 @@ public abstract class ModuleManager
 
     try
     {
-      java.io.InputStream is = new java.io.FileInputStream(DEFAULT_PROPERTIES_FILENAME);
-
-      try
-      {
-        moduleProperties.load(is);
-      }
-      finally
-      {
-        is.close();
-      }
+    try (java.io.InputStream is = new java.io.FileInputStream(DEFAULT_PROPERTIES_FILENAME))
+    {
+      moduleProperties.load(is);
+    }
     }
     catch (java.io.IOException iox)
     {
