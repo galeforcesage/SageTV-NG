@@ -17,7 +17,7 @@ REPO_URL="https://github.com/galeforcesage/SageTV-mine.git"
 BRANCH="appmod/java-upgrade-20260328165139"
 
 echo "================================================"
-echo " SageTV Java 21 + Weather Meteo Docker Setup"
+echo " SageTV Java 21 Docker Setup"
 echo "================================================"
 
 # ------------------------------------------------------------------
@@ -53,7 +53,7 @@ fi
 SAGETV_DIR="$(pwd)"
 echo "  -> Working directory: $SAGETV_DIR"
 echo "  -> Branch: $BRANCH"
-echo "  -> All Java 21 patches + Weather Meteo already included"
+echo "  -> All Java 21 patches already included"
 
 # ------------------------------------------------------------------
 # Step 2: Build Docker image

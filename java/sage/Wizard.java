@@ -18,7 +18,9 @@ package sage;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
+import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.CorruptIndexException;
+import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexCommit;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
@@ -9227,9 +9229,9 @@ public class Wizard implements EPGDBPublic2
 
     int lastCommittedWrite = 0;
 
-    //Analyzer analyzer = new StandardAnalyzer(org.apache.lucene.util.Version.LUCENE_36, Collections.emptySet());
-    Analyzer analyzer = new LuceneWhitespaceInsensitiveAnalyzer(org.apache.lucene.util.Version.LUCENE_36);
-    //Analyzer analyzer = new WhitespaceAnalyzer(org.apache.lucene.util.Version.LUCENE_36);
+    //Analyzer analyzer = new StandardAnalyzer(org.apache.lucene.util.Version.LUCENE_4_10_4, Collections.emptySet());
+    Analyzer analyzer = new LuceneWhitespaceInsensitiveAnalyzer();
+    //Analyzer analyzer = new WhitespaceAnalyzer(org.apache.lucene.util.Version.LUCENE_4_10_4);
 
     public LuceneIndex(byte type, String name, String indexRootPath) {
       this.type = type;
@@ -9277,10 +9279,10 @@ public class Wizard implements EPGDBPublic2
               IOUtils.deleteDirectory(directoryRunning);
               index = MMapDirectory.open(directoryRunning, NoLockFactory.getNoLockFactory());
             } else {
-              index = new RAMDirectory(diskDir);
+              index = new RAMDirectory(diskDir, org.apache.lucene.store.IOContext.DEFAULT);
             }
             IndexWriterConfig iwc = new IndexWriterConfig(
-                org.apache.lucene.util.Version.LUCENE_36,
+                org.apache.lucene.util.Version.LUCENE_4_10_4,
                 analyzer).setOpenMode(OpenMode.CREATE);
             // If the runnign index has a backer; copy over the snapshot index.
             if(diskIndexRunning) {
@@ -9311,17 +9313,17 @@ public class Wizard implements EPGDBPublic2
         }
 
         IndexWriterConfig iwc = new IndexWriterConfig(
-            org.apache.lucene.util.Version.LUCENE_36, analyzer).setOpenMode(
+            org.apache.lucene.util.Version.LUCENE_4_10_4, analyzer).setOpenMode(
                 OpenMode.CREATE_OR_APPEND);
         if(diskIndexRunning) {
           iwc.setRAMBufferSizeMB(INDEX_RAM_BUFFER_SIZE)
-          .setMergePolicy(NoMergePolicy.NO_COMPOUND_FILES) // TESTING
+          .setMergePolicy(NoMergePolicy.INSTANCE)
           .setMergeScheduler(NoMergeScheduler.INSTANCE); // TETING
         }
         writer = new IndexWriter(index, iwc);
         initializedIndex = (writer.numDocs() > 0) ? true : false;
         long start = Sage.time();
-        reader = IndexReader.open(getWriter(), true); /* true: apply all deletes (perfhit) */
+        reader = DirectoryReader.open(getWriter(), true); /* true: apply all deletes (perfhit) */
         start = Sage.time() - start;
         if(Sage.DBG) System.out.println("Lucene index(" + name + ") reader opened in " + start);
         searcher = new IndexSearcher(reader);
@@ -9352,16 +9354,16 @@ public class Wizard implements EPGDBPublic2
             return;
           }
           index = new MMapDirectory(directorySnapshot, NoLockFactory.getNoLockFactory());
-          IndexWriterConfig iwc = new IndexWriterConfig(org.apache.lucene.util.Version.LUCENE_36,
+          IndexWriterConfig iwc = new IndexWriterConfig(org.apache.lucene.util.Version.LUCENE_4_10_4,
               analyzer).setOpenMode(OpenMode.CREATE_OR_APPEND);
           if (diskIndexRunning) {
             iwc.setRAMBufferSizeMB(INDEX_RAM_BUFFER_SIZE)
-            .setMergePolicy(NoMergePolicy.NO_COMPOUND_FILES) // TESTING
+            .setMergePolicy(NoMergePolicy.INSTANCE)
             .setMergeScheduler(NoMergeScheduler.INSTANCE); // TETING
           }
           writer = new IndexWriter(index, iwc);
           initializedIndex = (writer.numDocs() > 0) ? true : false;
-          reader = IndexReader.open(getWriter(), true); /* true: apply all deletes (perfhit) */
+          reader = DirectoryReader.open(getWriter(), true); /* true: apply all deletes (perfhit) */
           searcher = new IndexSearcher(reader);
           needsReset = false;
         }
@@ -9397,15 +9399,15 @@ public class Wizard implements EPGDBPublic2
             index = new RAMDirectory();
           }
           IndexWriterConfig iwc = new IndexWriterConfig(
-              org.apache.lucene.util.Version.LUCENE_36,
+              org.apache.lucene.util.Version.LUCENE_4_10_4,
               analyzer).setOpenMode(OpenMode.CREATE);
           if (diskIndexRunning) {
             iwc.setRAMBufferSizeMB(INDEX_RAM_BUFFER_SIZE)
-            .setMergePolicy(NoMergePolicy.NO_COMPOUND_FILES) // TESTING
+            .setMergePolicy(NoMergePolicy.INSTANCE)
             .setMergeScheduler(NoMergeScheduler.INSTANCE); // TETING
           }
           writer = new IndexWriter(index, iwc);
-          reader = IndexReader.open(getWriter(), true); // true: apply all deletes (perfhit)
+          reader = DirectoryReader.open(getWriter(), true); // true: apply all deletes (perfhit)
           initializedIndex = false;
           searcher = new IndexSearcher(reader);
           insertions = 0;
@@ -9445,11 +9447,10 @@ public class Wizard implements EPGDBPublic2
       synchronized (getLock()) {
         IndexReader newReader;
         try {
-          newReader = IndexReader.openIfChanged(reader);
+          newReader = DirectoryReader.openIfChanged((DirectoryReader) reader);
           if (newReader != null) {
             reader.close();
             reader = newReader;
-            searcher.close();
             searcher = new IndexSearcher(reader);
           }
           lastCommittedWrite = insertions;
@@ -9505,7 +9506,7 @@ public class Wizard implements EPGDBPublic2
           Directory tmp = FSDirectory.open(directorySnapshot, NoLockFactory.getNoLockFactory());
           // Note: Spend a little time optimizing the index by leaving in the default merger.
           IndexWriterConfig tmpIwc = new IndexWriterConfig(
-              org.apache.lucene.util.Version.LUCENE_36,
+              org.apache.lucene.util.Version.LUCENE_4_10_4,
               analyzer).setOpenMode(OpenMode.CREATE);
           // If we later wish to push this off till boot time, make sure to uncomment these lines
           // if (!diskIndexRunning)
@@ -9514,7 +9515,7 @@ public class Wizard implements EPGDBPublic2
           IndexWriter tmpWriter = new IndexWriter(tmp, tmpIwc);
           tmpWriter.addIndexes(new Directory[] {index});
           // Write the tombstone marker signaling the write was successfull
-          tmp.createOutput(INDEX_WRITE_COMPLETED);
+          tmp.createOutput(INDEX_WRITE_COMPLETED, org.apache.lucene.store.IOContext.DEFAULT).close();
           tmpWriter.close();
           long start = Sage.time();
           tmp.close();
@@ -9606,16 +9607,16 @@ public class Wizard implements EPGDBPublic2
       // re-allocations.
       Document doc = new Document();
       final String emptyString = "";
-      Field id = new Field("id", emptyString, Field.Store.YES, Field.Index.ANALYZED);
-      Field title = new Field("title", emptyString, Field.Store.NO, Field.Index.ANALYZED);
-      Field desc = new Field("desc", emptyString, Field.Store.NO, Field.Index.ANALYZED);
-      Field ep = new Field("ep", emptyString, Field.Store.NO, Field.Index.ANALYZED);
-      Field year = new Field("year", emptyString, Field.Store.NO, Field.Index.ANALYZED);
-      Field rated = new Field("rated", emptyString, Field.Store.NO, Field.Index.ANALYZED);
-      Field peeps = new Field("peep", emptyString, Field.Store.NO, Field.Index.ANALYZED);
-      Field categories = new Field("cat", emptyString, Field.Store.NO, Field.Index.ANALYZED);
-      Field ers = new Field("ers", emptyString, Field.Store.NO, Field.Index.ANALYZED);
-      Field bonuses = new Field("bonus", emptyString, Field.Store.NO, Field.Index.ANALYZED);
+      TextField id = new TextField("id", emptyString, Field.Store.YES);
+      TextField title = new TextField("title", emptyString, Field.Store.NO);
+      TextField desc = new TextField("desc", emptyString, Field.Store.NO);
+      TextField ep = new TextField("ep", emptyString, Field.Store.NO);
+      TextField year = new TextField("year", emptyString, Field.Store.NO);
+      TextField rated = new TextField("rated", emptyString, Field.Store.NO);
+      TextField peeps = new TextField("peep", emptyString, Field.Store.NO);
+      TextField categories = new TextField("cat", emptyString, Field.Store.NO);
+      TextField ers = new TextField("ers", emptyString, Field.Store.NO);
+      TextField bonuses = new TextField("bonus", emptyString, Field.Store.NO);
       doc.add(id);
       doc.add(title);
       doc.add(desc);
@@ -9670,12 +9671,12 @@ public class Wizard implements EPGDBPublic2
                 Show s = (Show) trans;
                 long start = Sage.time();
 
-                id.setValue(Integer.toString(s.getID()));
-                title.setValue(s.getTitle());
-                desc.setValue(s.getDesc());
-                ep.setValue(s.getEpisodeName());
-                year.setValue(s.getYear());
-                rated.setValue(s.getRated());
+                id.setStringValue(Integer.toString(s.getID()));
+                title.setStringValue(s.getTitle());
+                desc.setStringValue(s.getDesc());
+                ep.setStringValue(s.getEpisodeName());
+                year.setStringValue(s.getYear());
+                rated.setStringValue(s.getRated());
 
                 StringBuffer buff = new StringBuffer();
                 if (s.people.length > 0) {
@@ -9685,7 +9686,7 @@ public class Wizard implements EPGDBPublic2
                     buff.append(" ");
                   }
                 }
-                peeps.setValue((buff.length() > 0) ? buff.toString() : emptyString);
+                peeps.setStringValue((buff.length() > 0) ? buff.toString() : emptyString);
 
                 buff.setLength(0);
                 if (s.categories.length > 0) {
@@ -9695,7 +9696,7 @@ public class Wizard implements EPGDBPublic2
                     buff.append(" ");
                   }
                 }
-                categories.setValue((buff.length() > 0) ? buff.toString() : emptyString);
+                categories.setStringValue((buff.length() > 0) ? buff.toString() : emptyString);
 
                 buff.setLength(0);
                 if (s.ers.length > 0) {
@@ -9705,7 +9706,7 @@ public class Wizard implements EPGDBPublic2
                     buff.append(" ");
                   }
                 }
-                ers.setValue((buff.length() > 0) ? buff.toString() : emptyString);
+                ers.setStringValue((buff.length() > 0) ? buff.toString() : emptyString);
 
                 buff.setLength(0);
                 if (s.bonuses.length > 0) {
@@ -9715,7 +9716,7 @@ public class Wizard implements EPGDBPublic2
                     buff.append(" ");
                   }
                 }
-                bonuses.setValue((buff.length() > 0) ? buff.toString() : emptyString);
+                bonuses.setStringValue((buff.length() > 0) ? buff.toString() : emptyString);
 
                 try {
                   writer.addDocument(doc);
@@ -9782,8 +9783,8 @@ public class Wizard implements EPGDBPublic2
       // re-allocations.
       Document doc = new Document();
       final String emptyString = "";
-      Field id = new Field("id", emptyString, Field.Store.YES, Field.Index.ANALYZED);
-      Field name = new Field("name", emptyString, Field.Store.NO, Field.Index.ANALYZED);
+      TextField id = new TextField("id", emptyString, Field.Store.YES);
+      TextField name = new TextField("name", emptyString, Field.Store.NO);
       doc.add(id);
       doc.add(name);
 
@@ -9821,8 +9822,8 @@ public class Wizard implements EPGDBPublic2
               } else if (trans instanceof Person) {
                 Person perp = (Person) trans;
                 long start = Sage.time();
-                id.setValue(Integer.toString(perp.id));
-                name.setValue(perp.getName());
+                id.setStringValue(Integer.toString(perp.id));
+                name.setStringValue(perp.getName());
                 try {
                   writer.addDocument(doc);
                 } catch (Exception e) {
@@ -10046,7 +10047,7 @@ public class Wizard implements EPGDBPublic2
       Show[] shows = new Show[search.scoreDocs.length];
       for (int i = 0; i < search.scoreDocs.length; i++) {
         Document doc = searcher.doc(search.scoreDocs[i].doc);
-        int showID = Integer.parseInt(doc.getFieldable("id").stringValue());
+        int showID = Integer.parseInt(doc.getField("id").stringValue());
         shows[i] = getShowForID(showID);
       }
       return shows;
@@ -10076,7 +10077,7 @@ public class Wizard implements EPGDBPublic2
       Person[] peeps = new Person[search.scoreDocs.length];
       for (int i = 0; i < search.scoreDocs.length; i++) {
         Document doc = searcher.doc(search.scoreDocs[i].doc);
-        int id = Integer.parseInt(doc.getFieldable("id").stringValue());
+        int id = Integer.parseInt(doc.getField("id").stringValue());
         peeps[i] = getPersonForID(id);
       }
       return peeps;

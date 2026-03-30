@@ -131,7 +131,8 @@ dependencies {
     'third_party/UPnPLib/sbbi-upnplib-1.0.3.jar',
 
     'third_party/Oracle/vecmath.jar',
-    'third_party/Lucene/lucene-core-3.6.0.jar',
+    'third_party/Lucene/lucene-core-4.10.4.jar',
+    'third_party/Lucene/lucene-analyzers-common-4.10.4.jar',
     'third_party/JCIFS/jcifs-1.1.6.jar',
   )
 
