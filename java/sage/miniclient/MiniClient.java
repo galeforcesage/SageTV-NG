@@ -58,7 +58,9 @@ public class MiniClient
       myProperties.store(os, "SageTV Placeshifter Properties");
       os.close();
       new java.io.File(configDir, "SageTVPlaceshifter.properties").delete();
-      new java.io.File(configDir, "SageTVPlaceshifter.properties.tmp").renameTo(new java.io.File(configDir, "SageTVPlaceshifter.properties"));
+      java.io.File finalPropFile = new java.io.File(configDir, "SageTVPlaceshifter.properties");
+      new java.io.File(configDir, "SageTVPlaceshifter.properties.tmp").renameTo(finalPropFile);
+      InputValidator.restrictFilePermissions(finalPropFile);
     }
     catch (java.io.IOException e)
     {
@@ -114,6 +116,7 @@ public class MiniClient
     else
       configDir = new java.io.File(System.getProperty("user.home"), ".sagetv");
     configDir.mkdirs();
+    InputValidator.restrictFilePermissions(configDir);
     // If the properties file is in the working directory; then use that one and save it back there. Otherwise
     // use the one in the user's home directory
     java.io.File propFile = new java.io.File(configDir, "SageTVPlaceshifter.properties");
@@ -201,12 +204,12 @@ public class MiniClient
     try
     {
       javax.crypto.Cipher.getInstance("RSA");
-      cryptoFormats = "RSA,Blowfish,DH,DES";
+      cryptoFormats = "RSA,Blowfish,AES,DH,DES,AES";
     }
     catch (Exception e)
     {
       // If we don't do RSA, then we use DH for the key exchange and DES for the secret stuff
-      cryptoFormats = "DH,DES";
+      cryptoFormats = "DH,DES,AES";
     }
     final MiniClientManagerFrame mcmf;
     String servername;

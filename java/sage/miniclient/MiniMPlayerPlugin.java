@@ -125,6 +125,11 @@ public class MiniMPlayerPlugin implements Runnable
     initialPTSmsec = 0;
     lastCacheRemBytes = 0;
     currState = PLAY_STATE; // it'll be playing at first, but the succesful pause will update this
+    if (hostname != null && hostname.length() > 0 && !InputValidator.isValidHostname(hostname))
+    {
+      System.out.println("WARNING: Invalid hostname rejected in fastLoad: " + InputValidator.maskForLog(hostname));
+      hostname = null;
+    }
     sendCommand((pauseOnLoad ? "pausing " : "") + "loadfile2 \"" +
         ((hostname != null && hostname.length() > 0) ? ("stv://" + hostname + "/") : "") +
         file.getPath().replaceAll("\\\\", "\\\\\\\\") + "\" " + (timeshifted ? "1 " : "0 ") + bufferSize);
@@ -331,7 +336,7 @@ public class MiniMPlayerPlugin implements Runnable
       return getColorKey().getRGB() & 0xFFFFFF;
   }
 
-  private static int shmemcounter = 0;
+  private static final java.security.SecureRandom secureRandom = new java.security.SecureRandom();
   public void load(byte majorTypeHint, byte minorTypeHint, String encodingHint, String file, String hostname, boolean timeshifted, long bufferSize)
   {
     if (alive && pushMode && Thread.currentThread() != cmdThread)
@@ -368,7 +373,7 @@ public class MiniMPlayerPlugin implements Runnable
         // too much audio ahead of where we need to be to do streaming playback.
         cmdOpts1 = /*(pushMode ? "-cache-min 0 " : "") + /*(pushMode ? "-abs 32768 " : "") +*/ "-identify -osdlevel 0 -autosync " +
             (pushMode ? "5" : "30") + " -noconsolecontrols -mc 1 -sid 99"+ // the -sid 99 disables subtitles by default (unless they have 99 sub langs)
-            (USE_STDIN ? "" : " -slave") + " " + MiniClient.myProperties.getProperty("extra_mplayer_args", "");
+            (USE_STDIN ? "" : " -slave") + " " + InputValidator.sanitizeMPlayerArgs(MiniClient.myProperties.getProperty("extra_mplayer_args", ""));
         int streamBufferSize = (pushMode ?
             Integer.parseInt(MiniClient.myProperties.getProperty("push_mode_stream_buffer_size", "8192")) :
               Integer.parseInt(MiniClient.myProperties.getProperty("stream_buffer_size", "65536")));
@@ -424,7 +429,7 @@ public class MiniMPlayerPlugin implements Runnable
           cmdOpt2 += " -ao " + MiniClient.myProperties.getProperty("audio_renderer", "dsound");
           if (gfxEngine instanceof DirectX9GFXCMD)
           {
-            final String shmemprefix = "SageTVPS" + (shmemcounter = ((shmemcounter+1)%1024));
+            final String shmemprefix = "SageTVPS" + Integer.toHexString(secureRandom.nextInt(0x7FFFFFFF));
             cmdOpt2 += " -vo stvwin:shmemprefix=" + shmemprefix;
             Thread t = new Thread("AsyncMPlayerVideoRender")
             {
@@ -538,7 +543,7 @@ public class MiniMPlayerPlugin implements Runnable
             }
           }
         }
-        cmdOpt2 += MiniClient.myProperties.getProperty("extra_option", "");
+        cmdOpt2 += InputValidator.sanitizeMPlayerArgs(MiniClient.myProperties.getProperty("extra_option", ""));
 
         // GPU/CPU performance: multi-threaded decoding and hardware acceleration hints
         cmdOpt2 += PerformanceTuner.getMPlayerPerformanceArgs();
@@ -555,6 +560,15 @@ public class MiniMPlayerPlugin implements Runnable
         {
           cmds.add("-circularfilesize");
           cmds.add(Long.toString(bufferSize));
+        }
+
+        // Sanitize file path and validate hostname before passing to MPlayer
+        if (file != null)
+          file = InputValidator.sanitizeFilePath(file);
+        if (hostname != null && hostname.length() > 0 && !InputValidator.isValidHostname(hostname))
+        {
+          System.out.println("WARNING: Invalid hostname rejected: " + InputValidator.maskForLog(hostname));
+          hostname = null;
         }
 
         if (USE_STDIN)

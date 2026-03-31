@@ -233,6 +233,11 @@ public class MiniClientManagerFrame extends javax.swing.JFrame implements java.a
               String[] cmdArgs = new String[tokie.countTokens()];
               int i = 0;
               while (tokie.hasMoreTokens()) cmdArgs[i++] = tokie.nextToken();
+              if (!InputValidator.isAllowedExecutable(cmdArgs[0]))
+              {
+                System.out.println("WARNING: Blocked execution of disallowed program: " + cmdArgs[0]);
+                return;
+              }
               try
               {
                 Runtime.getRuntime().exec(cmdArgs);
@@ -975,7 +980,7 @@ public class MiniClientManagerFrame extends javax.swing.JFrame implements java.a
         serverDirectAddress = MiniClient.myProperties.getProperty("servers/" + serverName + "/address", "");
         serverLookupID = MiniClient.myProperties.getProperty("servers/" + serverName + "/locator_id", "");
         lastConnectTime = Long.parseLong(MiniClient.myProperties.getProperty("servers/" + serverName + "/last_connect_time", "0"));
-        authBlock = MiniClient.myProperties.getProperty("servers/" + serverName + "/auth_block", "");
+        authBlock = InputValidator.decryptPropertyValue(MiniClient.myProperties.getProperty("servers/" + serverName + "/auth_block", ""));
       }
       catch (Exception e)
       {
@@ -1013,7 +1018,7 @@ public class MiniClientManagerFrame extends javax.swing.JFrame implements java.a
     public void setAuthBlock(String newAuth)
     {
       authBlock = newAuth;
-      MiniClient.myProperties.setProperty("servers/" + serverName + "/auth_block", newAuth);
+      MiniClient.myProperties.setProperty("servers/" + serverName + "/auth_block", InputValidator.encryptPropertyValue(newAuth));
       MiniClient.saveConfig();
     }
     public String serverName = "";
