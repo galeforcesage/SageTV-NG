@@ -192,6 +192,7 @@ public class MiniClientConnection implements sage.SageTVInputCallback
       java.io.File configDir = new java.io.File(System.getProperty("user.home"), ".sagetv");
       cacheDir = new java.io.File(configDir, "imgcache");
       cacheDir.mkdir();
+      InputValidator.restrictFilePermissions(cacheDir);
     }
     else
       cacheDir = null;
@@ -476,6 +477,7 @@ public class MiniClientConnection implements sage.SageTVInputCallback
     {
       tempfile = java.io.File.createTempFile("sagevideo","");
       tempfile.deleteOnExit();
+      InputValidator.restrictFilePermissions(tempfile);
       java.io.RandomAccessFile rafile = new java.io.RandomAccessFile(tempfile,"rw");
       java.nio.channels.FileChannel videoCh =
           rafile.getChannel();
@@ -628,16 +630,16 @@ public class MiniClientConnection implements sage.SageTVInputCallback
           myGfx = new DirectX9GFXCMD(this);
           if (sage.Native.FAILED_NATIVES.contains("SageTVDX93D"))
           {
-            System.out.println("DirectX9 native library failed to load, falling back");
+            System.out.println("DirectX9 native library failed to load, falling back to OpenGL");
             myGfx = null;
           }
         }
         catch (Throwable t) {
-          System.out.println("DirectX9 renderer unavailable (" + t.getMessage() + "), falling back");
+          System.out.println("DirectX9 renderer unavailable (" + t.getMessage() + "), falling back to OpenGL");
           myGfx = null;
         }
       }
-      if (myGfx == null && !MiniClient.WINDOWS_OS)
+      if (myGfx == null)
       {
         try {
           Class[] params = {this.getClass()};
@@ -648,13 +650,8 @@ public class MiniClientConnection implements sage.SageTVInputCallback
         catch (Throwable t) {
           System.out.println("Error loading OpenGLGFXCMD class, reverting to default rendering:" + t);
           t.printStackTrace();
-          myGfx = null;
+          myGfx = new GFXCMD2(this);
         }
-      }
-      if (myGfx == null)
-      {
-        System.out.println("Using software renderer (GFXCMD2)");
-        myGfx = new GFXCMD2(this);
       }
     }
     else
@@ -1280,8 +1277,23 @@ public class MiniClientConnection implements sage.SageTVInputCallback
 
                 // We also have to generate the shared secret now
                 bobKeyAgree.doPhase(serverPublicKey, true);
-                mySecretKey = bobKeyAgree.generateSecret("DES");
-                evtEncryptCipher = javax.crypto.Cipher.getInstance("DES/ECB/PKCS5Padding");
+                if (currentCrypto.indexOf("AES") != -1)
+                {
+                  // AES-128 derived from DH shared secret via SHA-256
+                  byte[] sharedSecret = bobKeyAgree.generateSecret();
+                  java.security.MessageDigest sha = java.security.MessageDigest.getInstance("SHA-256");
+                  byte[] keyHash = sha.digest(sharedSecret);
+                  byte[] aesKeyBytes = new byte[16];
+                  System.arraycopy(keyHash, 0, aesKeyBytes, 0, 16);
+                  mySecretKey = new javax.crypto.spec.SecretKeySpec(aesKeyBytes, "AES");
+                  evtEncryptCipher = javax.crypto.Cipher.getInstance("AES/ECB/PKCS5Padding");
+                  System.out.println("Using AES-128 encryption for event channel");
+                }
+                else
+                {
+                  mySecretKey = bobKeyAgree.generateSecret("DES");
+                  evtEncryptCipher = javax.crypto.Cipher.getInstance("DES/ECB/PKCS5Padding");
+                }
                 evtEncryptCipher.init(javax.crypto.Cipher.ENCRYPT_MODE, mySecretKey);
               }
             }
@@ -1301,7 +1313,10 @@ public class MiniClientConnection implements sage.SageTVInputCallback
           {
             propVal = "FULLSCREEN";
           }
-          System.out.println("GetProperty: " + propName + " = " + propVal);
+          if (InputValidator.isSensitiveProperty(propName))
+            System.out.println("GetProperty: " + propName + " = [REDACTED]");
+          else
+            System.out.println("GetProperty: " + propName + " = " + propVal);
           try
           {
             synchronized (eventChannel)
