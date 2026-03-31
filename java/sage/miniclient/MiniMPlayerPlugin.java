@@ -397,8 +397,20 @@ public class MiniMPlayerPlugin implements Runnable
             cmds.add("mplayer.exe");
           else
           {
-            System.out.println("Player executable is missing!!!");
-            return;
+            // Check common install locations as fallback
+            String appDir = System.getProperty("user.dir", ".");
+            java.io.File appPlayer = new java.io.File(appDir, "SageTVPlayer.exe");
+            java.io.File appMplayer = new java.io.File(appDir, "mplayer.exe");
+            if (appPlayer.isFile())
+              cmds.add(appPlayer.getAbsolutePath());
+            else if (appMplayer.isFile())
+              cmds.add(appMplayer.getAbsolutePath());
+            else
+            {
+              System.out.println("Player executable is missing! Video playback requires SageTVPlayer.exe or mplayer.exe in the application directory.");
+              System.out.println("The Placeshifter UI will work but video playback is unavailable.");
+              return;
+            }
           }
           // If the cache size is too small then when we pause MPlayer it may think it hit an EOS and
           // kill itself. 768 seems like an OK value, 512 was not big enough (testing with 256K streams)
@@ -427,7 +439,11 @@ public class MiniMPlayerPlugin implements Runnable
           }
           else if ("true".equals(MiniClient.myProperties.getProperty("opengl", "true")))
           {
-            cmdOpt2 += " -vo stvwin:shmemprefix=" + gfxEngine.getVideoOutParams();
+            String voParams = gfxEngine.getVideoOutParams();
+            if (voParams != null)
+              cmdOpt2 += " -vo stvwin:shmemprefix=" + voParams;
+            else
+              cmdOpt2 += " -vo directx"; // fallback if native video server unavailable
           }
           else
           {
@@ -523,6 +539,9 @@ public class MiniMPlayerPlugin implements Runnable
           }
         }
         cmdOpt2 += MiniClient.myProperties.getProperty("extra_option", "");
+
+        // GPU/CPU performance: multi-threaded decoding and hardware acceleration hints
+        cmdOpt2 += PerformanceTuner.getMPlayerPerformanceArgs();
 
         if (pushMode)
           cmdOpt2 += " -demuxer 2";
