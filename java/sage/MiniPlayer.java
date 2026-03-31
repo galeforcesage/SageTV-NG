@@ -547,6 +547,25 @@ public class MiniPlayer implements DVDMediaPlayer
 
   public java.awt.Dimension getVideoDimensions()
   {
+    if (videoDimensions == null && currState >= LOADED_STATE && currState != STOPPED_STATE)
+    {
+      long now = Sage.eventTime();
+      if (now - lastVideoDimRetry > 500)
+      {
+        lastVideoDimRetry = now;
+        videoDimensions = getVideoDimensions0();
+        if (videoDimensions != null)
+        {
+          if (Sage.DBG) System.out.println("Late video dimension detection: " + videoDimensions);
+          if (uiMgr != null)
+          {
+            ZRoot rooty = uiMgr.getRootPanel();
+            if (rooty != null)
+              rooty.appendToDirty(new java.awt.Rectangle(0, 0, rooty.getWidth(), rooty.getHeight()));
+          }
+        }
+      }
+    }
     return videoDimensions;
   }
 
@@ -4438,6 +4457,7 @@ public class MiniPlayer implements DVDMediaPlayer
   protected final Object decoderLock = new Object();
 
   protected java.awt.Dimension videoDimensions;
+  private long lastVideoDimRetry;
 
   protected int currCCState;
   protected boolean eos;
