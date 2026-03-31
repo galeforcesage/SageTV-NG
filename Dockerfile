@@ -117,6 +117,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-dejavu-core \
     libx11-6 \
     ca-certificates \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
@@ -134,8 +135,10 @@ COPY --from=builder /src/build/release/Sage.jar /opt/sagetv/server/Sage.jar
 WORKDIR /opt/sagetv/server
 
 # Create directories for media, config persistence, and recordings
+# Symlink ffmpeg into server dir where SageTV expects to find it for transcoding
 RUN mkdir -p /var/media/videos /var/media/pictures /var/media/music \
     /opt/sagetv/server/logs \
+    && ln -sf /usr/bin/ffmpeg /opt/sagetv/server/ffmpeg \
     && chmod -R 755 /opt/sagetv \
     && chown -R sagetv:sagetv /opt/sagetv /var/media
 
