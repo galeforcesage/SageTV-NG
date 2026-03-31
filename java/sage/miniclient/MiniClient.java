@@ -194,6 +194,9 @@ public class MiniClient
       }
     });
 
+    // Auto-detect GPU and system capabilities, apply performance tuning
+    PerformanceTuner.initialize();
+
     System.out.println("Detecting cryptography support...");
     try
     {

@@ -24,6 +24,7 @@ public class OpenGLVideoRenderer
 {
   private sage.miniclient.JOGLVideoUI owner;
   private boolean pureNativeMode=false; // defer drawing to underlying native code
+  private boolean nativeVideoAvailable=false; // true only if native video server init succeeded
   private int videowidth, videoheight;
   private int videoy, videoypitch, videou, videoupitch, videov, videovpitch;
   private java.nio.ByteBuffer videobuffer;
@@ -39,6 +40,20 @@ public class OpenGLVideoRenderer
   public native String getServerVideoOutParams();
   public native boolean isGLSLHardware();
 
+  public boolean isNativeVideoAvailable() { return nativeVideoAvailable; }
+
+  public String getSafeServerVideoOutParams()
+  {
+    if (!nativeVideoAvailable) return null;
+    try {
+      return getServerVideoOutParams();
+    } catch (Throwable t) {
+      System.out.println("Native getServerVideoOutParams failed: " + t);
+      nativeVideoAvailable = false;
+      return null;
+    }
+  }
+
   // native mode methods, called with the correct GL context active and from within the GL thread
   public native void createVideo0(int width, int height); // allocate GL resources that need to exist in our GL context
   public native void closeVideo0();
@@ -51,26 +66,38 @@ public class OpenGLVideoRenderer
     try
     {
       if(MiniClient.MAC_OS_X)
+      {
         initVideoServer();
+        nativeVideoAvailable = true;
+      }
       else if (MiniClient.WINDOWS_OS)
       {
         sage.Native.loadLibrary("SageTVWin32");
-        // For Windows we create the thread in Java
-        Thread t = new Thread("OpenGLVideo")
+        if (sage.Native.FAILED_NATIVES.contains("SageTVWin32"))
         {
-          public void run()
+          System.out.println("SageTVWin32 native library not found, OpenGL video rendering disabled");
+        }
+        else
+        {
+          // For Windows we create the thread in Java
+          Thread t = new Thread("OpenGLVideo")
           {
-            initVideoServer();
-          }
-        };
-        t.setDaemon(true);
-        t.setPriority(Thread.MAX_PRIORITY); // video is highest priority
-        t.start();
-        System.out.println("Started Win32 opengl video thread");
+            public void run()
+            {
+              initVideoServer();
+            }
+          };
+          t.setDaemon(true);
+          t.setPriority(Thread.MAX_PRIORITY); // video is highest priority
+          t.start();
+          nativeVideoAvailable = true;
+          System.out.println("Started Win32 opengl video thread");
+        }
       }
     } catch (Throwable t)
     {
       System.out.println("Error creating OpenGL Video of:" + t);
+      nativeVideoAvailable = false;
     }
   }
 

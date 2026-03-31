@@ -2013,7 +2013,12 @@ public class OpenGLGFXCMD extends GFXCMD2 implements GLEventListener, sage.minic
   public String getVideoOutParams()
   {
     String params;
-    params = videorenderer.getServerVideoOutParams();
+    try {
+      params = videorenderer.getSafeServerVideoOutParams();
+    } catch (Throwable t) {
+      System.out.println("Failed to get video out params: " + t);
+      params = null;
+    }
     System.out.println("video out params: " + params);
     return params;
   }

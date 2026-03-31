@@ -518,6 +518,89 @@ Source code for SageTV:  https://github.com/google/sagetv
   releaseAssets(fileTree(dir: stageBuildDir, includes: ['*.tar.gz', '*.deb', '*.zip']))
 }
 
+// Windows Placeshifter staging for Inno Setup installer
+task windowsPlaceshifterStage {
+  description 'Stage files for Windows Placeshifter installer'
+  dependsOn miniclientJar
+
+  doLast {
+    def stageDir = file('build/placeshifter-staging')
+    delete stageDir
+    stageDir.mkdirs()
+
+    def libDir = new File(stageDir, 'lib')
+    libDir.mkdirs()
+
+    // Copy MiniClient.jar
+    copy {
+      from 'build/minirelease/MiniClient.jar'
+      into libDir
+    }
+
+    // Copy JOGL runtime JARs (Windows only, exclude other platforms)
+    copy {
+      from configurations.miniclientRuntimeClasspath
+      into libDir
+      include '**/*.jar'
+      exclude '**/*-linux-*', '**/*-macosx-*', '**/*-solaris-*', '**/*-android-*', '**/*-armv6*'
+    }
+
+    // Copy license files
+    copy {
+      from 'LICENSE'
+      from 'third_party/ThirdPartyLicense.txt'
+      into stageDir
+    }
+
+    // Copy icon
+    copy {
+      from 'native/exe/MiniClientLauncher/SageIcon.ico'
+      into stageDir
+    }
+
+    // Create minimal JRE with jlink
+    def jreDir = new File(stageDir, 'runtime')
+    def javaHome = System.getProperty('java.home') ?: System.getenv('JAVA_HOME')
+    def jlinkExe = new File(javaHome, 'bin/jlink').absolutePath
+    if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+      jlinkExe += '.exe'
+    }
+
+    // Modules needed by MiniClient + JOGL
+    def modules = [
+      'java.base', 'java.desktop', 'java.logging', 'java.naming',
+      'java.security.jgss', 'java.security.sasl', 'java.xml',
+      'java.management', 'java.sql', 'java.prefs',
+      'jdk.crypto.ec', 'jdk.unsupported'
+    ].join(',')
+
+    exec {
+      commandLine jlinkExe,
+        '--module-path', new File(javaHome, 'jmods').absolutePath,
+        '--add-modules', modules,
+        '--output', jreDir.absolutePath,
+        '--strip-debug',
+        '--no-man-pages',
+        '--no-header-files',
+        '--compress', 'zip-6'
+    }
+
+    // Calculate JRE size
+    long jreSize = 0
+    jreDir.eachFileRecurse { f -> if (f.isFile()) jreSize += f.length() }
+    println "Placeshifter files staged in ${stageDir.absolutePath}"
+    println "JRE size: ${jreSize / 1024 / 1024} MB"
+
+    // List staged files
+    stageDir.eachFileRecurse { f ->
+      if (f.isFile()) {
+        def relPath = stageDir.toPath().relativize(f.toPath())
+        println "  ${relPath} (${f.length() / 1024} KB)"
+      }
+    }
+  }
+}
+
 // This get run when you call ./gradlew without any targets
 defaultTasks 'sageJar'
 

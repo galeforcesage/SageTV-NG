@@ -388,8 +388,13 @@ public class MiniClientConnection implements sage.SageTVInputCallback
     }
     else // Windows
     {
-      winIR = new WinInfraredReceive();
-      winIR.openInputPlugin(this);
+      try {
+        winIR = new WinInfraredReceive();
+        winIR.openInputPlugin(this);
+      }
+      catch (Throwable irErr) {
+        System.out.println("IR receiver unavailable (native library not found), skipping");
+      }
     }
 
     String str = MiniClient.myProperties.getProperty("local_fs_security", "high");
@@ -617,11 +622,22 @@ public class MiniClientConnection implements sage.SageTVInputCallback
     }
     else if ("true".equals(MiniClient.myProperties.getProperty("opengl", "true")))
     {
-      if (MiniClient.WINDOWS_OS)
+      if (MiniClient.WINDOWS_OS && !sage.Native.FAILED_NATIVES.contains("SageTVDX93D"))
       {
-        myGfx = new DirectX9GFXCMD(this);
+        try {
+          myGfx = new DirectX9GFXCMD(this);
+          if (sage.Native.FAILED_NATIVES.contains("SageTVDX93D"))
+          {
+            System.out.println("DirectX9 native library failed to load, falling back");
+            myGfx = null;
+          }
+        }
+        catch (Throwable t) {
+          System.out.println("DirectX9 renderer unavailable (" + t.getMessage() + "), falling back");
+          myGfx = null;
+        }
       }
-      else
+      if (myGfx == null && !MiniClient.WINDOWS_OS)
       {
         try {
           Class[] params = {this.getClass()};
@@ -632,8 +648,13 @@ public class MiniClientConnection implements sage.SageTVInputCallback
         catch (Throwable t) {
           System.out.println("Error loading OpenGLGFXCMD class, reverting to default rendering:" + t);
           t.printStackTrace();
-          myGfx = new GFXCMD2(this);
+          myGfx = null;
         }
+      }
+      if (myGfx == null)
+      {
+        System.out.println("Using software renderer (GFXCMD2)");
+        myGfx = new GFXCMD2(this);
       }
     }
     else

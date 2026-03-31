@@ -32,11 +32,22 @@ public class MiniClientPowerManagement extends sage.PowerManagement
   }
 
   /** Creates a new instance of MiniClientPowerManagement */
+  private boolean nativeLibLoaded = false;
+
   public MiniClientPowerManagement()
   {
     super();
     if (MiniClient.WINDOWS_OS)
+    {
       sage.Native.loadLibrary("SageTVWin32");
+      nativeLibLoaded = !sage.Native.FAILED_NATIVES.contains("SageTVWin32");
+      if (!nativeLibLoaded)
+        System.out.println("SageTVWin32 native library not found, power management disabled");
+    }
+    else
+    {
+      nativeLibLoaded = true;
+    }
   }
 
   // Determine the current power state
@@ -62,7 +73,7 @@ public class MiniClientPowerManagement extends sage.PowerManagement
 
   protected void setPowerState0(int currState)
   {
-    if (MiniClient.WINDOWS_OS || MiniClient.MAC_OS_X) {
+    if ((MiniClient.WINDOWS_OS || MiniClient.MAC_OS_X) && nativeLibLoaded) {
       super.setPowerState0(currState);
     }
     else
@@ -100,7 +111,7 @@ public class MiniClientPowerManagement extends sage.PowerManagement
   // 0 for the wakeupTime will release the handle
   protected long setWakeupTime0(long wakeupHandle, long wakeupTime)
   {
-    if (MiniClient.WINDOWS_OS || MiniClient.MAC_OS_X) {
+    if ((MiniClient.WINDOWS_OS || MiniClient.MAC_OS_X) && nativeLibLoaded) {
       return super.setWakeupTime0(wakeupHandle, wakeupTime);
     }
     else
