@@ -1112,7 +1112,7 @@ public class FileDownloader extends SystemTask
     {
       if (remAtomSize > 0)
       {
-        int used = Math.min((int)bytesUntilNextAtom, remAtomSize);
+        int used = (int)Math.min(bytesUntilNextAtom, (long)remAtomSize);
         if (used != remAtomSize)
         {
           System.arraycopy(remAtomData, used, remAtomData, 0, remAtomSize - used);
@@ -1388,7 +1388,7 @@ public class FileDownloader extends SystemTask
       {
         if (remAtomSize > 0)
         {
-          int used = Math.min((int)bytesUntilNextAtom, remAtomSize);
+          int used = (int)Math.min(bytesUntilNextAtom, (long)remAtomSize);
           if (used != remAtomSize)
           {
             System.arraycopy(remAtomData, used, remAtomData, 0, remAtomSize - used);
@@ -1409,8 +1409,14 @@ public class FileDownloader extends SystemTask
     }
     if (length > 0)
     {
-      System.arraycopy(buf, offset, remAtomData, remAtomSize, length);
-      remAtomSize = length;
+      int remaining = remAtomData.length - remAtomSize;
+      if (length > remaining)
+        length = remaining;
+      if (length > 0)
+      {
+        System.arraycopy(buf, offset, remAtomData, remAtomSize, length);
+        remAtomSize += length;
+      }
     }
   }
 
