@@ -62,30 +62,31 @@ public class SamsungTVPlusAPITest
   public void testParseChannelJson_basic()
   {
     String json = "{"
-        + "\"USBC1000001\": {"
-        + "  \"name\": \"Test Channel 1\","
-        + "  \"logo\": \"https://example.com/logo1.png\","
-        + "  \"url\": \"https://example.com/stream1.m3u8\","
-        + "  \"region\": \"us\","
-        + "  \"group\": \"News\""
-        + "},"
-        + "\"GBBC2000001\": {"
-        + "  \"name\": \"UK Channel\","
-        + "  \"logo\": \"https://example.com/logo2.png\","
-        + "  \"url\": \"https://example.com/stream2.m3u8\","
-        + "  \"region\": \"gb\","
-        + "  \"group\": \"Entertainment\""
-        + "}"
-        + "}";
+        + "\"slug\":\"stvp-{id}\","
+        + "\"regions\":{"
+        + "  \"us\":{\"name\":\"United States\",\"channels\":{"
+        + "    \"USBC1000001\":{\"name\":\"Test Channel 1\",\"chno\":1001,"
+        + "      \"logo\":\"https://example.com/logo1.png\",\"group\":\"News\","
+        + "      \"programs\":[[1000,\"Show A\"],[2000,\"Show B\"]]"
+        + "    },"
+        + "    \"USBC2000002\":{\"name\":\"DRM Channel\",\"chno\":1002,"
+        + "      \"logo\":\"https://example.com/logo2.png\",\"group\":\"Movies\","
+        + "      \"license_url\":\"https://example.com/drm\"}"
+        + "  }},"
+        + "  \"gb\":{\"name\":\"United Kingdom\",\"channels\":{"
+        + "    \"GBBC3000001\":{\"name\":\"UK Channel\",\"chno\":2001,"
+        + "      \"logo\":\"https://example.com/logo3.png\",\"group\":\"Entertainment\"}"
+        + "  }}"
+        + "}}";
 
     SamsungTVPlusAPI api = new SamsungTVPlusAPI("us");
     java.util.List<SamsungTVPlusChannel> channels = api.parseChannelJson(json);
 
-    // Should only contain the US channel
+    // Should only contain the US non-DRM channel
     Assert.assertEquals(channels.size(), 1);
     Assert.assertEquals(channels.get(0).getLongName(), "Test Channel 1");
     Assert.assertEquals(channels.get(0).getCategory(), "News");
-    Assert.assertEquals(channels.get(0).getStreamUrl(), "https://example.com/stream1.m3u8");
+    Assert.assertEquals(channels.get(0).getStreamUrl(), "https://jmp2.uk/stvp-USBC1000001");
   }
 
   @Test
@@ -94,6 +95,24 @@ public class SamsungTVPlusAPITest
     SamsungTVPlusAPI api = new SamsungTVPlusAPI("us");
     java.util.List<SamsungTVPlusChannel> channels = api.parseChannelJson("{}");
     Assert.assertEquals(channels.size(), 0);
+  }
+
+  @Test
+  public void testParseChannelJson_gbRegion()
+  {
+    String json = "{"
+        + "\"slug\":\"stvp-{id}\","
+        + "\"regions\":{"
+        + "  \"gb\":{\"name\":\"United Kingdom\",\"channels\":{"
+        + "    \"GBBC3000001\":{\"name\":\"UK Channel\",\"chno\":2001,"
+        + "      \"logo\":\"https://example.com/logo3.png\",\"group\":\"Entertainment\"}"
+        + "  }}"
+        + "}}";
+
+    SamsungTVPlusAPI api = new SamsungTVPlusAPI("gb");
+    java.util.List<SamsungTVPlusChannel> channels = api.parseChannelJson(json);
+    Assert.assertEquals(channels.size(), 1);
+    Assert.assertEquals(channels.get(0).getLongName(), "UK Channel");
   }
 
   @Test
