@@ -82,7 +82,7 @@ public abstract class CaptureDevice
     prefs = MMC.MMC_KEY + "/" + ENCODERS + "/" + id + "/";
     loadPrefs();
   }
-  void loadPrefs()
+  protected void loadPrefs()
   {
     currQuality = MMC.getInstance().cleanQualityName(Sage.get(prefs + VIDEO_ENCODING_PARAMS, Sage.rez("Great")));
     if (currQuality.trim().length() == 0)
@@ -132,12 +132,12 @@ public abstract class CaptureDevice
   public String getCaptureDeviceName() { return captureDeviceName; }
   public int getCaptureDeviceNum() { return captureDeviceNum; }
 
-  void createID()
+  protected void createID()
   {
     id = getName().hashCode();
     prefs = MMC.MMC_KEY + "/" + ENCODERS + "/" + id + "/";
   }
-  void writePrefs()
+  protected void writePrefs()
   {
     Sage.put(prefs + VIDEO_ENCODING_PARAMS, currQuality);
     Sage.put(prefs + VIDEO_CAPTURE_DEVICE_NAME, captureDeviceName);
@@ -211,7 +211,7 @@ public abstract class CaptureDevice
     return activeSource;
   }
 
-  void ensureInputExists(int crossType, int crossIdx)
+  protected void ensureInputExists(int crossType, int crossIdx)
   {
     for (int i = 0; i < srcConfigs.size(); i++)
     {

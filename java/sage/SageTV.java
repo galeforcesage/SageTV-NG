@@ -406,6 +406,19 @@ public class SageTV implements Runnable
           }
         }
       }
+
+      // Samsung TV Plus IPTV capture — available on all platforms
+      if (Sage.getBoolean("samsungtvplus/enabled", false))
+      {
+        try
+        {
+          mmc.addCaptureDeviceManager(new sage.samsungtvplus.SamsungTVPlusCaptureManager());
+        }
+        catch (Throwable t)
+        {
+          System.out.println("ERROR instantiating Samsung TV Plus capture manager: " + t);
+        }
+      }
     }
     mmc.prime();
 
