@@ -134,16 +134,23 @@ COPY --from=builder /src/build/release/Sage.jar /opt/sagetv/server/Sage.jar
 
 WORKDIR /opt/sagetv/server
 
-# Create directories for media, config persistence, and recordings
-# Install FFmpeg compatibility wrapper — stock FFmpeg doesn't support
-# SageTV-custom flags (-dumpmetadata, -stdinctrl, -activefile, -brokendts,
-# -deinterlace, numeric -v). The wrapper strips them before forwarding.
-COPY docker/ffmpeg-wrapper.sh /usr/local/bin/ffmpeg
-RUN mv /usr/bin/ffmpeg /usr/local/bin/ffmpeg.real \
-    && chmod +x /usr/local/bin/ffmpeg \
+# FFmpeg setup — prefer SageTV's patched binary (supports -stdinctrl,
+# -activefile, -dumpmetadata, -brokendts for full transcoder functionality).
+# If the patched build failed, fall back to stock FFmpeg with a compatibility
+# wrapper that strips the unsupported flags (basic transcoding still works,
+# but dynamic rate adaptation and active-file playback won't be available).
+COPY docker/ffmpeg-wrapper.sh /usr/local/bin/ffmpeg-wrapper
+RUN chmod +x /usr/local/bin/ffmpeg-wrapper \
+    && if [ -x /opt/sagetv/server/ffmpeg ]; then \
+         echo "Using SageTV patched FFmpeg (full feature support)"; \
+       else \
+         echo "Patched FFmpeg not built — falling back to stock + wrapper"; \
+         mv /usr/bin/ffmpeg /usr/local/bin/ffmpeg.real; \
+         cp /usr/local/bin/ffmpeg-wrapper /usr/local/bin/ffmpeg; \
+         ln -sf /usr/local/bin/ffmpeg /opt/sagetv/server/ffmpeg; \
+       fi \
     && mkdir -p /var/media/videos /var/media/pictures /var/media/music \
     /opt/sagetv/server/logs \
-    && ln -sf /usr/local/bin/ffmpeg /opt/sagetv/server/ffmpeg \
     && chmod -R 755 /opt/sagetv \
     && chown -R sagetv:sagetv /opt/sagetv /var/media
 
