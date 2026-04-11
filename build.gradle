@@ -290,24 +290,6 @@ task sageJavadoc(type: Javadoc) {
 }
 
 /**
- * Build standalone Samsung TV Plus plugin JAR for extraction to sagetv-plugin-repo.
- * This JAR contains only the sage.samsungtvplus package and can be placed in
- * SageTV's JARs/ directory as a plugin.
- */
-task samsungTVPlusJar(type: Jar) {
-  description = 'Build the Samsung TV Plus plugin JAR (extractable for plugin repo)'
-  archiveFileName = "SamsungTVPlus-${fullVersion}.jar"
-  destinationDirectory = file('build/plugins/')
-  from(files(sourceSets.main.output.classesDirs)) {
-    include 'sage/samsungtvplus/**'
-  }
-  doLast {
-    println "SamsungTVPlus-${fullVersion}.jar created in build/plugins/"
-  }
-}
-samsungTVPlusJar.dependsOn classes
-
-/**
  * Package SageTV jar and the STV together
  */
 task(packageSageJar)  {
