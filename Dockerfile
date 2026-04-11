@@ -135,10 +135,15 @@ COPY --from=builder /src/build/release/Sage.jar /opt/sagetv/server/Sage.jar
 WORKDIR /opt/sagetv/server
 
 # Create directories for media, config persistence, and recordings
-# Symlink ffmpeg into server dir where SageTV expects to find it for transcoding
-RUN mkdir -p /var/media/videos /var/media/pictures /var/media/music \
+# Install FFmpeg compatibility wrapper — stock FFmpeg doesn't support
+# SageTV-custom flags (-dumpmetadata, -stdinctrl, -activefile, -brokendts,
+# -deinterlace, numeric -v). The wrapper strips them before forwarding.
+COPY docker/ffmpeg-wrapper.sh /usr/local/bin/ffmpeg
+RUN mv /usr/bin/ffmpeg /usr/local/bin/ffmpeg.real \
+    && chmod +x /usr/local/bin/ffmpeg \
+    && mkdir -p /var/media/videos /var/media/pictures /var/media/music \
     /opt/sagetv/server/logs \
-    && ln -sf /usr/bin/ffmpeg /opt/sagetv/server/ffmpeg \
+    && ln -sf /usr/local/bin/ffmpeg /opt/sagetv/server/ffmpeg \
     && chmod -R 755 /opt/sagetv \
     && chown -R sagetv:sagetv /opt/sagetv /var/media
 
