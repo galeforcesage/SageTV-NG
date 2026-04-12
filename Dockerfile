@@ -106,13 +106,13 @@ RUN make -C ../native/crosslibs/Freetype && cp ../native/crosslibs/Freetype/*.so
 # applies SageTV custom patches (-stdinctrl, -activefile, -dumpmetadata,
 # -brokendts), and builds with libx264, libx265, libfdk-aac, etc.
 RUN bash /src/docker/build-modern-ffmpeg.sh \
+    && mkdir -p /src/build/elf \
     && cp /tmp/ffmpeg-build/ffmpeg-6.1.1/ffmpeg /src/build/elf/ffmpeg \
     && echo "Modern patched FFmpeg 6.1.1 built successfully" \
     || echo "WARN: Modern FFmpeg build failed (will fall back to stock+wrapper)"
 
 # Copy jpegtran if available
-RUN mkdir -p /src/build/elf \
-    && cp /src/third_party/codecs/jpeg-6b/jpegtran /src/build/elf/jpegtran 2>/dev/null || true
+RUN cp /src/third_party/codecs/jpeg-6b/jpegtran /src/build/elf/jpegtran 2>/dev/null || true
 
 # ---- 5. Assemble server release directory ----
 RUN ./copyserverfiles.sh || echo "WARN: copyserverfiles had errors"
