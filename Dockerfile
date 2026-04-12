@@ -130,6 +130,9 @@ RUN ./copyserverfiles.sh || echo "WARN: copyserverfiles had errors"
 RUN cp -n so/*.so serverrelease/ 2>/dev/null || true \
     && cp -rn so/irtunerplugins/*.so serverrelease/irtunerplugins/ 2>/dev/null || true
 
+# ---- 7. Remove old Lucene 3.6 JAR (conflicts with 4.10.4 on classpath) ----
+RUN rm -f serverrelease/JARs/lucene-core-3.6.0.jar
+
 ########################################################################
 # Stage 2 — Runtime image
 ########################################################################
