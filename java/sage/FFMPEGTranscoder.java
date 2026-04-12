@@ -845,7 +845,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // Trying to lower the frame rate here caused problems...
       xcodeParamsVec.add("29.97");
       xcodeParamsVec.add("-acodec");
-      xcodeParamsVec.add("libfaac");
+      xcodeParamsVec.add("libfdk_aac");
+      xcodeParamsVec.add("-profile:a");
+      xcodeParamsVec.add("aac_he_v2"); // HE-AAC v2 is optimal at 32kbps for HTTPLS streaming
       xcodeParamsVec.add("-ab");
       xcodeParamsVec.add(Integer.toString(currAudioBitrateKbps * 1000)); // FFMPEG takes audio in bits/sec now
       xcodeParamsVec.add("-ac");
@@ -947,8 +949,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add("2");
       //xcodeParamsVec.add("-deinterlace");
       xcodeParamsVec.add("-acodec");
-      xcodeParamsVec.add(iOSMode ? "libfaac" : Sage.get("xcode_dynamic_audio_codec", "mp2"));
+      xcodeParamsVec.add(iOSMode ? "libfdk_aac" : Sage.get("xcode_dynamic_audio_codec", "mp2"));
       int currAudioSampling, currPacketSize;
+      String fdkAacProfile = null; // selected after bandwidth tier is determined
       // Fast start is very important so always start at the bottom for video bitrate
       if (estimatedBandwidth < 90000)
       {
@@ -956,6 +959,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
           currVideoBitrateKbps = 50;
         if (currAudioBitrateKbps == -1)
           currAudioBitrateKbps = 24;
+        fdkAacProfile = "aac_he_v2"; // HE-AAC v2 optimal at <=48kbps
         // 10fps at 352x240
         currFps = 10;
         currAudioSampling = 24000;
@@ -968,6 +972,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
           currVideoBitrateKbps = 64;//192;
         if (currAudioBitrateKbps == -1)
           currAudioBitrateKbps = 48;
+        fdkAacProfile = "aac_he_v2"; // HE-AAC v2 optimal at <=48kbps
         // 15fps at 352x240
         currFps = 15;
         currAudioSampling = 24000;
@@ -980,6 +985,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
           currVideoBitrateKbps = (int)estimatedBandwidth/2000;//128;//256;
         if (currAudioBitrateKbps == -1)
           currAudioBitrateKbps = 64;
+        fdkAacProfile = "aac_he"; // HE-AAC v1 good at 64kbps
         // 15fps at 352x240
         currFps = 15;
         currAudioSampling = 48000;
@@ -991,10 +997,18 @@ public class FFMPEGTranscoder implements TranscodeEngine
           currVideoBitrateKbps = Math.min(1000, (int)estimatedBandwidth/2000);//192;//384;
         if (currAudioBitrateKbps == -1)
           currAudioBitrateKbps = 128; // There's issues with using 96Kbps audio encoding I discovered
+        fdkAacProfile = "aac_low"; // LC-AAC is best at >=128kbps
         // 30fps at 352x240 and 48kHz audio at 96Kbps
         currFps = MMC.getInstance().isNTSCVideoFormat() ? 30 : 25;
         currAudioSampling = 48000;
         currPacketSize = 2048;
+      }
+
+      // Add HE-AAC profile for iOS mode (libfdk_aac supports aac_he_v2, aac_he, aac_low)
+      if (iOSMode && fdkAacProfile != null)
+      {
+        xcodeParamsVec.add("-profile:a");
+        xcodeParamsVec.add(fdkAacProfile);
       }
 
       xcodeParamsVec.add("-r");
@@ -1814,8 +1828,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
   private static String substituteName(String s)
   {
     if (s == null) return null;
-    // 5/5/08 - The AAC encoder in FFMPEG is now called 'libfaac'
-    if ("aac".equalsIgnoreCase(s)) return "libfaac";
+    // AAC encoder: use Fraunhofer libfdk_aac (supports HE-AAC v1/v2 for low bitrates)
+    if ("aac".equalsIgnoreCase(s)) return "libfdk_aac";
     // 5/20/08 - The XVID encoder in FFMPEG is now called 'libxvid'
     if ("xvid".equalsIgnoreCase(s)) return "libxvid";
     // 6/5/08 - The h264 encoder in FFMPEG is now called 'libx264'

@@ -31,6 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxvidcore-dev \
     libfaad-dev \
     libfaac-dev \
+    libfdk-aac-dev \
     libmp3lame-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -108,6 +109,7 @@ RUN cd /src/third_party/ffmpeg \
          --enable-pthreads \
          --enable-nonfree \
          --enable-libfaac \
+         --enable-libfdk-aac \
          --enable-libx264 \
          --enable-libxvid \
          --enable-libfaad \
@@ -142,6 +144,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openjdk-21-jre-headless \
+    tini \
     libasound2t64 \
     libfreetype6 \
     libharfbuzz0b \
@@ -154,6 +157,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxvidcore4 \
     libfaad2 \
     libfaac0 \
+    libfdk-aac2 \
     libmp3lame0 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -204,6 +208,9 @@ ENV LD_LIBRARY_PATH=/opt/sagetv/server:/opt/sagetv/server/lib:/opt/sagetv/server
 
 # Run as sagetv user
 USER sagetv
+
+# Use tini as PID 1 for proper signal handling and zombie reaping
+ENTRYPOINT ["/usr/bin/tini", "--"]
 
 # Start SageTV in headless server mode
 # --add-opens flags required for bundled GSON library which uses sun.misc.Unsafe

@@ -69,7 +69,108 @@ Release Notes for V9
 21. Significant performance improvements to overall database system
 22. Licensing/key checking code removed
 23. “Spoiler Protection” when watching live TV, it will not default to a channel which could possibly ‘spoil’ something else you care about. It also tries to avoid selecting anything that needs parental control by default.
-24. Codebase from EMBEDDED (HD300) merged with main SageTV codebase (NOTE: This will no longer run on the HD300 because it’s not Java 1.5 source rather than Java 1.4)
+================================================================================
+SageTV FFmpeg Modernization and Bandwidth Adaptation
+================================================================================
+
+This fork forward-ports SageTV's custom FFmpeg patches to modern FFmpeg 6.1.1
+and upgrades the audio transcoding pipeline to use Fraunhofer FDK AAC with
+bandwidth-adaptive HE-AAC profile selection. It also adds H.265/HEVC encoding
+support.
+
+What Changed
+------------
+
+1. FFmpeg upgraded from patched git-0960662 (~2010) to FFmpeg 6.1.1
+2. Audio encoder changed from libfaac (discontinued) to libfdk_aac (Fraunhofer)
+3. H.265/HEVC encoding added via libx265
+4. Bandwidth-adaptive HE-AAC profiles for iOS/HLS placeshifting
+5. All four SageTV custom flags preserved in modern FFmpeg
+
+Files Modified
+--------------
+
+docker/build-modern-ffmpeg.sh  (NEW)
+  - Downloads FFmpeg 6.1.1 source and applies SageTV patches via sed/python3.
+  - Configure flags: --enable-gpl --enable-nonfree --enable-pthreads
+    --enable-libx264 --enable-libx265 --enable-libxvid --enable-libmp3lame
+    --enable-libfdk-aac --disable-devices --disable-bzlib
+  - Patches applied to: fftools/ffmpeg.c, fftools/ffmpeg_opt.c,
+    fftools/ffmpeg_demux.c
+
+java/sage/FFMPEGTranscoder.java
+  - substituteName(): "aac" now maps to "libfdk_aac" (was "libfaac")
+  - HTTPLS mode (line ~848): hardcoded "libfaac" -> "libfdk_aac" with
+    -profile:a aac_he_v2 for 32kbps HLS streaming
+  - Dynamic rate mode (line ~950): "libfaac" -> "libfdk_aac" for iOS mode,
+    with bandwidth-adaptive AAC profile selection:
+      <= 48 kbps: aac_he_v2 (parametric stereo, best for cellular)
+      64 kbps:    aac_he    (SBR, full stereo at half bandwidth)
+      >= 128 kbps: aac_low  (LC-AAC, best at high bitrates)
+
+Dockerfile
+  - Builder stage: added libfdk-aac-dev
+  - Runtime stage: added libfdk-aac2
+
+docker/ffmpeg-wrapper.sh  (existing)
+  - Fallback wrapper that strips SageTV-custom flags for stock FFmpeg.
+    Still present as safety net if the modern patched build fails.
+
+SageTV Custom FFmpeg Flags (Forward-Ported)
+-------------------------------------------
+
+-stdinctrl     : Accept control commands through stdin. Used by SageTV's
+                 dynamic rate adaptation (videorateadapt) and active file
+                 signaling (inactivefile). Patched into read_key() in
+                 fftools/ffmpeg.c.
+
+-activefile    : Input file is still being written (live DVR recording).
+                 Maps to FFmpeg 6.1's native follow=1 protocol option.
+                 When set, file_read() returns EAGAIN instead of EOF,
+                 allowing FFmpeg to wait for new data.
+
+-dumpmetadata  : Dump all container and stream metadata to stderr in
+                 META:key=value format. Patched into fftools/ffmpeg_demux.c
+                 after avformat_find_stream_info(). Uses modern
+                 av_dict_iterate() API (replaces old av_metadata_dump).
+
+-brokendts     : Ignore broken DTS timestamps in MPEG-TS streams.
+                 Maps to FFmpeg 6.1's native -fflags +igndts, which is more
+                 complete than the original partial implementation.
+
+Rebuilding Just This Portion
+-----------------------------
+
+To rebuild only the modern patched FFmpeg (without the full SageTV Docker
+image), you can run the build script in an Ubuntu 24.04 environment:
+
+  # Install build dependencies
+  apt-get install -y gcc make python3 pkg-config xz-utils yasm nasm \
+    libx264-dev libx265-dev libxvidcore-dev libmp3lame-dev libfdk-aac-dev
+
+  # Run the build script
+  bash docker/build-modern-ffmpeg.sh
+
+  # The resulting binary is at /tmp/ffmpeg-build/ffmpeg-6.1.1/ffmpeg
+  # Copy it to your SageTV server's elf/ directory
+
+To rebuild the Java changes, recompile Sage.jar with the modified
+FFMPEGTranscoder.java using the standard Gradle build:
+
+  ./gradlew buildSage
+
+The resulting Sage.jar in build/release/ contains the libfdk_aac codec
+references and HE-AAC profile selection logic.
+
+Licensing Notes
+---------------
+
+- SageTV Java code: Apache 2.0
+- FFmpeg with --enable-gpl: GPL v2+
+- libfdk-aac with --enable-nonfree: FDK license (GPL-incompatible)
+  - The combined binary cannot be redistributed, but private builds are fine.
+  - To redistribute, remove --enable-libfdk-aac and use FFmpeg's native AAC
+    encoder instead (good quality at >= 96 kbps, but no HE-AAC support).24. Codebase from EMBEDDED (HD300) merged with main SageTV codebase (NOTE: This will no longer run on the HD300 because it’s not Java 1.5 source rather than Java 1.4)
 25. Added new hooks: RecordRequestLiveMultiConflict, WatchRequestLiveMultiConflict (these allow processing all conflicts for watch/record requests at once rather than one at a time; if these hooks are not in the STV then the non-Multi hooks that have always existed will be called instead)
 26. TVTV support removed
 27. Added property “hdmi_always_select_best” which defaults to false, but if set true will auto select the best HDMI resolution for extender clients
