@@ -27,6 +27,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libfreetype-dev \
     dpkg-dev \
     ca-certificates \
+    libx264-dev \
+    libxvidcore-dev \
+    libfaad-dev \
+    libfaac-dev \
+    libmp3lame-dev \
     && rm -rf /var/lib/apt/lists/*
 
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
@@ -91,8 +96,32 @@ RUN make -C ../third_party/SageTV-LGPL/imageload && cp ../third_party/SageTV-LGP
 # -- 3d. Essential: Freetype --
 RUN make -C ../native/crosslibs/Freetype && cp ../native/crosslibs/Freetype/*.so so/ || true
 
-# ---- 4. Build third-party codecs + ffmpeg binary ----
-RUN ./build3rdparty.sh || echo "WARN: 3rdparty build had errors (non-fatal for jar-only testing)"
+# ---- 4. Build patched SageTV FFmpeg using system codec libraries ----
+# The bundled codec sources in third_party/codecs/ are too old for Ubuntu 24.04,
+# so we link against the system-installed dev packages instead.
+RUN cd /src/third_party/ffmpeg \
+    && make clean || true \
+    && ./configure \
+         --disable-ffserver \
+         --disable-ffplay \
+         --enable-gpl \
+         --enable-pthreads \
+         --enable-nonfree \
+         --enable-libfaac \
+         --enable-libx264 \
+         --enable-libxvid \
+         --enable-libfaad \
+         --disable-devices \
+         --disable-bzlib \
+         --disable-demuxer=msnwc_tcp \
+    && make -j$(nproc) \
+    && echo "Patched FFmpeg built successfully" \
+    || echo "WARN: Patched FFmpeg build failed (will fall back to stock+wrapper)"
+
+# Copy ffmpeg and jpegtran to elf/ for copyserverfiles.sh
+RUN mkdir -p /src/build/elf \
+    && cp /src/third_party/ffmpeg/ffmpeg /src/build/elf/ffmpeg 2>/dev/null || true \
+    && cp /src/third_party/codecs/jpeg-6b/jpegtran /src/build/elf/jpegtran 2>/dev/null || true
 
 # ---- 5. Assemble server release directory ----
 RUN ./copyserverfiles.sh || echo "WARN: copyserverfiles had errors"
