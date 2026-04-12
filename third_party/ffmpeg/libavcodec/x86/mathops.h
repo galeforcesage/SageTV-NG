@@ -79,22 +79,7 @@ __asm__ volatile(\
 #endif
 
 // avoid +32 for shift optimization (gcc should do that ...)
-#define NEG_SSR32 NEG_SSR32
-static inline  int32_t NEG_SSR32( int32_t a, int8_t s){
-    __asm__ ("sarl %b1, %0\n\t"
-         : "+r" (a)
-         : "ic" ((uint8_t)(-s))
-    );
-    return a;
-}
-
-#define NEG_USR32 NEG_USR32
-static inline uint32_t NEG_USR32(uint32_t a, int8_t s){
-    __asm__ ("shrl %b1, %0\n\t"
-         : "+r" (a)
-         : "ic" ((uint8_t)(-s))
-    );
-    return a;
-}
+// x86 asm shift macros disabled: incompatible with GCC 13 / Binutils 2.42
+// Generic C fallbacks in libavcodec/mathops.h are used instead
 
 #endif /* AVCODEC_X86_MATHOPS_H */
