@@ -5443,10 +5443,17 @@ public class MediaFile extends DBObject implements SegmentedFile
     args.add("-f");
     args.add("mjpeg");
     if (deinterlace)
-      args.add("-deinterlace");
-    // New version of FFMPEG requires using libavfilter for cropping
-    args.add("-vf");
-    args.add("crop=0:8:0:0,scale=" + width + ":" + height);
+    {
+      // FFmpeg 6.1 removed -deinterlace; prepend yadif to filter chain
+      args.add("-vf");
+      args.add("yadif,crop=0:8:0:0,scale=" + width + ":" + height);
+    }
+    else
+    {
+      // New version of FFMPEG requires using libavfilter for cropping
+      args.add("-vf");
+      args.add("crop=0:8:0:0,scale=" + width + ":" + height);
+    }
     args.add("-vframes");
     args.add("1");
     args.add("-an");

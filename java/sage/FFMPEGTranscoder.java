@@ -644,7 +644,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
         }
         else
         {
-          xcodeParams += " -vcodec " + vcodec  + " -b " + b + " -r " + r + " -s " + s  + " -g " + g + " -bf " + bf + (deinterlace ? " -deinterlace " : "");
+          xcodeParams += " -vcodec " + vcodec  + " -b " + b + " -r " + r + " -s " + s  + " -g " + g + " -bf " + bf + (deinterlace ? " -vf yadif " : "");
         }
         
         if(acodec.equals("COPY"))
@@ -910,8 +910,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
       if (xcodeParams.indexOf("-deinterlace") == -1 && srcVideo != null && srcVideo.isInterlaced() && targetHeight > srcVideo.getHeight()/2 &&
           Sage.getBoolean("xcode_auto_deinterlace", true))
       {
-        if (Sage.DBG) System.out.println("Automatically adding -deinterlace option to transcoding process");
-        xcodeParamsVec.add("-deinterlace");
+        if (Sage.DBG) System.out.println("Automatically adding yadif deinterlace filter to transcoding process");
+        xcodeParamsVec.add("-vf");
+        xcodeParamsVec.add("yadif");
       }
 
       // Preserve aspect ratio properly
@@ -1136,8 +1137,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
       if (xcodeParams.indexOf("-deinterlace") == -1 && srcVideo != null && srcVideo.isInterlaced() && targetHeight > srcVideo.getHeight()/2 &&
           Sage.getBoolean("xcode_auto_deinterlace", true))
       {
-        if (Sage.DBG) System.out.println("Automatically adding -deinterlace option to transcoding process");
-        xcodeParamsVec.add("-deinterlace");
+        if (Sage.DBG) System.out.println("Automatically adding yadif deinterlace filter to transcoding process");
+        xcodeParamsVec.add("-vf");
+        xcodeParamsVec.add("yadif");
       }
       // Creating interlaced video doesn't work properly yet...
       /*if (xcodeParams.indexOf("-deinterlace") == -1 && srcVideo != null && srcVideo.isInterlaced() && targetHeight == srcVideo.getHeight())
