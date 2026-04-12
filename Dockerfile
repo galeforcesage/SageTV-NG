@@ -147,6 +147,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libx11-6 \
     ca-certificates \
     ffmpeg \
+    libx264-164 \
+    libxvidcore4 \
+    libfaad2 \
+    libfaac0 \
+    libmp3lame0 \
     && rm -rf /var/lib/apt/lists/*
 
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
