@@ -32,7 +32,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libfaad-dev \
     libfaac-dev \
     libfdk-aac-dev \
+    libx265-dev \
     libmp3lame-dev \
+    python3 \
+    wget \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
@@ -97,32 +101,17 @@ RUN make -C ../third_party/SageTV-LGPL/imageload && cp ../third_party/SageTV-LGP
 # -- 3d. Essential: Freetype --
 RUN make -C ../native/crosslibs/Freetype && cp ../native/crosslibs/Freetype/*.so so/ || true
 
-# ---- 4. Build patched SageTV FFmpeg using system codec libraries ----
-# The bundled codec sources in third_party/codecs/ are too old for Ubuntu 24.04,
-# so we link against the system-installed dev packages instead.
-RUN cd /src/third_party/ffmpeg \
-    && make clean || true \
-    && ./configure \
-         --disable-ffserver \
-         --disable-ffplay \
-         --enable-gpl \
-         --enable-pthreads \
-         --enable-nonfree \
-         --enable-libfaac \
-         --enable-libfdk-aac \
-         --enable-libx264 \
-         --enable-libxvid \
-         --enable-libfaad \
-         --disable-devices \
-         --disable-bzlib \
-         --disable-demuxer=msnwc_tcp \
-    && make -j$(nproc) \
-    && echo "Patched FFmpeg built successfully" \
-    || echo "WARN: Patched FFmpeg build failed (will fall back to stock+wrapper)"
+# ---- 4. Build modern FFmpeg 6.1.1 with SageTV patches (forward-ported) ----
+# Uses docker/build-modern-ffmpeg.sh which downloads FFmpeg 6.1.1 source,
+# applies SageTV custom patches (-stdinctrl, -activefile, -dumpmetadata,
+# -brokendts), and builds with libx264, libx265, libfdk-aac, etc.
+RUN bash /src/docker/build-modern-ffmpeg.sh \
+    && cp /tmp/ffmpeg-build/ffmpeg-6.1.1/ffmpeg /src/build/elf/ffmpeg \
+    && echo "Modern patched FFmpeg 6.1.1 built successfully" \
+    || echo "WARN: Modern FFmpeg build failed (will fall back to stock+wrapper)"
 
-# Copy ffmpeg and jpegtran to elf/ for copyserverfiles.sh
+# Copy jpegtran if available
 RUN mkdir -p /src/build/elf \
-    && cp /src/third_party/ffmpeg/ffmpeg /src/build/elf/ffmpeg 2>/dev/null || true \
     && cp /src/third_party/codecs/jpeg-6b/jpegtran /src/build/elf/jpegtran 2>/dev/null || true
 
 # ---- 5. Assemble server release directory ----
@@ -158,6 +147,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libfaad2 \
     libfaac0 \
     libfdk-aac2 \
+    libx265-199 \
     libmp3lame0 \
     && rm -rf /var/lib/apt/lists/*
 
