@@ -7056,6 +7056,28 @@
         <Value>"xSubmenuPlugins"</Value>
        </Attribute>
        <Theme Ref="1110" Name="TertiaryMenuItemAreaTh..."/>
+       <Item Name="Modern Plugins" Sym="MODERN-10">
+        <Attribute Name="ButtonText" Sym="MODERN-11">
+         <Value>"Modern"</Value>
+        </Attribute>
+        <Attribute Name="ThisItem" Sym="MODERN-12">
+         <Value>"xItemPluginModern"</Value>
+        </Attribute>
+        <Attribute Ref="485" Name="SubItemDefaultFocus"/>
+        <Attribute Name="PluginModeStyle" Sym="MODERN-13">
+         <Value>"xPluginModeAll"</Value>
+        </Attribute>
+        <Action Name="&quot;REM Jump to Modern plugin list&quot;" Sym="MODERN-14">
+         <Action Ref="841" Name="&quot;REM Check permission ..."/>
+         <Conditional Name="CanAccessLockedSetupMenu" Sym="MODERN-15">
+          <Action Name="SetProperty(&quot;plugin/last_type_browsed&quot;, &quot;Modern&quot;)" Sym="MODERN-16">
+           <Action Name="AddStaticContext(&quot;newPluginListMode&quot;, PluginModeStyle)" Sym="MODERN-17">
+            <Menu Ref="2399" Name="Plugin List"/>
+           </Action>
+          </Action>
+         </Conditional>
+        </Action>
+       </Item>
        <Item Name="Plugin Repository" Sym="NFLX1-1589260">
         <Attribute ID="2393" Name="ButtonText" Sym="NFLX1-1589261">
          <Value>"All Available Plugins"</Value>
@@ -109036,7 +109058,9 @@
            <Action Name="GroupedPlugins = GroupByMethod( AllPlugins, &quot;GetPluginType&quot; )" Sym="OPUS4A-182230">
             <Action Name="&quot;REM Add list of All plugins to the All subgroup.&quot;" Sym="OPUS4A-184378">
              <Action Name="java_util_Map_put(GroupedPlugins,&quot;All&quot;, AllPlugins)" Sym="OPUS4A-184389">
-              <Action Name="CurPluginTypeList = GetSubgroup( GroupedPlugins, CurPluginType )" Sym="OPUS4A-182232">
+              <Action Name="&quot;REM Add Modern list (all plugins minus hidden ones) to the Modern subgroup.&quot;" Sym="MODERN-1">
+               <Action Name="java_util_Map_put(GroupedPlugins,&quot;Modern&quot;, FilterByBoolMethod( java_util_List_toArray(AllPlugins), &quot;IsPluginHidden&quot;, false ))" Sym="MODERN-2">
+                <Action Name="CurPluginTypeList = GetSubgroup( GroupedPlugins, CurPluginType )" Sym="OPUS4A-182232">
                <Conditional Name="Size(CurPluginTypeList) &gt; 0" Sym="OPUS4A-182233">
                 <Branch Name="else" Sym="OPUS4A-182234">
                  <Panel Name="Empty plugin list" Sym="OPUS4A-182236">
@@ -109682,6 +109706,16 @@
                                                      <Attribute Name="DefaultFocus" Sym="OPUS4A-182574">
                                                       <Value>true</Value>
                                                      </Attribute>
+                                                    </Item>
+                                                    <Item Name="Hide/Unhide Plugin" Sym="MODERN-3">
+                                                     <Action Name="If( IsPluginHidden(Plugin), &quot;Unhide in Modern&quot;, &quot;Hide in Modern&quot; )" Sym="MODERN-4">
+                                                      <Text Name="" Sym="MODERN-5"/>
+                                                     </Action>
+                                                     <Action Name="SetPluginHidden( Plugin, !IsPluginHidden(Plugin) )" Sym="MODERN-6">
+                                                      <Action Name="CloseOptionsMenu()" Sym="MODERN-7">
+                                                       <Action Name="Refresh()" Sym="MODERN-8"/>
+                                                      </Action>
+                                                     </Action>
                                                     </Item>
                                                     <Conditional Name="AllowPluginDetailsOption" Sym="OPUS4A-182569">
                                                      <Item ID="31586" Name="View Plugin Details" Sym="OPUS4A-182567">
@@ -110976,6 +111010,8 @@
           </Action>
          </Action>
         </Action>
+       </Action>
+      </Action>
        </Branch>
       </Conditional>
      </Action>
@@ -111185,13 +111221,13 @@
    <Value>PluginListMode</Value>
   </Attribute>
   <Attribute ID="40963" Name="PluginTypesList" Sym="OPUS4A-182155">
-   <Value>CreateArray("Standard", "STV", "STVI", "Theme", "Images", "Library", "All")</Value>
+   <Value>CreateArray("Standard", "STV", "STVI", "Theme", "Images", "Library", "Modern", "All")</Value>
   </Attribute>
   <Attribute Name="PluginTypeNamesShortList" Sym="OPUS4A-185784">
-   <Value>CreateArray("General", "Full UI", "UI Mod", "Theme", "Images", "Library", "All")</Value>
+   <Value>CreateArray("General", "Full UI", "UI Mod", "Theme", "Images", "Library", "Modern", "All")</Value>
   </Attribute>
   <Attribute ID="40965" Name="PluginTypeNamesLongList" Sym="OPUS4A-185788">
-   <Value>CreateArray("General", "Full UI Package", "UI Modification", "Theme", "Images", "Library", "All")</Value>
+   <Value>CreateArray("General", "Full UI Package", "UI Modification", "Theme", "Images", "Library", "Modern (Unhidden)", "All")</Value>
   </Attribute>
   <Attribute Name="CurPluginType" Sym="OPUS4A-182172">
    <Value>CurPluginType</Value>

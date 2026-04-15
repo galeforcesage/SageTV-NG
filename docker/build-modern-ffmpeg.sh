@@ -258,6 +258,23 @@ sed -i '/err = avformat_open_input/i\
         av_log(NULL, AV_LOG_INFO, "SageTV: Broken DTS mode enabled (igndts)\\n");\
     }' fftools/ffmpeg_demux.c
 
+# =====================================================================
+# PATCH 5: Make -vsync 0 + -r compatible (SageTV backward compat)
+# File: fftools/ffmpeg_mux_init.c
+#
+# FFmpeg 6.x rejects -vsync 0 (passthrough) when -r (target fps) is set,
+# calling it "contradictory". SageTV's old FFmpeg allowed this combination.
+# We patch it to warn and auto-upgrade to CFR instead of fataling out.
+# =====================================================================
+
+sed -i '/One of -r\/-fpsmax was specified/{
+    # Replace the fatal+return with a warning and auto-fix
+    N
+    s/av_log(ost, AV_LOG_FATAL, "One of -r\/-fpsmax was specified "\n[[:space:]]*"together a non-CFR -vsync\/-fps_mode. This is contradictory.\\n");/av_log(ost, AV_LOG_WARNING, "SageTV compat: -r\/-fpsmax specified with "\n                   "non-CFR -vsync\/-fps_mode. Auto-upgrading to CFR (vsync 1).\\n");/
+    N
+    s/return AVERROR(EINVAL);/ost->vsync_method = VSYNC_CFR;/
+}' fftools/ffmpeg_mux_init.c
+
 echo "=== Patches applied ==="
 
 # =====================================================================

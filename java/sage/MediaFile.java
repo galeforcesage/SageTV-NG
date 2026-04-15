@@ -5442,39 +5442,36 @@ public class MediaFile extends DBObject implements SegmentedFile
     args.add(pathString);
     args.add("-f");
     args.add("mjpeg");
-    if (deinterlace)
+    // Build video filter chain. FFmpeg 6.x's "thumbnail" filter replaces SageTV's custom
+    // -minpixvar/-minpixenergy/-minpixnumframes patches. It analyzes N frames and selects the
+    // one with the highest histogram variance (most visually interesting), which is strictly
+    // better than the old threshold-based approach that took the first acceptable frame.
     {
-      // FFmpeg 6.1 removed -deinterlace; prepend yadif to filter chain
+      StringBuilder vf = new StringBuilder();
+      if (deinterlace)
+        vf.append("yadif,");
+      // Crop 8px from top (broadcast overscan artifact removal)
+      // Modern FFmpeg crop syntax: crop=out_w:out_h:x:y (old syntax was crop=left:top:right:bottom)
+      vf.append("crop=iw:ih-8:0:8,");
+      if (skipNonKeys)
+      {
+        // Optimized mode: analyze 150 keyframes, pick the best one
+        // (replaces -minpixvar 300 -minpixnumframes 150)
+        vf.append("thumbnail=150,");
+      }
+      else
+      {
+        // Fallback mode: analyze 30 frames for a non-blank thumbnail
+        // (replaces -minpixenergy 1)
+        vf.append("thumbnail=30,");
+      }
+      vf.append("scale=").append(width).append(':').append(height);
       args.add("-vf");
-      args.add("yadif,crop=0:8:0:0,scale=" + width + ":" + height);
-    }
-    else
-    {
-      // New version of FFMPEG requires using libavfilter for cropping
-      args.add("-vf");
-      args.add("crop=0:8:0:0,scale=" + width + ":" + height);
+      args.add(vf.toString());
     }
     args.add("-vframes");
     args.add("1");
     args.add("-an");
-    // Our optimized mode sets skipNonKeys to true...but if that fails just grab the first frame so we don't do a huge search again
-    if (skipNonKeys)
-    {
-      // I'm not sure if we even need to worry about energy so much as variance...that's where the detail in the thumbnail comes from is the contrast...
-      //        args.add("-minpixenergy");
-      // We're trying this at higher values since we're getting some bad thumbnails through in testing
-      //        args.add("45");//args.add("35");//args.add("25");//args.add("20");
-      args.add("-minpixvar");
-      args.add("300");
-      args.add("-minpixnumframes");
-      args.add("150"); // used to be 600, but quite often this spends way too much time looking for a good frame
-    }
-    else
-    {
-      // This'll still do minimal keyframe obeyance which fixes some bad files such as: Y:\testcontent\_KRCA-DT_20080129_124117.mpg
-      args.add("-minpixenergy");
-      args.add("1");
-    }
     if (targetStream >= 0)
     {
       args.add("-map");

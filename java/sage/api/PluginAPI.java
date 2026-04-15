@@ -240,6 +240,38 @@ public class PluginAPI {
         sage.plugin.PluginWrapper pluggy = getPlugin(stack);
         return (pluggy != null && pluggy.isBeta()) ? Boolean.TRUE : Boolean.FALSE;
       }});
+    rft.put(new PredefinedJEPFunction("Plugin", "IsPluginHidden", new String[] { "Plugin" })
+    {
+      /**
+       * Returns true if the specified plugin has been hidden by the user via the plugin/hidden/&lt;id&gt; property.
+       * @param Plugin the Plugin object to check
+       * @return true if the specified plugin is hidden, false otherwise
+       * @since 9.2
+       *
+       * @declaration public boolean IsPluginHidden(Plugin Plugin);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        sage.plugin.PluginWrapper pluggy = getPlugin(stack);
+        if (pluggy == null) return Boolean.FALSE;
+        return Sage.getBoolean("plugin/hidden/" + pluggy.getId(), false) ? Boolean.TRUE : Boolean.FALSE;
+      }});
+    rft.put(new PredefinedJEPFunction("Plugin", "SetPluginHidden", new String[] { "Plugin", "Hidden" })
+    {
+      /**
+       * Sets whether the specified plugin should be hidden from the 'Modern' plugin view.
+       * @param Plugin the Plugin object to hide or unhide
+       * @param Hidden true to hide the plugin, false to unhide it
+       * @since 9.2
+       *
+       * @declaration public void SetPluginHidden(Plugin Plugin, boolean Hidden);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        boolean hidden = evalBool(stack.pop());
+        sage.plugin.PluginWrapper pluggy = getPlugin(stack);
+        if (pluggy != null)
+          Sage.putBoolean("plugin/hidden/" + pluggy.getId(), hidden);
+        return null;
+      }});
     rft.put(new PredefinedJEPFunction("Plugin", "RefreshAvailablePlugins", true)
     {
       /**

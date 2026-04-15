@@ -860,8 +860,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add("+loop");
       xcodeParamsVec.add("-cmp");
       xcodeParamsVec.add("+chroma");
+      // FFmpeg 6.x uses comma-separated partition names instead of +/- prefixed format
       xcodeParamsVec.add("-partitions");
-      xcodeParamsVec.add("+parti8x8+parti4x4-partp8x8-partb8x8");
+      xcodeParamsVec.add("i8x8,i4x4,p8x8");
       xcodeParamsVec.add("-me_method");
       xcodeParamsVec.add("dia");
       xcodeParamsVec.add("-subq");
@@ -890,15 +891,15 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add("0");
       xcodeParamsVec.add("-refs");
       xcodeParamsVec.add("1");
-      xcodeParamsVec.add("-directpred");
+      // FFmpeg 6.x renamed directpred→direct-pred, rc_lookahead→rc-lookahead
+      // Removed -flags2 -wpred-dct8x8 (applied globally, breaks non-x264 encoders)
+      xcodeParamsVec.add("-direct-pred");
       xcodeParamsVec.add("1");
       xcodeParamsVec.add("-trellis");
       xcodeParamsVec.add("0");
-      xcodeParamsVec.add("-flags2");
-      xcodeParamsVec.add("-wpred-dct8x8");
       xcodeParamsVec.add("-wpredp");
       xcodeParamsVec.add("0");
-      xcodeParamsVec.add("-rc_lookahead");
+      xcodeParamsVec.add("-rc-lookahead");
       xcodeParamsVec.add("50");
       xcodeParamsVec.add("-level");
       xcodeParamsVec.add("30");
@@ -1338,8 +1339,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
     else
       xcodeParamsVec.add("-");
     String[] xcodeParamArray = (String[]) xcodeParamsVec.toArray(Pooler.EMPTY_STRING_ARRAY);
-    // NOTE: While this debugging info would be highly useful, it's also highly proprietary what parameters we execute FFMPEG with
-    if (Sage.DBG && "TRUE".equals(Sage.get("xcode_cmdline_debug", null))) System.out.println("Executing xcoding process with args: " + java.util.Arrays.asList(xcodeParamArray));
+    // Always log the FFmpeg command line for diagnosability (disable with xcode_cmdline_debug=FALSE)
+    if (Sage.DBG && !"FALSE".equals(Sage.get("xcode_cmdline_debug", "TRUE"))) System.out.println("Executing xcoding process with args: " + java.util.Arrays.asList(xcodeParamArray));
     xcodeProcess = Runtime.getRuntime().exec(xcodeParamArray);
     // We open up the error stream and consume that for status info. The transcoded data is consumed by reading
     // from stdout.
