@@ -62025,6 +62025,20 @@
      </Attribute>
      <Hook Ref="22543" Name="FocusGained"/>
     </Item>
+    <Item Name="Commercial Skip" Sym="COMSKIP-1">
+     <IgnoreThemeProps>false</IgnoreThemeProps>
+     <Attribute Name="SetupArea" Sym="COMSKIP-2">
+      <Value>"xCommercialSkip"</Value>
+     </Attribute>
+     <Attribute Name="AreaName" Sym="COMSKIP-3">
+      <Value>"Commercial Skip"</Value>
+     </Attribute>
+     <Action Ref="22529" Name="&quot;REM Show button name ..."/>
+     <Attribute Name="HelpText" Sym="COMSKIP-4">
+      <Value>"Configure commercial detection and skip settings using Comskip."</Value>
+     </Attribute>
+     <Hook Ref="22543" Name="FocusGained"/>
+    </Item>
     <Item Name="Main Menu" Sym="BASE-72665">
      <Attribute Name="SetupArea" Sym="BASE-72666">
       <Value>"xSetupMenu"</Value>
@@ -81967,6 +81981,1029 @@
          </Listener>
          <Theme Ref="22995" Name="SetupPanelTheme"/>
         </Panel>
+       </Branch>
+       <Branch Name="&quot;xCommercialSkip&quot;" Sym="COMSKIP-10">
+        <Panel Name="CommercialSkip SetupPanel" Sym="COMSKIP-11">
+         <FixedWidth>1.0</FixedWidth>
+         <FixedHeight>=1.0-HelpTextAreaHeight</FixedHeight>
+         <WrapHNav>false</WrapHNav>
+         <WrapVNav>false</WrapVNav>
+         <IgnoreThemeProps>true</IgnoreThemeProps>
+         <BackgroundComponent>false</BackgroundComponent>
+         <MouseTransparency>false</MouseTransparency>
+         <Panel Name="CommercialSkipItems" Sym="COMSKIP-12">
+          <Layout>Vertical</Layout>
+          <AnchorX>0.0</AnchorX>
+          <AnchorPointX>0.0</AnchorPointX>
+          <FixedWidth>0.945</FixedWidth>
+          <FixedHeight>1.0</FixedHeight>
+          <PadY>.015</PadY>
+          <Insets>.01</Insets>
+          <Scrolling>1</Scrolling>
+          <WrapHNav>false</WrapHNav>
+          <WrapVNav>false</WrapVNav>
+          <IgnoreThemeProps>true</IgnoreThemeProps>
+          <BackgroundComponent>false</BackgroundComponent>
+          <MouseTransparency>false</MouseTransparency>
+          <Panel Name="CommercialDetectEnabled" Sym="COMSKIP-13">
+           <Text Name="Commercial Detection" Sym="COMSKIP-14"/>
+           <Item Name="Toggle" Sym="COMSKIP-15">
+            <Action Name="IsCommercialDetectionEnabled()" Sym="COMSKIP-16">
+             <Action Name="SetCommercialDetectionEnabled(!this)" Sym="COMSKIP-17">
+              <Action Name="Refresh()" Sym="COMSKIP-18"/>
+             </Action>
+            </Action>
+            <Conditional Name="IsCommercialDetectionEnabled()" Sym="COMSKIP-19">
+             <Branch Name="true" Sym="COMSKIP-20">
+              <Text Name="Enabled" Sym="COMSKIP-21"/>
+             </Branch>
+             <Branch Name="false" Sym="COMSKIP-22">
+              <Text Name="Disabled" Sym="COMSKIP-23"/>
+             </Branch>
+            </Conditional>
+            <Attribute Name="HelpText" Sym="COMSKIP-24">
+             <Value>"Enable or disable automatic commercial detection on new recordings."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="ComskipPath" Sym="COMSKIP-50">
+           <Text Name="Comskip Binary Path" Sym="COMSKIP-51"/>
+           <Item Name="Modify" Sym="COMSKIP-52">
+            <Action Name="GetComskipPath()" Sym="COMSKIP-53">
+             <Text Name="" Sym="COMSKIP-54"/>
+            </Action>
+            <Action Name="Title = DialogTitle" Sym="COMSKIP-55">
+             <Action Name="NewText = GetComskipPath()" Sym="COMSKIP-56">
+              <OptionsMenu Name="GetNewText" Sym="COMSKIP-57">
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <Action Name="Title + &quot;\n \n&quot;" Sym="COMSKIP-58">
+                <Text Name="" Sym="COMSKIP-59">
+                 <AnchorX>0.5</AnchorX>
+                 <AutosizeText>false</AutosizeText>
+                 <WrapText>true</WrapText>
+                 <TextAlignment>0.5</TextAlignment>
+                </Text>
+               </Action>
+               <Panel Name="InputArea" Sym="COMSKIP-60">
+                <Layout>Horizontal</Layout>
+                <FixedWidth>0.95</FixedWidth>
+                <TextAlignment>0.5</TextAlignment>
+                <HideText>false</HideText>
+                <WrapHNav>false</WrapHNav>
+                <WrapVNav>false</WrapVNav>
+                <IgnoreThemeProps>true</IgnoreThemeProps>
+                <BackgroundComponent>false</BackgroundComponent>
+                <MouseTransparency>false</MouseTransparency>
+                <TextInput Name="EditText" Sym="COMSKIP-61">
+                 <HideText>false</HideText>
+                 <IgnoreThemeProps>false</IgnoreThemeProps>
+                 <BackgroundComponent>false</BackgroundComponent>
+                 <FocusableCondition>false</FocusableCondition>
+                 <Shape Ref="941" Name="InputBorder"/>
+                </TextInput>
+               </Panel>
+               <Attribute Name="EditText" Sym="COMSKIP-62">
+                <Value>NewText</Value>
+               </Attribute>
+               <Listener Name="Select" Sym="COMSKIP-63">
+                <ListenerEvent>Select</ListenerEvent>
+                <Conditional Name="EditText != null" Sym="COMSKIP-64">
+                 <Action Name="NewText = EditText" Sym="COMSKIP-65"/>
+                </Conditional>
+                <Action Name="CloseOptionsMenu()" Sym="COMSKIP-66"/>
+               </Listener>
+               <Theme Ref="22900" Name="OptionsTextEntryTheme_..."/>
+              </OptionsMenu>
+              <Conditional Name="NewText != null &amp;&amp; NewText != &quot;&quot;" Sym="COMSKIP-67">
+               <Action Name="SetComskipPath(NewText)" Sym="COMSKIP-68">
+                <Action Name="Refresh()" Sym="COMSKIP-69"/>
+               </Action>
+              </Conditional>
+             </Action>
+            </Action>
+            <Attribute Name="DialogTitle" Sym="COMSKIP-70">
+             <Value>"Enter the path to the comskip binary:"</Value>
+            </Attribute>
+            <Listener Ref="22627" Name="Right"/>
+            <Attribute Name="HelpText" Sym="COMSKIP-71">
+             <Value>"Set the full path to the comskip executable (e.g. /usr/bin/comskip)."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="ComskipIniPath" Sym="COMSKIP-80">
+           <Text Name="Comskip INI Path" Sym="COMSKIP-81"/>
+           <Item Name="Modify" Sym="COMSKIP-82">
+            <Action Name="If(GetComskipIniPath()==&quot;&quot;, &quot;(default)&quot;, GetComskipIniPath())" Sym="COMSKIP-83">
+             <Text Name="" Sym="COMSKIP-84"/>
+            </Action>
+            <Action Name="Title = DialogTitle" Sym="COMSKIP-85">
+             <Action Name="NewText = GetComskipIniPath()" Sym="COMSKIP-86">
+              <OptionsMenu Name="GetNewText" Sym="COMSKIP-87">
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <Action Name="Title + &quot;\n \n&quot;" Sym="COMSKIP-88">
+                <Text Name="" Sym="COMSKIP-89">
+                 <AnchorX>0.5</AnchorX>
+                 <AutosizeText>false</AutosizeText>
+                 <WrapText>true</WrapText>
+                 <TextAlignment>0.5</TextAlignment>
+                </Text>
+               </Action>
+               <Panel Name="InputArea" Sym="COMSKIP-90">
+                <Layout>Horizontal</Layout>
+                <FixedWidth>0.95</FixedWidth>
+                <TextAlignment>0.5</TextAlignment>
+                <HideText>false</HideText>
+                <WrapHNav>false</WrapHNav>
+                <WrapVNav>false</WrapVNav>
+                <IgnoreThemeProps>true</IgnoreThemeProps>
+                <BackgroundComponent>false</BackgroundComponent>
+                <MouseTransparency>false</MouseTransparency>
+                <TextInput Name="EditText" Sym="COMSKIP-91">
+                 <HideText>false</HideText>
+                 <IgnoreThemeProps>false</IgnoreThemeProps>
+                 <BackgroundComponent>false</BackgroundComponent>
+                 <FocusableCondition>false</FocusableCondition>
+                 <Shape Ref="941" Name="InputBorder"/>
+                </TextInput>
+               </Panel>
+               <Attribute Name="EditText" Sym="COMSKIP-92">
+                <Value>NewText</Value>
+               </Attribute>
+               <Listener Name="Select" Sym="COMSKIP-93">
+                <ListenerEvent>Select</ListenerEvent>
+                <Conditional Name="EditText != null" Sym="COMSKIP-94">
+                 <Action Name="NewText = EditText" Sym="COMSKIP-95"/>
+                </Conditional>
+                <Action Name="CloseOptionsMenu()" Sym="COMSKIP-96"/>
+               </Listener>
+               <Theme Ref="22900" Name="OptionsTextEntryTheme_..."/>
+              </OptionsMenu>
+              <Conditional Name="NewText != null" Sym="COMSKIP-97">
+               <Action Name="SetComskipIniPath(NewText)" Sym="COMSKIP-98">
+                <Action Name="Refresh()" Sym="COMSKIP-99"/>
+               </Action>
+              </Conditional>
+             </Action>
+            </Action>
+            <Attribute Name="DialogTitle" Sym="COMSKIP-100">
+             <Value>"Enter the path to comskip.ini (leave empty for defaults):"</Value>
+            </Attribute>
+            <Listener Ref="22627" Name="Right"/>
+            <Attribute Name="HelpText" Sym="COMSKIP-101">
+             <Value>"Set the path to a custom comskip.ini configuration file. Leave empty to use comskip defaults."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="OutputFormats" Sym="COMSKIP-110">
+           <Text Name="Output Formats" Sym="COMSKIP-111"/>
+           <Item Name="Toggle" Sym="COMSKIP-112">
+            <Action Name="GetCommercialDetectOutputFormats()" Sym="COMSKIP-113">
+             <Action Name="SetCommercialDetectOutputFormats(If(this==&quot;edl&quot;,&quot;edl,vprj&quot;,If(this==&quot;edl,vprj&quot;,&quot;edl,csv&quot;,If(this==&quot;edl,csv&quot;,&quot;edl,vprj,csv&quot;,&quot;edl&quot;))))" Sym="COMSKIP-114">
+              <Action Name="Refresh()" Sym="COMSKIP-115"/>
+             </Action>
+            </Action>
+            <Action Name="GetCommercialDetectOutputFormats()" Sym="COMSKIP-116">
+             <Text Name="" Sym="COMSKIP-117"/>
+            </Action>
+            <Attribute Name="HelpText" Sym="COMSKIP-118">
+             <Value>"EDL is always generated for playback. Optionally also generate VPrj (VideoReDo) or CSV files."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="RunOnRecStart" Sym="COMSKIP-120">
+           <Text Name="Auto-Run on Recording Start" Sym="COMSKIP-121"/>
+           <Item Name="Toggle" Sym="COMSKIP-122">
+            <Action Name="GetProperty(&quot;commercial_detection/run_on_recording_start&quot;, true)" Sym="COMSKIP-123">
+             <Action Name="SetProperty(&quot;commercial_detection/run_on_recording_start&quot;, !this)" Sym="COMSKIP-124">
+              <Action Name="Refresh()" Sym="COMSKIP-125"/>
+             </Action>
+            </Action>
+            <Conditional Name="GetProperty(&quot;commercial_detection/run_on_recording_start&quot;, true)" Sym="COMSKIP-126">
+             <Branch Name="true" Sym="COMSKIP-127">
+              <Text Name="Yes" Sym="COMSKIP-128"/>
+             </Branch>
+             <Branch Name="else" Sym="COMSKIP-129">
+              <Text Name="No" Sym="COMSKIP-130"/>
+             </Branch>
+            </Conditional>
+            <Attribute Name="HelpText" Sym="COMSKIP-131">
+             <Value>"Automatically run commercial detection when a new recording starts. Detection runs after recording completes."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="MaxConcurrentJobs" Sym="COMSKIP-140">
+           <Text Name="Max Concurrent Jobs" Sym="COMSKIP-141"/>
+           <Item Name="Modify" Sym="COMSKIP-142">
+            <Action Name="GetProperty(&quot;commercial_detection/max_concurrent_jobs&quot;, 1)" Sym="COMSKIP-143">
+             <Text Name="" Sym="COMSKIP-144"/>
+            </Action>
+            <Action Name="Title = DialogTitle" Sym="COMSKIP-145">
+             <Action Name="NewNum = GetProperty(&quot;commercial_detection/max_concurrent_jobs&quot;, 1)" Sym="COMSKIP-146">
+              <OptionsMenu Ref="10189" Name="GetNewNum (NonZero Int..."/>
+              <Conditional Name="NewNum != 0" Sym="COMSKIP-147">
+               <Action Name="SetProperty(&quot;commercial_detection/max_concurrent_jobs&quot;, NewNum)" Sym="COMSKIP-148">
+                <Action Name="Refresh()" Sym="COMSKIP-149"/>
+               </Action>
+              </Conditional>
+             </Action>
+            </Action>
+            <Attribute Name="DialogTitle" Sym="COMSKIP-150">
+             <Value>"Enter the maximum number of concurrent commercial detection jobs:"</Value>
+            </Attribute>
+            <Listener Ref="22627" Name="Right"/>
+            <Attribute Name="HelpText" Sym="COMSKIP-151">
+             <Value>"Maximum number of commercial detection jobs that can run simultaneously. Higher values use more CPU."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="ExternalEngineConfig" Sym="COMSKIP-160">
+           <WrapHNav>false</WrapHNav>
+           <WrapVNav>false</WrapVNav>
+           <IgnoreThemeProps>false</IgnoreThemeProps>
+           <Text Name="External Engine Configuration" Sym="COMSKIP-161"/>
+           <Item Name="Configure" Sym="COMSKIP-162">
+            <OptionsMenu Name="ExternalEngineMenu" Sym="COMSKIP-163">
+             <IgnoreThemeProps>false</IgnoreThemeProps>
+             <Action Name="&quot;External Engine Configuration:\n \n&quot;" Sym="COMSKIP-164">
+              <Text Name="" Sym="COMSKIP-165"/>
+             </Action>
+             <Panel Name="DetectionEngine" Sym="COMSKIP-30">
+              <FixedWidth>1.0</FixedWidth>
+              <PadX>.02</PadX>
+              <PadY>.02</PadY>
+              <Insets>.02</Insets>
+              <WrapHNav>false</WrapHNav>
+              <WrapVNav>false</WrapVNav>
+              <IgnoreThemeProps>false</IgnoreThemeProps>
+              <Text Name="Detection Engine:" Sym="COMSKIP-31">
+               <AnchorX>0.0</AnchorX>
+               <FixedWidth>0.7</FixedWidth>
+               <AutosizeText>false</AutosizeText>
+               <WrapText>true</WrapText>
+               <TextShadow>true</TextShadow>
+               <DisableFontScaling>false</DisableFontScaling>
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+              </Text>
+              <Item Name="EngineToggle" Sym="COMSKIP-32">
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <BackgroundComponent>false</BackgroundComponent>
+               <Action Name="GetCommercialDetectEngine()" Sym="COMSKIP-33">
+                <Action Name="SetCommercialDetectEngine(If(this==&quot;comskip&quot;,&quot;external&quot;,&quot;comskip&quot;))" Sym="COMSKIP-34">
+                 <Action Name="Refresh()" Sym="COMSKIP-35"/>
+                </Action>
+               </Action>
+               <Conditional Name="GetCommercialDetectEngine()" Sym="COMSKIP-36">
+                <Branch Name="&quot;comskip&quot;" Sym="COMSKIP-37">
+                 <Text Name="Comskip" Sym="COMSKIP-38"/>
+                </Branch>
+                <Branch Name="else" Sym="COMSKIP-39">
+                 <Text Name="External" Sym="COMSKIP-40"/>
+                </Branch>
+               </Conditional>
+              </Item>
+              <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
+             </Panel>
+             <Panel Name="ExtEnginePath" Sym="COMSKIP-166">
+              <FixedWidth>1.0</FixedWidth>
+              <PadX>.02</PadX>
+              <PadY>.02</PadY>
+              <Insets>.02</Insets>
+              <WrapHNav>false</WrapHNav>
+              <WrapVNav>false</WrapVNav>
+              <IgnoreThemeProps>false</IgnoreThemeProps>
+              <Text Name="Engine Path:" Sym="COMSKIP-167">
+               <AnchorX>0.0</AnchorX>
+               <FixedWidth>0.7</FixedWidth>
+               <AutosizeText>false</AutosizeText>
+               <WrapText>true</WrapText>
+               <TextShadow>true</TextShadow>
+               <DisableFontScaling>false</DisableFontScaling>
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+              </Text>
+              <Item Name="PathEdit" Sym="COMSKIP-168">
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <BackgroundComponent>false</BackgroundComponent>
+               <Action Name="If(GetExternalEnginePath()==&quot;&quot;, &quot;(not set)&quot;, GetExternalEnginePath())" Sym="COMSKIP-169">
+                <Text Name="" Sym="COMSKIP-170"/>
+               </Action>
+               <Action Name="Title = &quot;Enter the path to the external detection engine binary:&quot;" Sym="COMSKIP-171">
+                <Action Name="NewText = GetExternalEnginePath()" Sym="COMSKIP-172">
+                 <OptionsMenu Name="GetNewText" Sym="COMSKIP-173">
+                  <IgnoreThemeProps>false</IgnoreThemeProps>
+                  <Action Name="Title + &quot;\n \n&quot;" Sym="COMSKIP-174">
+                   <Text Name="" Sym="COMSKIP-175">
+                    <AnchorX>0.5</AnchorX>
+                    <AutosizeText>false</AutosizeText>
+                    <WrapText>true</WrapText>
+                    <TextAlignment>0.5</TextAlignment>
+                   </Text>
+                  </Action>
+                  <Panel Name="InputArea" Sym="COMSKIP-176">
+                   <Layout>Horizontal</Layout>
+                   <FixedWidth>0.95</FixedWidth>
+                   <TextAlignment>0.5</TextAlignment>
+                   <HideText>false</HideText>
+                   <WrapHNav>false</WrapHNav>
+                   <WrapVNav>false</WrapVNav>
+                   <IgnoreThemeProps>true</IgnoreThemeProps>
+                   <BackgroundComponent>false</BackgroundComponent>
+                   <MouseTransparency>false</MouseTransparency>
+                   <TextInput Name="EditText" Sym="COMSKIP-177">
+                    <HideText>false</HideText>
+                    <IgnoreThemeProps>false</IgnoreThemeProps>
+                    <BackgroundComponent>false</BackgroundComponent>
+                    <FocusableCondition>false</FocusableCondition>
+                    <Shape Ref="941" Name="InputBorder"/>
+                   </TextInput>
+                  </Panel>
+                  <Attribute Name="EditText" Sym="COMSKIP-178">
+                   <Value>NewText</Value>
+                  </Attribute>
+                  <Listener Name="Select" Sym="COMSKIP-179">
+                   <ListenerEvent>Select</ListenerEvent>
+                   <Conditional Name="EditText != null" Sym="COMSKIP-180">
+                    <Action Name="NewText = EditText" Sym="COMSKIP-570"/>
+                   </Conditional>
+                   <Action Name="CloseOptionsMenu()" Sym="COMSKIP-571"/>
+                  </Listener>
+                  <Theme Ref="22900" Name="OptionsTextEntryTheme_..."/>
+                 </OptionsMenu>
+                 <Action Name="SetExternalEnginePath(If(NewText==null,&quot;&quot;,NewText))" Sym="COMSKIP-572">
+                  <Action Name="Refresh()" Sym="COMSKIP-573"/>
+                 </Action>
+                </Action>
+               </Action>
+              </Item>
+              <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
+             </Panel>
+             <Panel Name="ExtRecordedArgs" Sym="COMSKIP-574">
+              <FixedWidth>1.0</FixedWidth>
+              <PadX>.02</PadX>
+              <PadY>.02</PadY>
+              <Insets>.02</Insets>
+              <WrapHNav>false</WrapHNav>
+              <WrapVNav>false</WrapVNav>
+              <IgnoreThemeProps>false</IgnoreThemeProps>
+              <Text Name="Recorded Args:" Sym="COMSKIP-575">
+               <AnchorX>0.0</AnchorX>
+               <FixedWidth>0.7</FixedWidth>
+               <AutosizeText>false</AutosizeText>
+               <WrapText>true</WrapText>
+               <TextShadow>true</TextShadow>
+               <DisableFontScaling>false</DisableFontScaling>
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+              </Text>
+              <Item Name="RecArgsEdit" Sym="COMSKIP-576">
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <BackgroundComponent>false</BackgroundComponent>
+               <Action Name="GetExternalRecordedArgs()" Sym="COMSKIP-577">
+                <Text Name="" Sym="COMSKIP-578"/>
+               </Action>
+               <Action Name="Title = &quot;Enter args for completed recordings. Variables: {input} {output} {outputdir} {ini}&quot;" Sym="COMSKIP-579">
+                <Action Name="NewText = GetExternalRecordedArgs()" Sym="COMSKIP-580">
+                 <OptionsMenu Name="GetNewText" Sym="COMSKIP-581">
+                  <IgnoreThemeProps>false</IgnoreThemeProps>
+                  <Action Name="Title + &quot;\n \n&quot;" Sym="COMSKIP-582">
+                   <Text Name="" Sym="COMSKIP-583">
+                    <AnchorX>0.5</AnchorX>
+                    <AutosizeText>false</AutosizeText>
+                    <WrapText>true</WrapText>
+                    <TextAlignment>0.5</TextAlignment>
+                   </Text>
+                  </Action>
+                  <Panel Name="InputArea" Sym="COMSKIP-584">
+                   <Layout>Horizontal</Layout>
+                   <FixedWidth>0.95</FixedWidth>
+                   <TextAlignment>0.5</TextAlignment>
+                   <HideText>false</HideText>
+                   <WrapHNav>false</WrapHNav>
+                   <WrapVNav>false</WrapVNav>
+                   <IgnoreThemeProps>true</IgnoreThemeProps>
+                   <BackgroundComponent>false</BackgroundComponent>
+                   <MouseTransparency>false</MouseTransparency>
+                   <TextInput Name="EditText" Sym="COMSKIP-585">
+                    <HideText>false</HideText>
+                    <IgnoreThemeProps>false</IgnoreThemeProps>
+                    <BackgroundComponent>false</BackgroundComponent>
+                    <FocusableCondition>false</FocusableCondition>
+                    <Shape Ref="941" Name="InputBorder"/>
+                   </TextInput>
+                  </Panel>
+                  <Attribute Name="EditText" Sym="COMSKIP-586">
+                   <Value>NewText</Value>
+                  </Attribute>
+                  <Listener Name="Select" Sym="COMSKIP-587">
+                   <ListenerEvent>Select</ListenerEvent>
+                   <Conditional Name="EditText != null" Sym="COMSKIP-588">
+                    <Action Name="NewText = EditText" Sym="COMSKIP-589"/>
+                   </Conditional>
+                   <Action Name="CloseOptionsMenu()" Sym="COMSKIP-590"/>
+                  </Listener>
+                  <Theme Ref="22900" Name="OptionsTextEntryTheme_..."/>
+                 </OptionsMenu>
+                 <Action Name="SetExternalRecordedArgs(If(NewText==null,&quot;{input} {output}&quot;,NewText))" Sym="COMSKIP-591">
+                  <Action Name="Refresh()" Sym="COMSKIP-592"/>
+                 </Action>
+                </Action>
+               </Action>
+              </Item>
+              <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
+             </Panel>
+             <Panel Name="ExtLiveArgs" Sym="COMSKIP-600">
+              <FixedWidth>1.0</FixedWidth>
+              <PadX>.02</PadX>
+              <PadY>.02</PadY>
+              <Insets>.02</Insets>
+              <WrapHNav>false</WrapHNav>
+              <WrapVNav>false</WrapVNav>
+              <IgnoreThemeProps>false</IgnoreThemeProps>
+              <Text Name="Live Args:" Sym="COMSKIP-601">
+               <AnchorX>0.0</AnchorX>
+               <FixedWidth>0.7</FixedWidth>
+               <AutosizeText>false</AutosizeText>
+               <WrapText>true</WrapText>
+               <TextShadow>true</TextShadow>
+               <DisableFontScaling>false</DisableFontScaling>
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+              </Text>
+              <Item Name="LiveArgsEdit" Sym="COMSKIP-602">
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <BackgroundComponent>false</BackgroundComponent>
+               <Action Name="GetExternalLiveArgs()" Sym="COMSKIP-603">
+                <Text Name="" Sym="COMSKIP-604"/>
+               </Action>
+               <Action Name="Title = &quot;Enter args for live/in-progress recordings. Variables: {input} {output} {outputdir} {ini}&quot;" Sym="COMSKIP-605">
+                <Action Name="NewText = GetExternalLiveArgs()" Sym="COMSKIP-606">
+                 <OptionsMenu Name="GetNewText" Sym="COMSKIP-607">
+                  <IgnoreThemeProps>false</IgnoreThemeProps>
+                  <Action Name="Title + &quot;\n \n&quot;" Sym="COMSKIP-608">
+                   <Text Name="" Sym="COMSKIP-609">
+                    <AnchorX>0.5</AnchorX>
+                    <AutosizeText>false</AutosizeText>
+                    <WrapText>true</WrapText>
+                    <TextAlignment>0.5</TextAlignment>
+                   </Text>
+                  </Action>
+                  <Panel Name="InputArea" Sym="COMSKIP-610">
+                   <Layout>Horizontal</Layout>
+                   <FixedWidth>0.95</FixedWidth>
+                   <TextAlignment>0.5</TextAlignment>
+                   <HideText>false</HideText>
+                   <WrapHNav>false</WrapHNav>
+                   <WrapVNav>false</WrapVNav>
+                   <IgnoreThemeProps>true</IgnoreThemeProps>
+                   <BackgroundComponent>false</BackgroundComponent>
+                   <MouseTransparency>false</MouseTransparency>
+                   <TextInput Name="EditText" Sym="COMSKIP-611">
+                    <HideText>false</HideText>
+                    <IgnoreThemeProps>false</IgnoreThemeProps>
+                    <BackgroundComponent>false</BackgroundComponent>
+                    <FocusableCondition>false</FocusableCondition>
+                    <Shape Ref="941" Name="InputBorder"/>
+                   </TextInput>
+                  </Panel>
+                  <Attribute Name="EditText" Sym="COMSKIP-612">
+                   <Value>NewText</Value>
+                  </Attribute>
+                  <Listener Name="Select" Sym="COMSKIP-613">
+                   <ListenerEvent>Select</ListenerEvent>
+                   <Conditional Name="EditText != null" Sym="COMSKIP-614">
+                    <Action Name="NewText = EditText" Sym="COMSKIP-615"/>
+                   </Conditional>
+                   <Action Name="CloseOptionsMenu()" Sym="COMSKIP-616"/>
+                  </Listener>
+                  <Theme Ref="22900" Name="OptionsTextEntryTheme_..."/>
+                 </OptionsMenu>
+                 <Action Name="SetExternalLiveArgs(If(NewText==null,&quot;{input} {output}&quot;,NewText))" Sym="COMSKIP-617">
+                  <Action Name="Refresh()" Sym="COMSKIP-618"/>
+                 </Action>
+                </Action>
+               </Action>
+              </Item>
+              <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
+             </Panel>
+             <Action Name="&quot;\n \n&quot;" Sym="COMSKIP-619">
+              <Text Name="" Sym="COMSKIP-620"/>
+             </Action>
+             <Item Name="Close" Sym="COMSKIP-621">
+              <Action Name="CloseOptionsMenu()" Sym="COMSKIP-622"/>
+             </Item>
+             <Theme Ref="2131" Name="MutliSelectOptionsTheme"/>
+            </OptionsMenu>
+            <Attribute Name="HelpText" Sym="COMSKIP-623">
+             <Value>"Configure external commercial detection engine: path, detection engine selection, and command-line arguments for recorded and live modes."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="LiveDetection" Sym="COMSKIP-320">
+           <Text Name="Live Detection" Sym="COMSKIP-321"/>
+           <Item Name="Toggle" Sym="COMSKIP-322">
+            <Action Name="IsLiveDetectionEnabled()" Sym="COMSKIP-323">
+             <Action Name="SetLiveDetectionEnabled(!this)" Sym="COMSKIP-324">
+              <Action Name="Refresh()" Sym="COMSKIP-325"/>
+             </Action>
+            </Action>
+            <Conditional Name="IsLiveDetectionEnabled()" Sym="COMSKIP-326">
+             <Branch Name="true" Sym="COMSKIP-327">
+              <Text Name="Enabled" Sym="COMSKIP-328"/>
+             </Branch>
+             <Branch Name="false" Sym="COMSKIP-329">
+              <Text Name="Disabled" Sym="COMSKIP-330"/>
+             </Branch>
+            </Conditional>
+            <Attribute Name="HelpText" Sym="COMSKIP-331">
+             <Value>"Run comskip immediately when a recording starts using its native live_tv mode. Comskip processes the growing file in real-time and produces a complete EDL when done."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="RunSlow" Sym="COMSKIP-340">
+           <Text Name="Run Slow (Playnice)" Sym="COMSKIP-341"/>
+           <Item Name="Toggle" Sym="COMSKIP-342">
+            <Action Name="IsRunSlowEnabled()" Sym="COMSKIP-343">
+             <Action Name="SetRunSlowEnabled(!this)" Sym="COMSKIP-344">
+              <Action Name="Refresh()" Sym="COMSKIP-345"/>
+             </Action>
+            </Action>
+            <Conditional Name="IsRunSlowEnabled()" Sym="COMSKIP-346">
+             <Branch Name="true" Sym="COMSKIP-347">
+              <Text Name="Enabled" Sym="COMSKIP-348"/>
+             </Branch>
+             <Branch Name="false" Sym="COMSKIP-349">
+              <Text Name="Disabled" Sym="COMSKIP-350"/>
+             </Branch>
+            </Conditional>
+            <Attribute Name="HelpText" Sym="COMSKIP-351">
+             <Value>"Run comskip with --playnice flag to reduce CPU usage. Recommended when running during recordings."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="AutoSkip" Sym="COMSKIP-360">
+           <Text Name="Auto-Skip Commercials" Sym="COMSKIP-361"/>
+           <Item Name="Toggle" Sym="COMSKIP-362">
+            <Action Name="IsAutoSkipEnabled()" Sym="COMSKIP-363">
+             <Action Name="SetAutoSkipEnabled(!this)" Sym="COMSKIP-364">
+              <Action Name="Refresh()" Sym="COMSKIP-365"/>
+             </Action>
+            </Action>
+            <Conditional Name="IsAutoSkipEnabled()" Sym="COMSKIP-366">
+             <Branch Name="true" Sym="COMSKIP-367">
+              <Text Name="Enabled" Sym="COMSKIP-368"/>
+             </Branch>
+             <Branch Name="false" Sym="COMSKIP-369">
+              <Text Name="Disabled" Sym="COMSKIP-370"/>
+             </Branch>
+            </Conditional>
+            <Attribute Name="HelpText" Sym="COMSKIP-371">
+             <Value>"Automatically skip detected commercials during playback."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="AutoSkipDelay" Sym="COMSKIP-380">
+           <Text Name="Auto-Skip Delay (ms)" Sym="COMSKIP-381"/>
+           <Item Name="Modify" Sym="COMSKIP-382">
+            <Action Name="GetAutoSkipDelayMs()" Sym="COMSKIP-383">
+             <Text Name="" Sym="COMSKIP-384"/>
+            </Action>
+            <Action Name="Title = DialogTitle" Sym="COMSKIP-385">
+             <Action Name="NewNum = GetAutoSkipDelayMs()" Sym="COMSKIP-386">
+              <OptionsMenu Ref="10189" Name="GetNewNum (NonZero Int..."/>
+              <Conditional Name="NewNum != 0" Sym="COMSKIP-387">
+               <Action Name="SetAutoSkipDelayMs(NewNum)" Sym="COMSKIP-388">
+                <Action Name="Refresh()" Sym="COMSKIP-389"/>
+               </Action>
+              </Conditional>
+             </Action>
+            </Action>
+            <Attribute Name="DialogTitle" Sym="COMSKIP-390">
+             <Value>"Enter the delay in milliseconds before auto-skipping a commercial:"</Value>
+            </Attribute>
+            <Listener Ref="22627" Name="Right"/>
+            <Attribute Name="HelpText" Sym="COMSKIP-391">
+             <Value>"Milliseconds to wait before automatically skipping a detected commercial during playback. Default is 250."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="SkipChannels" Sym="COMSKIP-400">
+           <Text Name="Skip Channels" Sym="COMSKIP-401"/>
+           <Item Name="Modify" Sym="COMSKIP-402">
+            <Action Name="If(GetCommercialSkipChannels()==&quot;&quot;, &quot;(none)&quot;, GetCommercialSkipChannels())" Sym="COMSKIP-403">
+             <Text Name="" Sym="COMSKIP-404"/>
+            </Action>
+            <Action Name="Title = DialogTitle" Sym="COMSKIP-405">
+             <Action Name="NewText = GetCommercialSkipChannels()" Sym="COMSKIP-406">
+              <OptionsMenu Name="GetNewText" Sym="COMSKIP-407">
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <Action Name="Title + &quot;\n \n&quot;" Sym="COMSKIP-408">
+                <Text Name="" Sym="COMSKIP-409">
+                 <AnchorX>0.5</AnchorX>
+                 <AutosizeText>false</AutosizeText>
+                 <WrapText>true</WrapText>
+                 <TextAlignment>0.5</TextAlignment>
+                </Text>
+               </Action>
+               <Panel Name="InputArea" Sym="COMSKIP-410">
+                <Layout>Horizontal</Layout>
+                <FixedWidth>0.95</FixedWidth>
+                <TextAlignment>0.5</TextAlignment>
+                <HideText>false</HideText>
+                <WrapHNav>false</WrapHNav>
+                <WrapVNav>false</WrapVNav>
+                <IgnoreThemeProps>true</IgnoreThemeProps>
+                <BackgroundComponent>false</BackgroundComponent>
+                <MouseTransparency>false</MouseTransparency>
+                <TextInput Name="EditText" Sym="COMSKIP-411">
+                 <HideText>false</HideText>
+                 <IgnoreThemeProps>false</IgnoreThemeProps>
+                 <BackgroundComponent>false</BackgroundComponent>
+                 <FocusableCondition>false</FocusableCondition>
+                 <Shape Ref="941" Name="InputBorder"/>
+                </TextInput>
+               </Panel>
+               <Attribute Name="EditText" Sym="COMSKIP-412">
+                <Value>NewText</Value>
+               </Attribute>
+               <Listener Name="Select" Sym="COMSKIP-413">
+                <ListenerEvent>Select</ListenerEvent>
+                <Conditional Name="EditText != null" Sym="COMSKIP-414">
+                 <Action Name="NewText = EditText" Sym="COMSKIP-415"/>
+                </Conditional>
+                <Action Name="CloseOptionsMenu()" Sym="COMSKIP-416"/>
+               </Listener>
+               <Theme Ref="22900" Name="OptionsTextEntryTheme_..."/>
+              </OptionsMenu>
+              <Action Name="SetCommercialSkipChannels(If(NewText==null,&quot;&quot;,NewText))" Sym="COMSKIP-417">
+               <Action Name="Refresh()" Sym="COMSKIP-418"/>
+              </Action>
+             </Action>
+            </Action>
+            <Attribute Name="DialogTitle" Sym="COMSKIP-419">
+             <Value>"Enter channel names to skip (comma-separated). Leave empty for none:"</Value>
+            </Attribute>
+            <Listener Ref="22627" Name="Right"/>
+            <Attribute Name="HelpText" Sym="COMSKIP-420">
+             <Value>"Comma-separated list of channel names to exclude from commercial detection (e.g. HBO,PBS,BBC)."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="SkipCategories" Sym="COMSKIP-430">
+           <Text Name="Skip Categories" Sym="COMSKIP-431"/>
+           <Item Name="Modify" Sym="COMSKIP-432">
+            <Action Name="If(GetCommercialSkipCategories()==&quot;&quot;, &quot;(none)&quot;, GetCommercialSkipCategories())" Sym="COMSKIP-433">
+             <Text Name="" Sym="COMSKIP-434"/>
+            </Action>
+            <Action Name="Title = DialogTitle" Sym="COMSKIP-435">
+             <Action Name="NewText = GetCommercialSkipCategories()" Sym="COMSKIP-436">
+              <OptionsMenu Name="GetNewText" Sym="COMSKIP-437">
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <Action Name="Title + &quot;\n \n&quot;" Sym="COMSKIP-438">
+                <Text Name="" Sym="COMSKIP-439">
+                 <AnchorX>0.5</AnchorX>
+                 <AutosizeText>false</AutosizeText>
+                 <WrapText>true</WrapText>
+                 <TextAlignment>0.5</TextAlignment>
+                </Text>
+               </Action>
+               <Panel Name="InputArea" Sym="COMSKIP-440">
+                <Layout>Horizontal</Layout>
+                <FixedWidth>0.95</FixedWidth>
+                <TextAlignment>0.5</TextAlignment>
+                <HideText>false</HideText>
+                <WrapHNav>false</WrapHNav>
+                <WrapVNav>false</WrapVNav>
+                <IgnoreThemeProps>true</IgnoreThemeProps>
+                <BackgroundComponent>false</BackgroundComponent>
+                <MouseTransparency>false</MouseTransparency>
+                <TextInput Name="EditText" Sym="COMSKIP-441">
+                 <HideText>false</HideText>
+                 <IgnoreThemeProps>false</IgnoreThemeProps>
+                 <BackgroundComponent>false</BackgroundComponent>
+                 <FocusableCondition>false</FocusableCondition>
+                 <Shape Ref="941" Name="InputBorder"/>
+                </TextInput>
+               </Panel>
+               <Attribute Name="EditText" Sym="COMSKIP-442">
+                <Value>NewText</Value>
+               </Attribute>
+               <Listener Name="Select" Sym="COMSKIP-443">
+                <ListenerEvent>Select</ListenerEvent>
+                <Conditional Name="EditText != null" Sym="COMSKIP-444">
+                 <Action Name="NewText = EditText" Sym="COMSKIP-445"/>
+                </Conditional>
+                <Action Name="CloseOptionsMenu()" Sym="COMSKIP-446"/>
+               </Listener>
+               <Theme Ref="22900" Name="OptionsTextEntryTheme_..."/>
+              </OptionsMenu>
+              <Action Name="SetCommercialSkipCategories(If(NewText==null,&quot;&quot;,NewText))" Sym="COMSKIP-447">
+               <Action Name="Refresh()" Sym="COMSKIP-448"/>
+              </Action>
+             </Action>
+            </Action>
+            <Attribute Name="DialogTitle" Sym="COMSKIP-449">
+             <Value>"Enter show categories to skip (comma-separated). Leave empty for none:"</Value>
+            </Attribute>
+            <Listener Ref="22627" Name="Right"/>
+            <Attribute Name="HelpText" Sym="COMSKIP-450">
+             <Value>"Comma-separated list of show categories to exclude from commercial detection (e.g. Movie,Sports)."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="RestrictedTimes" Sym="COMSKIP-460">
+           <Text Name="Restricted Times" Sym="COMSKIP-461"/>
+           <Item Name="Modify" Sym="COMSKIP-462">
+            <Action Name="If(GetCommercialDetectRestrictedTimes()==&quot;&quot;, &quot;(none)&quot;, GetCommercialDetectRestrictedTimes())" Sym="COMSKIP-463">
+             <Text Name="" Sym="COMSKIP-464"/>
+            </Action>
+            <Action Name="Title = DialogTitle" Sym="COMSKIP-465">
+             <Action Name="NewText = GetCommercialDetectRestrictedTimes()" Sym="COMSKIP-466">
+              <OptionsMenu Name="GetNewText" Sym="COMSKIP-467">
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <Action Name="Title + &quot;\n \n&quot;" Sym="COMSKIP-468">
+                <Text Name="" Sym="COMSKIP-469">
+                 <AnchorX>0.5</AnchorX>
+                 <AutosizeText>false</AutosizeText>
+                 <WrapText>true</WrapText>
+                 <TextAlignment>0.5</TextAlignment>
+                </Text>
+               </Action>
+               <Panel Name="InputArea" Sym="COMSKIP-470">
+                <Layout>Horizontal</Layout>
+                <FixedWidth>0.95</FixedWidth>
+                <TextAlignment>0.5</TextAlignment>
+                <HideText>false</HideText>
+                <WrapHNav>false</WrapHNav>
+                <WrapVNav>false</WrapVNav>
+                <IgnoreThemeProps>true</IgnoreThemeProps>
+                <BackgroundComponent>false</BackgroundComponent>
+                <MouseTransparency>false</MouseTransparency>
+                <TextInput Name="EditText" Sym="COMSKIP-471">
+                 <HideText>false</HideText>
+                 <IgnoreThemeProps>false</IgnoreThemeProps>
+                 <BackgroundComponent>false</BackgroundComponent>
+                 <FocusableCondition>false</FocusableCondition>
+                 <Shape Ref="941" Name="InputBorder"/>
+                </TextInput>
+               </Panel>
+               <Attribute Name="EditText" Sym="COMSKIP-472">
+                <Value>NewText</Value>
+               </Attribute>
+               <Listener Name="Select" Sym="COMSKIP-473">
+                <ListenerEvent>Select</ListenerEvent>
+                <Conditional Name="EditText != null" Sym="COMSKIP-474">
+                 <Action Name="NewText = EditText" Sym="COMSKIP-475"/>
+                </Conditional>
+                <Action Name="CloseOptionsMenu()" Sym="COMSKIP-476"/>
+               </Listener>
+               <Theme Ref="22900" Name="OptionsTextEntryTheme_..."/>
+              </OptionsMenu>
+              <Action Name="SetCommercialDetectRestrictedTimes(If(NewText==null,&quot;&quot;,NewText))" Sym="COMSKIP-477">
+               <Action Name="Refresh()" Sym="COMSKIP-478"/>
+              </Action>
+             </Action>
+            </Action>
+            <Attribute Name="DialogTitle" Sym="COMSKIP-479">
+             <Value>"Enter restricted hours (e.g. 18-22,6-8). Detection deferred during these hours:"</Value>
+            </Attribute>
+            <Listener Ref="22627" Name="Right"/>
+            <Attribute Name="HelpText" Sym="COMSKIP-480">
+             <Value>"Comma-separated hour ranges (24h format) when commercial detection should not run (e.g. 18-22 for 6PM-10PM)."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="IntelligentScheduling" Sym="COMSKIP-490">
+           <Text Name="Intelligent Scheduling" Sym="COMSKIP-491"/>
+           <Item Name="Toggle" Sym="COMSKIP-492">
+            <Action Name="IsIntelligentSchedulingEnabled()" Sym="COMSKIP-493">
+             <Action Name="SetIntelligentSchedulingEnabled(!this)" Sym="COMSKIP-494">
+              <Action Name="Refresh()" Sym="COMSKIP-495"/>
+             </Action>
+            </Action>
+            <Conditional Name="IsIntelligentSchedulingEnabled()" Sym="COMSKIP-496">
+             <Branch Name="true" Sym="COMSKIP-497">
+              <Text Name="Enabled" Sym="COMSKIP-498"/>
+             </Branch>
+             <Branch Name="false" Sym="COMSKIP-499">
+              <Text Name="Disabled" Sym="COMSKIP-500"/>
+             </Branch>
+            </Conditional>
+            <Attribute Name="HelpText" Sym="COMSKIP-501">
+             <Value>"Only start detection jobs when enough time is available before the next scheduled recording."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="IniDirectory" Sym="COMSKIP-510">
+           <Text Name="Per-Channel INI Directory" Sym="COMSKIP-511"/>
+           <Item Name="Modify" Sym="COMSKIP-512">
+            <Action Name="If(GetComskipIniDirectory()==&quot;&quot;, &quot;(not set)&quot;, GetComskipIniDirectory())" Sym="COMSKIP-513">
+             <Text Name="" Sym="COMSKIP-514"/>
+            </Action>
+            <Action Name="Title = DialogTitle" Sym="COMSKIP-515">
+             <Action Name="NewText = GetComskipIniDirectory()" Sym="COMSKIP-516">
+              <OptionsMenu Name="GetNewText" Sym="COMSKIP-517">
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <Action Name="Title + &quot;\n \n&quot;" Sym="COMSKIP-518">
+                <Text Name="" Sym="COMSKIP-519">
+                 <AnchorX>0.5</AnchorX>
+                 <AutosizeText>false</AutosizeText>
+                 <WrapText>true</WrapText>
+                 <TextAlignment>0.5</TextAlignment>
+                </Text>
+               </Action>
+               <Panel Name="InputArea" Sym="COMSKIP-520">
+                <Layout>Horizontal</Layout>
+                <FixedWidth>0.95</FixedWidth>
+                <TextAlignment>0.5</TextAlignment>
+                <HideText>false</HideText>
+                <WrapHNav>false</WrapHNav>
+                <WrapVNav>false</WrapVNav>
+                <IgnoreThemeProps>true</IgnoreThemeProps>
+                <BackgroundComponent>false</BackgroundComponent>
+                <MouseTransparency>false</MouseTransparency>
+                <TextInput Name="EditText" Sym="COMSKIP-521">
+                 <HideText>false</HideText>
+                 <IgnoreThemeProps>false</IgnoreThemeProps>
+                 <BackgroundComponent>false</BackgroundComponent>
+                 <FocusableCondition>false</FocusableCondition>
+                 <Shape Ref="941" Name="InputBorder"/>
+                </TextInput>
+               </Panel>
+               <Attribute Name="EditText" Sym="COMSKIP-522">
+                <Value>NewText</Value>
+               </Attribute>
+               <Listener Name="Select" Sym="COMSKIP-523">
+                <ListenerEvent>Select</ListenerEvent>
+                <Conditional Name="EditText != null" Sym="COMSKIP-524">
+                 <Action Name="NewText = EditText" Sym="COMSKIP-525"/>
+                </Conditional>
+                <Action Name="CloseOptionsMenu()" Sym="COMSKIP-526"/>
+               </Listener>
+               <Theme Ref="22900" Name="OptionsTextEntryTheme_..."/>
+              </OptionsMenu>
+              <Action Name="SetComskipIniDirectory(If(NewText==null,&quot;&quot;,NewText))" Sym="COMSKIP-527">
+               <Action Name="Refresh()" Sym="COMSKIP-528"/>
+              </Action>
+             </Action>
+            </Action>
+            <Attribute Name="DialogTitle" Sym="COMSKIP-529">
+             <Value>"Enter directory for per-channel/show INI files (e.g. ShowName.ini, ChannelName.ini):"</Value>
+            </Attribute>
+            <Listener Ref="22627" Name="Right"/>
+            <Attribute Name="HelpText" Sym="COMSKIP-530">
+             <Value>"Directory containing per-channel or per-show comskip INI files. Place ShowName.ini or ChannelName.ini here for custom profiles."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="ContentProfiles" Sym="COMSKIP-640">
+           <Text Name="Content Profiles" Sym="COMSKIP-641"/>
+           <Item Name="Toggle" Sym="COMSKIP-642">
+            <Action Name="IsCommercialDetectProfilesEnabled()" Sym="COMSKIP-643">
+             <Action Name="SetCommercialDetectProfilesEnabled(!this)" Sym="COMSKIP-644">
+              <Action Name="Refresh()" Sym="COMSKIP-645"/>
+             </Action>
+            </Action>
+            <Conditional Name="IsCommercialDetectProfilesEnabled()" Sym="COMSKIP-646">
+             <Branch Name="true" Sym="COMSKIP-647">
+              <Text Name="Enabled" Sym="COMSKIP-648"/>
+             </Branch>
+             <Branch Name="false" Sym="COMSKIP-649">
+              <Text Name="Disabled" Sym="COMSKIP-650"/>
+             </Branch>
+            </Conditional>
+            <Attribute Name="HelpText" Sym="COMSKIP-651">
+             <Value>"Auto-select comskip INI profiles based on content type (Sports, News, Default). Uses base INI + content-specific delta overlays. When disabled, only the standard comskip.ini is used."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="BatchCommercialDetection" Sym="COMSKIP-540">
+           <WrapHNav>false</WrapHNav>
+           <WrapVNav>false</WrapVNav>
+           <IgnoreThemeProps>false</IgnoreThemeProps>
+           <Text Name="Batch Commercial Detection" Sym="COMSKIP-541"/>
+           <Item Name="Configure" Sym="COMSKIP-542">
+            <OptionsMenu Name="BatchCommDetectMenu" Sym="COMSKIP-543">
+             <IgnoreThemeProps>false</IgnoreThemeProps>
+             <Action Name="&quot;Batch Commercial Detection:\n \n&quot;" Sym="COMSKIP-544">
+              <Text Name="" Sym="COMSKIP-545"/>
+             </Action>
+             <Panel Name="QueueInfo" Sym="COMSKIP-546">
+              <FixedWidth>1.0</FixedWidth>
+              <PadX>.02</PadX>
+              <PadY>.02</PadY>
+              <Insets>.02</Insets>
+              <WrapHNav>false</WrapHNav>
+              <WrapVNav>false</WrapVNav>
+              <IgnoreThemeProps>false</IgnoreThemeProps>
+              <Text Name="Queue / Running:" Sym="COMSKIP-547">
+               <AnchorX>0.0</AnchorX>
+               <FixedWidth>0.7</FixedWidth>
+               <AutosizeText>false</AutosizeText>
+               <WrapText>true</WrapText>
+               <TextShadow>true</TextShadow>
+               <DisableFontScaling>false</DisableFontScaling>
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+              </Text>
+              <Item Name="QueueStatus" Sym="COMSKIP-548">
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <BackgroundComponent>false</BackgroundComponent>
+               <Action Name="GetCommercialDetectQueueSize() + &quot; queued / &quot; + GetCommercialDetectRunningCount() + &quot; running&quot;" Sym="COMSKIP-549">
+                <Text Name="" Sym="COMSKIP-550"/>
+               </Action>
+               <Action Name="Refresh()" Sym="COMSKIP-551"/>
+              </Item>
+              <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
+             </Panel>
+             <Panel Name="ScanAll" Sym="COMSKIP-552">
+              <FixedWidth>1.0</FixedWidth>
+              <PadX>.02</PadX>
+              <PadY>.02</PadY>
+              <Insets>.02</Insets>
+              <WrapHNav>false</WrapHNav>
+              <WrapVNav>false</WrapVNav>
+              <IgnoreThemeProps>false</IgnoreThemeProps>
+              <Text Name="Scan All Recordings:" Sym="COMSKIP-553">
+               <AnchorX>0.0</AnchorX>
+               <FixedWidth>0.7</FixedWidth>
+               <AutosizeText>false</AutosizeText>
+               <WrapText>true</WrapText>
+               <TextShadow>true</TextShadow>
+               <DisableFontScaling>false</DisableFontScaling>
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+              </Text>
+              <Item Name="ScanAllBtn" Sym="COMSKIP-554">
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <BackgroundComponent>false</BackgroundComponent>
+               <Action Name="ScanAllRecordings()" Sym="COMSKIP-555">
+                <Action Name="Refresh()" Sym="COMSKIP-556"/>
+               </Action>
+               <Text Name="Start Scan" Sym="COMSKIP-557"/>
+              </Item>
+              <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
+             </Panel>
+             <Panel Name="StopAll" Sym="COMSKIP-558">
+              <FixedWidth>1.0</FixedWidth>
+              <PadX>.02</PadX>
+              <PadY>.02</PadY>
+              <Insets>.02</Insets>
+              <WrapHNav>false</WrapHNav>
+              <WrapVNav>false</WrapVNav>
+              <IgnoreThemeProps>false</IgnoreThemeProps>
+              <Text Name="Stop All Jobs:" Sym="COMSKIP-559">
+               <AnchorX>0.0</AnchorX>
+               <FixedWidth>0.7</FixedWidth>
+               <AutosizeText>false</AutosizeText>
+               <WrapText>true</WrapText>
+               <TextShadow>true</TextShadow>
+               <DisableFontScaling>false</DisableFontScaling>
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+              </Text>
+              <Item Name="StopAllBtn" Sym="COMSKIP-560">
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <BackgroundComponent>false</BackgroundComponent>
+               <Action Name="StopAllCommercialDetectJobs()" Sym="COMSKIP-561">
+                <Action Name="Refresh()" Sym="COMSKIP-562"/>
+               </Action>
+               <Text Name="Stop All" Sym="COMSKIP-563"/>
+              </Item>
+              <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
+             </Panel>
+             <Action Name="&quot;\n \n&quot;" Sym="COMSKIP-564">
+              <Text Name="" Sym="COMSKIP-565"/>
+             </Action>
+             <Item Name="Close" Sym="COMSKIP-566">
+              <Action Name="CloseOptionsMenu()" Sym="COMSKIP-567"/>
+             </Item>
+             <Theme Ref="2131" Name="MutliSelectOptionsTheme"/>
+            </OptionsMenu>
+            <Attribute Name="HelpText" Sym="COMSKIP-568">
+             <Value>"Manage batch commercial detection: view queue status, scan all recordings, or stop all jobs."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Listener Ref="22994" Name="Left"/>
+          <Theme Ref="22995" Name="SetupPanelTheme"/>
+         </Panel>
+         <Panel Ref="22996" Name="PanelVPagination w=0.05"/>
+         <Listener Ref="22994" Name="Left"/>
+         <Theme Ref="22995" Name="SetupPanelTheme"/>
+        </Panel>
+        <Panel Ref="22997" Name="Help Text Area"/>
        </Branch>
        <Branch Name="&quot;xSetupMenu&quot;" Sym="BASE-76137">
         <Panel Name="SetpMenu SetupPanel" Sym="BASE-76138">
@@ -129086,6 +130123,44 @@
                      </Panel>
                     </Item>
                    </Conditional>
+                   <Conditional Name="!HasCommercialMarkers(MediaFile) &amp;&amp; !IsCommercialDetectRunning(MediaFile)" Sym="COMSKIP-234">
+                    <Item Name="Run Comskip" Sym="COMSKIP-235">
+                     <FixedWidth>0.5</FixedWidth>
+                     <Insets>10</Insets>
+                     <Action Name="RunCommercialDetect(MediaFile)" Sym="COMSKIP-236">
+                      <Action Name="CloseOptionsMenu()" Sym="COMSKIP-237"/>
+                     </Action>
+                    </Item>
+                   </Conditional>
+                   <Conditional Name="HasCommercialMarkers(MediaFile) &amp;&amp; !IsCommercialDetectRunning(MediaFile)" Sym="COMSKIP-630">
+                    <Item Name="Re-run Comskip" Sym="COMSKIP-631">
+                     <FixedWidth>0.5</FixedWidth>
+                     <Insets>10</Insets>
+                     <Action Name="ClearCommercialMarkers(MediaFile)" Sym="COMSKIP-632">
+                      <Action Name="RunCommercialDetect(MediaFile)" Sym="COMSKIP-633">
+                       <Action Name="CloseOptionsMenu()" Sym="COMSKIP-634"/>
+                      </Action>
+                     </Action>
+                    </Item>
+                   </Conditional>
+                   <Conditional Name="IsCommercialDetectRunning(MediaFile)" Sym="COMSKIP-635">
+                    <Item Name="Stop Comskip" Sym="COMSKIP-636">
+                     <FixedWidth>0.5</FixedWidth>
+                     <Insets>10</Insets>
+                     <Action Name="StopCommercialDetect(MediaFile)" Sym="COMSKIP-637">
+                      <Action Name="Refresh()" Sym="COMSKIP-638"/>
+                     </Action>
+                    </Item>
+                   </Conditional>
+                   <Conditional Name="HasCommercialMarkers(MediaFile) &amp;&amp; !IsCommercialDetectRunning(MediaFile)" Sym="COMSKIP-230">
+                    <Item Name="Delete Comskip" Sym="COMSKIP-231">
+                     <FixedWidth>0.5</FixedWidth>
+                     <Insets>10</Insets>
+                     <Action Name="ClearCommercialMarkers(MediaFile)" Sym="COMSKIP-232">
+                      <Action Name="Refresh()" Sym="COMSKIP-233"/>
+                     </Action>
+                    </Item>
+                   </Conditional>
                   </Branch>
                   <Branch Name="else" Sym="BASE-49834">
                    <Conditional Name="!GetProperty(&quot;video_lib_hide_delete&quot;, false)" Sym="BASE-49835">
@@ -129338,6 +130413,7 @@
                  </Conditional>
                 </Conditional>
                </Action>
+
                <Action Name="&quot;REM Add options for Archive &amp; Convert options.&quot;" Sym="OPUS4A-181684">
                 <Panel Name="Archive / Convert Options" Sym="BASE-50353">
                  <Layout>HorizontalGrid</Layout>
@@ -130307,7 +131383,9 @@
                                  <Conditional Name="!IsEmbeddedSystem()" Sym="OPUS4A-213200">
                                   <Action Name="java_io_File_delete(new_java_io_File(java_lang_String_replaceFirst(filename, &quot;\\.\\w+$&quot;, &quot;.txt&quot;)))" Sym="BASE-60260">
                                    <Action Name="java_io_File_delete(new_java_io_File(java_lang_String_replaceFirst(filename, &quot;\\.\\w+$&quot;, &quot;.smi&quot;))) " Sym="BASE-60261">
-                                    <Action Name="java_io_File_delete(new_java_io_File(java_lang_String_replaceFirst(filename, &quot;\\.\\w+$&quot;, &quot;.xml&quot;))) " Sym="BASE-60262"/>
+                                    <Action Name="java_io_File_delete(new_java_io_File(java_lang_String_replaceFirst(filename, &quot;\\.\\w+$&quot;, &quot;.xml&quot;))) " Sym="BASE-60262">
+                                     <Action Name="java_io_File_delete(new_java_io_File(java_lang_String_replaceFirst(filename, &quot;\\.\\w+$&quot;, &quot;.edl&quot;))) " Sym="COMSKIP-221"/>
+                                    </Action>
                                    </Action>
                                   </Action>
                                  </Conditional>
@@ -202594,6 +203672,60 @@
             </Panel>
            </Conditional>
           </Action>
+          <Conditional Name="IsTVFile(Airing)" Sym="COMSKIP-300">
+           <Panel Name="Comskip Bar" Sym="COMSKIP-301">
+            <AnchorY>1.0</AnchorY>
+            <AnchorPointY>1.0</AnchorPointY>
+            <FixedWidth>1.0</FixedWidth>
+            <FixedHeight>0.06</FixedHeight>
+            <WrapHNav>false</WrapHNav>
+            <WrapVNav>false</WrapVNav>
+            <IgnoreThemeProps>true</IgnoreThemeProps>
+            <BackgroundComponent>true</BackgroundComponent>
+            <MouseTransparency>true</MouseTransparency>
+            <Shape Name="ComskipBarBG" Sym="COMSKIP-302">
+             <ForegroundColor>0x28BC29</ForegroundColor>
+             <ForegroundAlpha>200</ForegroundAlpha>
+             <AnchorX>0.0</AnchorX>
+             <AnchorPointX>0.0</AnchorPointX>
+             <FixedWidth>1.0</FixedWidth>
+             <ShapeType>Rectangle</ShapeType>
+             <ShapeFill>true</ShapeFill>
+             <CornerArc>8</CornerArc>
+            </Shape>
+            <Conditional Name="HasCommercialMarkers(MediaFile)" Sym="COMSKIP-319">
+            <Action Name="CommSegCount = GetCommercialSegmentCount(MediaFile)" Sym="COMSKIP-303">
+             <Action Name="DurationSecs = GetAiringDuration(Airing) / 1000.0" Sym="COMSKIP-304">
+              <Conditional Name="DurationSecs &gt; 0 &amp;&amp; CommSegCount &gt; 0" Sym="COMSKIP-305">
+               <Action Name="SegIdx = 0" Sym="COMSKIP-306">
+                <Conditional ID="70900" Name="SegIdx &lt; CommSegCount" Sym="COMSKIP-307">
+                 <Action Name="CommStartFrac = Max(0.0, Min(1.0, GetCommercialSegmentStart(MediaFile, SegIdx) / DurationSecs))" Sym="COMSKIP-309">
+                  <Action Name="CommEndFrac = Max(0.0, Min(1.0, GetCommercialSegmentEnd(MediaFile, SegIdx) / DurationSecs))" Sym="COMSKIP-310">
+                   <Action Name="CommWidth = Max(0.003, CommEndFrac - CommStartFrac)" Sym="COMSKIP-311">
+                    <Shape Name="ComskipCommercialSeg" Sym="COMSKIP-312">
+                     <ForegroundColor>0x808080</ForegroundColor>
+                     <ForegroundAlpha>230</ForegroundAlpha>
+                     <AnchorX>=CommStartFrac</AnchorX>
+                     <AnchorPointX>0.0</AnchorPointX>
+                     <FixedWidth>=CommWidth</FixedWidth>
+                     <ShapeType>Rectangle</ShapeType>
+                     <ShapeFill>true</ShapeFill>
+                     <CornerArc>8</CornerArc>
+                    </Shape>
+                   </Action>
+                  </Action>
+                 </Action>
+                 <Action Name="SegIdx = SegIdx + 1" Sym="COMSKIP-313">
+                  <Conditional Ref="70900" Name="SegIdx &lt; CommSegCount..."/>
+                 </Action>
+                </Conditional>
+               </Action>
+              </Conditional>
+             </Action>
+            </Action>
+            </Conditional>
+           </Panel>
+          </Conditional>
           <Conditional ID="45820" Name="IsLibraryFile(Airing) &amp;&amp; !IsTVFile(Airing)" Sym="BASE-86526">
            <Branch Name="true" Sym="BASE-86527">
             <Action Name="BoldStyle = &quot;&quot;" Sym="OPUS4A-175254">

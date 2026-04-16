@@ -2433,6 +2433,8 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
     if (!encState.currRecordFile.isAnyLiveStream())
       PluginEventManager.postEvent(PluginEventManager.RECORDING_STARTED,
           new Object[] { PluginEventManager.VAR_MEDIAFILE, encState.currRecordFile });
+    // Commercial detection hook
+    sage.commercial.CommercialDetectionManager.getInstance().onRecordingStarted(encState.currRecordFile);
     encState.doingStartup = false;
   }
 
@@ -2710,6 +2712,8 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
     if (!es.switcherFile.isAnyLiveStream())
       PluginEventManager.postEvent(PluginEventManager.RECORDING_STOPPED,
           new Object[] { PluginEventManager.VAR_MEDIAFILE, es.switcherFile });
+    // Commercial detection hook
+    sage.commercial.CommercialDetectionManager.getInstance().onRecordingStopped(es.switcherFile);
 
     // General file export plugins
     if (es.switcherFile.isCompleteRecording())
@@ -2874,6 +2878,9 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
       if (!readySwitch && !es.currRecordFile.isAnyLiveStream())
         PluginEventManager.postEvent(PluginEventManager.RECORDING_STOPPED,
             new Object[] { PluginEventManager.VAR_MEDIAFILE, es.currRecordFile });
+      // Commercial detection hook
+      if (!readySwitch)
+        sage.commercial.CommercialDetectionManager.getInstance().onRecordingStopped(es.currRecordFile);
 
       // General file export plugins
       if (!readySwitch && es.currRecordFile.isCompleteRecording())

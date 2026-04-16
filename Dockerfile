@@ -37,6 +37,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     wget \
     xz-utils \
+    libargtable2-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libavcodec-dev \
+    libswscale-dev \
+    libswresample-dev \
     && rm -rf /var/lib/apt/lists/*
 
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
@@ -110,6 +116,16 @@ RUN bash /src/docker/build-modern-ffmpeg.sh \
     && cp /tmp/ffmpeg-build/ffmpeg-6.1.1/ffmpeg /src/build/elf/ffmpeg \
     && echo "Modern patched FFmpeg 6.1.1 built successfully" \
     || echo "WARN: Modern FFmpeg build failed (will fall back to stock+wrapper)"
+
+# ---- 4b. Build Comskip commercial detector ----
+WORKDIR /src/third_party/comskip
+RUN ./autogen.sh \
+    && ./configure \
+    && make \
+    && cp comskip /src/build/elf/comskip \
+    && echo "Comskip built successfully" \
+    || echo "WARN: Comskip build failed"
+WORKDIR /src/build
 
 # Copy jpegtran if available
 RUN cp /src/third_party/codecs/jpeg-6b/jpegtran /src/build/elf/jpegtran 2>/dev/null || true

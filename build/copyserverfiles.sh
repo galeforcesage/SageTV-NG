@@ -28,6 +28,9 @@ cp so/irtunerplugins/*.so ./serverrelease/irtunerplugins/
 
 cp elf/ffmpeg ./serverrelease/
 cp elf/jpegtran ./serverrelease/
+cp elf/comskip ./serverrelease/ 2>/dev/null || true
+mkdir -p ./serverrelease/comskip_profiles
+cp ../comskip/*.ini ./serverrelease/comskip_profiles/ 2>/dev/null || true
 cp ../install/config/RemoteClients.properties.defaults ./serverrelease
 cp ../install/config/Sage.properties.defaults ./serverrelease
 mkdir ./serverrelease/STVs
