@@ -708,12 +708,12 @@ public class MiniPlayer implements DVDMediaPlayer
         inAudio = inputFormat.getAudioFormat();
       if (inAudio != null && inAudio.getChannels() >= 5)
       {
-        prefTranscodeMode = Sage.getBoolean("media_server/conservative_transcode", true) ? uiMgr.get("miniclient/conservative_transcode_mode_6ch", "SVCD6Ch") :
+        prefTranscodeMode = Sage.getBoolean("media_server/conservative_transcode", false) ? uiMgr.get("miniclient/conservative_transcode_mode_6ch", "SVCD6Ch") :
           uiMgr.get("miniclient/transcode_mode_6ch", "DVD6Ch");
         using6ChAudioTranscode = true;
       }
       else
-        prefTranscodeMode = Sage.getBoolean("media_server/conservative_transcode", true) ? uiMgr.get("miniclient/conservative_transcode_mode", "SVCD") :
+        prefTranscodeMode = Sage.getBoolean("media_server/conservative_transcode", false) ? uiMgr.get("miniclient/conservative_transcode_mode", "SVCD") :
           uiMgr.get("miniclient/transcode_mode", "DVD");
 
       /*
