@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <stdint.h>
 #include "TSnative.h"
 #include "hrtime.h"
 
@@ -25,13 +26,13 @@ void hr_time( LONGLONG *time )
 	QueryPerformanceCounter( &t );
 	*time = t.QuadPart;
 }
-unsigned long hr_duration( LONGLONG *start_time, LONGLONG *stop_time )
+uint32_t hr_duration( LONGLONG *start_time, LONGLONG *stop_time )
 {
 	LARGE_INTEGER cpu_frq;
 	if ( !QueryPerformanceFrequency(&cpu_frq) )
 		return 0;
 	cpu_frq.QuadPart /= 1000;
-	return (unsigned long)(((*stop_time - *start_time)*1000)/cpu_frq.QuadPart); 
+	return (uint32_t)(((*stop_time - *start_time)*1000)/cpu_frq.QuadPart); 
 }
 
 LONGLONG hr_duration_long( LONGLONG *start_time, LONGLONG *stop_time )
@@ -40,7 +41,7 @@ LONGLONG hr_duration_long( LONGLONG *start_time, LONGLONG *stop_time )
 	if ( !QueryPerformanceFrequency(&cpu_frq) )
 		return 0;
 	cpu_frq.QuadPart /= 1000;
-	return (unsigned long)((*stop_time - *start_time)*1000/cpu_frq.QuadPart); 
+	return (uint32_t)((*stop_time - *start_time)*1000/cpu_frq.QuadPart); 
 }
 
 

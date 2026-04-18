@@ -26,7 +26,7 @@ JAVA_HOME ?= /opt/jdk1.5.0_02
 
 #JSDK=-I/usr/local/j2sdk/include/ -I/usr/local/j2sdk/include/linux
 JSDK=-I$(JAVA_HOME)/include -I$(JAVA_HOME)/include/linux
-CFLAGS=-fPIC -D_FILE_OFFSET_BITS=64 -Wall -Wno-missing-braces $(JSDK) $(DEBUG)
+CFLAGS=-fPIC -D_FILE_OFFSET_BITS=64 -Wall -Wno-missing-braces -fgnu89-inline $(JSDK) $(DEBUG)
 
 TARGETDIR=../../lib/TSnative
 
@@ -46,7 +46,7 @@ $(TARGETDIR):
 	touch $(TARGETDIR)
 
 $(TARGETDIR)/libTSnative.so: $(TARGETDIR) $(OBJS)
-	$(CC) -shared -Wl,-Map=libTSnative.map -o $(TARGETDIR)/libTSnative.so $(OBJS)
+	$(CC) -shared -Wl,-Map=libTSnative.map -Wl,-Bsymbolic -o $(TARGETDIR)/libTSnative.so $(OBJS)
 
 $(TARGETDIR)/libTSnatived.so: $(TARGETDIR) $(OBJS)
 	$(CC) -g -O0 -shared -o $(TARGETDIR)/libTSnatived.so $(OBJS)

@@ -1026,6 +1026,11 @@ int CreatSageStreamHeader( PS_BUILDER* pPSBuilder )
 		len = buf_size - (bytes+6);
 
 		tracks = pPSBuilder->tracks;
+		if ( tracks == NULL )
+		{
+			SageLog(( _LOG_TRACE, 3, TEXT("tracks is NULL in CreatSageStreamHeader, PS header isn't created.") ));
+			return 0;
+		}
 		for ( i = 0; i<tracks->total_track; i++ )
 		{
 			if ( tracks->track[i].av_elmnt->content_type == VIDEO_DATA )

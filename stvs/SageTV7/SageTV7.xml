@@ -29931,7 +29931,7 @@
                     <Action Name="SetFocusForVariable(&quot;SortMethod&quot;, GetProperty(SortMethodProperty, null))" Sym="OPUS4A-216786"/>
                    </Hook>
                    <Attribute Name="OrigSetting" Sym="OPUS4A-216787">
-                    <Value>GetProperty(SortMethodProperty, "xIntelligent")</Value>
+                    <Value>GetProperty(SortMethodProperty, "xOldestFirst")</Value>
                    </Attribute>
                    <Attribute Name="CurSetting" Sym="OPUS4A-216788">
                     <Value>OrigSetting</Value>
@@ -87939,7 +87939,7 @@
                               <Branch Name="else" Sym="OPUS4A-200476">
                                <Action ID="32201" Name="&quot;REM Continue processing the recordings list.&quot;" Sym="BASE-79301">
                                 <Action Name="&quot;REM Sort the lists of recordings&quot;" Sym="BASE-79302">
-                                 <Action Name="SortMethod = GetProperty(SortMethodProperty, &quot;xIntelligent&quot;)" Sym="OPUS4A-173224">
+                                 <Action Name="SortMethod = GetProperty(SortMethodProperty, &quot;xOldestFirst&quot;)" Sym="OPUS4A-173224">
                                   <Conditional Name="true" Sym="OPUS4A-173223">
                                    <Branch Name="(SortMethod == &quot;xTitleAZ&quot;) || (SortMethod == &quot;xTitleAndDate&quot;)" Sym="OPUS4A-173225">
                                     <Action Name="RecordedFiles = DataUnion(CurrentlyRecordingFiles, RecordedFiles)" Sym="OPUS4A-215083">
@@ -87954,8 +87954,8 @@
                                        </Branch>
                                        <Branch Name="else" Sym="OPUS4A-215113">
                                         <Action ID="32213" Name="&quot;REM Sort by episode, then title.&quot;" Sym="OPUS4A-215106">
-                                         <Action Name="FileList = SortLexical(RecordedFiles, GetProperty(SortReverseProperty, false), &quot;GetShowEpisode&quot; )" Sym="OPUS4A-215084">
-                                          <Action Name="FileList = SortLexical(FileList, GetProperty(SortReverseProperty, false), &quot;GetAiringTitle&quot; )" Sym="OPUS4A-215085">
+                                         <Action Name="FileList = SortLexical(RecordedFiles, GetProperty(SortReverseProperty, true), &quot;GetShowEpisode&quot; )" Sym="OPUS4A-215084">
+                                          <Action Name="FileList = SortLexical(FileList, GetProperty(SortReverseProperty, true), &quot;GetAiringTitle&quot; )" Sym="OPUS4A-215085">
                                            <Action Ref="32217" Name="SageTVRecordingsList =..."/>
                                           </Action>
                                          </Action>
@@ -87967,14 +87967,14 @@
                                    </Branch>
                                    <Branch Name="(SortMethod == &quot;xCategory&quot;) || (SortMethod == &quot;xChanNameAZ&quot;)" Sym="OPUS4A-215082">
                                     <Action Name="RecordedFiles = DataUnion(CurrentlyRecordingFiles, RecordedFiles)" Sym="OPUS4A-173227">
-                                     <Action Name="FileList = SortLexical(RecordedFiles, GetProperty(SortReverseProperty, false), GetProperty(SortStyleProperty, &quot;Intelligent&quot;))" Sym="OPUS4A-173228">
+                                     <Action Name="FileList = SortLexical(RecordedFiles, GetProperty(SortReverseProperty, true), GetProperty(SortStyleProperty, &quot;Intelligent&quot;))" Sym="OPUS4A-173228">
                                       <Action Ref="32217" Name="SageTVRecordingsList =..."/>
                                      </Action>
                                     </Action>
                                    </Branch>
                                    <Branch Name="SortMethod == &quot;xIntelligent&quot;" Sym="BASE-79383">
-                                    <Action Name="RecordedFiles = Sort(RecordedFiles, GetProperty(SortReverseProperty, false), &quot;Intelligent&quot;)" Sym="BASE-79384">
-                                     <Conditional Name="GetProperty(SortReverseProperty, false)" Sym="BASE-79385">
+                                    <Action Name="RecordedFiles = Sort(RecordedFiles, GetProperty(SortReverseProperty, true), &quot;Intelligent&quot;)" Sym="BASE-79384">
+                                     <Conditional Name="GetProperty(SortReverseProperty, true)" Sym="BASE-79385">
                                       <Branch Name="true" Sym="BASE-79386">
                                        <Action Name="FileList = DataUnion(RecordedFiles, CurrentlyRecordingFiles)" Sym="BASE-79387">
                                         <Action Ref="32217" Name="SageTVRecordingsList =..."/>
@@ -87990,7 +87990,7 @@
                                    </Branch>
                                    <Branch Name="else" Sym="BASE-79304">
                                     <Action Name="RecordedFiles = DataUnion(CurrentlyRecordingFiles, RecordedFiles)" Sym="BASE-79305">
-                                     <Action Name="FileList = Sort(RecordedFiles, GetProperty(SortReverseProperty, false), GetProperty(SortStyleProperty, &quot;Intelligent&quot;))" Sym="BASE-79306">
+                                     <Action Name="FileList = Sort(RecordedFiles, GetProperty(SortReverseProperty, true), GetProperty(SortStyleProperty, &quot;Intelligent&quot;))" Sym="BASE-79306">
                                       <Action ID="32217" Name="SageTVRecordingsList = FileList" Sym="BASE-79307">
                                        <Action Name="&quot;REM Categorize the list of recordings&quot;" Sym="BASE-79308">
                                         <Action Name="AutoCategorize = (GetProperty(GroupingStyleProperty, &quot;GetAiringTitle&quot;) != &quot;None&quot;)" Sym="BASE-79309">
@@ -89538,16 +89538,16 @@
                 </Panel>
                </Panel>
                <Hook Name="MenuNeedsDefaultFocus" Sym="BASE-79021">
-                <Action Name="SetFocusForVariable(&quot;SortMethod&quot;, GetProperty(SortMethodProperty, &quot;xIntelligent&quot;))" Sym="BASE-79022"/>
+                <Action Name="SetFocusForVariable(&quot;SortMethod&quot;, GetProperty(SortMethodProperty, &quot;xOldestFirst&quot;))" Sym="BASE-79022"/>
                </Hook>
                <Attribute Name="OrigSetting" Sym="BASE-79023">
-                <Value>GetProperty(SortMethodProperty, "xIntelligent")</Value>
+                <Value>GetProperty(SortMethodProperty, "xOldestFirst")</Value>
                </Attribute>
                <Attribute Name="CurSetting" Sym="BASE-79024">
                 <Value>OrigSetting</Value>
                </Attribute>
                <Attribute Name="OrigSortDirIsReverse" Sym="BASE-79025">
-                <Value>GetProperty(SortReverseProperty, false)</Value>
+                <Value>GetProperty(SortReverseProperty, true)</Value>
                </Attribute>
                <Attribute Name="CurSortDirIsReverse" Sym="BASE-79026">
                 <Value>OrigSortDirIsReverse</Value>
@@ -135395,8 +135395,8 @@
                  </Branch>
                  <Branch Name="else" Sym="BASE-79911">
                   <Action Name="&quot;REM Sort the filtered results.&quot;" Sym="BASE-79916">
-                   <Action Name="SortMethod = GetProperty(SortMethodProperty, &quot;xTitleAndDate&quot;)" Sym="OPUS4A-182055">
-                    <Action Name="SortReverse = GetProperty(SortReverseProperty, false)" Sym="OPUS4A-182056">
+                   <Action Name="SortMethod = GetProperty(SortMethodProperty, &quot;xOldestFirst&quot;)" Sym="OPUS4A-182055">
+                    <Action Name="SortReverse = GetProperty(SortReverseProperty, true)" Sym="OPUS4A-182056">
                      <Action Name="SortStyle = GetProperty(SortStyleProperty, &quot;GetAiringStartTime&quot;)" Sym="OPUS4A-182063">
                       <Conditional Name="true" Sym="OPUS4A-182052">
                        <Branch Name="(SortMethod == &quot;xCategory&quot;) || (SortMethod == &quot;xChanNameAZ&quot;)" Sym="OPUS4A-182057">
@@ -137514,16 +137514,16 @@
              </Panel>
             </Panel>
             <Hook Name="MenuNeedsDefaultFocus" Sym="OPUS4A-182026">
-             <Action Name="SetFocusForVariable(&quot;SortMethod&quot;, GetProperty(SortMethodProperty, &quot;xTitleAndDate&quot;))" Sym="OPUS4A-182027"/>
+             <Action Name="SetFocusForVariable(&quot;SortMethod&quot;, GetProperty(SortMethodProperty, &quot;xOldestFirst&quot;))" Sym="OPUS4A-182027"/>
             </Hook>
             <Attribute Name="OrigSetting" Sym="OPUS4A-182028">
-             <Value>GetProperty(SortMethodProperty, "xTitleAndDate")</Value>
+             <Value>GetProperty(SortMethodProperty, "xOldestFirst")</Value>
             </Attribute>
             <Attribute Name="CurSetting" Sym="OPUS4A-182029">
              <Value>OrigSetting</Value>
             </Attribute>
             <Attribute Name="OrigSortDirIsReverse" Sym="OPUS4A-182030">
-             <Value>GetProperty(SortReverseProperty, false)</Value>
+             <Value>GetProperty(SortReverseProperty, true)</Value>
             </Attribute>
             <Attribute Name="CurSortDirIsReverse" Sym="OPUS4A-182031">
              <Value>OrigSortDirIsReverse</Value>
@@ -184843,7 +184843,7 @@
                           <Branch Name="else" Sym="BASE-60202">
                            <Action Name="FileList = GetSubgroup(Grouping, Media)" Sym="BASE-60203">
                             <Action Name="FileList = FilterByBoolMethod(FileList, &quot;IsMediaFileObject&quot;, true)" Sym="BASE-60204">
-                             <Action Name="FileList = Sort(FileList, GetProperty(SortReverseProperty, false), GetProperty(SortStyleProperty, &quot;Intelligent&quot;))" Sym="BASE-60205"/>
+                             <Action Name="FileList = Sort(FileList, GetProperty(SortReverseProperty, true), GetProperty(SortStyleProperty, &quot;Intelligent&quot;))" Sym="BASE-60205"/>
                              <Action ID="65276" Name="&quot;REM Limit file list to MaxFileCount so that it can't be scrollable &amp; thus gain focus by accident&quot;" Sym="BASE-60159">
                               <Action Name="MaxCount = 20000" Sym="BASE-60160">
                                <Action Name="FileList = DataUnion(FileList)" Sym="BASE-60161">

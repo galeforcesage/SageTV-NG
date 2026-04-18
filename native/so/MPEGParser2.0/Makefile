@@ -43,7 +43,7 @@ debug:dep_make_debug libMPEGParser.so.debug
 OBJFILES=sage_media_format_MPEGParser.o
 
 libMPEGParser.so: $(OBJFILES)
-	$(CC)  -shared -o libMPEGParser.so $(OBJFILES) libNativeCore.so $(ADDFLAG)
+	$(CC)  -shared -o libMPEGParser.so $(OBJFILES) libNativeCore.so $(ADD_FLAG)
 
 libMPEGParser.so.debug: $(OBJFILES)
 	$(CC)  -shared -g -O0 -Wl,-Map=libMPEGParser.map -W1 -o libMPEGParser.so $(OBJFILES) 

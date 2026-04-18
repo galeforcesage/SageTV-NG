@@ -17,12 +17,14 @@
 #ifndef _H_HRTIME_H
 #define _H_HRTIME_H
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 void hr_time( LONGLONG *time );
-unsigned long hr_duration( LONGLONG *start_time, LONGLONG *stop_time );      //in ms
+uint32_t hr_duration( LONGLONG *start_time, LONGLONG *stop_time );      //in ms
 LONGLONG      hr_duration_long( LONGLONG *start_time, LONGLONG *stop_time ); //in ms
 
 

@@ -16,6 +16,7 @@
 // Eliminate silly MS compiler security warnings about using POSIX functions
 #pragma warning(disable : 4996)
 
+#include <stdint.h>
 
 #include <stdio.h>
 #include <stdlib.h>	
@@ -65,7 +66,7 @@ void CatchError( char* file, int line )
 }
 #endif
 ////////////////////////////////////
-int  UnpackPackHeader(   char* pData, int Bytes, unsigned long *pDemux, LONGLONG* ref_time );
+int  UnpackPackHeader(   char* pData, int Bytes, uint32_t *pDemux, LONGLONG* ref_time );
 int  UnpackPadPack( const unsigned char* pbData, int Bytes );
 int  UnpackPsmPack( const unsigned char* pbData, int Bytes );
 
@@ -146,10 +147,10 @@ const unsigned short BitRates[3][16] ={
 };
 
 #if !defined(__APPLE__)
-unsigned long DWORD_SWAP(unsigned long x)
+uint32_t DWORD_SWAP(uint32_t x)
 {
     return
-     ((unsigned long)( ((x) << 24) | ((x) >> 24) |
+     ((uint32_t)( ((x) << 24) | ((x) >> 24) |
                (((x) & 0xFF00) << 8) | (((x) & 0xFF0000) >> 8)));
 }
 #endif // __APPLE__
@@ -249,8 +250,8 @@ char* PTS2TimeString2( char *buf, int len, LONGLONG* pllPTS )
 bool UnpackTimeStamp(const unsigned char	* pData, LONGLONG *Clock )
 {
 	unsigned char Byte1	= pData[0];	
-	unsigned long Word2	= ((unsigned long)pData[1] << 8) + (unsigned long)pData[2];	
-	unsigned long Word3	= ((unsigned long)pData[3] << 8) + (unsigned long)pData[4];	
+	uint32_t Word2	= ((uint32_t)pData[1] << 8) + (uint32_t)pData[2];	
+	uint32_t Word3	= ((uint32_t)pData[3] << 8) + (uint32_t)pData[4];	
 	INTEGER64 liClock;
 
 	//	Do check 
@@ -263,9 +264,9 @@ bool UnpackTimeStamp(const unsigned char	* pData, LONGLONG *Clock )
 
 
 	liClock.HighPart = (Byte1 & 8 ) != 0;
-	liClock.LowPart	 = (unsigned long)((((unsigned long)Byte1 &	0x6) << 29)	+
-					   (((unsigned long)Word2 &	0xFFFE)	<< 14) +
-					   ((unsigned long)Word3 >>	1));
+	liClock.LowPart	 = (uint32_t)((((uint32_t)Byte1 &	0x6) << 29)	+
+					   (((uint32_t)Word2 &	0xFFFE)	<< 14) +
+					   ((uint32_t)Word3 >>	1));
 
 	*Clock = liClock.QuadPart;
 
@@ -277,17 +278,17 @@ bool UnpackTimeStamp(const unsigned char	* pData, LONGLONG *Clock )
 bool UnpackTimeStamp(const unsigned char	* pData, LONGLONG *Clock )
 {
 	//unsigned char Byte1	= pData[0];	
-	//unsigned long Word2	= ((unsigned long)pData[1] << 8) + (unsigned long)pData[2];	
-	//unsigned long Word3	= ((unsigned long)pData[3] << 8) + (unsigned long)pData[4];	
+	//uint32_t Word2	= ((uint32_t)pData[1] << 8) + (uint32_t)pData[2];	
+	//uint32_t Word3	= ((uint32_t)pData[3] << 8) + (uint32_t)pData[4];	
 	LONGLONG pts;
 
 	if ( ( pData[0] & 0x30 ) == 0x0 || (pData[2] & 1) != 1 || (pData[4] & 1) != 1) {
 		return false;
 	}
 
-	pts  = ((unsigned long long)(((pData[0] >> 1) & 7))) << 30;
-  	pts |= (unsigned long long)pData[1] << 22;
-  	pts |= (unsigned long long)(pData[2]>>1) << 15;
+	pts  = ((uint64_t)(((pData[0] >> 1) & 7))) << 30;
+  	pts |= (uint64_t)pData[1] << 22;
+  	pts |= (uint64_t)(pData[2]>>1) << 15;
   	pts |= pData[3] << 7;
   	pts |= (pData[4]>>1);
 
@@ -301,8 +302,8 @@ bool UnpackTimeStamp(const unsigned char	* pData, LONGLONG *Clock )
 bool UnpackTimeStamp1(const unsigned char*pData, LONGLONG *Clock )
 {
 	unsigned char Byte1	= pData[0];	
-	unsigned long Word2	= ((unsigned long)pData[1] << 8) + (unsigned long)pData[2];	
-	unsigned long Word3	= ((unsigned long)pData[3] << 8) + (unsigned long)pData[4];	
+	uint32_t Word2	= ((uint32_t)pData[1] << 8) + (uint32_t)pData[2];	
+	uint32_t Word3	= ((uint32_t)pData[3] << 8) + (uint32_t)pData[4];	
 	LONGLONG liClock;
 
 	if ( ( Byte1 & 0x30 ) == 0x0 || (Word2 & 1) != 1 || (Word3 & 1) != 1) {
@@ -312,9 +313,9 @@ bool UnpackTimeStamp1(const unsigned char*pData, LONGLONG *Clock )
 
 	liClock = (Byte1 & 8 ) != 0;
 	liClock <<= 32;
-	liClock |= (unsigned long)((((unsigned long)Byte1 &	0x6) << 29)	+
-					   (((unsigned long)Word2 &	0xFFFE)	<< 14) +
-					   ((unsigned long)Word3 >>	1));
+	liClock |= (uint32_t)((((uint32_t)Byte1 &	0x6) << 29)	+
+					   (((uint32_t)Word2 &	0xFFFE)	<< 14) +
+					   ((uint32_t)Word3 >>	1));
 
 	*Clock = liClock;
 
@@ -403,9 +404,9 @@ short MPEG2SequenceHeaderSize( const unsigned char *pb )
 	}
 }
 
-bool IsMPEG2StartCode( const unsigned char* pStart, unsigned long StartCode )
+bool IsMPEG2StartCode( const unsigned char* pStart, uint32_t StartCode )
 {
-	unsigned long code;
+	uint32_t code;
 	code = *pStart++;
 	code <<= 8;
     code |= *pStart++;
@@ -416,11 +417,11 @@ bool IsMPEG2StartCode( const unsigned char* pStart, unsigned long StartCode )
 	return ( code == StartCode );
 }
 
-bool SearchMPEG2StartCode( const unsigned char* pStart, int Bytes, unsigned	long StartCode,	const unsigned char** ppSeqStart )
+bool SearchMPEG2StartCode( const unsigned char* pStart, int Bytes, uint32_t StartCode,	const unsigned char** ppSeqStart )
 {
 	const unsigned char	*pbData;
 	int	 len;
-	unsigned long code;
+	uint32_t code;
 
 	if ( Bytes < 4 )
 		return false;
@@ -450,7 +451,7 @@ bool SearchMPEG4VOLCode( const unsigned char* pStart, int Bytes, const unsigned 
 {
 	const unsigned char	*pbData;
 	int	 len;
-	unsigned long code;
+	uint32_t code;
 
 	if ( Bytes < 4 )
 		return false;
@@ -1059,7 +1060,7 @@ float Mepg2FrameRate( unsigned char code )
 	return 0;
 }
 
-float Mepg2AspectRatio( unsigned char code, long width, long height )
+float Mepg2AspectRatio( unsigned char code, int32_t width, int32_t height )
 {
 	switch ( code & 0x0f ) {
 	case 1:
@@ -1092,7 +1093,7 @@ float Mepg2AspectRatio( unsigned char code, long width, long height )
 }
 
 
-int Mepg2AspectRatioNomi( unsigned char code, long width, long height )
+int Mepg2AspectRatioNomi( unsigned char code, int32_t width, int32_t height )
 {
 	switch ( code & 0x0f ) {
 	case 1:
@@ -1123,7 +1124,7 @@ int Mepg2AspectRatioNomi( unsigned char code, long width, long height )
 	return 0;
 }
 
-int Mepg2AspectRatioDeno( unsigned char code, long width, long height )
+int Mepg2AspectRatioDeno( unsigned char code, int32_t width, int32_t height )
 {
 	switch ( code & 0x0f ) {
 	case 1:
@@ -1226,7 +1227,7 @@ static int Mepg2FrameRateDeno_( unsigned char code )
 }
 static bool UnpackMPEG2SeqHdr( AV_CONTEXT* av, const unsigned char *pbData )
 {
-	unsigned long dwWidthAndHeight;
+	uint32_t dwWidthAndHeight;
 	unsigned char PelAspectRatioAndPictureRate;
 
 	/*	Check random marker	bit	*/
@@ -1235,9 +1236,9 @@ static bool UnpackMPEG2SeqHdr( AV_CONTEXT* av, const unsigned char *pbData )
 
 	memset(	&av->Mpeg2Hdr, 0, sizeof( av->Mpeg2Hdr ) );	
 	
-	dwWidthAndHeight = ((unsigned	long)pbData[4] << 16) +	
-									 ((unsigned	long)pbData[5] << 8) +
-									 ((unsigned	long)pbData[6]);
+	dwWidthAndHeight = ((uint32_t)pbData[4] << 16) +	
+									 ((uint32_t)pbData[5] << 8) +
+									 ((uint32_t)pbData[6]);
 
 	av->Mpeg2Hdr.SeqHdr.Width  = dwWidthAndHeight >> 12;
 	av->Mpeg2Hdr.SeqHdr.Height = dwWidthAndHeight &	0xFFF;
@@ -1262,12 +1263,12 @@ static bool UnpackMPEG2SeqHdr( AV_CONTEXT* av, const unsigned char *pbData )
 	av->Mpeg2Hdr.SeqHdr.tPictureTime = (LONGLONG)PictureTimes[PelAspectRatioAndPictureRate & 0x0F];	
 	av->Mpeg2Hdr.SeqHdr.PictureRate	= PictureRates[PelAspectRatioAndPictureRate	& 0x0F];
 
-	av->Mpeg2Hdr.SeqHdr.TimePerFrame = (long)av->Mpeg2Hdr.SeqHdr.tPictureTime * 9/1000;	
+	av->Mpeg2Hdr.SeqHdr.TimePerFrame = (int32_t)av->Mpeg2Hdr.SeqHdr.tPictureTime * 9/1000;	
 
 	/*	Pull out the bit rate and aspect ratio for the type	*/
-	av->Mpeg2Hdr.SeqHdr.BitRate	= ((((unsigned long)pbData[8]	<< 16) +
-								 ((unsigned	long)pbData[9]	<<	8) +
-								 (unsigned long)pbData[10])	>> 6 );		
+	av->Mpeg2Hdr.SeqHdr.BitRate	= ((((uint32_t)pbData[8]	<< 16) +
+								 ((uint32_t)pbData[9]	<<	8) +
+								 (uint32_t)pbData[10])	>> 6 );		
 	if (av->Mpeg2Hdr.SeqHdr.BitRate	== 0x3FFFF)	{
 		av->Mpeg2Hdr.SeqHdr.BitRate	 = 0;
 	} else {
@@ -1275,7 +1276,7 @@ static bool UnpackMPEG2SeqHdr( AV_CONTEXT* av, const unsigned char *pbData )
 	}
 
 	/*	Pull out the vbv */	
-	av->Mpeg2Hdr.SeqHdr.vbv	= ((((long)pbData[10] &	0x1F) << 5)	| ((long)pbData[11]	>> 3)) * 16	* 1024;	
+	av->Mpeg2Hdr.SeqHdr.vbv	= ((((int32_t)pbData[10] &	0x1F) << 5)	| ((int32_t)pbData[11]	>> 3)) * 16	* 1024;	
 
 	av->Mpeg2Hdr.SeqHdr.ActualHeaderLen	= MPEG2SequenceHeaderSize(pbData);
 	if ( (unsigned int)av->Mpeg2Hdr.SeqHdr.ActualHeaderLen > sizeof(av->Mpeg2Hdr.SeqHdr.RawHeader) )
@@ -1416,7 +1417,7 @@ static bool UnpackMpegUserDataHeader( MPEG_USER_DATA* ud, const unsigned char* p
 	const unsigned char* data;
 	const unsigned char* start;
 	int  size, bytes;
-	unsigned long code;
+	uint32_t code;
 	bool ret;
 
 	data = pStart;
@@ -1436,7 +1437,7 @@ static bool UnpackMpegUserDataHeader( MPEG_USER_DATA* ud, const unsigned char* p
 		size = Size - (int)( data - pStart );
 		if ( size <= 4 ) break;
 	
-		code = DWORD_SWAP(*(unsigned long *)data);
+		code = DWORD_SWAP(*(uint32_t *)data);
 		if ( code == ATSC_IDENTIFIER )
 		{
 			bytes = UnpackATSCUserData( ud, data+4, size-4 );
@@ -2314,7 +2315,7 @@ static bool UnpackAC3( AV_CONTEXT* av, const unsigned char *pbData, int size )
 	av->AC3Wav.wfx.nSamplesPerSec = sample_rate;
 	av->AC3Wav.wfx.nAvgBytesPerSec =  bit_rate /8;
 	av->AC3Wav.wfx.nChannels = channels;
-	av->AC3Wav.wfx.nBlockAlign = (unsigned short)(((long)av->AC3Wav.wfx.nAvgBytesPerSec * 1536) / av->AC3Wav.wfx.nSamplesPerSec);
+	av->AC3Wav.wfx.nBlockAlign = (unsigned short)(((int32_t)av->AC3Wav.wfx.nAvgBytesPerSec * 1536) / av->AC3Wav.wfx.nSamplesPerSec);
 	av->AudioType =	AC3_AUDIO;
 
 	//check if it's DVD AC3, get its SubID
@@ -2352,7 +2353,7 @@ static bool UnpackMpegAudio( AV_CONTEXT* av, const unsigned char * pbData, int S
 	int Layer,i,MPGVersion, CRC_protected, BiteRateIndex, SampleRateIndex;
 	unsigned char LayerCode;
 	const unsigned char *pData;
-	unsigned long Bitrate;
+	uint32_t Bitrate;
 
 
 	pData = pbData;
@@ -2412,7 +2413,7 @@ static bool UnpackMpegAudio( AV_CONTEXT* av, const unsigned char * pbData, int S
 	
 	BiteRateIndex = ((*(pData+2)	>> 4 ) & 0x0f);
 	if ( BiteRateIndex == 0x0f ) return false;
-	Bitrate = (unsigned long )MpegBitRateTbl[MPGVersion-1][Layer - 1][BiteRateIndex] * 1000;
+	Bitrate = (uint32_t )MpegBitRateTbl[MPGVersion-1][Layer - 1][BiteRateIndex] * 1000;
 	if ( av->MpegWav.wfx.nSamplesPerSec	!= 44100 &&	
 		/*	Layer 3	can	sometimes switch bitrates */
 		!(Layer	== 3 &&	/* !m_pStreamList->AudioLock() && */
@@ -2888,7 +2889,7 @@ int StreamMuxConfig( AAC_PARAM *aac, const unsigned char * pbData, int Size )
 	//LATM parsing according to ISO/IEC 14496-3
 
 	int num, prog, lay, streamCnt;
-	unsigned long frame_length_type;
+	uint32_t frame_length_type;
 	int use_same_config,  all_same_framing;
 	int audio_mux_version, frameLength;
 	int numProgram, numSubFrames;
@@ -3013,8 +3014,8 @@ int CheckMPEGPacket( const unsigned char* pStart, int Bytes )
 {
 	const unsigned char	*pbData, *p1, *p2;
 	int	 len;
-	unsigned long code;
-	unsigned long StartCode = 0x000001BA;
+	uint32_t code;
+	uint32_t StartCode = 0x000001BA;
 
 	if ( Bytes < 4 )
 		return false;
@@ -3075,9 +3076,9 @@ bool CheckTSPacket( const unsigned char* pStart, int Bytes )
 }
 
 #define ISO639_LANGUAGE_DESC  0x0a
-unsigned long GetLauguage( char* descriptor )
+uint32_t GetLauguage( char* descriptor )
 {
-	unsigned long country=0;
+	uint32_t country=0;
 	int totoal, len, i;
 	unsigned char* p;
 	totoal = (int)descriptor[0];
@@ -3344,9 +3345,9 @@ void InitOutBits( BITS_T *bits, unsigned char* buf, int size )
 }
 
 
-void PutBits( BITS_T *bits, unsigned long val, int n )  
+void PutBits( BITS_T *bits, uint32_t val, int n )  
 {
-	unsigned long mask;
+	uint32_t mask;
 	if ( n == 0 ) return;
 	if ( bits->bytecnt >= bits->buf_size ||  bits->buf == NULL )
 		return;
@@ -3427,12 +3428,12 @@ void AlignOutBits( BITS_T *bits )
 	PutBits( bits, 0, bits->outcnt & 7  );
 }
 
-long BitOutCount( BITS_T *bits )                 
+int BitOutCount( BITS_T *bits )                 
 {
 	return 8 * bits->bytecnt + (32 - bits->outcnt);
 }
 
-long BytesOutCount( BITS_T *bits )                  
+int BytesOutCount( BITS_T *bits )                  
 {
 	return bits->bytecnt;
 }
@@ -3471,10 +3472,10 @@ void InitInBits( BITS_T *bits, unsigned char* buf, int size )
 
 }
 
-unsigned long ReadBits( BITS_T *bits, int n )  
+uint32_t ReadBits( BITS_T *bits, int n )  
 {
-	unsigned long val;
-	unsigned long mask;
+	uint32_t val;
+	uint32_t mask;
 	if ( n == 0 ) return 0;
 	if ( bits->bytecnt == 0 && bits->outcnt >= 8 )
 		return 0;
@@ -3528,7 +3529,7 @@ unsigned long ReadBits( BITS_T *bits, int n )
 	return val;
 }
 
-unsigned long AlignInBits( BITS_T *bits )                
+uint32_t AlignInBits( BITS_T *bits )                
 {
 	return ReadBits( bits, bits->outcnt & 7 );
 }
@@ -3583,7 +3584,7 @@ int InterpretProfileLevel( AV_CONTEXT* av );
 static int ParseGolombCode (const unsigned char buffer[], int totbitoffset, int *info, int bytecount )                           
  {                                                                                                   
 	register int inf;                                                                                 
-	long byteoffset;      // byte from start of buffer                                                
+	int byteoffset;      // byte from start of buffer                                                
 	int bitoffset;      // bit from start of byte                                                     
 	int ctr_bit=0;      // control bit for current bit posision                                       
 	int bitcounter=1;                                                                                 
@@ -3634,7 +3635,7 @@ static int ParseGolombCode (const unsigned char buffer[], int totbitoffset, int 
 
 
 
-unsigned long ue( const unsigned char *code, int bits_offset, int total_bits, int* code_bits )
+uint32_t ue( const unsigned char *code, int bits_offset, int total_bits, int* code_bits )
 {
 	int len, info;
 	*code_bits = 0;
@@ -3663,7 +3664,7 @@ int se( const unsigned char *code, int bits_offset, int total_bits, int* code_bi
 
 unsigned short u(  const unsigned char *buffer, int totbitoffset, int total_bits, int *code_bits )
 {
-	long byteoffset;      // byte from start of buffer                                                
+	int byteoffset;      // byte from start of buffer                                                
 	int bitoffset;      // bit from start of byte                                                     
 	register short val, i;      // control bit for current bit posision                                       
 	    

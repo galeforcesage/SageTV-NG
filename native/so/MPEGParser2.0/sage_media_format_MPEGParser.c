@@ -18,6 +18,8 @@
 #include <string.h>
 #include <inttypes.h>
 #include <sys/types.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include "sage_media_format_MPEGParser.h"
 
 #include "TSSplitter.h"
@@ -187,11 +189,40 @@ JNIEXPORT jlong JNICALL Java_sage_media_format_MPEGParser_openRemuxer0
 {
 	TSSPLT *pSplt = (TSSPLT*) OpenTSSplitter(remuxMode);
 	if (!pSplt)
+	{
 		return 0;
+	}
 	JavaRemuxer* rv = (JavaRemuxer*)malloc(sizeof(JavaRemuxer));
+	if (!rv)
+	{
+		CloseTSSplitter(pSplt);
+		return 0;
+	}
 	rv->pSplt = pSplt;
 	rv->outStream = (*env)->NewGlobalRef(env, outputStreamCallback);
-	rv->outBuf = (jbyteArray) (*env)->NewGlobalRef(env, (*env)->NewByteArray(env, REMUX_BUFFER_SIZE));
+	if (!rv->outStream)
+	{
+		CloseTSSplitter(pSplt);
+		free(rv);
+		return 0;
+	}
+	jbyteArray localBuf = (*env)->NewByteArray(env, REMUX_BUFFER_SIZE);
+	if (!localBuf)
+	{
+		(*env)->DeleteGlobalRef(env, rv->outStream);
+		CloseTSSplitter(pSplt);
+		free(rv);
+		return 0;
+	}
+	rv->outBuf = (jbyteArray) (*env)->NewGlobalRef(env, localBuf);
+	(*env)->DeleteLocalRef(env, localBuf);
+	if (!rv->outBuf)
+	{
+		(*env)->DeleteGlobalRef(env, rv->outStream);
+		CloseTSSplitter(pSplt);
+		free(rv);
+		return 0;
+	}
 	rv->outBufSize = REMUX_BUFFER_SIZE;
 	rv->bytes_in  = 0;
 	rv->bytes_out = 0;
@@ -220,10 +251,25 @@ JNIEXPORT void JNICALL Java_sage_media_format_MPEGParser_closeRemuxer0
 int OutputDump( void* pContext, const unsigned char* pData, int lDataLen )
 {
 	CXT* cxt = (CXT*)pContext;
-	if ( cxt == NULL ) return 0;
+	if ( cxt == NULL || cxt->env == NULL || cxt->jr == NULL ) return 0;
 
 	JavaRemuxer* jr = cxt->jr;
+	if ( !jr->outStream || !cxt->outStreamWrite ) return 0;
+
+	// Copy the native data into the Java byte array before calling write().
+	// pData points into a buffer that may be a native copy (GetByteArrayElements),
+	// so the Java array doesn't see the data until we explicitly copy it.
+	(*(cxt->env))->SetByteArrayRegion(cxt->env, jr->outBuf, 0, lDataLen, (const jbyte*)pData);
+
 	(*(cxt->env))->CallVoidMethod(cxt->env, jr->outStream, cxt->outStreamWrite, jr->outBuf, 0, lDataLen );
+
+	// Check for pending Java exception from the write call
+	if ((*(cxt->env))->ExceptionCheck(cxt->env))
+	{
+		(*(cxt->env))->ExceptionClear(cxt->env);
+		return 0;
+	}
+
 	jr->bytes_out += lDataLen;
 	return lDataLen;
 }
@@ -231,20 +277,34 @@ int OutputDump( void* pContext, const unsigned char* pData, int lDataLen )
 int AllocOutputBuffer( void* pContext, unsigned char** pData, int cmd )
 {
 	CXT* cxt = (CXT*)pContext;
-	*pData = NULL;
-	if ( cxt == NULL ) return 0;
+	if ( cxt == NULL || cxt->jr == NULL || cxt->env == NULL ) { *pData = NULL; return 0; }
 	JavaRemuxer* jr = cxt->jr;
+	if ( !jr->outBuf ) { *pData = NULL; return 0; }
 	if ( cmd == 0 ) //alloc buffer
 	{
-		*pData = (unsigned char*)(*(cxt->env))->GetPrimitiveArrayCritical(cxt->env, jr->outBuf, NULL);
+		// Use GetByteArrayElements instead of GetPrimitiveArrayCritical.
+		// The output callback (OutputDump) calls back into Java via CallVoidMethod,
+		// which is not permitted inside a JNI critical region.
+		*pData = (unsigned char*)(*(cxt->env))->GetByteArrayElements(cxt->env, jr->outBuf, NULL);
+		if ( *pData == NULL )
+		{
+			return 0;
+		}
 		return cxt->jr->outBufSize;
 
 	} else
 	if ( cmd == 1 ) //release buffer
 	{
-		(*(cxt->env))->ReleasePrimitiveArrayCritical(cxt->env, jr->outBuf, (void*)*pData, JNI_ABORT );
+		// *pData holds the pointer returned by GetByteArrayElements in cmd==0.
+		// Must NOT be NULL - the old code had *pData=NULL at function entry which
+		// clobbered this value, causing SIGSEGV in Java 21's ReleaseByteArrayElements.
+		if ( *pData != NULL )
+		{
+			(*(cxt->env))->ReleaseByteArrayElements(cxt->env, jr->outBuf, (jbyte*)*pData, 0 );
+		}
 		return 0;
 	}
+	*pData = NULL;
 	return 0;
 }
 
@@ -261,13 +321,18 @@ JNIEXPORT jlong JNICALL Java_sage_media_format_MPEGParser_pushRemuxData0
 #else
 	if (!ptr) return 0;
 	JavaRemuxer* jr = INT64_TO_PTR(JavaRemuxer*,ptr);
+	if (!jr->pSplt)
+	{
+		return 0;
+	}
 	// Get the native data. Don't use 'critical' access because we make callbacks into Java
 	// while we're processing this data.
 	jbyte* newData = (*env)->GetByteArrayElements(env, javabuf, NULL);
+	if (!newData)
+	{
+		return 0;
+	}
 	const unsigned char* pStart;
-	//unsigned long Bytes;
-	//unsigned int Size;
-	//int 	nBufferIndex;
 	CXT cxt;
 
 	
@@ -275,23 +340,26 @@ JNIEXPORT jlong JNICALL Java_sage_media_format_MPEGParser_pushRemuxData0
 
 	static jmethodID outStreamWrite = 0;
 	if ( outStreamWrite == 0 )
-	    outStreamWrite = (*env)->GetMethodID(env, (*env)->FindClass(env, "java/io/OutputStream"), 
-	                        "write", "([BII)V");
+	{
+	    jclass osClass = (*env)->FindClass(env, "java/io/OutputStream");
+	    if (!osClass)
+	    {
+	        (*env)->ReleaseByteArrayElements(env, javabuf, newData, JNI_ABORT);
+	        return 0;
+	    }
+	    outStreamWrite = (*env)->GetMethodID(env, osClass, "write", "([BII)V");
+	    if (!outStreamWrite)
+	    {
+	        (*env)->ReleaseByteArrayElements(env, javabuf, newData, JNI_ABORT);
+	        return 0;
+	    }
+	}
 	cxt.env = env;	 cxt.jr = jr;	cxt.outStreamWrite = outStreamWrite;
 	PushData2( jr->pSplt, pStart, (int)length,  AllocOutputBuffer, &cxt, (OUTPUT_DUMP)OutputDump, &cxt );
 	jr->bytes_in += length; 
 
 	(*env)->ReleaseByteArrayElements(env, javabuf, newData, JNI_ABORT);
 
-	/*
-	//if not data were splitted to push out try rebuiltTSPMT 
-	if ( jr->bytes_out == 0 && jr->bytes_in > 4*12*524288*4 && !jr->rebuiltTSPMT  )
-	{
-		int ret = RebuildTSPMT( jr->pSplt );
-		jr->rebuiltTSPMT = true;
-		slog((env, "Rebuilt PMT %d.\r\n", ret ));
-	}
-	*/
 	return (jlong) GetLastPTS(jr->pSplt);
 #endif
 }
@@ -312,6 +380,10 @@ JNIEXPORT jstring JNICALL Java_sage_media_format_MPEGParser_initRemuxDataDone0
 	// Get the native data. Don't use 'critical' access because we make callbacks into Java
 	// while we're processing this data.
 	jbyte* newData = (*env)->GetByteArrayElements(env, javabuf, NULL);
+	if (!newData)
+	{
+		return 0;
+	}
 	const unsigned char* pStart;
 	//unsigned long Bytes;
 	//unsigned int Size;
@@ -352,6 +424,10 @@ JNIEXPORT void JNICALL Java_sage_media_format_MPEGParser_flushRemuxer0
 #else
 	if (!ptr) return;
 	JavaRemuxer* jr = INT64_TO_PTR(JavaRemuxer*,ptr);
+	if (!jr->pSplt)
+	{
+		return;
+	}
 	FlushPush(jr->pSplt);
 #endif
 }

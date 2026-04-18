@@ -17,6 +17,7 @@
 #if !defined( _TS_NATIVE_TS_PARSER_INCLUDED_ )
 #define _TS_NATIVE_TS_PARSER_INCLUDED_
 
+#include <stdint.h>
 
 #include "TSnative.h"
 
@@ -55,7 +56,7 @@ typedef struct {
 	unsigned short pid;      //pid;
 	unsigned char  type;     //pid type; type<0x80 is section id, type>0x80 is assign type
 	unsigned char  state;    //state, state 0x01 vaild pid bit, 0x80 ready bit
-	unsigned long  hits;     //pid hit conter
+	uint32_t  hits;     //pid hit conter
 	unsigned char  counter;  //continuty
 	unsigned char  scrambled; //encrypted
 	TS_SECTION     section;
@@ -74,7 +75,7 @@ typedef struct {
 typedef struct {
 	unsigned short channelID;
 	unsigned short programID;
-	unsigned long  pidNum;
+	uint32_t  pidNum;
 	PID_TBL  *pids;
 } PID_INF;
 
@@ -111,10 +112,10 @@ typedef	struct
 	short		ESPidMap[ MAX_PROGRAM ][MAX_ES];    //mapping of ES index vs. PID.
 
 	LONGLONG	  StreamPCR;
-	unsigned long packet_pcr_rate;				    //stream rate: packet interval in 27M HZ unite
-	unsigned long pcr_packet_syn;					//private variable to calc stream rate
-	unsigned long StreamIntervalSum;                //private variable to calc stream rate
-	unsigned long StreamIntervalNum;  			    //private variable to calc stream rate
+	uint32_t packet_pcr_rate;				    //stream rate: packet interval in 27M HZ unite
+	uint32_t pcr_packet_syn;					//private variable to calc stream rate
+	uint32_t StreamIntervalSum;                //private variable to calc stream rate
+	uint32_t StreamIntervalNum;  			    //private variable to calc stream rate
 
 	TS_PAT  PATs[MAX_PAT_NUM];						//cache pats
 	unsigned short pats_num;
@@ -124,13 +125,13 @@ typedef	struct
 	unsigned short pcr_pids[MAX_PCR_PIDS];
 
 	//Statistic	
-	unsigned long packets;
-	unsigned long audio_frames;	
-	unsigned long video_frames;	
-	unsigned long pat_frames;
-	unsigned long pmt_frames;
-	unsigned long cat_frames;
-	unsigned long err_frames;
+	uint32_t packets;
+	uint32_t audio_frames;	
+	uint32_t video_frames;	
+	uint32_t pat_frames;
+	uint32_t pmt_frames;
+	uint32_t cat_frames;
+	uint32_t err_frames;
 
 	LPFNParserDump av_dumper;                      //video Audio data callback function
 	LPFNParserDump signal_dumper;                  //state change callback function
@@ -147,7 +148,7 @@ typedef	struct
 	bool	  bChannelInfReady;					   //if channel infomation isn't ready, keep dumpping PMT 
 
 	LONGLONG	  data_pos;                        //a packet position = data_pos + data_offset
-	unsigned long data_offset;                     //
+	uint32_t data_offset;                     //
 
     unsigned short pid_filter_num;				    //pids number in soft pid filter
 	unsigned short pid_filter_tbl[MAX_PID_COLLECT];	//soft pid filter table
@@ -160,7 +161,7 @@ typedef	struct
 
 _inline bool CheckContinuity( TS_HEADER* pTSHeader, unsigned char* pContinuity );
 bool UnpackSectionData( bool bStartFlag, TS_SECTION* pSection, const unsigned char*  pbData, int nSize );
-unsigned long GetCRC32( const unsigned char *pData, int len );
+uint32_t GetCRC32( const unsigned char *pData, int len );
 
 TS_PARSER* TSParserOpen() ;
 void TSParserClose( TS_PARSER* pParser );
@@ -227,21 +228,21 @@ int  FindPlayableChannel( TS_PARSER* pParser );
 int  IsPlayableChannel( TS_PARSER* pParser, int channel );
 
 int GetPMTDescData( TS_PARSER* pParser, unsigned short pid, unsigned char** desc, int *bytes );
-int GetTelexLanguageInfo( unsigned char* desc, int bytes, unsigned long* language, unsigned char *type );
-int GetAudioLanguageInfo( unsigned char* desc, int bytes, unsigned long* language, unsigned char *type );
+int GetTelexLanguageInfo( unsigned char* desc, int bytes, uint32_t* language, unsigned char *type );
+int GetAudioLanguageInfo( unsigned char* desc, int bytes, uint32_t* language, unsigned char *type );
 int GetVideoBkgrdInfo( unsigned char* desc, int bytes, unsigned short *hor, unsigned short *ver, unsigned char* aspect );
 int GetVideoWindowInfo( unsigned char* desc, int bytes, unsigned short *hor, unsigned short *ver, unsigned char* priority );
 void StopParser( TS_PARSER* pParser );
 void StartParser( TS_PARSER* pParser );
-unsigned long PidHits( TS_PARSER* pParser, unsigned short pid );
-unsigned long TotalPidHits( TS_PARSER* pParser );
-unsigned long ProgramPidHits( TS_PARSER* pParser, unsigned short Program );
-unsigned long ChannelPidHits( TS_PARSER* pParser, unsigned short Channel );
+uint32_t PidHits( TS_PARSER* pParser, unsigned short pid );
+uint32_t TotalPidHits( TS_PARSER* pParser );
+uint32_t ProgramPidHits( TS_PARSER* pParser, unsigned short Program );
+uint32_t ChannelPidHits( TS_PARSER* pParser, unsigned short Channel );
 bool IsDVBStream( TS_PARSER* pParser );
-unsigned long GetPacketCounter( TS_PARSER* pParser );
+uint32_t GetPacketCounter( TS_PARSER* pParser );
 
 //LONGLONG GetEstimatePCR( TS_PARSER* pParser );
-unsigned long EstimatePCRIncrease( TS_PARSER* pParser, unsigned long packets );
+uint32_t EstimatePCRIncrease( TS_PARSER* pParser, uint32_t packets );
 int  CheckProgramState( TS_PARSER* pParser, unsigned short Program );
 int  GetProgramAVType( TS_PARSER* pParser, unsigned short Program ); //0: no AV; 1:video only; 2:audio only; 3:video+audio; -1:unkown;
 void ResetTSSoftPidFilter( TS_PARSER* pParser );

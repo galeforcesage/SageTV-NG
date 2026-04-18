@@ -5653,6 +5653,28 @@ public class MediaFile extends DBObject implements SegmentedFile
     return tempFormat != null && tempFormat.hasAudioOnlyStream();
   }
 
+  void redetectFormatDuration()
+  {
+    if (files.isEmpty()) return;
+    ContainerFormat oldFormat = getFileFormat();
+    if (oldFormat == null) return;
+    long oldDur = oldFormat.getDuration();
+    long recordDur = getRecordDuration();
+    // Only rescan if stored duration is suspiciously short vs wall-clock duration (>4% difference)
+    if (oldDur > 0 && recordDur > 0
+        && ((float) Math.abs(recordDur - oldDur)) / recordDur <= 0.04f)
+      return;
+    ContainerFormat newFormat = sage.media.format.FormatParser.getFileFormat(files.get(0));
+    if (newFormat == null) return;
+    long newDur = newFormat.getDuration();
+    if (newDur > 0 && newDur != oldDur)
+    {
+      if (Sage.DBG) System.out.println("Format rescan updated duration for " + this +
+          " OldDur=" + oldDur + " NewDur=" + newDur);
+      setMediafileFormat(newFormat);
+    }
+  }
+
   public void setMediafileFormat(ContainerFormat newFormat)
   {
     // Check to see if we've changed the stream format or IDs for any of the streams; and if so we should have anybody playing this file reload it.

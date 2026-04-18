@@ -16,6 +16,7 @@
 #if !defined( _TS_NATIVE_PES_BUILDER_INCLUDED_ )
 #define _TS_NATIVE_PES_BUILDER_INCLUDED_
 
+#include <stdint.h>
 #include "TSnative.h"
 #include "AVUtility.h"
 
@@ -55,9 +56,9 @@ extern "C" {
 typedef struct {
 	char		    Type;
 	short			State;		//0:empty, 1:pending, 2:ready
-	unsigned long   SeqNum;
-	unsigned long	PacketSize;
-	unsigned long	DataSize;
+	uint32_t   SeqNum;
+	uint32_t	PacketSize;
+	uint32_t	DataSize;
 	unsigned char*  Packet;
 } PS_PACKET_DATA;
 
@@ -86,8 +87,8 @@ typedef struct {
 
 	unsigned char video_stream_id;
 	unsigned char audio_stream_id;
-	unsigned long video_demux_rate;
-	unsigned long audio_demux_rate;
+	uint32_t video_demux_rate;
+	uint32_t audio_demux_rate;
 	unsigned char main_video_index;
 	unsigned char main_audio_index;
 	unsigned char total_video_num;
@@ -108,18 +109,18 @@ typedef struct {
 	PS_PACKET_DATA PacketBuffer[PES_PACKET_BUFFER_SIZE];    //packets buffer pool
 	int PacketsInPoolNum;                          //number of packet that are in packets buffer pool
 	int ReadyPacketsInPoolNum;
-	unsigned long Sequence;
+	uint32_t Sequence;
 	int PacketQueueHead;						   //packets buffer pool queue header	
 	int PacketQueueTail;						   //packets buffer pool queue tail
 	int VideoSlot[MAX_STREAM_NUM];
 	int AudioSlot[MAX_STREAM_NUM];
 
 	//Statistic	
-	unsigned long video_packets;
-	unsigned long audio_packets;
-	unsigned long video_incoming;
-	unsigned long audio_incoming;
-	unsigned long packets;
+	uint32_t video_packets;
+	uint32_t audio_packets;
+	uint32_t video_incoming;
+	uint32_t audio_incoming;
+	uint32_t packets;
 
 	// Timestamp tracking
 	LONGLONG lastRefTime;
@@ -164,8 +165,8 @@ int GetAudioNewStreamId( PS_BUILDER* pBuilder, int Index, unsigned char StreamTy
 
 int  GetPSReadyPacketNumInPool( PS_BUILDER* pBuilder ); 
 //bool PeekPSPacket( PS_BUILDER* pBuilder, short* pType, char** ppPacketData,unsigned  long* pSize );
-bool PopPSPacket( PS_BUILDER* pBuilder,  short* pType, char* pPacketData, unsigned long* pSize );
-bool FlushOutPSPacket( PS_BUILDER* pBuilder, short* pType, char* pPacketData, unsigned long* pSize );
+bool PopPSPacket( PS_BUILDER* pBuilder,  short* pType, char* pPacketData, uint32_t* pSize );
+bool FlushOutPSPacket( PS_BUILDER* pBuilder, short* pType, char* pPacketData, uint32_t* pSize );
 
 int  PSGetBlockSize( PS_BUILDER *builder );
 

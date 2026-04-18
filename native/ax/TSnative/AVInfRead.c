@@ -16,6 +16,7 @@
 // Eliminate silly MS compiler security warnings about using POSIX functions
 #pragma warning(disable : 4996)
 
+#include <stdint.h>
 #include "AVUtility.h"
 #include "TSnative.h"
 #include "TSParser.h"
@@ -90,29 +91,29 @@ extern off64_t tell64( int filedes );
 /* ///////////////////////////////////////////////////////////////////////////////////////////// 
 parser hooker section
  ////////////////////////////////////////////////////////////////////////////////////////////*/
-static	long TSAVStreamHook( void* handle, short channel, void* data );
-static	long TSAVSignalHook( void* handle, short channel, void* data );
-static	long PESAVStreamHook( void* handle, short channel, void* data );
-static	long PESAVSignalHook( void* handle, short channel, void* data );
+static	int TSAVStreamHook( void* handle, short channel, void* data );
+static	int TSAVSignalHook( void* handle, short channel, void* data );
+static	int PESAVStreamHook( void* handle, short channel, void* data );
+static	int PESAVSignalHook( void* handle, short channel, void* data );
 static  void SetStreamPTS( ENV* env, int channel, LONGLONG* pllPTS );
 static  LONGLONG  GetStreamLastPTS( ENV* env, int channel  );
 static  bool StreamReady( ENV* env );
 static  bool StreamPlayable( ENV* env );
 static  LONGLONG  ReadFileLastPTS( ENV* env, int fd, LONGLONG *filesize );
-static unsigned long GetStreamTotalRate( ENV* env );
+static uint32_t GetStreamTotalRate( ENV* env );
 static char* BuildFormatDesc( ENV* env, char* buf, int size );
 static char* BuildDurationDesc( LONGLONG llDur, char* buf, int size );
 
 static int DectTSMainAudioPid( ENV* env, int channel );
 static int DectPSMainAudioTrk( ENV* env );
-long TSAVStreamHook( void* handle, short channel, void* data )
+int TSAVStreamHook( void* handle, short channel, void* data )
 {
 	TS_AV_INFO* av_info = (TS_AV_INFO*)data;
 	TS_PARSER * parser;
 	ENV*		env;
 	int			stream_index;
 	const unsigned char* pData;
-	long        Size;
+	int         Size;
 	LONGLONG    llPTS;
 	PES_INFO	PESInfo ={0};
 	bool        bPESInfoReady=false;
@@ -266,7 +267,7 @@ long TSAVStreamHook( void* handle, short channel, void* data )
 	return 1;
 }
 
-long TSAVSignalHook( void* handle, short channel, void* data )
+int TSAVSignalHook( void* handle, short channel, void* data )
 {
 	int i;
 	TS_PARSER * parser;
@@ -380,7 +381,7 @@ long TSAVSignalHook( void* handle, short channel, void* data )
 }
 
 
-long PESAVStreamHook( void* handle, short channel, void* data )
+int PESAVStreamHook( void* handle, short channel, void* data )
 {
 	PES_AV_INFO* av_info = (PES_AV_INFO*)data;
 	PS_PARSER * parser;
@@ -430,7 +431,7 @@ long PESAVStreamHook( void* handle, short channel, void* data )
 	return 1;
 }
 
-long PESAVSignalHook( void* handle, short channel, void* data )
+int PESAVSignalHook( void* handle, short channel, void* data )
 {
 	PS_PARSER * parser;
 	ENV* env;
@@ -507,7 +508,7 @@ long PESAVSignalHook( void* handle, short channel, void* data )
 	return 0;
 }
 
-int DetectInputStreamFormat( unsigned char* pData, long dwSize )
+int DetectInputStreamFormat( unsigned char* pData, int dwSize )
 {
 	int proTS  = 0;
 	int proPES = 0;
@@ -542,12 +543,12 @@ int DetectInputStreamFormat( unsigned char* pData, long dwSize )
 	return uType;
 }
 
-int GetAVInf( char* FileName, unsigned long CheckSize, bool bLiveFile, int RequestedTSChannel, 
+int GetAVInf( char* FileName, uint32_t CheckSize, bool bLiveFile, int RequestedTSChannel, 
 			   char* FormatBuf, int FormatSize, char* DurationBuf, int DurationSize, int* ProgramNum )
 {
 	ENV env={0};
-	unsigned long dwTotalInitLen; 
-	unsigned long dwIncLen;
+	uint32_t dwTotalInitLen; 
+	uint32_t dwIncLen;
 	unsigned char *pbData;
 	unsigned uInputStreamFormat = 0;
 	int Bytes;
@@ -558,8 +559,8 @@ int GetAVInf( char* FileName, unsigned long CheckSize, bool bLiveFile, int Reque
 
 	int BlockSize;
 	int Size;
-	unsigned long dwCheckBytes;
-	unsigned long dwPushBytes;
+	uint32_t dwCheckBytes;
+	uint32_t dwPushBytes;
 	LONGLONG rtDur = 0;
 
 #ifdef WIN32	
@@ -794,7 +795,7 @@ int GetAVInf( char* FileName, unsigned long CheckSize, bool bLiveFile, int Reque
 
 	if ( env.stream_num && !bScrambledChannel )
 	{
-		unsigned long lRateBound;
+		uint32_t lRateBound;
 		LONGLONG llByteLength;
 		//caculate data play duration
 		if ( uInputStreamFormat == PES_FORMAT )
@@ -811,7 +812,7 @@ int GetAVInf( char* FileName, unsigned long CheckSize, bool bLiveFile, int Reque
 			rtDur = ReadFileLastPTS( &env, fd, &llByteLength );
 			if ( rtDur )
 			{
-				env.avg_byte_rate = (unsigned long)( llByteLength*UNITS/(rtDur) );
+				env.avg_byte_rate = (uint32_t)( llByteLength*UNITS/(rtDur) );
 			}
 		} else
 		{
@@ -829,7 +830,7 @@ int GetAVInf( char* FileName, unsigned long CheckSize, bool bLiveFile, int Reque
 				rtDur = ReadFileLastPTS( &env, fd, &llByteLength );
 				if ( rtDur )
 				{
-					env.avg_byte_rate = (unsigned long)( llByteLength*UNITS/(rtDur) );
+					env.avg_byte_rate = (uint32_t)( llByteLength*UNITS/(rtDur) );
 				}
 			} 
 
@@ -928,7 +929,7 @@ bool StreamPlayable( ENV* env )
 	int i;
 	bool video_ready = false, audio_ready = false;
 	int  audio_tracking = 0;
-	unsigned long ellipse_tick;
+	uint32_t ellipse_tick;
 
 	env->nTrackPTSChannel = 0;
 
@@ -1052,7 +1053,7 @@ LONGLONG  ReadFileLastPTS( ENV* env, int fd, LONGLONG *pllBytes )
 	int Bytes, Size, BlockSize;
 	char* pData;
 	LONGLONG llByteLength, rtDur;
-	unsigned long dwIncLen = 32*1024;  
+	uint32_t dwIncLen = 32*1024;  
 	unsigned char* pbData = sagetv_malloc( dwIncLen );
 	int pmt_locked;
 
@@ -1151,9 +1152,9 @@ LONGLONG  ReadFileLastPTS( ENV* env, int fd, LONGLONG *pllBytes )
 
 
 
-static unsigned long GetVideoRate( unsigned short uStreamID, unsigned short uStreamType, AV_CONTEXT *pAV )
+static uint32_t GetVideoRate( unsigned short uStreamID, unsigned short uStreamType, AV_CONTEXT *pAV )
 {
-	unsigned long lVideoRate = 0;
+	uint32_t lVideoRate = 0;
 	if ( uStreamType == 0xf1 ) //customized DixV stream
 	{
 		_MEDIA* pMsftMedia;
@@ -1184,9 +1185,9 @@ static unsigned long GetVideoRate( unsigned short uStreamID, unsigned short uStr
 	return lVideoRate;
 }
 
-static unsigned long GetAudioRate( unsigned short uStreamID, unsigned short uStreamType, AV_CONTEXT *pAV )
+static uint32_t GetAudioRate( unsigned short uStreamID, unsigned short uStreamType, AV_CONTEXT *pAV )
 {
-	unsigned long lAudioRate = 0;
+	uint32_t lAudioRate = 0;
 	if ( uStreamType == 0x3 || uStreamType == 0x4 ) 
 	{
 		TS_MPEGWAV*   pWfx;	
@@ -1202,10 +1203,10 @@ static unsigned long GetAudioRate( unsigned short uStreamID, unsigned short uStr
 	return lAudioRate;
 }
 
-unsigned long GetStreamTotalRate( ENV* env )
+uint32_t GetStreamTotalRate( ENV* env )
 {
 	int i;
-	unsigned long TotalRate = 0;
+	uint32_t TotalRate = 0;
 	for ( i = 0; i<env->stream_num && i < MAX_STREAM_NUM ; i++ )
 		if ( env->stream[i].stream_ready  )
 		{
@@ -1277,7 +1278,7 @@ char* BuildFormatDesc( ENV* env, char* buf, int size )
 	{
 		char *main_audio, *main_video;
 		char lauguage[16];
-		unsigned long lauguage_code;
+		uint32_t lauguage_code;
 
 		if ( !env->stream[i].stream_ready )
 			continue;
@@ -1580,7 +1581,7 @@ int DectTSMainAudioPid( ENV* env, int channel )
 	int i;
 	int stream_num;
 	AVSTREAM_INFO* StreamInfo;
-	unsigned long lauguagecode;
+	uint32_t lauguagecode;
 	stream_num = GetStreamNum( env->parser, channel );
 	if ( stream_num <= 0 ) return 0;
 	if ( stream_num >  MAX_STREAM_NUM ) stream_num = MAX_STREAM_NUM;
@@ -1686,7 +1687,7 @@ for ( i = 1; i< stream_num; i++ )
 				} else
 				if ( first_prior == priority )
 				{ //if the same priority, pick up packet rate higher one
-					unsigned long rate1, rate2;
+					uint32_t rate1, rate2;
 					rate1 = PidHits( env->parser, StreamInfo[i].pid );
 					rate2 = PidHits( env->parser, env->audio_main_track );
 					if ( rate1 > rate2  )

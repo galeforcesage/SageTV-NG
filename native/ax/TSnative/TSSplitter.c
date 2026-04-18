@@ -16,18 +16,18 @@
 // Eliminate silly MS compiler security warnings about using POSIX functions
 #pragma warning(disable : 4996)
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>	
 #include <memory.h>	
 #include <string.h>
+#include <stdarg.h>
+#include <time.h>
 	
 #include "TSSplitter.h"
 
 #define TS_STREAM 1
 #define PS_STREAM 2
-
-#include <stdarg.h>
-#include <time.h>
 
 int TranslateJWideString2( char* buf_out, int buf_out_size, unsigned short* buf_in );
 
@@ -127,8 +127,8 @@ static bool _ENABLE_TELETEXT()
 //static void TracePTSJittle( TSSPLT* parser, int Contrl, int streamIndex, LONGLONG *llPTS, LONGLONG *llDTS );
 static bool AVInfoReady( TSSPLT* ts, bool *done  );
 static void NotifySteamInfo(  TSSPLT* ts );
-static long EPG_dump(void* handle, short, void*);
-static long PMT_dump(void* handle, short bytes, void* data );
+static int EPG_dump(void* handle, short, void*);
+static int PMT_dump(void* handle, short bytes, void* data );
 static int PickupMainAudioTrack( TSSPLT* ts, AVSTREAM_INFO* StreamInfo, int stream_num  );
 static int FindMainAudioTrack( TSSPLT* ts, int channel );
 static void DumpChannelPid( TSSPLT* ts, AVSTREAM_INFO* StreamInfo, int stream_num );
@@ -136,7 +136,7 @@ static void ResetPTSFIX( TSSPLT* ts );
 
 int    GetBlockSize();
 //////////////////////////////////////////////////////////////////////////////////////////////////
-unsigned long TSAVStreamHook( void* handle, short channel, void* data )
+int TSAVStreamHook( void* handle, short channel, void* data )
 {
 	TS_AV_INFO* av_info = (TS_AV_INFO*)data;
 	int stream_index;
@@ -182,7 +182,7 @@ unsigned long TSAVStreamHook( void* handle, short channel, void* data )
 			ts->stream_pid[stream_index]= av_info->pid; 
 			if ( IsAudioType( av_info->type ) )
 			{
-				unsigned long language; unsigned char type;
+				uint32_t language; unsigned char type;
 				if ( GetPMTDescData( parser, av_info->pid, &desc, &length ) && 
 					 ( GetAudioLanguageInfo( desc, length, &language, &type ) || 
 					 GetTelexLanguageInfo( desc, length, &language, &type )) )
@@ -322,7 +322,7 @@ unsigned long TSAVStreamHook( void* handle, short channel, void* data )
 	return 0;
 }
 
-unsigned long TSAVSignalHook( void* handle, short channel, void* data )
+int TSAVSignalHook( void* handle, short channel, void* data )
 {
 	TS_PARSER* parser;
 	TSSPLT* ts;
@@ -448,7 +448,7 @@ unsigned long TSAVSignalHook( void* handle, short channel, void* data )
 				else
 				if ( program == 0 )
 				{
-					unsigned long packets;
+					uint32_t packets;
 					if ( ( packets = PacketInputNum( ts ) )<  ATSC_CHANNL_LOCKING_TIMEOUT )
 					{
 						ret = 3;
@@ -574,7 +574,7 @@ unsigned long TSAVSignalHook( void* handle, short channel, void* data )
 							}
 							else
 							{
-								unsigned long packets;
+								uint32_t packets;
 								if ( ( packets = PacketInputNum( ts ) )<  ATSC_CHANNL_LOCKING_TIMEOUT )
 								{
 									ret = 3;
@@ -723,7 +723,7 @@ unsigned long TSAVSignalHook( void* handle, short channel, void* data )
 //static int  _log_max_num = 100;
 #define IS_MAIN_AV_STREAM ( ts->video_stream_index == av_info->sub_channel || ts->audio_stream_index == av_info->sub_channel )
 static LONGLONG PTSFix( TS_PARSER * parser, TS_AV_INFO* av_info, PES_INFO* pPESInfo );
-long PSAVStreamHook( void* handle, short channel, void* data )
+int PSAVStreamHook( void* handle, short channel, void* data )
 {
 	TS_AV_INFO* av_info = (TS_AV_INFO*)data;
 	TS_PARSER * parser;
@@ -866,7 +866,7 @@ long PSAVStreamHook( void* handle, short channel, void* data )
 
 			if ( IsAudioType( av_info->type ) && ret != TELTEXT_TYPE )
 			{
-				unsigned long language; unsigned char type;
+				uint32_t language; unsigned char type;
 				if ( GetPMTDescData( parser, av_info->pid, &desc, &length ) ) 
 				{
 		            if ( GetAudioLanguageInfo( desc, length, &language, &type ) || 
@@ -917,7 +917,10 @@ long PSAVStreamHook( void* handle, short channel, void* data )
 			{
 				int bytes;
 				ts->builder_state = 2 ;
-				if ( ts->disable_multi_audio_stream ) 
+				if ( ts->ps_builder == NULL )
+				{
+				}
+				else if ( ts->disable_multi_audio_stream ) 
 				{
 					bytes = CreatSageStreamHeader( ts->ps_builder, 
 								ts->video_stream_id,    ts->audio_stream_id,
@@ -1057,7 +1060,7 @@ long PSAVStreamHook( void* handle, short channel, void* data )
 	return 0;
 }
 
-long PSAVSignalHook( void* handle, short channel, void* data )
+int PSAVSignalHook( void* handle, short channel, void* data )
 {
 	int i;
 	TS_PARSER * parser;
@@ -1174,7 +1177,7 @@ long PSAVSignalHook( void* handle, short channel, void* data )
 				else
 				if ( program == 0 )
 				{
-					unsigned long packets;
+					uint32_t packets;
 					if ( ( packets = PacketInputNum( ts ) ) <  ATSC_CHANNL_LOCKING_TIMEOUT )
 					{
 						ret = 3;
@@ -1309,7 +1312,7 @@ long PSAVSignalHook( void* handle, short channel, void* data )
 							}
 							else
 							{
-								unsigned long packets;
+								uint32_t packets;
 								if ( ( packets = PacketInputNum( ts ) )<  ATSC_CHANNL_LOCKING_TIMEOUT )
 								{
 									ret = 3;
@@ -1398,7 +1401,7 @@ long PSAVSignalHook( void* handle, short channel, void* data )
 
 					if ( IsAudioType( StreamInfo[i].streamType ) )
 					{
-						//unsigned long language; unsigned char type;
+						//uint32_t language; unsigned char type;
 						ts->audio_stream_num++;
 						//exclusive teletex
 						if ( StreamInfo[i].streamType == 6 && 
@@ -1460,7 +1463,7 @@ static bool AVInfoReady( TSSPLT* ts, bool *done )
 {
 	int i, audio_ready_stream_num = 0, video_ready_stream_num = 0;
 	int avinf_posted_num = 0;
-	unsigned long video_counter=0, audio_counter = 0;
+	uint32_t video_counter=0, audio_counter = 0;
 	bool need_updated, auido_ready, video_ready, main_audio_found;
 
 ////ZQ Trace!
@@ -2011,7 +2014,7 @@ static LONGLONG PTSFix( TS_PARSER * parser, TS_AV_INFO* av_info, PES_INFO* pPESI
 			if ( ( delta > 4000 || -delta > 5 ) ) //4 seconds shifiting
 			{
 				//drop jumping PCR
-				unsigned long inc = EstimatePCRIncrease( parser, GetPacketCounter(ts->parser)-ts->last_pcr_packet_num );
+				uint32_t inc = EstimatePCRIncrease( parser, GetPacketCounter(ts->parser)-ts->last_pcr_packet_num );
 				ts->cur_pcr = ts->inc_pcr + inc;
 				flog(( "native.log", "PCR discontinue on pid:0x%x. (%06ldms:%06ldms)\n", av_info->pid, 
 					                                                   (long)delta, (long)inc/27000 ) );
@@ -2035,7 +2038,7 @@ static LONGLONG PTSFix( TS_PARSER * parser, TS_AV_INFO* av_info, PES_INFO* pPESI
 	{
 		if ( ts->last_pcr )
 		{
-			unsigned long inc = EstimatePCRIncrease(parser, GetPacketCounter(ts->parser)-ts->last_pcr_packet_num);
+			uint32_t inc = EstimatePCRIncrease(parser, GetPacketCounter(ts->parser)-ts->last_pcr_packet_num);
 			ts->cur_pcr = ts->inc_pcr + inc;
 			//{
 			//	static int ct = 0;
@@ -2544,7 +2547,7 @@ bool  PopupPacket( TSSPLT* splt, unsigned char* pData, unsigned int* Size )
 	} else
 	{
 			//check data 
-			unsigned long   size = (unsigned long)*Size;
+			uint32_t   size = (uint32_t)*Size;
 			if ( PopPSPacket( splt->ps_builder, &type, (char*)pData , &size )  )
 			{
 				*Size = size;
@@ -2573,7 +2576,7 @@ bool  DrainPacket( TSSPLT* splt, unsigned char* pData, unsigned int* Size )
 	} else
 	{
 		//check data 
-		unsigned long   size = *Size;
+		uint32_t   size = *Size;
 		ret = FlushOutPSPacket( splt->ps_builder, &type, (char*)pData , &size );
 		if ( ret )
 			*Size = size;
@@ -2606,10 +2609,10 @@ int   NumOfPacketsInPool( TSSPLT* splt )
 	}
 }
 
-int   GetTSProgramList( TSSPLT* splt, unsigned short* ProgramList, unsigned long MaxBytes )
+int   GetTSProgramList( TSSPLT* splt, unsigned short* ProgramList, uint32_t MaxBytes )
 {
 	int total_channel, i;
-	unsigned long size = 0;
+	uint32_t size = 0;
 	PROGRAM_INFO *Channels;
 	total_channel = GetProgramNumber( splt->parser );
 	Channels = (PROGRAM_INFO *)sagetv_malloc( sizeof(PROGRAM_INFO)*total_channel );
@@ -2634,10 +2637,10 @@ bool  GetCountOfStreams( TSSPLT* splt, int Program, unsigned short* pVal )
 	return true;
 }
 
-int   GetVideoProgramList( TSSPLT* splt, unsigned short* ProgramList, unsigned long MaxBytes )
+int   GetVideoProgramList( TSSPLT* splt, unsigned short* ProgramList, uint32_t MaxBytes )
 {
 	int total_channel, i, k = 0;
-	unsigned long size = 0;
+	uint32_t size = 0;
 	PROGRAM_INFO *Channels;
 	total_channel = GetProgramNumber( splt->parser );
 	Channels = (PROGRAM_INFO *)sagetv_malloc( sizeof(PROGRAM_INFO)*total_channel );
@@ -2657,7 +2660,7 @@ int   GetVideoProgramList( TSSPLT* splt, unsigned short* ProgramList, unsigned l
 	return k;
 }
 
-int   GetChannelName( TSSPLT* splt, void* pChannelName , unsigned long MaxBytes )
+int   GetChannelName( TSSPLT* splt, void* pChannelName , uint32_t MaxBytes )
 {
 	if ( pChannelName == NULL || MaxBytes <= 0 )
 		return 0;
@@ -2694,7 +2697,7 @@ bool  StreamType( TSSPLT* splt, int Program, unsigned short index, unsigned char
 	return true;
 }
 
-bool  ParseData( TSSPLT* splt, const unsigned char* pData, long dwBytes )
+bool  ParseData( TSSPLT* splt, const unsigned char* pData, int dwBytes )
 {
 	TSProcessBlock( splt->parser, dwBytes, (char*)pData );
 	return true;
@@ -2807,7 +2810,7 @@ bool RetreveSIProgramName( TSSPLT* splt, unsigned short program, char* name, uns
 	return GetSIProgramName( splt->si_parser, program, name, (int)size );
 }
 
-long PMT_dump(void* handle, short bytes, void* data )
+int PMT_dump(void* handle, short bytes, void* data )
 {
 	TSSPLT* splt = (TSSPLT*)handle;
 	if ( splt->pfnPMTDataDump != NULL )
@@ -2817,7 +2820,7 @@ long PMT_dump(void* handle, short bytes, void* data )
 	return 0;
 }
 
-long EPG_dump(void* handle, short bytes, void* message )
+int EPG_dump(void* handle, short bytes, void* message )
 {
 	TSSPLT* splt = (TSSPLT*)handle;
 	if ( splt->pfnEPGDump != NULL && splt->EPG_parser_ctrl )
@@ -2829,12 +2832,12 @@ long EPG_dump(void* handle, short bytes, void* message )
 	return 0;
 }
 
-void  EPGParserCtrl( TSSPLT* splt, unsigned long contrl )
+void  EPGParserCtrl( TSSPLT* splt, uint32_t contrl )
 {
 	splt->EPG_parser_ctrl = contrl;
 }
 
-void  AVInfoCtrl( TSSPLT* splt, unsigned long contrl )
+void  AVInfoCtrl( TSSPLT* splt, uint32_t contrl )
 {
 	splt->avinfo_ctrl = contrl;
 }
@@ -2882,7 +2885,7 @@ bool IsAudioStreamReady( TSSPLT* splt )
 	return false;
 }
 
-unsigned long PacketInputNum( TSSPLT* splt )
+uint32_t PacketInputNum( TSSPLT* splt )
 {
 	return TotalPidHits( splt->parser );
 }
@@ -2923,7 +2926,7 @@ int PushData( TSSPLT* splt, const unsigned char* data, int len, unsigned char* o
 {
 	const unsigned char* pStart;
 	unsigned char* pOutbuf;
-	unsigned long TotalBytes, Bytes;
+	uint32_t TotalBytes, Bytes;
 	unsigned int Size;
 	int 	nBufferIndex;
 	int		nTSPacketNum;
@@ -2995,7 +2998,7 @@ int FlashData( TSSPLT* splt, unsigned char* out_buf, int buf_size,
 {
 
 	unsigned char* pOutbuf;
-	unsigned long TotalBytes, Bytes;
+	uint32_t TotalBytes, Bytes;
 	unsigned int Size;
 	int 	nBufferIndex;
 	int		nTSPacketNum;
@@ -3053,7 +3056,7 @@ int PushData2( TSSPLT* splt, const unsigned char* data, int len, ALLOC_BUFFER pf
 {
 	const unsigned char* pStart;
 	unsigned char* pOutbuf;
-	unsigned long TotalBytes, Bytes;
+	uint32_t TotalBytes, Bytes;
 	unsigned int Size;
 	int 	nBufferIndex;
 	int		nTSPacketNum;
@@ -3104,7 +3107,9 @@ int PushData2( TSSPLT* splt, const unsigned char* data, int len, ALLOC_BUFFER pf
 						}
 						Bytes = nBufferIndex * TS_PACKET_LENGTH;
 						if ( pfnOutput != NULL )
+						{
 							pfnOutput( context_output, out_buf, Bytes );
+						}
 						TotalBytes += Bytes;
 				} 
 				
@@ -3115,7 +3120,7 @@ int PushData2( TSSPLT* splt, const unsigned char* data, int len, ALLOC_BUFFER pf
 		{
 			bool ret = true;
 			while ( ret )
-			{   //I should do peekpspacket to save over heat of alloc.PeekPSPacket( PS_BUILDER* pBuilder, short* pType, NULL, unsigned long* pSize )
+			{
 				buf_size = pfnAllocBuffer( context_alloc, &out_buf, 0 );
 				if ( out_buf == NULL || buf_size == 0 )
 				{
@@ -3147,7 +3152,7 @@ int FlashData2( TSSPLT* splt, ALLOC_BUFFER pfnAllocBuffer, void* context_alloc,
 			                               OUTPUT_DUMP pfnOutput, void* context_output )
 {
 	unsigned char* pOutbuf;
-	unsigned long TotalBytes, Bytes;
+	uint32_t TotalBytes, Bytes;
 	unsigned int Size;
 	int 	nBufferIndex;
 	int		nTSPacketNum;
@@ -3407,7 +3412,7 @@ static int PickupMainAudioTrack( TSSPLT* ts, AVSTREAM_INFO* StreamInfo, int stre
 {
 	int i, ret = 0;
 	int priority, first_prior;
-	unsigned long lauguagecode;
+	uint32_t lauguagecode;
 	bool IsATSC;
 	int stream_type;
 	ts->audio_state = 0, 
@@ -3539,7 +3544,7 @@ static int PickupMainAudioTrack( TSSPLT* ts, AVSTREAM_INFO* StreamInfo, int stre
 			} else
 			if ( first_prior == priority )
 			{ //if the same priority, pick up packet rate higher one
-				unsigned long rate1, rate2;
+				uint32_t rate1, rate2;
 				rate1 = PidHits( ts->parser, StreamInfo[i].pid );
 				rate2 = PidHits( ts->parser, ts->selected_audio_pid );
 				if ( _MAX( rate1, rate2 ) < 60 )
@@ -3562,7 +3567,7 @@ static int PickupMainAudioTrack( TSSPLT* ts, AVSTREAM_INFO* StreamInfo, int stre
 }
 
 
-void GetDebugInfo( TSSPLT* splt, unsigned short cmd, char* Buf, unsigned long BufSize )
+void GetDebugInfo( TSSPLT* splt, unsigned short cmd, char* Buf, uint32_t BufSize )
 {
 	GetSIDebugInfo( splt->si_parser, cmd, Buf, BufSize );
 }

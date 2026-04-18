@@ -18,6 +18,8 @@
 #if !defined( _TS_NATIVE_AVINFREAD_INCLUDED_ )
 #define _TS_NATIVE_AVINFREAD_INCLUDED_
 
+#include <stdint.h>
+
 //data structure byte packing throughout
 #ifdef WIN32
 #if( _MSC_VER <= 800 )
@@ -53,7 +55,7 @@ typedef struct {
 	AV_CONTEXT	   av;             //Audio/video codec information
 	LONGLONG	   firstPTS;	   //first Picture Time Stamp
 	LONGLONG	   lastPTS;		   //last Picture Time Stamp
-	unsigned long  data_frames;    //recieved data frames
+	uint32_t  data_frames;    //recieved data frames
 	unsigned short pid;            //TS pid
 	char  stream_desc[180];
 } STREAM_INF;
@@ -79,13 +81,13 @@ typedef struct
 	int  video_main_track;
 	int	 audio_main_track;
 	int	 sage_inf_flag;
-	unsigned long  start_tick;
-	unsigned long  last_tick;
+	uint32_t  start_tick;
+	uint32_t  last_tick;
 	LONGLONG	   llFirstPTS;
 	int			   nTrackPTSChannel;
 	unsigned short uInputStreamFormat;
 	unsigned short dwAudioCtrl;
-	unsigned long  avg_byte_rate;
+	uint32_t  avg_byte_rate;
 }	ENV;
 
 //define mask bit for stream_state
@@ -93,9 +95,9 @@ typedef struct
 #define   PARSER_STREAM_START 0x001
 #define   PARSER_STREAM_READY 0x002
 
-extern int GetAVInf( char* FileName, unsigned long CheckSize, bool bLiveFile, int RequestedChannel, 
+extern int GetAVInf( char* FileName, uint32_t CheckSize, bool bLiveFile, int RequestedChannel, 
 			   char* FormatBuf, int FormatSize, char* DurationBuf, int DurationSize, int* ProgramNum );
-extern int DetectInputStreamFormat( unsigned char* pData, long dwSize );
+extern int DetectInputStreamFormat( unsigned char* pData, int dwSize );
 #ifdef __cplusplus
 }
 #endif

@@ -631,7 +631,7 @@ public class SeriesInfo extends DBObject
         return -1;
 
       return (a1.legacySeriesID == a2.legacySeriesID)
-          ? a1.showcardID - a2.legacySeriesID
+          ? a1.showcardID - a2.showcardID
           : a1.legacySeriesID - a2.legacySeriesID;
     }
   };

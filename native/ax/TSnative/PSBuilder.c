@@ -16,6 +16,7 @@
 // Eliminate silly MS compiler security warnings about using POSIX functions
 #pragma warning(disable : 4996)
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <memory.h>
@@ -84,7 +85,7 @@ static void _flog_check()
 }
 
 static int  BuildPESHeader( PS_BUILDER* pBuilder, int streamid, int len, LONGLONG PTS, LONGLONG DTS );
-static bool PushPESPacket( PS_BUILDER* pBuilder, int index, char Type,  char* pPacketData, unsigned long Size );
+static bool PushPESPacket( PS_BUILDER* pBuilder, int index, char Type,  char* pPacketData, uint32_t Size );
 static int   AllocPESPacket( PS_BUILDER* pBuilder );
 int BuildPsmPacket( PS_BUILDER* pBuilder, unsigned char *stream_id, unsigned char* stream_type, int stream_num );
 
@@ -433,6 +434,7 @@ int CreatSageStreamHeader( PS_BUILDER* pBuilder, unsigned char VidstreamId, unsi
 {
 	int bytes; 
 	unsigned char *ptr;
+	if ( pBuilder == NULL ) return 0;
 	InitOutBits( &pBuilder->bits, pBuilder->bits_buf, sizeof(pBuilder->bits_buf) );
 
 	if ( pBuilder->remapping_stream && IsAudioStreamId(AudstreamId) )
@@ -553,12 +555,12 @@ static int BuiderAudioPackPESHeader( PS_BUILDER* pBuilder, int trk, LONGLONG ref
 
 }
 
-unsigned long GetCRC32( const unsigned char *pData, int len );
+uint32_t GetCRC32( const unsigned char *pData, int len );
 int BuildPsmPacket( PS_BUILDER* pBuilder, unsigned char *stream_id, unsigned char* stream_type, int stream_num )
 {
 	int i, bytes = 0, len;
 	unsigned char *p;
-	unsigned long crc;
+	uint32_t crc;
 
 	if ( stream_num <= 0 || stream_num > MAX_STREAM_NUM )
 		return 0;
@@ -1260,7 +1262,7 @@ static int AllocPESPacket( PS_BUILDER* pBuilder )
 	return index;
 }
 
-static bool PushPESPacket( PS_BUILDER* pBuilder, int index, char Type,  char* pPacketData, unsigned long Size )
+static bool PushPESPacket( PS_BUILDER* pBuilder, int index, char Type,  char* pPacketData, uint32_t Size )
 {
 	//int index;
 	if ( index < 0 || index >= PES_PACKET_BUFFER_SIZE ) 
@@ -1303,10 +1305,10 @@ static bool PushPESPacket( PS_BUILDER* pBuilder, int index, char Type,  char* pP
 	return true;
 }
 
-bool PeekPSPacket( PS_BUILDER* pBuilder, short* pType, char** ppPacketData, unsigned long* pSize )
+bool PeekPSPacket( PS_BUILDER* pBuilder, short* pType, char** ppPacketData, uint32_t* pSize )
 {
 	int i;
-	unsigned long bytes, seq;
+	uint32_t bytes, seq;
 	int index;
 
 	if (  pBuilder->ReadyPacketsInPoolNum == 0 || pBuilder->PacketsInPoolNum == 0 ) 
@@ -1356,10 +1358,10 @@ bool PeekPSPacket( PS_BUILDER* pBuilder, short* pType, char** ppPacketData, unsi
 	return true;
 }
 
-bool PopPSPacket( PS_BUILDER* pBuilder, short* pType, char* pPacketData, unsigned long *pSize )
+bool PopPSPacket( PS_BUILDER* pBuilder, short* pType, char* pPacketData, uint32_t *pSize )
 {
 	int i;
-	unsigned long bytes, seq;
+	uint32_t bytes, seq;
 	int index;
 
 	if (  pBuilder->ReadyPacketsInPoolNum == 0 || pBuilder->PacketsInPoolNum == 0 ) 
@@ -1431,10 +1433,10 @@ bool PopPSPacket( PS_BUILDER* pBuilder, short* pType, char* pPacketData, unsigne
 
 }
 
-bool FlushOutPSPacket( PS_BUILDER* pBuilder, short* pType, char* pPacketData, unsigned long* pSize )
+bool FlushOutPSPacket( PS_BUILDER* pBuilder, short* pType, char* pPacketData, uint32_t* pSize )
 {
 	int i;
-	unsigned long bytes;
+	uint32_t bytes;
 	int index;
 
 	if (  pBuilder->ReadyPacketsInPoolNum == 0 || pBuilder->PacketsInPoolNum == 0 ) 

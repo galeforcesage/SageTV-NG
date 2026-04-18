@@ -3264,6 +3264,12 @@ public class Wizard implements EPGDBPublic2
       {
         int mid = (low + high) >> 1;
         SeriesInfo midVal = (SeriesInfo) indy.data[mid];
+        if (midVal == null)
+        {
+          // Null entry in index (can occur after massRemove), skip past it
+          low = mid + 1;
+          continue;
+        }
         int cmp = midVal.legacySeriesID - seriesID;
 
         if (cmp < 0)
@@ -3293,6 +3299,12 @@ public class Wizard implements EPGDBPublic2
       {
         int mid = (low + high) >> 1;
         SeriesInfo midVal = (SeriesInfo) indy.data[mid];
+        if (midVal == null)
+        {
+          // Null entry in index (can occur after massRemove), skip past it
+          low = mid + 1;
+          continue;
+        }
         int cmp = midVal.showcardID - showcardID;
 
         if (cmp < 0)

@@ -451,12 +451,12 @@ int PushAVPacketData( TS_BUILDER* pBuilder, int PrgrmID, int StreamID, bool Star
 	return 1;
 }
 
-int PushBlockData( TS_BUILDER* pBuilder, int PrgrmID, int StreamID, char* pData, long Size  )
+int PushBlockData( TS_BUILDER* pBuilder, int PrgrmID, int StreamID, char* pData, int Size  )
 {
 	int i;
 	char data[1024];
 	unsigned short pid;
-	long total_bytes;
+	int total_bytes;
 	memset( data, 0, sizeof(data) );
 
 	//check if there is a vaild PorgramID

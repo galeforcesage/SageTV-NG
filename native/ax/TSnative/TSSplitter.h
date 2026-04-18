@@ -17,6 +17,8 @@
 #ifndef _TSSPLITTER_H_
 #define _TSSPLITTER_H_
 
+#include <stdint.h>
+
 #define MAX_STREAM_NUM    24
 
 #include "TSnative.h"
@@ -47,15 +49,15 @@ typedef struct {
 	LONGLONG	lastPTS;   //last Picture Time Stamp
 	LONGLONG	newDTS;	   //first Picture Time Stamp
 	LONGLONG	lastDTS;   //last Picture Time Stamp
-	unsigned long ticks; //million second.
+	uint32_t ticks; //million second.
 } PTS_INF;
 
 
-typedef long (*EPG_DUMP)( void* context, short bytes, void* mesg );
-typedef long (*AV_INF_DUMP)( void* context, short bytes, void* mesg );
-typedef long (*DATA_DUMP)( void* context, short bytes, void* mesg );
-typedef long (*PID_DUMP)( void* context, short bytes, void* mesg );
-typedef int  (*OUTPUT_DUMP)( void* context, unsigned char* pData, unsigned long lBytes );
+typedef int (*EPG_DUMP)( void* context, short bytes, void* mesg );
+typedef int (*AV_INF_DUMP)( void* context, short bytes, void* mesg );
+typedef int (*DATA_DUMP)( void* context, short bytes, void* mesg );
+typedef int (*PID_DUMP)( void* context, short bytes, void* mesg );
+typedef int  (*OUTPUT_DUMP)( void* context, unsigned char* pData, uint32_t lBytes );
 typedef int  (*ALLOC_BUFFER)( void* conext, unsigned char** ppData, int cmd ); //cmd 0:alloc, 1:release
 
 typedef struct  {
@@ -75,7 +77,7 @@ typedef struct  {
 	int  video_state;
 	int  audio_state;
 	int  channel_type;  //3:vido_audio_channel; 1:video_only_channel; 2:audio_only_channel
-	unsigned long ts_packet_num;
+	uint32_t ts_packet_num;
 
 	EPG_DUMP    pfnEPGDump;
 	AV_INF_DUMP pfnAVInfDump;
@@ -85,8 +87,8 @@ typedef struct  {
 	void*	    AVInfContext;
 	void*	    PidContext;
 	void*	    PMTDataContext;
-	unsigned long EPG_parser_ctrl;
-	unsigned long avinfo_ctrl;
+	uint32_t EPG_parser_ctrl;
+	uint32_t avinfo_ctrl;
 
 	AV_CONTEXT     av[MAX_STREAM_NUM];
 	unsigned short stream_type[MAX_STREAM_NUM];
@@ -94,7 +96,7 @@ typedef struct  {
 	unsigned short stream_pid[MAX_STREAM_NUM];
 	unsigned char  stream_ts_type[MAX_STREAM_NUM];
 	unsigned char  stream_desc[MAX_STREAM_NUM][32];
-	unsigned long  stream_counter[MAX_STREAM_NUM];
+	uint32_t  stream_counter[MAX_STREAM_NUM];
 	unsigned char  stream_posted[MAX_STREAM_NUM];
 	unsigned short stream_pack_byte[MAX_STREAM_NUM];
 	
@@ -119,8 +121,8 @@ typedef struct  {
 	LONGLONG  cur_PTS;
 	LONGLONG  last_sync_pcr;
 	LONGLONG  pcr_rate;
-	unsigned  long last_pcr_packet_num;
-	unsigned  long last_pts_packet_num;
+	uint32_t last_pcr_packet_num;
+	uint32_t last_pts_packet_num;
 
 	LONGLONG  frame_counter; //use frame counter to correct/estimate PCR
 	LONGLONG  frame_pcr_inc;
@@ -174,14 +176,14 @@ bool  DrainPacket( TSSPLT* splt, unsigned char* pData, unsigned int* Size ); //e
 bool  CheckProgramStart( TSSPLT* splt );
 
 int   GetTotalProgram( TSSPLT* splt );
-int   GetTSProgramList( TSSPLT* splt, unsigned short* ProgramList, unsigned long MaxBytes );
+int   GetTSProgramList( TSSPLT* splt, unsigned short* ProgramList, uint32_t MaxBytes );
 bool  GetPmtVersion( TSSPLT* splt, int Program, unsigned short* pVer );
 bool  GetCountOfStreams( TSSPLT* splt, int Program, unsigned short* pVal );
 bool  StreamType( TSSPLT* splt, int Program, unsigned short index, unsigned char* pVal );
-int   GetVideoProgramList( TSSPLT* splt, unsigned short* ProgramList, unsigned long MaxBytes );
+int   GetVideoProgramList( TSSPLT* splt, unsigned short* ProgramList, uint32_t MaxBytes );
 
 int   GetValidChannelNum( TSSPLT* splt );
-int   GetChannelName( TSSPLT* splt, void* pChannelName , unsigned long MaxBytes );
+int   GetChannelName( TSSPLT* splt, void* pChannelName , uint32_t MaxBytes );
 int   GetVideoChannelNum( TSSPLT* splt );
 void  SetEPGDump( TSSPLT* splt, EPG_DUMP pfn, void* Context );
 void  SetAVInfDump( TSSPLT* splt, AV_INF_DUMP pfn, void* Context );
@@ -193,18 +195,18 @@ bool  IsScrambledTSChannel( TSSPLT* splt, unsigned short Channel );
 bool  IsScrambleTSdProgram( TSSPLT* splt, unsigned short Program );
 bool  RetreveSIProgramName( TSSPLT* splt, unsigned short Program, char* name, unsigned short size );
 
-bool  ParseData( TSSPLT* splt, const unsigned char* pData, long dwBytes );
+bool  ParseData( TSSPLT* splt, const unsigned char* pData, int dwBytes );
 int   NumOfPacketsInPool( TSSPLT* splt );
 void  SetupRebuildPTS( TSSPLT* splt, int contrl );
-void  EPGParserCtrl( TSSPLT* splt, unsigned long contrl );
-void  AVInfoCtrl( TSSPLT* splt, unsigned long contrl );
+void  EPGParserCtrl( TSSPLT* splt, uint32_t contrl );
+void  AVInfoCtrl( TSSPLT* splt, uint32_t contrl );
 void  ResetSIParser( TSSPLT* splt );
 void  DisableMultiAudio( TSSPLT* splt, int flag );
 LONGLONG GetCurPTS( TSSPLT* splt );
 LONGLONG GetLastPTS( TSSPLT* splt );
 bool IsVideoStreamReady( TSSPLT* splt );
 bool IsAudioStreamReady( TSSPLT* splt );
-unsigned long PacketInputNum( TSSPLT* splt );
+uint32_t PacketInputNum( TSSPLT* splt );
 int  GetProgramState( TSSPLT* splt, unsigned short Program );
 int  GetTotalProgramNum( TSSPLT* splt );
 void SetTSStreamType( TSSPLT* splt, int type );
@@ -235,7 +237,7 @@ int  GetNetworkNum( TSSPLT* splt );
 int  GetNetworkList( TSSPLT* splt, char* Buf, int MaxBufSize );
 void SelectTSTSID( TSSPLT* splt, unsigned short tsid );
 void LockATSCChannel( TSSPLT* splt, unsigned short major, unsigned short minor );
-void GetDebugInfo( TSSPLT* splt, unsigned short cmd, char* Buf, unsigned long BufSize );
+void GetDebugInfo( TSSPLT* splt, unsigned short cmd, char* Buf, uint32_t BufSize );
 char* GetStreamInfo( TSSPLT* ts, char* buf, int buf_len );
 
 bool IsMultipleTSDI(  TSSPLT* ts );

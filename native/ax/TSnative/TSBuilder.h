@@ -17,6 +17,7 @@
 #if !defined( _TS_NATIVE_BUILDER_INCLUDED_ )
 #define _TS_NATIVE_BUILDER_INCLUDED_
 
+#include <stdint.h>
 #include "TSnative.h"
 
 #ifdef WIN32
@@ -64,8 +65,8 @@ typedef struct {
 	int PacketQueueTail;						   //packets buffer pool queue tail
 
 	//Statistic	
-	unsigned long packets;
-	unsigned long av_frames;	
+	uint32_t packets;
+	uint32_t av_frames;	
 	
 	LPFNBuilderDump builder_dumper;
 	void*    env;  //caller enviroment context, used by dumper call back.
@@ -85,8 +86,8 @@ void TSResetBuilder(TS_BUILDER* buider);
 int  PushPat(TS_BUILDER* pBuilder);
 int  PushPmt( TS_BUILDER* pBuilder,int PrgrmID );
 int  PushAVPacketData( TS_BUILDER* pBuilder,int PrgrmID, int StreamID, bool Start, char* pPayload, int Bytes  );
-int  PushAVBlockData(  TS_BUILDER* pBuilder,int PrgrmID, int StreamID, char* pData, long Size  );
-int  PushBlockData( TS_BUILDER* pBuilder, int PrgrmID, int StreamID, char* pData, long Size  );
+int  PushAVBlockData(  TS_BUILDER* pBuilder,int PrgrmID, int StreamID, char* pData, int Size  );
+int  PushBlockData( TS_BUILDER* pBuilder, int PrgrmID, int StreamID, char* pData, int Size  );
 bool PopPacket( TS_BUILDER* pBuilder,char* pPacket, short* Type, short* PayloadOffset );
 int  GetPacketNumInPool( TS_BUILDER* pBuilder );
 

@@ -2752,6 +2752,20 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
       Ministry.getInstance().submitForPotentialTranscoding(es.switcherFile);
     }
 
+    // Re-detect format metadata now that the recording is complete so the stored duration is accurate
+    if (Sage.getBoolean("seeker/redetect_format_on_recording_complete", true) && es.switcherFile.isCompleteRecording())
+    {
+      final MediaFile formatMF = es.switcherFile;
+      Pooler.execute(new Runnable()
+      {
+        public void run()
+        {
+          try{Thread.sleep(Math.round(Math.random()*30000) + 30000);}catch(Exception e){}
+          formatMF.redetectFormatDuration();
+        }
+      }, "SeekFormatRescan", Thread.MIN_PRIORITY);
+    }
+
     // If we do this here after a recording completes then it'll mean less on-demand thumbnail generation when the recordings view is shown and reduce the likelihood
     // that thumbnail generation will interfere with UI activity
     if (Sage.getBoolean("seeker/generate_thumbnail_when_recordings_complete", true) && es.switcherFile.isCompleteRecording())
@@ -2917,6 +2931,20 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
                   es.currRecordFile.acquisitionTech == MediaFile.ACQUISITION_MANUAL)))
       {
         Ministry.getInstance().submitForPotentialTranscoding(es.currRecordFile);
+      }
+
+      // Re-detect format metadata now that the recording is complete so the stored duration is accurate
+      if (Sage.getBoolean("seeker/redetect_format_on_recording_complete", true) && es.currRecordFile.isCompleteRecording())
+      {
+        final MediaFile formatMF = es.currRecordFile;
+        Pooler.execute(new Runnable()
+        {
+          public void run()
+          {
+            try{Thread.sleep(Math.round(Math.random()*30000) + 30000);}catch(Exception e){}
+            formatMF.redetectFormatDuration();
+          }
+        }, "SeekFormatRescan", Thread.MIN_PRIORITY);
       }
 
       // If we do this here after a recording completes then it'll mean less on-demand thumbnail generation when the recordings view is shown and reduce the likelihood
