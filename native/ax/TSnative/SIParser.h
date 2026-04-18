@@ -17,6 +17,7 @@
 #if !defined( _TS_NATIVE_SI_PARSER_INCLUDED_ )
 #define _TS_NATIVE_SI_PARSER_INCLUDED_
 
+#include <stdint.h>
 #include "TSParser.h"
 #include "TSnative.h"
 
@@ -54,7 +55,7 @@ extern "C" {
 typedef struct {
 	int   state;
 	char* addr;
-	long  size;
+	int   size;
 	int	  line;
 } MEM_BLK;
 
@@ -91,7 +92,7 @@ typedef struct
 typedef struct {
 	unsigned short a;
 	unsigned short b;
-	unsigned long  c;
+	uint32_t  c;
 } EGUID;
 
 typedef struct 
@@ -105,14 +106,14 @@ typedef struct
 	unsigned short service_type;
 	unsigned short source_id;
 	unsigned short modulation;
-	unsigned long  freq;
+	uint32_t  freq;
 } VCT;
 
 typedef struct 
 {
 	unsigned short type;
 	unsigned short pid;
-	unsigned long  tbl_size;
+	uint32_t  tbl_size;
 } MGT;
 
 typedef struct 
@@ -162,7 +163,7 @@ typedef struct
 	unsigned short event_id;
 	unsigned short source_id;
 	time_t         start_time;
-	unsigned long  during_length;
+	uint32_t  during_length;
 	unsigned char  etm_loc;
 	unsigned char  title_length;
 	unsigned char  program_length;
@@ -171,7 +172,7 @@ typedef struct
 	CAD*		   cad;
 	MSS*		   channel_name;
 	unsigned char  genre[MAX_GENRE_NUM];
-	unsigned long  stample;
+	uint32_t  stample;
 	bool	       need_updated;
 } EIT;
 
@@ -195,7 +196,7 @@ typedef struct
 {
 	char   channel[16];
 	time_t         start_time;
-	unsigned long  during_length;
+	uint32_t  during_length;
 	char*  title_text;
 	char*  program_text;
 } EPG;
@@ -223,22 +224,22 @@ typedef struct {
 } DVB_SERVICE_LIST;
 
 typedef struct {
-	unsigned long  freq;
+	uint32_t  freq;
 	unsigned short band;
 	unsigned char  trans_mode;
 } TERRESTRIAL_DATA;
 
 typedef struct {
-	unsigned long  freq;
-	unsigned long  symbol_rate;
+	uint32_t  freq;
+	uint32_t  symbol_rate;
 	unsigned char  modulation;
 	unsigned char  fec_out;
 	unsigned char  fec_in_rate;
 } CABLE_DATA;
 
 typedef struct {
-	unsigned long  freq;
-	unsigned long  symbol_rate;
+	uint32_t  freq;
+	uint32_t  symbol_rate;
 	unsigned char  fec;
 	unsigned char  fec_rate;
 	unsigned char  pol;
@@ -345,7 +346,7 @@ typedef struct
 	unsigned short TSID;
 	unsigned short service_id;
 	time_t         start_time;
-	unsigned long  during_length;
+	uint32_t  during_length;
 	EGUID		   event_guid;
 	S_EVENT		  *event; 
 	bool           ext_event_flag;
@@ -360,7 +361,7 @@ typedef struct
 	int flag;
 	unsigned short ONID;
 	unsigned short TSID;
-	unsigned long  counter;
+	uint32_t  counter;
 } DVB_CHECK;
 
 typedef struct
@@ -376,11 +377,11 @@ typedef struct
 	TS_SECTION     NITSection;
 	unsigned char  NITCountinuty;  //continuty
 	NIT			   nit;
-	unsigned long  NITSectionCount; 
+	uint32_t  NITSectionCount; 
 
 	TS_SECTION     SDTSection;
 	unsigned char  SDTCountinuty;  //continuty
-	unsigned long  SDTSectionCount; 
+	uint32_t  SDTSectionCount; 
 
 	unsigned short SVTNum;
 	SVT			   svt[MAX_SVT_TBL];
@@ -389,7 +390,7 @@ typedef struct
 	unsigned char  DEITCountinuty;  //continuty
 	DEIT		   deit[MAX_DEIT_NUM];
 	unsigned short DEITNum;
-	unsigned long  DETISectionCount; 
+	uint32_t  DETISectionCount; 
 
 	unsigned short DVBCheckNum;
 	DVB_CHECK      dvb_check[MAX_DVB_NETOWRK_NUM];
@@ -409,44 +410,44 @@ typedef struct
 	unsigned short VCTNum;
 	unsigned short VCTTSID;
 	VCT			   vct[MAX_VCT_TBL];
-	unsigned long  VCTSectionCount; 
+	uint32_t  VCTSectionCount; 
 
 
 	TS_SECTION     EITSection[MAX_EIT_NUM];
 	unsigned char  EITCountinuty[MAX_EIT_NUM];   //continuty
 	unsigned char  EITProtocal[MAX_EIT_NUM];
 	EIT			   eit[MAX_EIT_NUM][MAX_EPG_NUM_PER_CH];	
-	unsigned long  EITSectionCount; 
+	uint32_t  EITSectionCount; 
 
 
 	TS_SECTION     ETTSection[MAX_EIT_NUM+1];
 	unsigned char  ETTCountinuty[MAX_EIT_NUM+1];   //continuty
 	unsigned char  ETTProtocal[MAX_EIT_NUM+1];
-	unsigned long  ETTSectionCount; 
+	uint32_t  ETTSectionCount; 
 
 
 	TS_SECTION     RTTSection;
 	unsigned char  RTTCountinuty;     //continuty
 	RTT			   rtt[MAX_RTT_TBL];
-	unsigned long  RTTSectionCount; 
+	uint32_t  RTTSectionCount; 
 	//***** ASTC section *****
 
 	TS_PARSER*	  pTSParser; //reserve
-	unsigned long DVB_count;
-	unsigned long ATSC_count;
+	uint32_t DVB_count;
+	uint32_t ATSC_count;
 
 	//DVB data
 
     //statistic
-	unsigned long TSDT_count,NIT_count,SDT_count,EIT_count, RST_count,TDT_count,MIP_count,RNT_count,DIT_count,SIT_count;
-	unsigned long PAT_E_count, STT_E_count, OPERA_count,PSIP_count, SCTE_count;
+	uint32_t TSDT_count,NIT_count,SDT_count,EIT_count, RST_count,TDT_count,MIP_count,RNT_count,DIT_count,SIT_count;
+	uint32_t PAT_E_count, STT_E_count, OPERA_count,PSIP_count, SCTE_count;
 
 	MEM_BLK* _mem_blk;
 	int _mem_blk_usage;
 
 //debug
-//unsigned long  SDTSectionCount2;
-//unsigned long  SIct, SDTct, NITct,SDTct2, SDTct3,SDTct4; 
+//uint32_t  SDTSectionCount2;
+//uint32_t  SIct, SDTct, NITct,SDTct2, SDTct3,SDTct4; 
 } SI_PARSER;
 
 SI_PARSER* SIParerOpen( TS_PARSER* pTSParser, int StreamType );
@@ -467,7 +468,7 @@ int  GetSINetworkList( SI_PARSER* pParser, char* Buf, int MaxBufSize );
 unsigned short GetSIProgramTSID( SI_PARSER* pParser, unsigned short program );
 void RegisterTSID( void* context, unsigned short tsid );
 int GetSIProgramByMajorMinor( SI_PARSER* pParser, unsigned short major, unsigned short minor );
-void GetSIDebugInfo( SI_PARSER* pParser, unsigned short cmd, char* Buf, unsigned long BufSize );
+void GetSIDebugInfo( SI_PARSER* pParser, unsigned short cmd, char* Buf, uint32_t BufSize );
 
 #ifdef __cplusplus
 }

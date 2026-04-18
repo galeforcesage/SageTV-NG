@@ -235,5 +235,8 @@ CMD ["java", \
      "-XX:MaxGCPauseMillis=50", \
      "-XX:GCTimeRatio=19", \
      "-XX:+ParallelRefProcEnabled", \
+     "-XX:ErrorFile=/opt/sagetv/server/logs/hs_err_%p.log", \
+     "-XX:+HeapDumpOnOutOfMemoryError", \
+     "-XX:HeapDumpPath=/opt/sagetv/server/logs/", \
      "-cp", "Sage.jar:JARs/*", \
      "sage.Sage", "0", "0", "x", "sagetv Sage.properties"]

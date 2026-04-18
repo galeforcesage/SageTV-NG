@@ -17,6 +17,8 @@
 #if !defined( _TS_NATIVE_INCLUDED_ )
 #define _TS_NATIVE_INCLUDED_
 
+#include <stdint.h>
+
 #if defined(__APPLE__) || defined(__linux__)
  #include <stdbool.h>
 #else
@@ -85,10 +87,10 @@ int  sage_stricmp ( const char * dst,  const char * src );
 
 #define	SYNC		   0x47
 
-typedef long (*LPFNParserDump)(void* handle, short, void*);
-typedef long (*LPFNBuilderDump)(void* handle, short, void*);
-typedef long (*LPFNRawDump)(void* handle, void*, long );
-typedef long (*LPFNMesgDump)(void* handle, short, void*);
+typedef int (*LPFNParserDump)(void* handle, short, void*);
+typedef int (*LPFNBuilderDump)(void* handle, short, void*);
+typedef int (*LPFNRawDump)(void* handle, void*, int );
+typedef int (*LPFNMesgDump)(void* handle, short, void*);
 
 #ifdef WIN32   //windows defined
 typedef _int64 LONGLONG;

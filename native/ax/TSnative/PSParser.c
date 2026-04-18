@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <memory.h>
@@ -34,7 +35,7 @@ static int ParseH264VideoStreamInf( void** stream_info, const unsigned char* des
 static int DecodeSystemHeader( PS_PARSER* pParser, char* pHeader, int Bytes )
 {
 	int length = 0, header_len;
-	unsigned long demux=0;
+	uint32_t demux=0;
 	unsigned char stream_id;
 	unsigned short block_size = 0;
 	unsigned char* pData;
@@ -276,29 +277,29 @@ void PSParserClose( PS_PARSER* pParser )
 
 }	
 
-unsigned long GetStreamBoundRate( PS_PARSER* pParser )
+uint32_t GetStreamBoundRate( PS_PARSER* pParser )
 {
 	return pParser->demux_bound;
 }
 
-unsigned long GetVideoBlockSize( PS_PARSER* pParser )
+uint32_t GetVideoBlockSize( PS_PARSER* pParser )
 {
 	return pParser->video_block_size;
 }
 
-unsigned long GetAudioBlockSize( PS_PARSER* pParser )
+uint32_t GetAudioBlockSize( PS_PARSER* pParser )
 {
 	return pParser->audio_block_size;
 }
 
-int UnpackPackHeader( char* pData, int Bytes, unsigned long *pDemux, LONGLONG* pRefTime )
+int UnpackPackHeader( char* pData, int Bytes, uint32_t *pDemux, LONGLONG* pRefTime )
 {
 	int length = 0;
-	unsigned long demux;
+	uint32_t demux;
 	unsigned int pad_bytes = 0;
 	unsigned char c;
 	LONGLONG ll = 0;
-	unsigned long l;
+	uint32_t l;
 	//mpeg2
 	if ( (pData[4] & 0xC0 ) == 0x40 )
 	{
@@ -316,8 +317,8 @@ int UnpackPackHeader( char* pData, int Bytes, unsigned long *pDemux, LONGLONG* p
 		ll <<= 5;
 		ll |= ((LONGLONG)((unsigned char)pData[8] &0xf8 ))>>3;     //5bits
 
-		l = ((unsigned long)((unsigned char)pData[8] &0x03 ))<<7;  //2bits
-		l |= ((unsigned long)((unsigned char)pData[9] &0xfe ))>>1;  //7bits
+		l = ((uint32_t)((unsigned char)pData[8] &0x03 ))<<7;  //2bits
+		l |= ((uint32_t)((unsigned char)pData[9] &0xfe ))>>1;  //7bits
 		*pRefTime = ll*300+l;
 	
         //skip system_clock_reference_extension
@@ -507,14 +508,14 @@ int ParseH264VideoStreamInf( void** stream_info, const unsigned char* desc )
 
 static int ProcessNewPacketData( PS_PARSER* pParser, char* pData, int Size )
 {
-	unsigned long demux;
+	uint32_t demux;
 	LONGLONG ref_time;
 
 	bool pes_found;
 	int  stream_type = 0;
 	int  bytes, used_bytes;
 	const unsigned char* ptr;
-	unsigned long code;
+	uint32_t code;
 	int magic_data_len;
 	PES_INFO PESInfo={0};
 	int stream_index = -1;
@@ -527,7 +528,7 @@ static int ProcessNewPacketData( PS_PARSER* pParser, char* pData, int Size )
 	pes_found = false;
 	while ( !pes_found && used_bytes < Size )
 	{
-		code = *((unsigned long*)((char*)pData+used_bytes));	
+		code = *((uint32_t*)((char*)pData+used_bytes));	
 		code = DWORD_SWAP( code	);
 
 		if ( code == PACK_START_CODE )
@@ -823,7 +824,7 @@ static int ProcessPacketData( PS_PARSER* pParser, char* pData, int Size, bool PE
 		if ( pParser->PES[stream_index].PacketLen )
 		{
 			if ( pParser->PES[stream_index].PacketLen > pParser->parser_data_bytes)
-				bytes = _MIN( (unsigned long)Size, pParser->PES[stream_index].PacketLen - pParser->parser_data_bytes );
+				bytes = _MIN( (uint32_t)Size, pParser->PES[stream_index].PacketLen - pParser->parser_data_bytes );
 			else
 				bytes = 0;
 		}
@@ -835,7 +836,7 @@ static int ProcessPacketData( PS_PARSER* pParser, char* pData, int Size, bool PE
 			if ( SearchMPEG2StartCode( pData, Size, PACK_START_CODE, &ptr )  )
 			{
 				int pack_bytes, skip;
-				unsigned long demux;
+				uint32_t demux;
 				LONGLONG ref_time;
 				PES_INFO PESInfo;
 				skip = ptr - pData;
@@ -880,7 +881,7 @@ static int ProcessPacketData( PS_PARSER* pParser, char* pData, int Size, bool PE
 		if ( pParser->OtherPES.PacketLen )
 		{
 			if ( pParser->OtherPES.PacketLen > pParser->other_data_bytes )
-				bytes = _MIN( (unsigned long)Size, pParser->OtherPES.PacketLen - pParser->other_data_bytes );
+				bytes = _MIN( (uint32_t)Size, pParser->OtherPES.PacketLen - pParser->other_data_bytes );
 			else
 				bytes = 0;
 		}
@@ -895,7 +896,7 @@ static int ProcessPacketData( PS_PARSER* pParser, char* pData, int Size, bool PE
 
 bool SearchStartCode( const unsigned char* pData, int Bytes, const unsigned char** Ptr )
 {
-	unsigned long code = DWORD_SWAP(*(unsigned long *)pData);
+	uint32_t code = DWORD_SWAP(*(uint32_t *)pData);
 	*Ptr = pData;
 	if ( !VALID_SYSTEM_START_CODE(code) )
 	{
@@ -969,11 +970,11 @@ void PSProcessBlock( PS_PARSER* pParser, int Size, char* pData )
 //#define DUMP_RAW( pParser, start, size ) if ( pParser->raw_dumper ) { pParser->raw_dumper( pParser, start, size ); };
 #define DUMP_RAW( pParser, start, size ) {}
 //called does buffering and alignmanting data.
-unsigned long PSProcessBlockWithoutBuffer( PS_PARSER* pParser, int Size, char* pData, int* pUsedBytes )
+uint32_t PSProcessBlockWithoutBuffer( PS_PARSER* pParser, int Size, char* pData, int* pUsedBytes )
 {
-	unsigned long used_bytes, bytes;
+	uint32_t used_bytes, bytes;
 	PES_INFO PESInfo={0};
-	unsigned long code;
+	uint32_t code;
 	LONGLONG ref_time;
 
 	used_bytes = 0;
@@ -1002,15 +1003,15 @@ unsigned long PSProcessBlockWithoutBuffer( PS_PARSER* pParser, int Size, char* p
 		ref_time = 0;
 		//if it's not valid PACK, PES or SYSTEM header, drop it
 		ptr = (unsigned char*)pData + used_bytes;
-		code = DWORD_SWAP(*(unsigned long *)ptr);
+		code = DWORD_SWAP(*(uint32_t *)ptr);
 		if ( code == PACK_START_CODE )
 		{
-			unsigned long demux;
+			uint32_t demux;
 			
 			bytes = UnpackPackHeader( pData+used_bytes, Size-used_bytes, &demux, &ref_time );
 			if ( bytes == 0 ) bytes++;
 
-			if ( used_bytes + bytes > (unsigned long)Size )
+			if ( used_bytes + bytes > (uint32_t)Size )
 				break;
 
 			if ( pParser->signal_dumper )
@@ -1041,7 +1042,7 @@ unsigned long PSProcessBlockWithoutBuffer( PS_PARSER* pParser, int Size, char* p
 			{
 				pParser->parser_state = 1;
 				pParser->data_offset = used_bytes;
-				if ( used_bytes + bytes > (unsigned long)Size )
+				if ( used_bytes + bytes > (uint32_t)Size )
 					break;
 
 				if ( pParser->signal_dumper )
@@ -1071,7 +1072,7 @@ unsigned long PSProcessBlockWithoutBuffer( PS_PARSER* pParser, int Size, char* p
 		if ( code == PADDING_START_CODE )
 		{
 			bytes = UnpackPadPack( (unsigned char*)pData+used_bytes, Size-used_bytes );
-			if ( used_bytes + bytes > (unsigned long)Size )
+			if ( used_bytes + bytes > (uint32_t)Size )
 				break;
 
 			if ( pParser->signal_dumper )
@@ -1213,7 +1214,7 @@ unsigned long PSProcessBlockWithoutBuffer( PS_PARSER* pParser, int Size, char* p
 								  Size-(used_bytes+PESInfo.HeaderLen) );
 				pParser->AV[stream_index].MagicLen = magic_data_len;
 
-				assert( PESInfo.PacketLen >= (unsigned long)PESInfo.HeaderLen + magic_data_len );
+				assert( PESInfo.PacketLen >= (uint32_t)PESInfo.HeaderLen + magic_data_len );
 
 				pParser->PES[stream_index] = PESInfo;
 
@@ -1272,7 +1273,7 @@ unsigned long PSProcessBlockWithoutBuffer( PS_PARSER* pParser, int Size, char* p
 		} 
 	}
 
-	used_bytes = _MIN( used_bytes, (unsigned long)Size );
+	used_bytes = _MIN( used_bytes, (uint32_t)Size );
 	if ( pUsedBytes != NULL )
 		*pUsedBytes = used_bytes;
 

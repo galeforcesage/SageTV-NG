@@ -82,7 +82,7 @@ $(TARGETDIR)/libNativeCore.so: $(TARGETDIR) $(OBJS)
 ifeq ($(UNAME_S),Darwin)
 	$(CC) -shared -o $(TARGETDIR)/libNativeCore.so $(OBJS) $(CPU_TUNE)
 else
-	$(CC) -shared -Wl,-Map=libNativeCore.map -o $(TARGETDIR)/libNativeCore.so $(OBJS) $(CPU_TUNE)
+	$(CC) -shared -Wl,-Map=libNativeCore.map -Wl,-Bsymbolic -o $(TARGETDIR)/libNativeCore.so $(OBJS) $(CPU_TUNE)
 endif
 
 $(TARGETDIR)/libNativeCored.so: $(TARGETDIR) $(OBJS)

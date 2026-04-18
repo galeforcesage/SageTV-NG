@@ -16,6 +16,7 @@
 // Eliminate silly MS compiler security warnings about using POSIX functions
 #pragma warning(disable : 4996)
 
+#include <stdint.h>
 
 #include <stdio.h>
 #include <time.h>
@@ -88,7 +89,7 @@ static void _flog_check()
 
 //
 //section data api
-static unsigned long CalCrcCheck( const unsigned char *pData, int len );
+static uint32_t CalCrcCheck( const unsigned char *pData, int len );
 static LONGLONG GetPCR( TS_PARSER* pParser, const unsigned char* pData );
 
 //ts parser data api
@@ -107,7 +108,7 @@ static  short GetChannelNum( TS_PARSER* pParser, short ProgramNum );
 //static  bool  IsSelectedChannel( TS_PARSER* pParser, short ChannelNum );
 static  int   SetSeletedChannelByProgramNum( TS_PARSER* pParser, unsigned short ProgramNum );
 static  int   ParseData( TS_PARSER* pParser, const unsigned char* pStartData, LONGLONG dwBytes );
-static  void  CalcStreamPacketInterval( TS_PARSER* pParser, LONGLONG PCR, unsigned long packets );
+static  void  CalcStreamPacketInterval( TS_PARSER* pParser, LONGLONG PCR, uint32_t packets );
 static void SavePAT( TS_PARSER* pParser, TS_PAT* Pat );
 int static LookUpPidHit( TS_PARSER* pParser, unsigned pid );
 static unsigned short GetSelectedProgramPcrPID( TS_PARSER* pParser );
@@ -139,7 +140,7 @@ static void _log_error( char* mesg )
 /* put memory alloc under control (leak check) */
 #ifdef  MEMORY_CHECK
 #define MAX_ALLOC_BLOCK 1024
-unsigned long _totla_memory_alloc = 0;
+uint32_t _totla_memory_alloc = 0;
 void* alloc_ptr_tbl[MAX_ALLOC_BLOCK]={0};
 void* alloc_size_tbl[MAX_ALLOC_BLOCK]={0};
 int alloc_num = 0;
@@ -275,7 +276,7 @@ bool PushSectionData( TS_SECTION* pSection, char* pData, int Bytes )
 
 bool BuildSectionData( TS_SECTION* pSection, int nDataLength, char* pData )
 {
-	unsigned long crc;
+	uint32_t crc;
 	unsigned char *p;
 	pSection->total_bytes = 0;
 	if ( nDataLength+4 > pSection->data_size  )
@@ -311,7 +312,7 @@ bool SectionCrcCheck( TS_SECTION* pSection )
 }
 
 
-static unsigned long crc32_table[256] =
+static uint32_t crc32_table[256] =
 {
   0x00000000, 0x04c11db7, 0x09823b6e, 0x0d4326d9,
   0x130476dc, 0x17c56b6b, 0x1a864db2, 0x1e475005,
@@ -382,7 +383,7 @@ static unsigned long crc32_table[256] =
 
 #ifdef CRC32_TBALE
 //testing
-static unsigned long crc32_table2[256] = {
+static uint32_t crc32_table2[256] = {
 	0x00000000L, 0x77073096L, 0xee0e612cL, 0x990951baL, 0x076dc419L,
 	0x706af48fL, 0xe963a535L, 0x9e6495a3L, 0x0edb8832L, 0x79dcb8a4L,
 	0xe0d5e91eL, 0x97d2d988L, 0x09b64c2bL, 0x7eb17cbdL, 0xe7b82d07L,
@@ -438,9 +439,9 @@ static unsigned long crc32_table2[256] = {
 };
 #endif
 //
-unsigned long CalCrcCheck( const unsigned char *pData, int len )
+uint32_t CalCrcCheck( const unsigned char *pData, int len )
 {
-    unsigned long  crc = 0xffffffff;
+    uint32_t  crc = 0xffffffff;
     unsigned char* p_byte = (unsigned char*)pData;
 
     while( len-- )
@@ -2979,7 +2980,7 @@ static bool LookupStream( TS_PARSER* pParser, unsigned short Pid, unsigned short
 	return false;
 }
 
-unsigned long PidHits( TS_PARSER* pParser, unsigned short pid )
+uint32_t PidHits( TS_PARSER* pParser, unsigned short pid )
 {
 	int pid_array_id;
 	pid_array_id = LookUpPidHit( pParser, pid );
@@ -2987,10 +2988,10 @@ unsigned long PidHits( TS_PARSER* pParser, unsigned short pid )
 		return 0;
 	return pParser->pid_array[pid_array_id].hits;
 }
-unsigned long TotalPidHits( TS_PARSER* pParser )
+uint32_t TotalPidHits( TS_PARSER* pParser )
 {
 	int i;
-	unsigned long sum  = 0;
+	uint32_t sum  = 0;
 	for ( i = 0; i<MAX_PID_COLLECT; i++ )
 	{
 		if ( pParser->pid_array[i].state )
@@ -3001,10 +3002,10 @@ unsigned long TotalPidHits( TS_PARSER* pParser )
 	return sum;
 }
 
-unsigned long ProgramPidHits( TS_PARSER* pParser, unsigned short Program )
+uint32_t ProgramPidHits( TS_PARSER* pParser, unsigned short Program )
 {
 	int j, i, pid_array_id;
-	unsigned long sum_hits = 0;
+	uint32_t sum_hits = 0;
 
 	if ( pParser == NULL || Program == 0xffff  )
 		return false;
@@ -3028,7 +3029,7 @@ unsigned long ProgramPidHits( TS_PARSER* pParser, unsigned short Program )
 	return sum_hits;
 }
 
-unsigned long ChannelPidHits( TS_PARSER* pParser, unsigned short Channel )
+uint32_t ChannelPidHits( TS_PARSER* pParser, unsigned short Channel )
 {
 	if ( Channel > MAX_PROGRAM )
 		return false;
@@ -3045,7 +3046,7 @@ bool IsScrambledChannel( TS_PARSER* pParser, unsigned short Channel )
 bool IsDVBStream( TS_PARSER* pParser )
 {
 	//check if there NIT,SDT,EIT,TDT packet
-	unsigned long NIT_hits, SDT_hits, EIT_hits, TDT_hits;
+	uint32_t NIT_hits, SDT_hits, EIT_hits, TDT_hits;
 	NIT_hits = PidHits( pParser, 0x010 );
 
 	if ( NIT_hits > 1 ) 
@@ -3086,12 +3087,12 @@ bool IsDVBStream( TS_PARSER* pParser )
 	return false;
 }
 
-unsigned long GetPacketCounter( TS_PARSER* pParser )
+uint32_t GetPacketCounter( TS_PARSER* pParser )
 {
 	return pParser->packets;
 }
 
-void CalcStreamPacketInterval( TS_PARSER* pParser, LONGLONG PCR, unsigned long packets )
+void CalcStreamPacketInterval( TS_PARSER* pParser, LONGLONG PCR, uint32_t packets )
 {
 	LONGLONG k;
 	if ( pParser->StreamIntervalSum > 0xf0000000 || packets == pParser->pcr_packet_syn ) 
@@ -3100,7 +3101,7 @@ void CalcStreamPacketInterval( TS_PARSER* pParser, LONGLONG PCR, unsigned long p
 	k = ( PCR - pParser->StreamPCR )/(packets - pParser->pcr_packet_syn );
 	if ( k < 4000 && k > 800 )
 	{
-		pParser->StreamIntervalSum += (unsigned long)k;
+		pParser->StreamIntervalSum += (uint32_t)k;
 		pParser->StreamIntervalNum++;
 		pParser->packet_pcr_rate = pParser->StreamIntervalSum / pParser->StreamIntervalNum;
 	}
@@ -3116,7 +3117,7 @@ void CalcStreamPacketInterval( TS_PARSER* pParser, LONGLONG PCR, unsigned long p
 //	return pParser->StreamPCR + ( pParser->packets - pParser->pcr_packet_syn ) * pParser->packet_pcr_rate;
 //}
 
-unsigned long EstimatePCRIncrease( TS_PARSER* pParser, unsigned long packets )
+uint32_t EstimatePCRIncrease( TS_PARSER* pParser, uint32_t packets )
 {
 	return  pParser->packet_pcr_rate * packets;
 }
@@ -3147,7 +3148,7 @@ int GetPMTDescData( TS_PARSER* pParser, unsigned short pid, unsigned char** desc
 	return 0;
 }
 
-int GetAudioLanguageInfo( unsigned char* desc, int bytes, unsigned long* language, unsigned char *type )
+int GetAudioLanguageInfo( unsigned char* desc, int bytes, uint32_t* language, unsigned char *type )
 {
 	unsigned char tag;
 	int desc_bytes, i;
@@ -3171,7 +3172,7 @@ int GetAudioLanguageInfo( unsigned char* desc, int bytes, unsigned long* languag
 	return 0;
 }
 
-int GetTelexLanguageInfo( unsigned char* desc, int bytes, unsigned long* language, unsigned char *type )
+int GetTelexLanguageInfo( unsigned char* desc, int bytes, uint32_t* language, unsigned char *type )
 {
 	unsigned char tag;
 	int desc_bytes, i;
@@ -3280,7 +3281,7 @@ int CheckProgramState( TS_PARSER* pParser, unsigned short Program )
 				{
 					if ( ( pid_array_id = LookUpPidHit( pParser, pParser->Pmt[i].ElementaryPID[j] ) ) >= 0 )
 					{
-						unsigned long flag = pParser->pid_array[pid_array_id].scrambled;
+						uint32_t flag = pParser->pid_array[pid_array_id].scrambled;
 						packet_present++;
 					        if ( flag == 0x02 || flag == 03 )
 							return -5; //scrambled data
@@ -3318,7 +3319,7 @@ int SetTSSoftPidFilter( TS_PARSER* pParser, unsigned short pid )
 	return pParser->pid_filter_num;
 }
 
-unsigned long GetCRC32( const unsigned char *pData, int len )
+uint32_t GetCRC32( const unsigned char *pData, int len )
 {
 	return CalCrcCheck( pData, len );
 }

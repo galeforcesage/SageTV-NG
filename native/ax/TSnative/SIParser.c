@@ -19,6 +19,7 @@
 #endif
 #pragma warning(disable : 4996)
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <memory.h>
@@ -136,7 +137,7 @@ static int  UnpackGenre( SI_PARSER* pParser, unsigned char* genre, unsigned char
 int TranslateJWideString2( char* buf_out, int buf_out_size, unsigned short* buf_in );
 
 static time_t MJD2Locatime( unsigned char* pMJD );
-static long BCDTime( unsigned char* pBCDcode );
+static int BCDTime( unsigned char* pBCDcode );
 
 static int UncompressHuffman( int Type, unsigned char* pOut, int MaxSize, unsigned char* pData, int Length );
 static char* genre_string( unsigned char code );
@@ -318,7 +319,7 @@ void _mem_range( int size, int line )
 	} 
 }
 /*************************************************************/
-static long _mem_alloc = 0; 
+static int _mem_alloc = 0; 
 #include <signal.h>
 _inline static void* sagetv_malloc1( int size )
 {
@@ -1699,7 +1700,7 @@ static void UnpackVCT( SI_PARSER* pParser, SECTION_HEADER* pSectionHeader, unsig
 static int find_eit_cell( SI_PARSER* pParser, int type, int source_id, int event_id )
 {
 	int i, oldest=0;
-	unsigned long max_stample=0, min_stample = 0xffffffff;
+	uint32_t max_stample=0, min_stample = 0xffffffff;
 
 	//oldest eit cell
 	for ( i = 0; i<MAX_EPG_NUM_PER_CH; i++ )
@@ -2695,7 +2696,7 @@ static int UnpackDVBEIT( SI_PARSER* pParser, SECTION_HEADER* pSectionHeader, uns
 	unsigned char* p;
 	unsigned short service_id, TSID, ONID, event_id;
 	time_t        start_time;
-	unsigned long duration_length;
+	uint32_t duration_length;
 	int total_bytes, bytes;
 	int n;
 
@@ -2885,7 +2886,7 @@ static void FreeDVBEIT( SI_PARSER* pParser )
 
 static time_t MJD2Locatime( unsigned char* pMJD )
 {
-	unsigned long mjd;
+	uint32_t mjd;
 	struct tm lt={0};
 	unsigned int y,m,d,wd;
 
@@ -2916,7 +2917,7 @@ static time_t MJD2Locatime( unsigned char* pMJD )
 
 
 
-static long BCDTime( unsigned char* pMJD )
+static int BCDTime( unsigned char* pMJD )
 {
 	int h,m,s;
 	h = ( pMJD[0] >> 4 )*10  + (pMJD[0] & 0x0f);
@@ -3220,7 +3221,7 @@ static void free_terrestrial_delivery( SI_PARSER* pParser, void* pDescData )
 	SAGETV_FREE( pDescData);
 }
 
-static unsigned long unpackBCDcode( char* p, int bytes );
+static uint32_t unpackBCDcode( char* p, int bytes );
 static bool parser_cable_delivery( SI_PARSER* pParser, char* pData, int Bytes, void** pDescData  )
 {
 	unsigned char* p;
@@ -3379,7 +3380,7 @@ static void free_service( SI_PARSER* pParser, void* pDescData )
 static bool parser_short_event( SI_PARSER* pParser, char* pData, int Bytes, void** pDescData )
 {
 	S_EVENT *s_event;
-	unsigned long guid;
+	uint32_t guid;
 
 	if ( pData == NULL )
 		return false;
@@ -4146,10 +4147,10 @@ static int  MakeTextMesgString ( char* buffer, int buffer_size, char* message, i
 	
 	return  bytes;
 }
-static unsigned long unpackBCDcode( char* p, int bytes )
+static uint32_t unpackBCDcode( char* p, int bytes )
 {
 	int i;
-	unsigned long val = 0;
+	uint32_t val = 0;
 	for ( i=0; i<bytes; i++, p++ )
 	{
 		val *= 10;
@@ -4375,7 +4376,7 @@ int  GetSINetworkList( SI_PARSER* pParser, char* Buf, int MaxBufSize )
 
 		 
 
-void GetSIDebugInfo( SI_PARSER* pParser, unsigned short cmd, char* Buf, unsigned long BufSize )
+void GetSIDebugInfo( SI_PARSER* pParser, unsigned short cmd, char* Buf, uint32_t BufSize )
 {
 	char tmp[128];
 	int i, channel_num = 0, valid_channel_num = 0, found_valid_channel_num = 0;

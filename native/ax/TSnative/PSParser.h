@@ -17,6 +17,7 @@
 #if !defined( _TS_NATIVE_PES_PARSER_INCLUDED_ )
 #define _TS_NATIVE_PES_PARSER_INCLUDED_
 
+#include <stdint.h>
 #include "TSnative.h"
 #include "AVUtility.h"
 
@@ -55,22 +56,22 @@ typedef struct {
 	char* pData;
 	unsigned short Size;
 	LONGLONG SCR;
-	unsigned long Demux;
+	uint32_t Demux;
 } PACK_INF;
 
 typedef struct {
 	char* pData;
 	unsigned short Size;
-	unsigned long Demux;
-	unsigned long VideoBlockSize;
-	unsigned long AudioBlockSize;
+	uint32_t Demux;
+	uint32_t VideoBlockSize;
+	uint32_t AudioBlockSize;
 } SYSTEM_HEAD_INF;
 
 typedef struct {
 	char* pData;
 	unsigned short Size;
 	LONGLONG SCR;
-	unsigned long Demux;
+	uint32_t Demux;
 } PES_PACK_INF;
 
 typedef struct {
@@ -93,8 +94,8 @@ typedef struct {
 
 typedef struct {
 	short			Type;		//reserver
-	unsigned long	PacketSize;
-	unsigned long	DataSize;
+	uint32_t	PacketSize;
+	uint32_t	DataSize;
 	unsigned char*  Packet;
 } PES_AV_DATA;
 
@@ -106,8 +107,8 @@ typedef struct {
 
 typedef struct {
 
-	unsigned long     parser_data_bytes;
-	unsigned long     other_data_bytes;
+	uint32_t     parser_data_bytes;
+	uint32_t     other_data_bytes;
 	PES_INFO   OtherPES;
 	bool	 video_PES_start;
 	bool	 audio_PES_start;
@@ -116,11 +117,11 @@ typedef struct {
 	unsigned char audio_stream_id;
 	unsigned char video_stream_type;
 	unsigned char audio_stream_type;
-	unsigned long video_demux_rate;
-	unsigned long audio_demux_rate;
-	unsigned long video_block_size;
-	unsigned long audio_block_size;
-	unsigned long demux_bound;
+	uint32_t video_demux_rate;
+	uint32_t audio_demux_rate;
+	uint32_t video_block_size;
+	uint32_t audio_block_size;
+	uint32_t demux_bound;
 
 	int	video_track_num;
 	int audio_track_num;
@@ -144,14 +145,14 @@ typedef struct {
 	int cur_stream_index;
 
 	//Statistic	
-	unsigned long video_out_bytes;
-	unsigned long audio_out_bytes;
-	unsigned long video_packets;
-	unsigned long audio_packets;
-	unsigned long other_packets;
-	unsigned long video_block;
-	unsigned long audio_block;
-	unsigned long packets;
+	uint32_t video_out_bytes;
+	uint32_t audio_out_bytes;
+	uint32_t video_packets;
+	uint32_t audio_packets;
+	uint32_t other_packets;
+	uint32_t video_block;
+	uint32_t audio_block;
+	uint32_t packets;
 
 	//H.264 Info
 	unsigned char h264_frame_rate;
@@ -170,7 +171,7 @@ typedef struct {
 	int  data_block_size;
 
 	LONGLONG	  data_pos;                        //a packet position = data_pos + data_offset
-	unsigned long data_offset;                     //
+	uint32_t data_offset;                     //
 
 } PS_PARSER;
 
@@ -187,11 +188,11 @@ void   PSResetDataPosition( PS_PARSER* pParser );
 void PSProcessBlock( PS_PARSER* pParser, int size, char* data );
 void PSFlushout( PS_PARSER* pParser );
 void PSResetBlockBuffer( PS_PARSER* pParser );
-unsigned long PSProcessBlockWithoutBuffer( PS_PARSER* pParser, int Size, char* pData, int* pUsedBytes );
-int DecodePackHeader( char* pData, int Bytes, unsigned long *pDemux, LONGLONG* pRefTime );
-unsigned long GetStreamBoundRate( PS_PARSER* pParser );
-unsigned long GetVideoBlockSize( PS_PARSER* pParser );
-unsigned long GetAudioBlockSize( PS_PARSER* pParser );
+uint32_t PSProcessBlockWithoutBuffer( PS_PARSER* pParser, int Size, char* pData, int* pUsedBytes );
+int DecodePackHeader( char* pData, int Bytes, uint32_t *pDemux, LONGLONG* pRefTime );
+uint32_t GetStreamBoundRate( PS_PARSER* pParser );
+uint32_t GetVideoBlockSize( PS_PARSER* pParser );
+uint32_t GetAudioBlockSize( PS_PARSER* pParser );
 int  GetMainTrack( PS_PARSER* pParser, int* video_track, int* audio_track );
 int  GetTrackNum( PS_PARSER* pParser, int* video_num, int* audio_num );
 int  GetMainStreamType( PS_PARSER* pParser, int* video_stream_type, int* audio_stream_type );

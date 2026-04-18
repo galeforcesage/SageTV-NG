@@ -19,6 +19,8 @@
 #if !defined( _TS_NATIVE_AVUTILITY_INCLUDED_ )
 #define _TS_NATIVE_AVUTILITY_INCLUDED_
 
+#include <stdint.h>
+
 //data structure byte packing throughout
 #ifdef WIN32
 #include <pshpack1.h>
@@ -176,8 +178,8 @@ typedef struct
 {
     unsigned short        wFormatTag;         /* format type */
     unsigned short        nChannels;          /* number of channels (i.e. mono, stereo...) */
-    unsigned long         nSamplesPerSec;     /* sample rate */
-    unsigned long         nAvgBytesPerSec;    /* for buffer estimation */
+    uint32_t         nSamplesPerSec;     /* sample rate */
+    uint32_t         nAvgBytesPerSec;    /* for buffer estimation */
     unsigned short        nBlockAlign;        /* block size of data */
     unsigned short        wBitsPerSample;     /* number of bits per sample of mono data */
     unsigned short        cbSize;             /* the count in bytes of the size of */
@@ -187,25 +189,25 @@ typedef struct
 
 typedef struct
 {
-  unsigned long  biSize; 
-  long    biWidth; 
-  long    biHeight; 
+  uint32_t  biSize; 
+  int32_t    biWidth; 
+  int32_t    biHeight; 
   short   biPlanes; 
   short   biBitCount; 
-  unsigned long  biCompression; 
-  unsigned long  biSizeImage; 
-  long   biXPelsPerMeter; 
-  long   biYPelsPerMeter; 
-  unsigned long  biClrUsed; 
-  unsigned long  biClrImportant; 
+  uint32_t  biCompression; 
+  uint32_t  biSizeImage; 
+  int32_t   biXPelsPerMeter; 
+  int32_t   biYPelsPerMeter; 
+  uint32_t  biClrUsed; 
+  uint32_t  biClrImportant; 
 } _BITMAPINFOHEADER;
 
 typedef struct 
 { 
-  long left; 
-  long top; 
-  long right; 
-  long bottom; 
+  int32_t left; 
+  int32_t top; 
+  int32_t right; 
+  int32_t bottom; 
 } _RECT;
 
 
@@ -230,18 +232,18 @@ typedef struct   {
     char      subtype[16];    //GUID
     bool      bFixedSizeSamples;
     bool      bTemporalCompression;
-    unsigned long  lSampleSize;
+    uint32_t  lSampleSize;
     char      formattype[16];   //GUID
 	void*	  *pUnk;
-    unsigned long  cbFormat;
+    uint32_t  cbFormat;
 	void*	  *pBFoarmt;
 } _MEDIA_DATA;
 
 typedef struct  {
     _RECT               rcSource;
     _RECT               rcTarget;
-    unsigned long       dwBitRate;
-    unsigned long       dwBitErrorRate;
+    uint32_t       dwBitRate;
+    uint32_t       dwBitErrorRate;
     LONGLONG		    AvgTimePerFrame;
     _BITMAPINFOHEADER   bmiHeader;
 	unsigned char		bmiExt[4096];
@@ -256,13 +258,13 @@ typedef	struct
 {
 	_WAVEFORMATEX	wfx;
 	unsigned short	fwHeadLayer;
-	unsigned long	dwHeadBitrate;
+	uint32_t	dwHeadBitrate;
 	unsigned short	fwHeadMode;	
 	unsigned short	fwHeadModeExt;
 	unsigned short	wHeadEmphasis;
 	unsigned short	fwHeadFlags;
-	unsigned long	dwPTSLow;
-	unsigned long	dwPTSHigh;
+	uint32_t	dwPTSLow;
+	uint32_t	dwPTSHigh;
 } TS_MPEGWAV;
 
 typedef struct 
@@ -273,35 +275,35 @@ typedef struct
 typedef	struct {
 	short		   Profile;			   //  Profile - MPEG2 only	
 	short		   Level;			   //  Level - MPEG2 only
-	long		   Width;			   //  Native Width	in pixels
-	long		   Height;			   //  Native Height in	pixels
-	long		   vbv;				   //  vbv
+	int32_t		   Width;			   //  Native Width	in pixels
+	int32_t		   Height;			   //  Native Height in	pixels
+	int32_t		   vbv;				   //  vbv
 	short		   progressive;		   //  progressive flag	
-	long		   arInfo;			   //  aspect ratio	code from stream
+	int32_t		   arInfo;			   //  aspect ratio	code from stream
 	REFERENCE_TIME tPictureTime;	   //  Time	per	picture	in 100ns units
 	float		   PictureRate;		   //  In frames	per	second
-	long		   TimePerFrame;	   //  Time per picture in MPEG units
+	int32_t		   TimePerFrame;	   //  Time per picture in MPEG units
 	//unsigned char  FrameRateCode;     //  4 bits frame rate code
 	unsigned short FrameRateNomi;
 	unsigned short FrameRateDeno;
-	long		   BitRate;			   //  Bits	per	second
-	long		   lXPelsPerMeter;	   //  Pel aspect ratio	
-	long		   lYPelsPerMeter;	   //  Pel aspect ratio	
-	unsigned long  StartTimeCode;	   //  First GOP time code (or -1)
+	int32_t		   BitRate;			   //  Bits	per	second
+	int32_t		   lXPelsPerMeter;	   //  Pel aspect ratio	
+	int32_t		   lYPelsPerMeter;	   //  Pel aspect ratio	
+	uint32_t  StartTimeCode;	   //  First GOP time code (or -1)
 	int		   ActualHeaderLen;	   //  Length of valid bytes in	raw	seq	hdr	
 	unsigned char		   RawHeader[150];	   //  The real	sequence header	
 } SEQHDR;
 
 typedef struct {
 
-	unsigned long  sps_id;
+	uint32_t  sps_id;
 	unsigned short profile, level;
 	unsigned short constraint_set0;
 	unsigned short constraint_set1;
 	unsigned short constraint_set2;
 	unsigned short width, height;
 	unsigned short progressive; //PAFF
-	unsigned long  cbr;
+	uint32_t  cbr;
 	unsigned short frame_rate;
 	int guessH264; //-100, 100, 0: is unsure, 100 sure is H264 
 
@@ -321,7 +323,7 @@ typedef struct {
 	int  sample_freq;
 	int  bitrate;
 	short frame_length;
-	unsigned long total_frame_bytes;
+	uint32_t total_frame_bytes;
 	int  frames;
 	int  expect_bytes;
 } AAC_PARAM;
@@ -339,7 +341,7 @@ typedef	struct {
 typedef	struct	{
 	unsigned char  StreamId;
 	unsigned short HeaderLen;
-	unsigned long  PacketLen;
+	uint32_t  PacketLen;
 	bool		   HasPts;
 	bool		   HasDts;
 	LONGLONG	   llPts;
@@ -406,7 +408,7 @@ typedef	struct {
 } MPEG_USER_DATA;
 
 typedef struct {
-	unsigned long outbfr;  //save uncommited to buffer bits
+	uint32_t outbfr;  //save uncommited to buffer bits
 	int outcnt;			   //bits in outbfr
 	int	bytecnt;	       //in byte buffer 	
 	unsigned char* buf;
@@ -420,7 +422,7 @@ typedef struct {
  #include <libkern/OSByteOrder.h>
  #define DWORD_SWAP(x) OSSwapBigToHostInt32(x)
 #else
- unsigned long DWORD_SWAP(unsigned long x);
+ uint32_t DWORD_SWAP(uint32_t x);
 #endif // __APPLE__
 
 //ZQ I define MSFT MEDIA TYPE Stream Type 0xf1.
@@ -449,8 +451,8 @@ bool CheckTSContinuity( unsigned char TSContinuity, unsigned char* pContinuity, 
 //_inline bool IsVideoType(	unsigned char StreamType);
 //_inline bool IsAudioType(	unsigned char StreamType);
 
-bool SearchMPEG2StartCode( const unsigned char* pStart, int Bytes, unsigned	long StartCode,	const unsigned char** ppSeqStart );
-bool IsMPEG2StartCode( const unsigned char* pStart, unsigned long StartCode );
+bool SearchMPEG2StartCode( const unsigned char* pStart, int Bytes, uint32_t StartCode,	const unsigned char** ppSeqStart );
+bool IsMPEG2StartCode( const unsigned char* pStart, uint32_t StartCode );
 unsigned int SearFrameType(  char* pData, int Size ); //1 I-Frame, 2 P-Frame, 3 B-Frame
 
 int  UnpackPESHeader( const unsigned char * pbData, int Bytes, PES_INFO *pPESInfo );
@@ -465,11 +467,11 @@ void UpdatePESPTS( unsigned char* pbData, int Bytes, PES_INFO *pPESInfo, LONGLON
 
 
 void InitOutBits( BITS_T *bits, unsigned char* buf, int size );
-void PutBits( BITS_T *bits, unsigned long val, int n );
+void PutBits( BITS_T *bits, uint32_t val, int n );
 int	 CloseOutBits( BITS_T *bits );
 void AlignOutBits( BITS_T *bits );
-long BitOutCount( BITS_T *bits );
-long BytesOutCount( BITS_T *bits );
+int BitOutCount( BITS_T *bits );
+int BytesOutCount( BITS_T *bits );
 int  FlushOutBits( BITS_T *bits, char* out_buf, int size );
 
 float Mepg2FrameRate( unsigned char code );
@@ -478,9 +480,9 @@ int   Mepg2FrameRateNomi( unsigned char code );
 LONGLONG GetPCRTimePerFrame( AV_CONTEXT *av );
 
 
-float Mepg2AspectRatio( unsigned char code, long width, long height );
-int   Mepg2AspectRatioDeno( unsigned char code, long width, long height );
-int   Mepg2AspectRatioNomi( unsigned char code, long width, long height );
+float Mepg2AspectRatio( unsigned char code, int32_t width, int32_t height );
+int   Mepg2AspectRatioDeno( unsigned char code, int32_t width, int32_t height );
+int   Mepg2AspectRatioNomi( unsigned char code, int32_t width, int32_t height );
 float Mepg1AspectRatio( unsigned char code );
 
 int  CheckMPEGPacket( const unsigned char* pStart, int Bytes );
@@ -493,7 +495,7 @@ int  GetAuidoType( char* descriptor, int len  );
 bool IsSubtitleDescriptor( char* descriptor, int len );
 bool IsTeletextTypeDescriptor( char* descriptor, int len );
 bool IsPrivateData( char* desc, int len );
-unsigned long GetLauguage( char* descriptor );
+uint32_t GetLauguage( char* descriptor );
 unsigned short GetISO639LanguageType( char* descriptor );
 
 
