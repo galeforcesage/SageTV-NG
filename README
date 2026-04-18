@@ -70,6 +70,23 @@ Release Notes for V9
 22. Licensing/key checking code removed
 23. “Spoiler Protection” when watching live TV, it will not default to a channel which could possibly ‘spoil’ something else you care about. It also tries to avoid selecting anything that needs parental control by default.
 ================================================================================
+Change default transcode quality from SVCD to DVD
+================================================================================
+
+The media_server/conservative_transcode property default was changed from true
+to false. When transcoding is required for MiniClient playback, this selects
+DVD quality (720x480) instead of SVCD (352x240). On modern hardware there is
+no reason to default to the lower quality SVCD mode; the original SVCD default
+was intended for CPUs under 1.9 GHz circa 2010. The Windows code path already
+auto-detected fast CPUs and disabled conservative mode, but Linux servers had
+no such detection and always defaulted to SVCD.
+
+The property can still be set explicitly in Sage.properties to override
+this default in either direction.
+
+File Modified: java/sage/MiniPlayer.java
+
+================================================================================
 SageTV FFmpeg Modernization and Bandwidth Adaptation
 ================================================================================
 
