@@ -3868,6 +3868,10 @@ public class MiniClientSageRenderer extends SageRenderer
         sendGetPropertyAsync("OFFLINE_CACHE_CONTENTS");
         sendGetPropertyAsync("ADVANCED_IMAGE_CACHING");
         sendGetPropertyAsync("VIDEO_ADVANCED_ASPECT");
+        // Schema v2 capability negotiation properties
+        sendGetPropertyAsync("CAP_SCHEMA_VERSION");
+        sendGetPropertyAsync("CAP_PROFILE_ID");
+        sendGetPropertyAsync("CAP_OVERRIDES");
         sendBufferNow();
         // Now get capabilities properties for this specific miniclient
         // The default is to use image maps for text rendering
@@ -4454,6 +4458,141 @@ public class MiniClientSageRenderer extends SageRenderer
             }
           }
         }
+
+        // --- Schema v2 capability negotiation ---
+        try
+        {
+        if (Sage.DBG) System.out.println("MiniClient >>> ENTERING PROFILE NEGOTIATION");
+        String capSchemaVersionProp = recvr.getStringReply();
+        if (Sage.DBG) System.out.println("MiniClient CAP_SCHEMA_VERSION=" + capSchemaVersionProp);
+        capSchemaVersion = 0;
+        if (capSchemaVersionProp != null && capSchemaVersionProp.length() > 0)
+        {
+          try { capSchemaVersion = Integer.parseInt(capSchemaVersionProp.trim()); }
+          catch (NumberFormatException e) { /* legacy client, stays at 0 */ }
+        }
+
+        capProfileId = recvr.getStringReply();
+        if (Sage.DBG) System.out.println("MiniClient CAP_PROFILE_ID=" + capProfileId);
+
+        String capOverridesProp = recvr.getStringReply();
+        if (Sage.DBG) System.out.println("MiniClient CAP_OVERRIDES=" + capOverridesProp);
+        java.util.Map<String, String> overridesMap = null;
+        if (capOverridesProp != null && capOverridesProp.trim().length() > 0)
+        {
+          overridesMap = parseSimpleJsonOverrides(capOverridesProp.trim());
+        }
+
+        // Resolve the effective client profile
+        sage.client.ClientProfileManager profileMgr = sage.client.ClientProfileManager.getInstance();
+        resolvedProfile = profileMgr.resolveProfile(
+            capSchemaVersion,
+            capProfileId,
+            isMediaExtender() && !isStandaloneMediaPlayer(),
+            remoteVersion,
+            overridesMap);
+
+        // If resolveProfile returned null (legacy client, no schema v2), auto-detect
+        // the profile from the client's already-reported capabilities.
+        if (resolvedProfile == null && Sage.getBoolean("miniclient/auto_detect_profiles", true))
+        {
+          resolvedProfile = profileMgr.autoDetectProfile(
+              clientName,
+              isMediaExtender(),
+              iPhoneMode,
+              remoteVersion,
+              videoCodecs,
+              streamingProtocols);
+          if (Sage.DBG && resolvedProfile != null)
+            System.out.println("MiniClient auto-detected profile: " + resolvedProfile);
+        }
+
+        if (resolvedProfile != null)
+        {
+          if (Sage.DBG) System.out.println("MiniClient resolved profile: " + resolvedProfile);
+
+          // --- Profile is the source of truth for managed clients ---
+          // Intersect profile-allowed codecs/containers with what the client reported.
+          // This enforces server policy while respecting client hardware capabilities.
+          // For unmanaged HDx00, the profile clamps even harder.
+
+          // Video codecs: keep only what the profile allows
+          java.util.Set<String> policyVideoCodecs = resolvedProfile.getVideoCodecs();
+          java.util.Set<String> originalVideoCodecs = new java.util.HashSet<>(videoCodecs);
+          videoCodecs.retainAll(policyVideoCodecs);
+          // If HEVC not allowed by profile, ensure it's removed even if client reported it
+          if (!resolvedProfile.isAllowHevc())
+          {
+            videoCodecs.remove("HEVC");
+            videoCodecs.remove("H265");
+            videoCodecs.remove("H.265");
+          }
+          if (Sage.DBG && !originalVideoCodecs.equals(videoCodecs))
+            System.out.println("MiniClient profile clamped VIDEO_CODECS: " + originalVideoCodecs + " → " + videoCodecs);
+
+          // Audio codecs: keep only what the profile allows
+          java.util.Set<String> policyAudioCodecs = resolvedProfile.getAudioCodecs();
+          java.util.Set<String> originalAudioCodecs = new java.util.HashSet<>(audioCodecs);
+          audioCodecs.retainAll(policyAudioCodecs);
+          if (Sage.DBG && !originalAudioCodecs.equals(audioCodecs))
+            System.out.println("MiniClient profile clamped AUDIO_CODECS: " + originalAudioCodecs + " → " + audioCodecs);
+
+          // Push containers: keep only what the profile allows
+          java.util.Set<String> policyContainers = resolvedProfile.getContainers();
+          java.util.Set<String> originalPushContainers = new java.util.HashSet<>(pushContainers);
+          pushContainers.retainAll(policyContainers);
+          if (Sage.DBG && !originalPushContainers.equals(pushContainers))
+            System.out.println("MiniClient profile clamped PUSH_AV_CONTAINERS: " + originalPushContainers + " → " + pushContainers);
+
+          // Pull containers: keep only what the profile allows
+          if (pullContainers != null && !pullContainers.isEmpty())
+          {
+            java.util.Set<String> originalPullContainers = new java.util.HashSet<>(pullContainers);
+            pullContainers.retainAll(policyContainers);
+            if (Sage.DBG && !originalPullContainers.equals(pullContainers))
+              System.out.println("MiniClient profile clamped PULL_AV_CONTAINERS: " + originalPullContainers + " → " + pullContainers);
+          }
+
+          // If the profile specifies a preferred container and the client has no
+          // fixed push format set, generate one from the profile's first container.
+          // This feeds into the existing FIXED_PUSH_MEDIA_FORMAT/REMUX_FORMAT path.
+          if ((fixedPushMediaFormatProp == null || fixedPushMediaFormatProp.isEmpty()) &&
+              resolvedProfile.isAutoRemuxEnabled())
+          {
+            // Set remux format to the profile's preferred container so the existing
+            // remux path in MiniPlayer picks it up automatically
+            String preferredContainer = policyContainers.iterator().next();
+            if (!pushContainers.contains(preferredContainer))
+              pushContainers.add(preferredContainer);
+            if (fixedPushRemuxFormatProp == null || fixedPushRemuxFormatProp.isEmpty())
+            {
+              fixedPushRemuxFormatProp = containerToRemuxFormat(preferredContainer);
+              if (Sage.DBG) System.out.println("MiniClient profile set FIXED_PUSH_REMUX_FORMAT=" + fixedPushRemuxFormatProp);
+            }
+          }
+
+          // Publish the available profiles list to the client
+          StringBuilder profileList = new StringBuilder();
+          for (String id : profileMgr.getAvailableProfileIds())
+          {
+            if (profileList.length() > 0) profileList.append(',');
+            profileList.append(id);
+          }
+          sendSetProperty("CAP_AVAILABLE_PROFILES", profileList.toString());
+          sendSetProperty("CAP_EFFECTIVE_PROFILE", resolvedProfile.getProfileId());
+        }
+        else
+        {
+          if (Sage.DBG) System.out.println("MiniClient no profile resolved; using legacy negotiation");
+        }
+        if (Sage.DBG) System.out.println("MiniClient >>> PROFILE NEGOTIATION COMPLETE");
+        }
+        catch (Throwable profileErr)
+        {
+          System.out.println("MiniClient PROFILE NEGOTIATION ERROR: " + profileErr);
+          profileErr.printStackTrace();
+        }
+        // --- End schema v2 ---
 
         if (advImageCaching)
         {
@@ -6471,6 +6610,78 @@ public class MiniClientSageRenderer extends SageRenderer
   {
     return fixedPushRemuxFormatProp;
   }
+
+  /**
+   * Returns the resolved client capability profile, or null if the client
+   * is using legacy negotiation (schema_version < 2).
+   */
+  public sage.client.ClientProfile getResolvedProfile()
+  {
+    return resolvedProfile;
+  }
+
+  /**
+   * Returns the client's reported capability schema version.
+   * 0 means legacy (not sent).
+   */
+  public int getCapSchemaVersion()
+  {
+    return capSchemaVersion;
+  }
+
+  /**
+   * Returns true if this client has a schema v2 profile resolved.
+   */
+  public boolean hasProfileNegotiation()
+  {
+    return resolvedProfile != null;
+  }
+
+  /**
+   * Map a profile container name to an FFmpeg-compatible remux format string.
+   * This feeds into the existing FIXED_PUSH_REMUX_FORMAT path in MiniPlayer.
+   */
+  private String containerToRemuxFormat(String container)
+  {
+    if (container == null) return null;
+    switch (container.toUpperCase())
+    {
+      case "MP4": return "mp4remux";
+      case "MKV": case "MATROSKA": return "mkvremux";
+      case "MPEG2-TS": case "TS": return "mpeg2tsremux";
+      case "MPEG2-PS": case "PS": return "mpeg2psremux";
+      default: return "mpeg2psremux";
+    }
+  }
+
+  /**
+   * Parse simple JSON override map: {"key":"value", "key2":"value2"}
+   * Minimal parser — no nested objects, no arrays.
+   */
+  private java.util.Map<String, String> parseSimpleJsonOverrides(String json)
+  {
+    java.util.Map<String, String> map = new java.util.LinkedHashMap<>();
+    if (json == null || !json.startsWith("{")) return map;
+    int cursor = 1;
+    while (cursor < json.length())
+    {
+      int kStart = json.indexOf('"', cursor);
+      if (kStart < 0) break;
+      int kEnd = json.indexOf('"', kStart + 1);
+      if (kEnd < 0) break;
+      String key = json.substring(kStart + 1, kEnd);
+      int colon = json.indexOf(':', kEnd + 1);
+      if (colon < 0) break;
+      int vStart = json.indexOf('"', colon + 1);
+      if (vStart < 0) break;
+      int vEnd = json.indexOf('"', vStart + 1);
+      if (vEnd < 0) break;
+      String value = json.substring(vStart + 1, vEnd);
+      map.put(key, value);
+      cursor = vEnd + 1;
+    }
+    return map;
+  }
   
   public boolean isLocalConnection()
   {
@@ -7433,6 +7644,9 @@ public class MiniClientSageRenderer extends SageRenderer
   private java.util.Set streamingProtocols;
   private String fixedPushMediaFormatProp;
   private String fixedPushRemuxFormatProp;
+  private int capSchemaVersion;
+  private String capProfileId;
+  private sage.client.ClientProfile resolvedProfile;
   private boolean detailedPushBufferStats;
   private boolean pushBufferSeeking;
 

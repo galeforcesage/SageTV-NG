@@ -1,0 +1,65 @@
+{
+  "schema_version": 2,
+  "profiles": {
+    "hd_legacy_strict": {
+      "description": "Unmanaged HDx00 extenders - strictest safety path",
+      "managed": false,
+      "containers": ["MPEG2-TS"],
+      "video_codecs": ["H.264"],
+      "audio_codecs": ["AC3", "AAC"],
+      "allow_hevc": false,
+      "auto_remux": "aggressive",
+      "max_video_width": 1920,
+      "max_video_height": 1080,
+      "allow_client_overrides": false
+    },
+    "desktop_default": {
+      "description": "Windows/macOS managed clients - default profile",
+      "managed": true,
+      "containers": ["MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS"],
+      "video_codecs": ["H.264"],
+      "audio_codecs": ["AAC", "AC3"],
+      "allow_hevc": false,
+      "auto_remux": "on_failure",
+      "max_video_width": 0,
+      "max_video_height": 0,
+      "allow_client_overrides": true
+    },
+    "desktop_hevc_optin": {
+      "description": "Windows/macOS managed clients - HEVC opt-in",
+      "managed": true,
+      "containers": ["MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS"],
+      "video_codecs": ["H.264", "HEVC"],
+      "audio_codecs": ["AAC", "AC3"],
+      "allow_hevc": true,
+      "auto_remux": "on_failure",
+      "max_video_width": 0,
+      "max_video_height": 0,
+      "allow_client_overrides": true
+    },
+    "android_modern": {
+      "description": "Android MiniClient - supports HEVC in MKV",
+      "managed": true,
+      "containers": ["MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS"],
+      "video_codecs": ["H.264", "HEVC"],
+      "audio_codecs": ["AAC", "AC3", "EAC3", "DTS", "DCA"],
+      "allow_hevc": true,
+      "auto_remux": "on_failure",
+      "max_video_width": 0,
+      "max_video_height": 0,
+      "allow_client_overrides": true
+    },
+    "pwa_safe": {
+      "description": "PWA client - browser sandbox constraints",
+      "managed": true,
+      "containers": ["MP4"],
+      "video_codecs": ["H.264"],
+      "audio_codecs": ["AAC"],
+      "allow_hevc": false,
+      "auto_remux": "on_failure",
+      "max_video_width": 0,
+      "max_video_height": 0,
+      "allow_client_overrides": true
+    }
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SageTV Client Profiles",
+  "description": "Server-managed client capability profiles for managed and unmanaged clients",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 2,
+      "description": "Profile schema version"
+    },
+    "profiles": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/Profile"
+      }
+    }
+  },
+  "required": ["schema_version", "profiles"],
+  "definitions": {
+    "Profile": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "managed": {
+          "type": "boolean",
+          "description": "Whether clients using this profile are managed (can receive policy updates)"
+        },
+        "containers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Allowed output container formats"
+        },
+        "video_codecs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Allowed video codecs"
+        },
+        "audio_codecs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Allowed audio codecs"
+        },
+        "allow_hevc": {
+          "type": "boolean",
+          "default": false
+        },
+        "auto_remux": {
+          "type": "string",
+          "enum": ["disabled", "on_failure", "aggressive"],
+          "default": "on_failure"
+        },
+        "max_video_width": {
+          "type": "integer",
+          "description": "Maximum output video width (0 = no limit)"
+        },
+        "max_video_height": {
+          "type": "integer",
+          "description": "Maximum output video height (0 = no limit)"
+        },
+        "allow_client_overrides": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether clients can send override keys for this profile"
+        }
+      },
+      "required": ["containers", "video_codecs", "audio_codecs", "auto_remux"]
+    }
+  }
+}
