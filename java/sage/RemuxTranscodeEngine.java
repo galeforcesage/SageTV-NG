@@ -221,6 +221,11 @@ public class RemuxTranscodeEngine implements TranscodeEngine
     currServer = server;
   }
 
+  public void setOutputTS(boolean ts)
+  {
+    outputTS = ts;
+  }
+
   public void setTranscodeFormat(sage.media.format.ContainerFormat inSourceFormat, sage.media.format.ContainerFormat newFormat)
   {
     // We do this because our format parser has a much better TS detector than the one in the FastMpeg2Reader
@@ -240,7 +245,8 @@ public class RemuxTranscodeEngine implements TranscodeEngine
       sourceFile.setForcedTSSource(true);
     sourceFile.init(true, false, false);
     muxyBuffer = new RemuxOutputBuffer();
-    muxy = sage.media.format.MPEGParser.openRemuxer(sage.media.format.MPEGParser.REMUX_PS, 0, muxyBuffer);
+    muxy = sage.media.format.MPEGParser.openRemuxer(outputTS ? sage.media.format.MPEGParser.REMUX_TS : sage.media.format.MPEGParser.REMUX_PS, 0, muxyBuffer);
+    if (Sage.DBG) System.out.println("RemuxTranscodeEngine output format: " + (outputTS ? "MPEG2-TS" : "MPEG2-PS"));
     if (muxy == null)
       throw new java.io.IOException("ERROR creating remuxer");
 
@@ -369,6 +375,7 @@ public class RemuxTranscodeEngine implements TranscodeEngine
   protected boolean fillerAlive = false;
 
   protected boolean inputTS;
+  protected boolean outputTS;
 
   protected RemuxOutputBuffer muxyBuffer;
 

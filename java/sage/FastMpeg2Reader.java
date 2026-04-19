@@ -87,6 +87,7 @@ public final class FastMpeg2Reader
   private boolean vc1RemapMode;
   private boolean h264Video;
   private boolean mpeg2Video;
+  private boolean remuxToTS;
 
   private boolean alignIFrames = false;
   private long lastRawIFramePTS;
@@ -289,6 +290,10 @@ public final class FastMpeg2Reader
     streamTranscodeMode = x;
     sourceFormat = inSourceFormat;
   }
+  public void setRemuxToTS(boolean ts)
+  {
+    remuxToTS = ts;
+  }
   public void init(boolean findFirstPTS, boolean findDuration, boolean allowRemuxing) throws IOException
   {
     boolean forcedPS = false;
@@ -369,8 +374,11 @@ public final class FastMpeg2Reader
         forcedPS = true;
         firstPTS = 45000;
         findFirstPTS = false;
-        if (Sage.DBG) System.out.println("Using the MPEG2 Remuxer");
-        inxs = new RemuxTranscodeEngine();
+        if (Sage.DBG) System.out.println("Using the MPEG2 Remuxer (outputTS=" + remuxToTS + ")");
+        RemuxTranscodeEngine remuxEngine = new RemuxTranscodeEngine();
+        if (remuxToTS)
+          remuxEngine.setOutputTS(true);
+        inxs = remuxEngine;
         inxs.setActiveFile(activeFileSource);
         inxs.setSourceFile(hostname, mpegFile);
         inxs.setTranscodeFormat(sourceFormat, null);

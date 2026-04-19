@@ -948,6 +948,32 @@ public class MiniPlayer implements DVDMediaPlayer
 
       boolean useOriginalAudioTrack = true;
 
+      // --- Profile-driven playback decision (schema v2) ---
+      // If a managed client has a resolved profile, consult the PlaybackDecisionEngine
+      // to influence the transcoding/remux/direct play decision.
+      // For legacy clients (no profile), this block is skipped and the existing logic runs unchanged.
+      sage.client.ClientProfile effectiveProfile = (mcsr != null) ? mcsr.getResolvedProfile() : null;
+      sage.client.PlaybackDecisionEngine.PlaybackDecision profileDecision = null;
+      if (effectiveProfile != null && currMF != null)
+      {
+        String mediaContainer = currMF.getContainerFormat();
+        String mediaVideo = currMF.getPrimaryVideoFormat();
+        String mediaAudio = currMF.getPrimaryAudioFormat();
+        sage.media.format.ContainerFormat cf = currMF.getFileFormat();
+        int mediaW = 0, mediaH = 0;
+        if (cf != null && cf.getVideoFormat() != null)
+        {
+          mediaW = cf.getVideoFormat().getWidth();
+          mediaH = cf.getVideoFormat().getHeight();
+        }
+        boolean isHDx00 = effectiveProfile.getProfileId().equals("hd_legacy_strict");
+        profileDecision = sage.client.PlaybackDecisionEngine.evaluate(
+            effectiveProfile, mediaContainer, mediaVideo, mediaAudio,
+            mediaW, mediaH, isHDx00);
+        if (Sage.DBG) System.out.println("MiniPlayer profile decision: " + profileDecision);
+      }
+      // --- End profile decision ---
+
       if (clientDoesPull && (httpls || pureLocal || !clientDoesMPEG2Push || !clientCanDoMpeg4 || uiBandwidthEstimate >= Sage.getInt("miniplayer/min_bandwidth_for_no_transcode", 2000000)))
       {
         if (Sage.DBG) System.out.println("MiniPlayer is using Pull mode playback");
@@ -1084,6 +1110,18 @@ public class MiniPlayer implements DVDMediaPlayer
         }
       }
 
+      // --- Profile decision diagnostic (schema v2) ---
+      // The profile now enforces policy by clamping videoCodecs/audioCodecs/pushContainers/pullContainers
+      // in MiniClientSageRenderer.initMini(). The existing format-checking logic above operates on the
+      // already-clamped sets, so no override is needed here. We log the decision for diagnostics.
+      if (profileDecision != null)
+      {
+        if (Sage.DBG) System.out.println("MiniPlayer: Profile decision=" + profileDecision.decision +
+            " reason=" + profileDecision.reason +
+            " (enforced via clamped codec/container sets, existing logic result: transcoded=" + transcoded + ")");
+      }
+      // --- End profile decision diagnostic ---
+
 
       this.timeshifted = timeshifted;
       currMute = !mediaExtender;
@@ -1181,8 +1219,10 @@ public class MiniPlayer implements DVDMediaPlayer
           mpegSrc.setStreamTranscodeMode(null, currFileFormat);
           if (currMF.isBluRay())
             mpegSrc.setTargetBDTitle(uiMgr.getVideoFrame().getBluRayTargetTitle());
-          if (!hdMediaExtender && currFileFormat != null && sage.media.format.MediaFormat.MPEG2_TS.equals(currFileFormat.getFormatName()))
+          if (!hdMediaExtender && currFileFormat != null && sage.media.format.MediaFormat.MPEG2_TS.equals(currFileFormat.getFormatName())
+              && !(mcsr != null && mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_TS)))
           {
+            // Client doesn't support TS push — remux TS→PS for legacy clients
             usingRemuxer = true;
             transcoded = false;
             serverSideTranscoding = true;
@@ -1190,6 +1230,11 @@ public class MiniPlayer implements DVDMediaPlayer
             // NOTE: WE DO WANT TO USE IT; WE JUST DON'T KNOW WHERE IT'LL BE!!!!
             // NOTE: WE DO WANT TO USE IT; WE JUST DON'T KNOW WHERE IT'LL BE!!!!
             useOriginalAudioTrack = true;
+          }
+          else if (!hdMediaExtender && currFileFormat != null && sage.media.format.MediaFormat.MPEG2_TS.equals(currFileFormat.getFormatName()))
+          {
+            // Client supports TS push — skip remuxer entirely, push raw TS bytes
+            if (Sage.DBG) System.out.println("MiniPlayer skipping remuxer — pushing raw TS (client supports MPEG2-TS push)");
           }
           else if (currFileFormat != null && Sage.getBoolean("miniplayer/align_iframes_on_seek", true))
             mpegSrc.setIFrameAlign(true);
@@ -4281,4 +4326,37 @@ public class MiniPlayer implements DVDMediaPlayer
   private boolean enableBufferFillPause;
 
   private boolean hdhrPrimeSpecial;
+  private int autoRemuxFailureCount;
+
+  /**
+   * Attempt auto-remux on playback failure if the client profile permits it.
+   * Returns the path to the remuxed file, or null if remux is not applicable or failed.
+   */
+  protected String attemptAutoRemux(java.io.File sourceFile)
+  {
+    if (mcsr == null || sourceFile == null) return null;
+    sage.client.ClientProfile profile = mcsr.getResolvedProfile();
+    if (profile == null || !profile.isAutoRemuxEnabled()) return null;
+
+    // Limit remux attempts per playback session
+    if (autoRemuxFailureCount >= 2)
+    {
+      if (Sage.DBG) System.out.println("MiniPlayer: Auto-remux attempt limit reached");
+      return null;
+    }
+    autoRemuxFailureCount++;
+
+    // Pick the first allowed container from the profile
+    String targetContainer = null;
+    for (String c : profile.getContainers())
+    {
+      targetContainer = c;
+      break;
+    }
+    if (targetContainer == null) return null;
+
+    String ffmpegPath = System.getProperty("user.dir") + java.io.File.separator + "ffmpeg";
+    sage.client.AutoRemuxer remuxer = sage.client.AutoRemuxer.getInstance();
+    return remuxer.onPlaybackFailure(profile, sourceFile, targetContainer, ffmpegPath);
+  }
 }
