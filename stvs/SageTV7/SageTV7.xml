@@ -8528,6 +8528,15 @@
   <Attribute Ref="3011" Name="MusicTimerIsActive"/>
   <Attribute Ref="3012" Name="MusicPosX"/>
   <Attribute Ref="3013" Name="MusicPosY"/>
+  <Attribute Name="CommSkipTimerIsActive" Sym="COMSKIP-711">
+   <Value>If(CommSkipTimerIsActive==null,false,CommSkipTimerIsActive)</Value>
+  </Attribute>
+  <Attribute Name="ShowCommercialSkipPopup" Sym="COMSKIP-712">
+   <Value>If(ShowCommercialSkipPopup==null,false,ShowCommercialSkipPopup)</Value>
+  </Attribute>
+  <Attribute Name="WasInCommercial" Sym="COMSKIP-713">
+   <Value>If(WasInCommercial==null,false,WasInCommercial)</Value>
+  </Attribute>
   <Action Name="&quot;REM Show the various OSD portions.&quot;" Sym="BASE-52218">
    <Action Name="&quot;REM If the below conditionals change, see if they also need to change for the Options command and the MediaPlayerPlayStateChanged or MediaPlayerSeekCompleted hooks.&quot;" Sym="BASE-52219"/>
    <Conditional Name="DisplayDVDInvalidOp" Sym="BASE-52220">
@@ -11668,6 +11677,67 @@
     </Conditional>
    </Conditional>
   </Action>
+  <Conditional Name="ShowCommercialSkipPopup == true" Sym="COMSKIP-700">
+   <Panel Name="CommercialSkipPopup" Sym="COMSKIP-701">
+    <AnchorX>0.98</AnchorX>
+    <AnchorY>0.85</AnchorY>
+    <AnchorPointX>1.0</AnchorPointX>
+    <AnchorPointY>1.0</AnchorPointY>
+    <FixedWidth>0.22</FixedWidth>
+    <FixedHeight>0.07</FixedHeight>
+    <WrapHNav>false</WrapHNav>
+    <WrapVNav>false</WrapVNav>
+    <IgnoreThemeProps>true</IgnoreThemeProps>
+    <BackgroundComponent>false</BackgroundComponent>
+    <MouseTransparency>false</MouseTransparency>
+    <Shape Name="SkipPopupBG" Sym="COMSKIP-702">
+     <ShapeType>Rectangle</ShapeType>
+     <ForegroundColor>0xFF222222</ForegroundColor>
+     <CornerArc>12</CornerArc>
+     <FixedWidth>1.0</FixedWidth>
+     <FixedHeight>1.0</FixedHeight>
+     <BackgroundComponent>true</BackgroundComponent>
+    </Shape>
+    <Item Name="SkipCommercialBtn" Sym="COMSKIP-703">
+     <FixedWidth>1.0</FixedWidth>
+     <FixedHeight>1.0</FixedHeight>
+     <HorizontalAlignment>0.5</HorizontalAlignment>
+     <VerticalAlignment>0.5</VerticalAlignment>
+     <IgnoreThemeProps>true</IgnoreThemeProps>
+     <BackgroundComponent>false</BackgroundComponent>
+     <Action Name="CommSkipEndTime = GetCommercialEndTime(GetCurrentMediaFile(), GetMediaTime())" Sym="COMSKIP-704">
+      <Conditional Name="CommSkipEndTime &gt; 0" Sym="COMSKIP-705">
+       <Action Name="Seek(CommSkipEndTime)" Sym="COMSKIP-706">
+        <Action Name="ShowCommercialSkipPopup = false" Sym="COMSKIP-707">
+         <Action Name="RefreshArea(&quot;CommercialSkipPopup&quot;)" Sym="COMSKIP-708"/>
+        </Action>
+       </Action>
+      </Conditional>
+     </Action>
+     <Text Name="Skip Commercial  &gt;&gt;" Sym="COMSKIP-709">
+      <FixedWidth>1.0</FixedWidth>
+      <FixedHeight>1.0</FixedHeight>
+      <HorizontalAlignment>0.5</HorizontalAlignment>
+      <VerticalAlignment>0.5</VerticalAlignment>
+      <ForegroundColor>0xFF44BBFF</ForegroundColor>
+      <DisableFontScaling>false</DisableFontScaling>
+      <BackgroundComponent>false</BackgroundComponent>
+      <MouseTransparency>false</MouseTransparency>
+     </Text>
+    </Item>
+    <Effect Name="FX CommSkip Popup" Sym="COMSKIP-710">
+     <BackgroundAlpha>1.0</BackgroundAlpha>
+     <ForegroundAlpha>0.0</ForegroundAlpha>
+     <EffectTrigger>VisibleChange</EffectTrigger>
+     <Duration>400</Duration>
+     <Loop>false</Loop>
+     <Reversible>true</Reversible>
+     <Timescale>Quadratic</Timescale>
+     <Easing>Out</Easing>
+     <MenuRelativeOffsets>false</MenuRelativeOffsets>
+    </Effect>
+   </Panel>
+  </Conditional>
   <Listener Name="Info" Sym="BASE-52846">
    <ListenerEvent>Info</ListenerEvent>
    <Conditional Ref="3618" Name="(DisplayTimebarStatus ..."/>
@@ -18576,6 +18646,78 @@
          </Conditional>
         </Action>
        </Branch>
+      </Conditional>
+     </Conditional>
+    </Action>
+    <Action Name="&quot;REM See if we need to fork a timer thread for commercial skip detection during playback.&quot;" Sym="COMSKIP-720">
+     <Conditional Name="!IsMusicPlayback &amp;&amp; HasMediaFile() &amp;&amp; !IsCurrentMediaFileDVD() &amp;&amp; HasCommercialMarkers(GetCurrentMediaFile())" Sym="COMSKIP-721">
+      <Conditional Name="CommSkipTimerIsActive != true" Sym="COMSKIP-722">
+       <Action Name="CommSkipTimerIsActive = true" Sym="COMSKIP-723">
+        <Action Name="WasInCommercial = false" Sym="COMSKIP-724">
+         <Action Name="ShowCommercialSkipPopup = false" Sym="COMSKIP-725">
+          <Action Name="Fork()" Sym="COMSKIP-726">
+           <Action Name="DebugLog(&quot;Commercial Skip Timer is starting&quot;)" Sym="COMSKIP-727"/>
+           <Action ID="9700" Name="&quot;REM Wait then check if we are in a commercial segment.&quot;" Sym="COMSKIP-728">
+            <Action Name="Wait(500)" Sym="COMSKIP-729">
+             <Conditional Name="MenuIsActive()" Sym="COMSKIP-730">
+              <Branch Name="true" Sym="COMSKIP-731">
+               <Action Name="&quot;REM Check commercial status.&quot;" Sym="COMSKIP-732">
+                <Action Name="NowInCommercial = IsInCommercial(GetCurrentMediaFile(), GetMediaTime())" Sym="COMSKIP-733">
+                 <Conditional Name="NowInCommercial &amp;&amp; !WasInCommercial" Sym="COMSKIP-734">
+                  <Action Name="&quot;REM Just entered a commercial break.&quot;" Sym="COMSKIP-735">
+                   <Conditional Name="GetProperty(&quot;commercial_detection/auto_skip&quot;, &quot;false&quot;) == &quot;true&quot;" Sym="COMSKIP-736">
+                    <Branch Name="true" Sym="COMSKIP-737">
+                     <Action Name="&quot;REM Auto-skip is enabled; seek past the commercial.&quot;" Sym="COMSKIP-738">
+                      <Action Name="CommSkipEndTime = GetCommercialEndTime(GetCurrentMediaFile(), GetMediaTime())" Sym="COMSKIP-739">
+                       <Conditional Name="CommSkipEndTime &gt; 0" Sym="COMSKIP-740">
+                        <Action Name="Seek(CommSkipEndTime)" Sym="COMSKIP-741">
+                         <Action Name="DebugLog(&quot;Commercial Skip: auto-skipped to &quot; + CommSkipEndTime)" Sym="COMSKIP-742"/>
+                        </Action>
+                       </Conditional>
+                      </Action>
+                     </Action>
+                    </Branch>
+                    <Branch Name="false" Sym="COMSKIP-743">
+                     <Action Name="&quot;REM Auto-skip disabled; show the Skip Commercial popup.&quot;" Sym="COMSKIP-744">
+                      <Action Name="ShowCommercialSkipPopup = true" Sym="COMSKIP-745">
+                       <Action Name="Refresh()" Sym="COMSKIP-746"/>
+                      </Action>
+                     </Action>
+                    </Branch>
+                   </Conditional>
+                  </Action>
+                 </Conditional>
+                 <Conditional Name="!NowInCommercial &amp;&amp; WasInCommercial" Sym="COMSKIP-747">
+                  <Action Name="&quot;REM Just left the commercial break; hide the popup.&quot;" Sym="COMSKIP-748">
+                   <Conditional Name="ShowCommercialSkipPopup" Sym="COMSKIP-749">
+                    <Action Name="ShowCommercialSkipPopup = false" Sym="COMSKIP-750">
+                     <Action Name="Refresh()" Sym="COMSKIP-751"/>
+                    </Action>
+                   </Conditional>
+                  </Action>
+                 </Conditional>
+                 <Action Name="WasInCommercial = NowInCommercial" Sym="COMSKIP-752">
+                  <Action Ref="9700" Name="&quot;REM Wait then check ..."/>
+                 </Action>
+                </Action>
+               </Action>
+              </Branch>
+              <Branch Name="false" Sym="COMSKIP-753">
+               <Action Name="&quot;REM Media player menu closed; stop commercial skip timer.&quot;" Sym="COMSKIP-754">
+                <Action Name="CommSkipTimerIsActive = false" Sym="COMSKIP-755">
+                 <Action Name="ShowCommercialSkipPopup = false" Sym="COMSKIP-756">
+                  <Action Name="DebugLog(&quot;Commercial Skip Timer is exiting&quot;)" Sym="COMSKIP-757"/>
+                 </Action>
+                </Action>
+               </Action>
+              </Branch>
+             </Conditional>
+            </Action>
+           </Action>
+          </Action>
+         </Action>
+        </Action>
+       </Action>
       </Conditional>
      </Conditional>
     </Action>
@@ -82982,6 +83124,85 @@
               </Item>
               <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
              </Panel>
+             <Panel Name="RunningJobs" Sym="COMSKIP-680">
+              <FixedWidth>1.0</FixedWidth>
+              <PadX>.02</PadX>
+              <PadY>.02</PadY>
+              <Insets>.02</Insets>
+              <WrapHNav>false</WrapHNav>
+              <WrapVNav>false</WrapVNav>
+              <IgnoreThemeProps>false</IgnoreThemeProps>
+              <Text Name="Running Jobs:" Sym="COMSKIP-681">
+               <AnchorX>0.0</AnchorX>
+               <FixedWidth>0.7</FixedWidth>
+               <AutosizeText>false</AutosizeText>
+               <WrapText>true</WrapText>
+               <TextShadow>true</TextShadow>
+               <DisableFontScaling>false</DisableFontScaling>
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+              </Text>
+              <Item Name="RunningList" Sym="COMSKIP-682">
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <Action Name="If(GetRunningJobCount()==0, &quot;None&quot;, GetRunningJobTitles())" Sym="COMSKIP-683">
+                <Text Name="" Sym="COMSKIP-684"/>
+               </Action>
+               <Action Name="Refresh()" Sym="COMSKIP-685"/>
+              </Item>
+              <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
+             </Panel>
+             <Panel Name="QueuedJobs" Sym="COMSKIP-686">
+              <FixedWidth>1.0</FixedWidth>
+              <PadX>.02</PadX>
+              <PadY>.02</PadY>
+              <Insets>.02</Insets>
+              <WrapHNav>false</WrapHNav>
+              <WrapVNav>false</WrapVNav>
+              <IgnoreThemeProps>false</IgnoreThemeProps>
+              <Text Name="Queued Jobs:" Sym="COMSKIP-687">
+               <AnchorX>0.0</AnchorX>
+               <FixedWidth>0.7</FixedWidth>
+               <AutosizeText>false</AutosizeText>
+               <WrapText>true</WrapText>
+               <TextShadow>true</TextShadow>
+               <DisableFontScaling>false</DisableFontScaling>
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+              </Text>
+              <Item Name="QueuedList" Sym="COMSKIP-688">
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <Action Name="If(GetQueuedJobCount()==0, &quot;None&quot;, GetQueuedJobTitles())" Sym="COMSKIP-689">
+                <Text Name="" Sym="COMSKIP-690"/>
+               </Action>
+               <Action Name="Refresh()" Sym="COMSKIP-691"/>
+              </Item>
+              <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
+             </Panel>
+             <Panel Name="ClearQueue" Sym="COMSKIP-692">
+              <FixedWidth>1.0</FixedWidth>
+              <PadX>.02</PadX>
+              <PadY>.02</PadY>
+              <Insets>.02</Insets>
+              <WrapHNav>false</WrapHNav>
+              <WrapVNav>false</WrapVNav>
+              <IgnoreThemeProps>false</IgnoreThemeProps>
+              <Text Name="Clear Queue:" Sym="COMSKIP-693">
+               <AnchorX>0.0</AnchorX>
+               <FixedWidth>0.7</FixedWidth>
+               <AutosizeText>false</AutosizeText>
+               <WrapText>true</WrapText>
+               <TextShadow>true</TextShadow>
+               <DisableFontScaling>false</DisableFontScaling>
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+              </Text>
+              <Item Name="ClearQueueBtn" Sym="COMSKIP-694">
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <BackgroundComponent>false</BackgroundComponent>
+               <Action Name="ClearCommercialDetectQueue()" Sym="COMSKIP-695">
+                <Action Name="Refresh()" Sym="COMSKIP-696"/>
+               </Action>
+               <Text Name="Clear" Sym="COMSKIP-697"/>
+              </Item>
+              <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
+             </Panel>
              <Action Name="&quot;\n \n&quot;" Sym="COMSKIP-564">
               <Text Name="" Sym="COMSKIP-565"/>
              </Action>
@@ -96264,6 +96485,72 @@
                                    <ScalingInsets>=gOverlayRoundedCurRecScalingInsets</ScalingInsets>
                                   </Image>
                                  </Action>
+                                </Conditional>
+                                <Conditional Name="IsCommercialDetectRunning(Airing)" Sym="COMSKIP-660">
+                                 <Panel Name="CS Active Badge" Sym="COMSKIP-661">
+                                  <AnchorX>0.98</AnchorX>
+                                  <AnchorY>0.02</AnchorY>
+                                  <AnchorPointX>1.0</AnchorPointX>
+                                  <AnchorPointY>0.0</AnchorPointY>
+                                  <FixedWidth>0.25</FixedWidth>
+                                  <FixedHeight>0.18</FixedHeight>
+                                  <WrapHNav>false</WrapHNav>
+                                  <WrapVNav>false</WrapVNav>
+                                  <IgnoreThemeProps>true</IgnoreThemeProps>
+                                  <BackgroundComponent>false</BackgroundComponent>
+                                  <MouseTransparency>true</MouseTransparency>
+                                  <Shape Name="CSActiveBG" Sym="COMSKIP-662">
+                                   <ShapeType>Rectangle</ShapeType>
+                                   <ForegroundColor>0xCC0088FF</ForegroundColor>
+                                   <CornerArc>8</CornerArc>
+                                   <FixedWidth>1.0</FixedWidth>
+                                   <FixedHeight>1.0</FixedHeight>
+                                   <BackgroundComponent>true</BackgroundComponent>
+                                  </Shape>
+                                  <Text Name="CS" Sym="COMSKIP-663">
+                                   <FixedWidth>1.0</FixedWidth>
+                                   <FixedHeight>1.0</FixedHeight>
+                                   <HorizontalAlignment>0.5</HorizontalAlignment>
+                                   <VerticalAlignment>0.5</VerticalAlignment>
+                                   <ForegroundColor>White</ForegroundColor>
+                                   <DisableFontScaling>false</DisableFontScaling>
+                                   <BackgroundComponent>false</BackgroundComponent>
+                                   <MouseTransparency>true</MouseTransparency>
+                                  </Text>
+                                 </Panel>
+                                </Conditional>
+                                <Conditional Name="!IsCommercialDetectRunning(Airing) &amp;&amp; HasCommercialMarkers(Airing)" Sym="COMSKIP-664">
+                                 <Panel Name="CS Done Badge" Sym="COMSKIP-665">
+                                  <AnchorX>0.98</AnchorX>
+                                  <AnchorY>0.02</AnchorY>
+                                  <AnchorPointX>1.0</AnchorPointX>
+                                  <AnchorPointY>0.0</AnchorPointY>
+                                  <FixedWidth>0.25</FixedWidth>
+                                  <FixedHeight>0.18</FixedHeight>
+                                  <WrapHNav>false</WrapHNav>
+                                  <WrapVNav>false</WrapVNav>
+                                  <IgnoreThemeProps>true</IgnoreThemeProps>
+                                  <BackgroundComponent>false</BackgroundComponent>
+                                  <MouseTransparency>true</MouseTransparency>
+                                  <Shape Name="CSDoneBG" Sym="COMSKIP-666">
+                                   <ShapeType>Rectangle</ShapeType>
+                                   <ForegroundColor>0xCC00AA00</ForegroundColor>
+                                   <CornerArc>8</CornerArc>
+                                   <FixedWidth>1.0</FixedWidth>
+                                   <FixedHeight>1.0</FixedHeight>
+                                   <BackgroundComponent>true</BackgroundComponent>
+                                  </Shape>
+                                  <Text Name="CS" Sym="COMSKIP-667">
+                                   <FixedWidth>1.0</FixedWidth>
+                                   <FixedHeight>1.0</FixedHeight>
+                                   <HorizontalAlignment>0.5</HorizontalAlignment>
+                                   <VerticalAlignment>0.5</VerticalAlignment>
+                                   <ForegroundColor>White</ForegroundColor>
+                                   <DisableFontScaling>false</DisableFontScaling>
+                                   <BackgroundComponent>false</BackgroundComponent>
+                                   <MouseTransparency>true</MouseTransparency>
+                                  </Text>
+                                 </Panel>
                                 </Conditional>
                                </Conditional>
                               </Action>
@@ -145858,6 +146145,44 @@
               <Action Ref="51331" Name="&quot;REM Effects for showi..."/>
              </Panel>
             </Conditional>
+           </Conditional>
+          </Action>
+          <Action Name="&quot;REM Show comskip active indicator?&quot;" Sym="COMSKIP-670">
+           <Conditional Name="IsComskipActive()" Sym="COMSKIP-671">
+            <Panel Name="ComskipIndicator" Sym="COMSKIP-672">
+             <FixedHeight>0.8</FixedHeight>
+             <HorizontalAlignment>0.5</HorizontalAlignment>
+             <VerticalAlignment>0.5</VerticalAlignment>
+             <WrapHNav>false</WrapHNav>
+             <WrapVNav>false</WrapVNav>
+             <IgnoreThemeProps>false</IgnoreThemeProps>
+             <BackgroundComponent>false</BackgroundComponent>
+             <MouseTransparency>false</MouseTransparency>
+             <Panel Name="CSHeaderBadge" Sym="COMSKIP-673">
+              <FixedHeight>1.0</FixedHeight>
+              <VerticalAlignment>0.5</VerticalAlignment>
+              <IgnoreThemeProps>true</IgnoreThemeProps>
+              <BackgroundComponent>false</BackgroundComponent>
+              <MouseTransparency>false</MouseTransparency>
+              <Shape Name="CSHeaderBG" Sym="COMSKIP-674">
+               <ShapeType>Rectangle</ShapeType>
+               <ForegroundColor>0xCC0088FF</ForegroundColor>
+               <CornerArc>6</CornerArc>
+               <FixedWidth>1.0</FixedWidth>
+               <FixedHeight>1.0</FixedHeight>
+               <BackgroundComponent>true</BackgroundComponent>
+              </Shape>
+              <Text Name=" CS " Sym="COMSKIP-675">
+               <FixedHeight>1.0</FixedHeight>
+               <HorizontalAlignment>0.5</HorizontalAlignment>
+               <VerticalAlignment>0.5</VerticalAlignment>
+               <ForegroundColor>White</ForegroundColor>
+               <DisableFontScaling>false</DisableFontScaling>
+               <BackgroundComponent>false</BackgroundComponent>
+               <MouseTransparency>false</MouseTransparency>
+              </Text>
+             </Panel>
+            </Panel>
            </Conditional>
           </Action>
           <Action Name="&quot;REM Show conflicting recordings indicator?&quot;" Sym="OPUS4A-213376">
