@@ -845,12 +845,242 @@ public class CommercialSkipAPI {
         MediaFile mf = getMediaFile(stack);
         return CommercialDetectionManager.getInstance().detectContentProfile(mf).name();
       }});
+
+    // ── Status / Queue Methods ──
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "IsComskipActive")
+    {
+      /**
+       * Returns true if any commercial detection job is currently running.
+       * @return true if at least one job is active
+       * @since 9.3
+       *
+       * @declaration public boolean IsComskipActive();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return CommercialDetectionManager.getInstance().getRunningCount() > 0;
+      }});
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "GetQueuedJobCount")
+    {
+      /**
+       * Returns the number of jobs waiting in the queue.
+       * @return the queue size
+       * @since 9.3
+       *
+       * @declaration public int GetQueuedJobCount();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return CommercialDetectionManager.getInstance().getQueueSize();
+      }});
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "GetRunningJobCount")
+    {
+      /**
+       * Returns the number of currently running detection jobs.
+       * @return the active job count
+       * @since 9.3
+       *
+       * @declaration public int GetRunningJobCount();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return CommercialDetectionManager.getInstance().getRunningCount();
+      }});
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "GetQueuedJobTitles")
+    {
+      /**
+       * Returns a newline-separated list of show titles for queued jobs.
+       * @return job titles string
+       * @since 9.3
+       *
+       * @declaration public String GetQueuedJobTitles();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return getJobTitles(CommercialDetectionManager.getInstance().getQueuedMediaFileIDs());
+      }});
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "GetRunningJobTitles")
+    {
+      /**
+       * Returns a newline-separated list of show titles for running jobs.
+       * @return job titles string
+       * @since 9.3
+       *
+       * @declaration public String GetRunningJobTitles();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return getJobTitles(CommercialDetectionManager.getInstance().getRunningMediaFileIDs());
+      }});
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "ClearCommercialDetectQueue", true)
+    {
+      /**
+       * Clears all pending jobs from the commercial detection queue.
+       * Running jobs are not affected.
+       * @since 9.3
+       *
+       * @declaration public void ClearCommercialDetectQueue();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        CommercialDetectionManager.getInstance().clearQueue();
+        return null;
+      }});
+
+    // ── Playback: Commercial Segment Queries ──
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "IsInCommercial", new String[] { "MediaFile", "TimeMs" })
+    {
+      /**
+       * Returns whether the given playback time falls within a commercial segment.
+       * @param MediaFile the MediaFile being played
+       * @param TimeMs the current playback time in milliseconds
+       * @return true if the time is within a commercial break
+       * @since 9.3
+       *
+       * @declaration public boolean IsInCommercial(MediaFile MediaFile, long TimeMs);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        long timeMs = getLong(stack);
+        MediaFile mf = getMediaFile(stack);
+        return isInCommercialSegment(mf, timeMs);
+      }});
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "GetCommercialEndTime", new String[] { "MediaFile", "TimeMs" })
+    {
+      /**
+       * If the given time is within a commercial, returns the end time of that commercial
+       * segment in milliseconds. Returns -1 if not in a commercial.
+       * @param MediaFile the MediaFile being played
+       * @param TimeMs the current playback time in milliseconds
+       * @return end time in ms, or -1
+       * @since 9.3
+       *
+       * @declaration public long GetCommercialEndTime(MediaFile MediaFile, long TimeMs);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        long timeMs = getLong(stack);
+        MediaFile mf = getMediaFile(stack);
+        return getCommercialEndTimeMs(mf, timeMs);
+      }});
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "GetCommercialSegmentCount", new String[] { "MediaFile" })
+    {
+      /**
+       * Returns the number of commercial segments detected for this MediaFile.
+       * @param MediaFile the MediaFile to check
+       * @return segment count, 0 if no EDL
+       * @since 9.3
+       *
+       * @declaration public int GetCommercialSegmentCount(MediaFile MediaFile);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        MediaFile mf = getMediaFile(stack);
+        if (mf == null) return 0;
+        java.io.File recFile = mf.getRecordingFile();
+        if (recFile == null) return 0;
+        return EdlWriter.readEdl(recFile).size();
+      }});
+
+    // ── Auto-Skip Settings ──
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "IsAutoSkipEnabled")
+    {
+      /**
+       * Returns whether automatic commercial skipping during playback is enabled.
+       * When enabled, playback will automatically seek past commercial segments.
+       * When disabled, a "Skip Commercial" popup will appear instead.
+       * @return true if auto-skip is enabled
+       * @since 9.3
+       *
+       * @declaration public boolean IsAutoSkipEnabled();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return Sage.getBoolean("commercial_detection/auto_skip", false);
+      }});
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "SetAutoSkipEnabled", new String[] { "Enabled" }, true)
+    {
+      /**
+       * Enables or disables automatic commercial skipping during playback.
+       * @param Enabled true to enable auto-skip, false for popup mode
+       * @since 9.3
+       *
+       * @declaration public void SetAutoSkipEnabled(boolean Enabled);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        boolean enabled = evalBool(stack.pop());
+        Sage.putBoolean("commercial_detection/auto_skip", enabled);
+        return null;
+      }});
   }
+
+  // ── Helpers ──
 
   private static MediaFile getMediaFile(Catbert.FastStack stack)
   {
     Object o = stack.pop();
     if (o instanceof MediaFile) return (MediaFile)o;
     return null;
+  }
+
+  private static long getLong(Catbert.FastStack stack)
+  {
+    Object o = stack.pop();
+    if (o instanceof Number) return ((Number)o).longValue();
+    return 0;
+  }
+
+  private static String getJobTitles(int[] ids)
+  {
+    if (ids == null || ids.length == 0) return "";
+    StringBuilder sb = new StringBuilder();
+    for (int id : ids)
+    {
+      MediaFile mf = Wizard.getInstance().getFileForID(id);
+      if (mf != null)
+      {
+        Show show = mf.getShow();
+        String title = (show != null) ? show.getTitle() : mf.getName();
+        if (title != null && !title.isEmpty())
+        {
+          if (sb.length() > 0) sb.append("\n");
+          String ep = (show != null) ? show.getEpisodeName() : null;
+          if (ep != null && !ep.isEmpty())
+            sb.append(title).append(" - ").append(ep);
+          else
+            sb.append(title);
+        }
+      }
+    }
+    return sb.toString();
+  }
+
+  private static boolean isInCommercialSegment(MediaFile mf, long timeMs)
+  {
+    if (mf == null) return false;
+    java.io.File recFile = mf.getRecordingFile();
+    if (recFile == null) return false;
+    double timeSec = timeMs / 1000.0;
+    for (EdlWriter.Segment seg : EdlWriter.readEdl(recFile))
+    {
+      if (seg.action == 0 && timeSec >= seg.startSeconds && timeSec < seg.endSeconds)
+        return true;
+    }
+    return false;
+  }
+
+  private static long getCommercialEndTimeMs(MediaFile mf, long timeMs)
+  {
+    if (mf == null) return -1;
+    java.io.File recFile = mf.getRecordingFile();
+    if (recFile == null) return -1;
+    double timeSec = timeMs / 1000.0;
+    for (EdlWriter.Segment seg : EdlWriter.readEdl(recFile))
+    {
+      if (seg.action == 0 && timeSec >= seg.startSeconds && timeSec < seg.endSeconds)
+        return (long)(seg.endSeconds * 1000);
+    }
+    return -1;
   }
 }
