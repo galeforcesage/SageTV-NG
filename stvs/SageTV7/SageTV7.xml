@@ -10882,6 +10882,64 @@
                                    </Action>
                                   </Branch>
                                  </Conditional>
+                                 <Conditional Name="!IsCurrentMediaFileDVD() &amp;&amp; !IsBluRay(mf) &amp;&amp; HasCommercialMarkers(mf)" Sym="COMSKIP-780">
+                                  <Action Name="CSSegTimes = GetCommercialSegmentTimes(mf)" Sym="COMSKIP-781">
+                                   <Action Name="CSFileStart = GetStartForSegment(mf, 0)" Sym="COMSKIP-789">
+                                    <Action Name="CSIdx = 0" Sym="COMSKIP-782">
+                                     <Conditional ID="9780" Name="CSIdx &lt; Size(CSSegTimes)" Sym="COMSKIP-783">
+                                      <Action Name="CSSegStart = CSFileStart + GetElement(CSSegTimes, CSIdx) * 1000" Sym="COMSKIP-784">
+                                       <Action Name="CSSegEnd = CSFileStart + GetElement(CSSegTimes, CSIdx + 1) * 1000" Sym="COMSKIP-785a">
+                                        <Shape Name="Commercial Top half" Sym="COMSKIP-785">
+                                         <ForegroundColor>0x00260D</ForegroundColor>
+                                         <ForegroundAlpha>255</ForegroundAlpha>
+                                         <AnchorX>=(CSSegStart - BarStartTime)*1.0/BarDuration</AnchorX>
+                                         <AnchorY>0.0</AnchorY>
+                                         <AnchorPointX>0.0</AnchorPointX>
+                                         <AnchorPointY>0.0</AnchorPointY>
+                                         <FixedWidth>=(CSSegEnd - CSSegStart)*1.0/BarDuration</FixedWidth>
+                                         <FixedHeight>0.5</FixedHeight>
+                                         <ShapeType>Rectangle</ShapeType>
+                                         <ShapeFill>true</ShapeFill>
+                                         <GradientAngle>270</GradientAngle>
+                                         <GradientAmount>-3.4</GradientAmount>
+                                        </Shape>
+                                        <Shape Name="Commercial Bottom half" Sym="COMSKIP-786">
+                                         <ForegroundColor>0x00260D</ForegroundColor>
+                                         <ForegroundAlpha>255</ForegroundAlpha>
+                                         <AnchorX>=(CSSegStart - BarStartTime)*1.0/BarDuration</AnchorX>
+                                         <AnchorY>0.5</AnchorY>
+                                         <AnchorPointX>0.0</AnchorPointX>
+                                         <AnchorPointY>0.0</AnchorPointY>
+                                         <FixedWidth>=(CSSegEnd - CSSegStart)*1.0/BarDuration</FixedWidth>
+                                         <FixedHeight>0.5</FixedHeight>
+                                         <ShapeType>Rectangle</ShapeType>
+                                         <ShapeFill>true</ShapeFill>
+                                         <GradientAngle>90</GradientAngle>
+                                         <GradientAmount>-3.4</GradientAmount>
+                                        </Shape>
+                                        <Shape Name="Commercial Border" Sym="COMSKIP-787">
+                                         <ForegroundColor>0x003C00</ForegroundColor>
+                                         <ForegroundAlpha>255</ForegroundAlpha>
+                                         <AnchorX>=(CSSegStart - BarStartTime)*1.0/BarDuration</AnchorX>
+                                         <AnchorY>0.0</AnchorY>
+                                         <AnchorPointX>0.0</AnchorPointX>
+                                         <AnchorPointY>0.0</AnchorPointY>
+                                         <FixedWidth>=(CSSegEnd - CSSegStart)*1.0/BarDuration</FixedWidth>
+                                         <FixedHeight>1.0</FixedHeight>
+                                         <ShapeType>Rectangle</ShapeType>
+                                         <ShapeFill>false</ShapeFill>
+                                         <Thickness>1</Thickness>
+                                        </Shape>
+                                       </Action>
+                                      </Action>
+                                      <Action Name="CSIdx = CSIdx + 2" Sym="COMSKIP-788">
+                                       <Conditional Ref="9780" Name="CSIdx &lt; Size(CSSegTimes..."/>
+                                      </Action>
+                                     </Conditional>
+                                    </Action>
+                                   </Action>
+                                  </Action>
+                                 </Conditional>
                                  <Conditional Name="IsCurrentMediaFileDVD() || IsBluRay(mf)" Sym="BASE-52642">
                                   <Branch Name="true" Sym="BASE-52643">
                                    <Shape Name="DVDWatched Top half" Sym="BASE-52644">
@@ -12082,7 +12140,18 @@
        <Branch Name="true" Sym="BASE-52983">
         <Action Name="DisplayTimebarStatus = true" Sym="BASE-52984">
          <Action Ref="3766" Name="&quot;REM Display extra bot..."/>
-         <Action Name="SkipForward()" Sym="BASE-52985"/>
+         <Conditional Name="HasCommercialMarkers(GetCurrentMediaFile()) &amp;&amp; IsInCommercial(GetCurrentMediaFile(), GetMediaTime())" Sym="COMSKIP-790">
+          <Branch Name="true" Sym="COMSKIP-791">
+           <Action Name="CommSkipEndTime = GetCommercialEndTime(GetCurrentMediaFile(), GetMediaTime())" Sym="COMSKIP-792">
+            <Conditional Name="CommSkipEndTime &gt; 0" Sym="COMSKIP-793">
+             <Action Name="Seek(CommSkipEndTime)" Sym="COMSKIP-794"/>
+            </Conditional>
+           </Action>
+          </Branch>
+          <Branch Name="false" Sym="COMSKIP-795">
+           <Action Name="SkipForward()" Sym="BASE-52985"/>
+          </Branch>
+         </Conditional>
         </Action>
        </Branch>
        <Branch Name="false" Sym="BASE-52986">

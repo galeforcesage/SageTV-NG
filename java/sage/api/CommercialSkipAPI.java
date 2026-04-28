@@ -125,13 +125,6 @@ public class CommercialSkipAPI {
         return result;
       }});
 
-    rft.put(new PredefinedJEPFunction("CommercialSkip", "GetCommercialSegmentCount", new String[] { "MediaFile" })
-    {
-      public Object runSafely(Catbert.FastStack stack) throws Exception{
-        MediaFile mf = getMediaFile(stack);
-        return CommercialDetectionManager.getInstance().getSegments(mf).size();
-      }});
-
     rft.put(new PredefinedJEPFunction("CommercialSkip", "GetCommercialSegmentStart", new String[] { "MediaFile", "Index" })
     {
       public Object runSafely(Catbert.FastStack stack) throws Exception{
@@ -150,6 +143,29 @@ public class CommercialSkipAPI {
         java.util.ArrayList<EdlWriter.Segment> segs = CommercialDetectionManager.getInstance().getSegments(mf);
         if (idx < 0 || idx >= segs.size()) return 0.0;
         return segs.get(idx).endSeconds;
+      }});
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "GetCommercialSegmentTimes", new String[] { "MediaFile" })
+    {
+      /**
+       * Returns a flat array of commercial segment times in seconds: [start1, end1, start2, end2, ...].
+       * One file read, efficient for STV iteration. Times are in seconds from file start.
+       * @param MediaFile the MediaFile to get segments for
+       * @return a double array of alternating start/end times, or empty array if none
+       * @since 9.3
+       *
+       * @declaration public double[] GetCommercialSegmentTimes(MediaFile MediaFile);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        MediaFile mf = getMediaFile(stack);
+        java.util.ArrayList<EdlWriter.Segment> segs = CommercialDetectionManager.getInstance().getSegments(mf);
+        double[] result = new double[segs.size() * 2];
+        for (int i = 0; i < segs.size(); i++)
+        {
+          result[i * 2] = segs.get(i).startSeconds;
+          result[i * 2 + 1] = segs.get(i).endSeconds;
+        }
+        return result;
       }});
 
     rft.put(new PredefinedJEPFunction("CommercialSkip", "IsCommercialDetectRunning", new String[] { "MediaFile" })
@@ -563,41 +579,6 @@ public class CommercialSkipAPI {
         int ms = getInt(stack);
         CommercialDetectionManager.getInstance().setAutoSkipDelayMs(ms);
         return null;
-      }});
-
-    rft.put(new PredefinedJEPFunction("CommercialSkip", "IsInCommercial", new String[] { "MediaFile", "PositionSeconds" })
-    {
-      /**
-       * Returns whether the given playback position is inside a commercial segment.
-       * @param MediaFile the MediaFile being played
-       * @param PositionSeconds the current playback position in seconds
-       * @return true if the position is inside a commercial
-       * @since 9.3
-       *
-       * @declaration public boolean IsInCommercial(MediaFile MediaFile, double PositionSeconds);
-       */
-      public Object runSafely(Catbert.FastStack stack) throws Exception{
-        double pos = (double) getFloat(stack);
-        MediaFile mf = getMediaFile(stack);
-        return CommercialDetectionManager.getInstance().isInCommercial(mf, pos);
-      }});
-
-    rft.put(new PredefinedJEPFunction("CommercialSkip", "GetCommercialEndPosition", new String[] { "MediaFile", "PositionSeconds" })
-    {
-      /**
-       * Returns the end position (seconds) of the commercial segment at the given position.
-       * Returns -1 if not in a commercial.
-       * @param MediaFile the MediaFile being played
-       * @param PositionSeconds the current playback position in seconds
-       * @return the end of the commercial in seconds, or -1
-       * @since 9.3
-       *
-       * @declaration public double GetCommercialEndPosition(MediaFile MediaFile, double PositionSeconds);
-       */
-      public Object runSafely(Catbert.FastStack stack) throws Exception{
-        double pos = (double) getFloat(stack);
-        MediaFile mf = getMediaFile(stack);
-        return CommercialDetectionManager.getInstance().getCommercialEndPosition(mf, pos);
       }});
 
     // ── Queue Management (from tmiranda ComskipManager) ──
@@ -1061,7 +1042,9 @@ public class CommercialSkipAPI {
     if (mf == null) return false;
     java.io.File recFile = mf.getRecordingFile();
     if (recFile == null) return false;
-    double timeSec = timeMs / 1000.0;
+    // Convert epoch ms to file-relative seconds
+    long fileStartMs = mf.getStart(0);
+    double timeSec = (timeMs - fileStartMs) / 1000.0;
     for (EdlWriter.Segment seg : EdlWriter.readEdl(recFile))
     {
       if (seg.action == 0 && timeSec >= seg.startSeconds && timeSec < seg.endSeconds)
@@ -1075,11 +1058,13 @@ public class CommercialSkipAPI {
     if (mf == null) return -1;
     java.io.File recFile = mf.getRecordingFile();
     if (recFile == null) return -1;
-    double timeSec = timeMs / 1000.0;
+    // Convert epoch ms to file-relative seconds
+    long fileStartMs = mf.getStart(0);
+    double timeSec = (timeMs - fileStartMs) / 1000.0;
     for (EdlWriter.Segment seg : EdlWriter.readEdl(recFile))
     {
       if (seg.action == 0 && timeSec >= seg.startSeconds && timeSec < seg.endSeconds)
-        return (long)(seg.endSeconds * 1000);
+        return fileStartMs + (long)(seg.endSeconds * 1000);
     }
     return -1;
   }
