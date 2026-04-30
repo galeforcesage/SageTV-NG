@@ -103,6 +103,25 @@ public class CommercialDetectionJob implements Runnable
       else if (recordingActive && liveDetection)
       {
         if (sage.Sage.DBG) System.out.println("CommercialDetectionJob: Using comskip native live_tv mode for growing file " + recordingFile.getName());
+        // Wait for the recording file to exist and have some data before launching comskip.
+        // The recording thread may not have created/written the file yet when this job starts.
+        int waitMs = sage.Sage.getInt("commercial_detection/live_tv_file_wait_ms", 30000);
+        long deadline = System.currentTimeMillis() + waitMs;
+        while (!cancelled && System.currentTimeMillis() < deadline)
+        {
+          if (recordingFile.exists() && recordingFile.length() > 0)
+          {
+            if (sage.Sage.DBG) System.out.println("CommercialDetectionJob: Recording file ready (" + recordingFile.length() + " bytes)");
+            break;
+          }
+          try { Thread.sleep(1000); } catch (InterruptedException e) { break; }
+        }
+        if (cancelled) return;
+        if (!recordingFile.exists() || recordingFile.length() == 0)
+        {
+          if (sage.Sage.DBG) System.out.println("CommercialDetectionJob: Recording file not ready after " + waitMs + "ms, aborting");
+          return;
+        }
       }
 
       if (cancelled) return;

@@ -704,4 +704,40 @@ public class SageProperties
   private boolean client;
   private boolean dirty;
   private volatile boolean pendingSave;
+
+  // Debounced save support — 5 second default, configurable at runtime via properties_save_debounce_ms
+  private static final long DEFAULT_DEBOUNCE_DELAY_MS = 5000;
+  private java.util.Timer debounceTimer;
+  private final Object debounceLock = new Object();
+
+  /**
+   * Schedules a debounced property save. Multiple calls within the debounce window
+   * are coalesced into a single disk write. Safe for UI settings pages.
+   */
+  public void savePrefsDebounced()
+  {
+    if (!dirty) return;
+    final long delayMs;
+    try { delayMs = Sage.getLong("properties_save_debounce_ms", DEFAULT_DEBOUNCE_DELAY_MS); }
+    catch (Throwable t) { savePrefs(); return; } // fallback if prefs not ready
+    synchronized (debounceLock)
+    {
+      if (debounceTimer != null)
+      {
+        debounceTimer.cancel();
+      }
+      debounceTimer = new java.util.Timer("PropsSaveDebounce", true);
+      debounceTimer.schedule(new java.util.TimerTask()
+      {
+        public void run()
+        {
+          savePrefs();
+          synchronized (debounceLock)
+          {
+            debounceTimer = null;
+          }
+        }
+      }, delayMs);
+    }
+  }
 }

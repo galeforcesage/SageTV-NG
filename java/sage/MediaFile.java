@@ -3944,6 +3944,15 @@ public class MediaFile extends DBObject implements SegmentedFile
         File indFile = new File(fullPath.substring(0, dotIdx) + ".ind");
         indFile.delete();
       }
+      // Remove sidecar files (.skip, .fidx, .seg, .edl, .vprj, .csv)
+      sage.io.SidecarFile.deleteSidecars(theFile);
+      sage.commercial.EdlWriter.deleteEdl(theFile);
+      if (dotIdx != -1)
+      {
+        String basePath = fullPath.substring(0, dotIdx);
+        new File(basePath + ".vprj").delete();
+        new File(basePath + ".csv").delete();
+      }
       // Don't remove the last entry from files because it's used to maintain the file path index
       if (files.size() > 1)
       {
