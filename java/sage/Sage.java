@@ -1515,6 +1515,19 @@ public final class Sage
     prefs.savePrefs();
   }
 
+  /**
+   * Schedules a debounced property save. Multiple calls within the debounce window
+   * (default 5 seconds) are coalesced into a single disk write. Use this from UI settings
+   * pages where rapid changes would otherwise cause repeated full rewrites.
+   * <p>
+   * The immediate {@link #savePrefs()} should still be used for shutdown paths
+   * and critical config changes that must be durable before returning.
+   */
+  public static void savePrefsDebounced()
+  {
+    prefs.savePrefsDebounced();
+  }
+
   // For using this as a default for a UI property set
   public static SageProperties getRawProperties() { return prefs; }
 

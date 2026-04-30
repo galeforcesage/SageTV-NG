@@ -163,10 +163,51 @@ public class FastRandomFile implements java.io.DataOutput, java.io.DataInput
 
   public void write(byte b[], int off, int len) throws java.io.IOException
   {
-    if (crypto || circularFileSize > 0)
+    if (circularFileSize > 0)
     {
+      // Circular mode must go byte-by-byte for wrap detection
       while (len-- > 0)
         write(b[off++]);
+    }
+    else if (crypto)
+    {
+      // Encrypt into a temp buffer, then write through the normal buffered path.
+      // This avoids per-byte write() calls while preserving buffer flush behavior.
+      while (len > 0)
+      {
+        int chunk = Math.min(len, 4096);
+        byte[] enc = new byte[chunk];
+        for (int i = 0; i < chunk; i++)
+        {
+          int keyIdx = ((int)(fp + i)) & 127;
+          enc[i] = (byte) ((((b[off + i] & 0x0F) << 4) | ((b[off + i] & 0xF0) >> 4)) ^ (cryptoKeys[keyIdx]));
+        }
+        // Write the encrypted chunk through the normal buffered path (non-crypto, non-circular)
+        int eoff = 0;
+        int elen = chunk;
+        while (elen > 0)
+        {
+          int rem = buff.length - buffptr;
+          if (elen < rem)
+          {
+            System.arraycopy(enc, eoff, buff, buffptr, elen);
+            buffptr += elen;
+            fp += elen;
+            break;
+          }
+          else
+          {
+            System.arraycopy(enc, eoff, buff, buffptr, rem);
+            buffptr += rem;
+            eoff += rem;
+            elen -= rem;
+            fp += rem;
+            flush();
+          }
+        }
+        off += chunk;
+        len -= chunk;
+      }
     }
     else
     {
@@ -620,14 +661,75 @@ public class FastRandomFile implements java.io.DataOutput, java.io.DataInput
     raf.readFully(b, off, len);
     if (crypto)
     {
-      for (int i = 0; i < len; i++)
-      {
-        int x = b[i] ^ (cryptoKeys[((int)(fp++)) % 128]);
-        b[i] = (byte)(((x & 0x0F) << 4) | ((x & 0xF0) >> 4));
-      }
+      decryptBuffer(b, off, len);
     }
     else
       fp += len;
+  }
+
+  /**
+   * Decrypts a buffer in place using XOR + nibble-swap.
+   * Processes 8 bytes at a time via long operations when aligned to the 128-byte key cycle,
+   * falling back to per-byte for the remainder. Same output as the original per-byte loop.
+   */
+  private void decryptBuffer(byte[] b, int off, int len)
+  {
+    int i = 0;
+    // Process 8 bytes at a time when we can
+    while (i + 8 <= len)
+    {
+      int keyIdx = ((int) fp) & 127; // fp % 128, but 128 is power of 2
+      // If the key index is aligned such that we have at least 8 contiguous key bytes
+      // without wrapping, use the fast path
+      if (keyIdx + 8 <= 128)
+      {
+        // Build an 8-byte XOR mask from the key
+        long mask = 0;
+        for (int k = 0; k < 8; k++)
+          mask = (mask << 8) | (cryptoKeys[keyIdx + k] & 0xFFL);
+
+        // Read 8 bytes from the buffer as a long (big-endian)
+        long val = 0;
+        for (int k = 0; k < 8; k++)
+          val = (val << 8) | (b[off + i + k] & 0xFFL);
+
+        // XOR
+        val ^= mask;
+
+        // Nibble-swap all 8 bytes at once:
+        // For each byte: ((x & 0x0F) << 4) | ((x & 0xF0) >> 4)
+        // On a long: swap the two nibbles of every byte
+        long lo = val & 0x0F0F0F0F0F0F0F0FL;
+        long hi = val & 0xF0F0F0F0F0F0F0F0L;
+        val = (lo << 4) | (hi >>> 4);
+
+        // Write back
+        for (int k = 7; k >= 0; k--)
+        {
+          b[off + i + k] = (byte) (val & 0xFF);
+          val >>>= 8;
+        }
+
+        fp += 8;
+        i += 8;
+      }
+      else
+      {
+        // Near key boundary — process one byte to advance past it
+        int x = b[off + i] ^ (cryptoKeys[keyIdx]);
+        b[off + i] = (byte)(((x & 0x0F) << 4) | ((x & 0xF0) >> 4));
+        fp++;
+        i++;
+      }
+    }
+    // Handle remaining bytes (< 8)
+    while (i < len)
+    {
+      int x = b[off + i] ^ (cryptoKeys[((int) fp) & 127]);
+      b[off + i] = (byte)(((x & 0x0F) << 4) | ((x & 0xF0) >> 4));
+      fp++;
+      i++;
+    }
   }
 
   public char readChar() throws java.io.IOException

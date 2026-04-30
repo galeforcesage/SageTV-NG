@@ -76,7 +76,10 @@ public class MediaServer implements Runnable
         nextExt = nextExt.substring(1);
       readAheadFormats.add(nextExt.toLowerCase());
     }
-    useNioTransfers = Sage.getBoolean("use_nio_transfers", false);
+    // On 64-bit JVMs (Java 9+), the sendfile 32-bit offset limitation is resolved.
+    // Default to true on 64-bit Linux, false elsewhere (Windows network share perf issues).
+    boolean nioDefault = Sage.LINUX_OS && "amd64".equals(System.getProperty("os.arch"));
+    useNioTransfers = Sage.getBoolean("use_nio_transfers", nioDefault);
   }
 
   public static void main(String[] args) { new MediaServer().run(); }
@@ -806,12 +809,11 @@ public class MediaServer implements Runnable
         long readThisTime = Math.min(currFileSize - offset, length);
         if (readThisTime > 0)
         {
-          if (!useNioTransfers || (Sage.LINUX_OS && offset +length >= Integer.MAX_VALUE))
+          if (!useNioTransfers || (Sage.LINUX_OS && !Sage.is64BitJVM() && offset + length >= Integer.MAX_VALUE))
           {
-            // NOTE: Due to Java using the sendfile kernel API call to do the transfer,
-            // there's a 32-bit limitation here. This is very unfortunate. But since it's
-            // compiled into the JVM and into the Linux kernel there's really no other way around this
-            // We also don't use them by default on Windows because of poor performance w/ network shares
+            // NOTE: On 32-bit JVMs, Java's sendfile has a 32-bit offset limitation.
+            // On 64-bit JVMs (Java 9+), this is no longer an issue.
+            // We also don't use NIO transfers by default on Windows because of poor performance w/ network shares
             if (hackBuf == null)
             {
               hackBuf = java.nio.ByteBuffer.allocateDirect(65536);

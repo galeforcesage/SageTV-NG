@@ -2,6 +2,14 @@
 
 ## Next
 
+## Version 10.0.16 (2026-04-28)
+* Version bump to 10.0.16 (fork versioning: galeforcesage/SageTV-mine)
+* Java 21 compatibility (finalize suppression, module access)
+* Commercial detection system with profile-based INI resolution
+* Disk I/O Phase 1: sidecar file infrastructure, skip matrix, crypto vectorization
+* Properties save debounce, MediaServer zero-copy on 64-bit Linux
+* Sidecar cleanup on recording deletion (fixes orphaned .edl/.vprj/.csv)
+
 ## Version 9.2.16 (2025-11-20)
 * Fix for lockouts with SD EPG images bring requested with wrong agent and missing token
 * Further fixes to send 14 character program ids
