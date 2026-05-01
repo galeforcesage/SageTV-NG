@@ -21,8 +21,8 @@ services:
 
     volumes:
       # ── Shared configuration & database (READ/WRITE) ──
-      - /opt/sagetv/shared/Wiz.bin:/opt/sagetv/server/Wiz.bin
-      - /opt/sagetv/shared/Sage.properties:/opt/sagetv/server/Sage.properties
+      - /opt/sagetv/server/Wiz.bin:/opt/sagetv/server/Wiz.bin
+      - /opt/sagetv/server/Sage.properties:/opt/sagetv/server/Sage.properties
 
       # ── Shared recordings / media libraries (READ/WRITE) ──
       - /media/sagetv/nextcloud/SageTV9:/var/media/nextcloud-sagetv9
@@ -31,6 +31,6 @@ services:
       - /media/sagetv/SageTV64/SageV9Recordings:/var/media/sagetv64-sagetv9
 
       # ── sagetv-mine isolated runtime state ──
-      - /opt/sagetv/docker/mine/runtime/plugins:/opt/sagetv/server/plugins
-      - /opt/sagetv/docker/mine/runtime/jetty:/opt/sagetv/server/jetty
-      - /opt/sagetv/docker/mine/runtime/logs:/opt/sagetv/server/logs
+      - /opt/sagetv/docker/mine/SageTVPlugins:/opt/sagetv/server/SageTVPlugins
+      - /opt/sagetv/docker/mine/jetty:/opt/sagetv/server/jetty
+      - /opt/sagetv/docker/mine/logs:/opt/sagetv/server/logs
