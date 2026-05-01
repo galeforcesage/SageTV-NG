@@ -12589,6 +12589,34 @@
         </Conditional>
        </Conditional>
       </Action>
+      <Conditional Name="!IsDVD(MediaFile) &amp;&amp; !IsBluRay(MediaFile) &amp;&amp; HasCommercialMarkers(MediaFile)" Sym="COMSKIP-800">
+       <Item Name="Auto-Skip Commercials" Sym="COMSKIP-801">
+        <Action Name="IsAutoSkipEnabled()" Sym="COMSKIP-802">
+         <Action Name="SetAutoSkipEnabled(!this)" Sym="COMSKIP-803">
+          <Action Name="CloseOptionsMenu()" Sym="COMSKIP-804"/>
+         </Action>
+        </Action>
+        <Conditional Name="IsAutoSkipEnabled()" Sym="COMSKIP-805">
+         <Branch Name="true" Sym="COMSKIP-806">
+          <Text Name="Auto-Skip: ON" Sym="COMSKIP-807"/>
+         </Branch>
+         <Branch Name="false" Sym="COMSKIP-808">
+          <Text Name="Auto-Skip: OFF" Sym="COMSKIP-809"/>
+         </Branch>
+        </Conditional>
+       </Item>
+       <Conditional Name="IsInCommercial(MediaFile, GetMediaTime())" Sym="COMSKIP-810">
+        <Item Name="Skip Commercial" Sym="COMSKIP-811">
+         <Action Name="CommSkipEndTime = GetCommercialEndTime(MediaFile, GetMediaTime())" Sym="COMSKIP-812">
+          <Conditional Name="CommSkipEndTime &gt; 0" Sym="COMSKIP-813">
+           <Action Name="Seek(CommSkipEndTime)" Sym="COMSKIP-814">
+            <Action Name="CloseOptionsMenu()" Sym="COMSKIP-815"/>
+           </Action>
+          </Conditional>
+         </Action>
+        </Item>
+       </Conditional>
+      </Conditional>
       <Conditional Name="IsDVD(MediaFile)" Sym="BASE-53082">
        <Conditional Name="GetDVDCurrentDomain()" Sym="BASE-53083">
         <Branch Name="10" Sym="BASE-53084"/>
@@ -18718,77 +18746,8 @@
       </Conditional>
      </Conditional>
     </Action>
-    <Action Name="&quot;REM See if we need to fork a timer thread for commercial skip detection during playback.&quot;" Sym="COMSKIP-720">
-     <Conditional Name="!IsMusicPlayback &amp;&amp; HasMediaFile() &amp;&amp; !IsCurrentMediaFileDVD() &amp;&amp; HasCommercialMarkers(GetCurrentMediaFile())" Sym="COMSKIP-721">
-      <Conditional Name="CommSkipTimerIsActive != true" Sym="COMSKIP-722">
-       <Action Name="CommSkipTimerIsActive = true" Sym="COMSKIP-723">
-        <Action Name="WasInCommercial = false" Sym="COMSKIP-724">
-         <Action Name="ShowCommercialSkipPopup = false" Sym="COMSKIP-725">
-          <Action Name="Fork()" Sym="COMSKIP-726">
-           <Action Name="DebugLog(&quot;Commercial Skip Timer is starting&quot;)" Sym="COMSKIP-727"/>
-           <Action ID="9700" Name="&quot;REM Wait then check if we are in a commercial segment.&quot;" Sym="COMSKIP-728">
-            <Action Name="Wait(500)" Sym="COMSKIP-729">
-             <Conditional Name="MenuIsActive()" Sym="COMSKIP-730">
-              <Branch Name="true" Sym="COMSKIP-731">
-               <Action Name="&quot;REM Check commercial status.&quot;" Sym="COMSKIP-732">
-                <Action Name="NowInCommercial = IsInCommercial(GetCurrentMediaFile(), GetMediaTime())" Sym="COMSKIP-733">
-                 <Conditional Name="NowInCommercial &amp;&amp; !WasInCommercial" Sym="COMSKIP-734">
-                  <Action Name="&quot;REM Just entered a commercial break.&quot;" Sym="COMSKIP-735">
-                   <Conditional Name="GetProperty(&quot;commercial_detection/auto_skip&quot;, &quot;false&quot;) == &quot;true&quot;" Sym="COMSKIP-736">
-                    <Branch Name="true" Sym="COMSKIP-737">
-                     <Action Name="&quot;REM Auto-skip is enabled; seek past the commercial.&quot;" Sym="COMSKIP-738">
-                      <Action Name="CommSkipEndTime = GetCommercialEndTime(GetCurrentMediaFile(), GetMediaTime())" Sym="COMSKIP-739">
-                       <Conditional Name="CommSkipEndTime &gt; 0" Sym="COMSKIP-740">
-                        <Action Name="Seek(CommSkipEndTime)" Sym="COMSKIP-741">
-                         <Action Name="DebugLog(&quot;Commercial Skip: auto-skipped to &quot; + CommSkipEndTime)" Sym="COMSKIP-742"/>
-                        </Action>
-                       </Conditional>
-                      </Action>
-                     </Action>
-                    </Branch>
-                    <Branch Name="false" Sym="COMSKIP-743">
-                     <Action Name="&quot;REM Auto-skip disabled; show the Skip Commercial popup.&quot;" Sym="COMSKIP-744">
-                      <Action Name="ShowCommercialSkipPopup = true" Sym="COMSKIP-745">
-                       <Action Name="Refresh()" Sym="COMSKIP-746"/>
-                      </Action>
-                     </Action>
-                    </Branch>
-                   </Conditional>
-                  </Action>
-                 </Conditional>
-                 <Conditional Name="!NowInCommercial &amp;&amp; WasInCommercial" Sym="COMSKIP-747">
-                  <Action Name="&quot;REM Just left the commercial break; hide the popup.&quot;" Sym="COMSKIP-748">
-                   <Conditional Name="ShowCommercialSkipPopup" Sym="COMSKIP-749">
-                    <Action Name="ShowCommercialSkipPopup = false" Sym="COMSKIP-750">
-                     <Action Name="Refresh()" Sym="COMSKIP-751"/>
-                    </Action>
-                   </Conditional>
-                  </Action>
-                 </Conditional>
-                 <Action Name="WasInCommercial = NowInCommercial" Sym="COMSKIP-752">
-                  <Action Ref="9700" Name="&quot;REM Wait then check ..."/>
-                 </Action>
-                </Action>
-               </Action>
-              </Branch>
-              <Branch Name="false" Sym="COMSKIP-753">
-               <Action Name="&quot;REM Media player menu closed; stop commercial skip timer.&quot;" Sym="COMSKIP-754">
-                <Action Name="CommSkipTimerIsActive = false" Sym="COMSKIP-755">
-                 <Action Name="ShowCommercialSkipPopup = false" Sym="COMSKIP-756">
-                  <Action Name="DebugLog(&quot;Commercial Skip Timer is exiting&quot;)" Sym="COMSKIP-757"/>
-                 </Action>
-                </Action>
-               </Action>
-              </Branch>
-             </Conditional>
-            </Action>
-           </Action>
-          </Action>
-         </Action>
-        </Action>
-       </Action>
-      </Conditional>
-     </Conditional>
+    <Action Name="&quot;REM Commercial skip detection is now handled natively in VideoFrame.java. The STV only needs to listen for CommercialBreakEntered/Exited hooks to show/hide the popup. Timeline markers are always displayed independently.&quot;" Sym="COMSKIP-720">
+     <Action Name="ShowCommercialSkipPopup = false" Sym="COMSKIP-725"/>
     </Action>
     <Action Name="&quot;REM All done loading this menu; reset the inactivity timeout in case the menu load took too long, so the OSD will autohide.&quot;" Sym="OPUS4A-213145">
      <Action Ref="6099" Name="SetInactivityTimeout(G..."/>
@@ -18797,6 +18756,22 @@
   </Hook>
   <Hook Name="MediaPlayerPlayStateChanged" Sym="BASE-53965">
    <Action Ref="6424" Name="&quot;REM Call Refresh() on..."/>
+  </Hook>
+  <Hook Name="CommercialBreakEntered" Sym="COMSKIP-760">
+   <Action Name="&quot;REM VideoFrame detected we entered a commercial break. Show the skip popup.&quot;" Sym="COMSKIP-761">
+    <Action Name="ShowCommercialSkipPopup = true" Sym="COMSKIP-762">
+     <Action Name="Refresh()" Sym="COMSKIP-763"/>
+    </Action>
+   </Action>
+  </Hook>
+  <Hook Name="CommercialBreakExited" Sym="COMSKIP-770">
+   <Action Name="&quot;REM VideoFrame detected we left the commercial break. Hide the skip popup.&quot;" Sym="COMSKIP-771">
+    <Conditional Name="ShowCommercialSkipPopup" Sym="COMSKIP-772">
+     <Action Name="ShowCommercialSkipPopup = false" Sym="COMSKIP-773">
+      <Action Name="Refresh()" Sym="COMSKIP-774"/>
+     </Action>
+    </Conditional>
+   </Action>
   </Hook>
   <Hook Name="MediaPlayerSeekCompleted" Sym="BASE-53981">
    <Action ID="6424" Name="&quot;REM Call Refresh() only if the OSD needs it.&quot;" Sym="BASE-53966">
@@ -96576,7 +96551,7 @@
                                    <FixedHeight>1.0</FixedHeight>
                                    <BackgroundComponent>true</BackgroundComponent>
                                   </Shape>
-                                  <Text Name="CS" Sym="COMSKIP-663">
+                                  <Text Name="C" Sym="COMSKIP-663">
                                    <FixedWidth>1.0</FixedWidth>
                                    <FixedHeight>1.0</FixedHeight>
                                    <HorizontalAlignment>0.5</HorizontalAlignment>
@@ -96609,7 +96584,7 @@
                                    <FixedHeight>1.0</FixedHeight>
                                    <BackgroundComponent>true</BackgroundComponent>
                                   </Shape>
-                                  <Text Name="CS" Sym="COMSKIP-667">
+                                  <Text Name="C" Sym="COMSKIP-667">
                                    <FixedWidth>1.0</FixedWidth>
                                    <FixedHeight>1.0</FixedHeight>
                                    <HorizontalAlignment>0.5</HorizontalAlignment>

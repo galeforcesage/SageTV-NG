@@ -48,6 +48,8 @@ public class PluginEventManager implements sage.SageTVPluginRegistry, Runnable
   public static final String CLIENT_DISCONNECTED = "ClientDisconnected";
   public static final String PLUGIN_STARTED = "PluginStarted";
   public static final String PLUGIN_STOPPED = "PluginStopped";
+  public static final String COMMERCIAL_ENTERED = "CommercialBreakEntered";
+  public static final String COMMERCIAL_EXITED = "CommercialBreakExited";
   public static final String PLAYBACK_PAUSED = "PlaybackPaused";
   public static final String PLAYBACK_RESUMED = "PlaybackResumed";
   public static final String SYSTEM_ALERT_LEVEL_RESET = "SystemAlertLevelReset";

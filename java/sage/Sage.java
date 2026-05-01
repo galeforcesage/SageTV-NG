@@ -1442,7 +1442,7 @@ public final class Sage
 
   public static int getInt(String name, int d)
   {
-    return prefs.getInt(name, d);
+    return (prefs == null) ? d : prefs.getInt(name, d);
   }
 
   public static boolean getBoolean(String name, boolean d)
@@ -1452,12 +1452,12 @@ public final class Sage
 
   public static long getLong(String name, long d)
   {
-    return prefs.getLong(name, d);
+    return (prefs == null) ? d : prefs.getLong(name, d);
   }
 
   public static float getFloat(String name, float d)
   {
-    return prefs.getFloat(name, d);
+    return (prefs == null) ? d : prefs.getFloat(name, d);
   }
 
   public static String get(String name, String d)

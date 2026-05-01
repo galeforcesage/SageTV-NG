@@ -23,6 +23,53 @@ import sage.commercial.*;
  */
 public class CommercialSkipAPI {
   private CommercialSkipAPI() {}
+
+  /**
+   * Returns the SkipMatrix for the given MediaFile.
+   * Uses VideoFrame's cached matrix if this is the currently playing file,
+   * otherwise loads from disk (.skip sidecar or .edl fallback).
+   */
+  private static SkipMatrix getSkipMatrixForFile(Catbert.FastStack stack, MediaFile mf)
+  {
+    if (mf == null) {
+      if (sage.Sage.DBG) System.out.println("CommSkipAPI.getSkipMatrixForFile: mf is null");
+      return null;
+    }
+    try
+    {
+      VideoFrame vf = stack.getUIMgrSafe().getVideoFrame();
+      if (vf != null && mf.equals(vf.getCurrFile()))
+      {
+        SkipMatrix matrix = vf.getCommercialSkipMatrix();
+        if (matrix != null) {
+          if (sage.Sage.DBG) System.out.println("CommSkipAPI.getSkipMatrixForFile: using cached matrix, segments=" + matrix.getSegmentCount());
+          return matrix;
+        }
+      }
+    }
+    catch (Exception e) {
+      if (sage.Sage.DBG) System.out.println("CommSkipAPI.getSkipMatrixForFile: VideoFrame check failed: " + e);
+    }
+    // Fall back to loading from file
+    java.io.File recFile = mf.getFile(0);
+    if (recFile == null) {
+      if (sage.Sage.DBG) System.out.println("CommSkipAPI.getSkipMatrixForFile: mf.getFile(0) returned null for mf=" + mf);
+      return null;
+    }
+    if (sage.Sage.DBG) System.out.println("CommSkipAPI.getSkipMatrixForFile: loading from file " + recFile.getAbsolutePath());
+    try
+    {
+      SkipMatrix matrix = SkipMatrix.load(recFile);
+      if (sage.Sage.DBG) System.out.println("CommSkipAPI.getSkipMatrixForFile: loaded matrix segments=" + matrix.getSegmentCount());
+      return matrix.getSegmentCount() > 0 ? matrix : null;
+    }
+    catch (Exception e)
+    {
+      if (sage.Sage.DBG) System.out.println("CommSkipAPI.getSkipMatrixForFile: load failed: " + e);
+      return null;
+    }
+  }
+
   public static void init(Catbert.ReflectionFunctionTable rft)
   {
     rft.put(new PredefinedJEPFunction("CommercialSkip", "IsCommercialDetectionEnabled", true)
@@ -95,7 +142,11 @@ public class CommercialSkipAPI {
        */
       public Object runSafely(Catbert.FastStack stack) throws Exception{
         MediaFile mf = getMediaFile(stack);
-        return CommercialDetectionManager.getInstance().hasMarkers(mf);
+        if (sage.Sage.DBG) System.out.println("CommSkipAPI.HasCommercialMarkers called, mf=" + mf + " (class=" + (mf != null ? mf.getClass().getName() : "null") + ")");
+        SkipMatrix matrix = getSkipMatrixForFile(stack, mf);
+        boolean result = matrix != null && matrix.getSegmentCount() > 0;
+        if (sage.Sage.DBG) System.out.println("CommSkipAPI.HasCommercialMarkers returning " + result);
+        return result;
       }});
 
     rft.put(new PredefinedJEPFunction("CommercialSkip", "GetCommercialSegments", new String[] { "MediaFile" })
@@ -111,15 +162,16 @@ public class CommercialSkipAPI {
        */
       public Object runSafely(Catbert.FastStack stack) throws Exception{
         MediaFile mf = getMediaFile(stack);
-        java.util.ArrayList<EdlWriter.Segment> segs = CommercialDetectionManager.getInstance().getSegments(mf);
-        Object[] result = new Object[segs.size()];
-        for (int i = 0; i < segs.size(); i++)
+        SkipMatrix matrix = getSkipMatrixForFile(stack, mf);
+        if (matrix == null || matrix.getSegmentCount() == 0)
+          return new Object[0];
+        Object[] result = new Object[matrix.getSegmentCount()];
+        for (int i = 0; i < matrix.getSegmentCount(); i++)
         {
-          EdlWriter.Segment seg = segs.get(i);
           java.util.HashMap<String, Object> map = new java.util.HashMap<>();
-          map.put("StartSeconds", seg.startSeconds);
-          map.put("EndSeconds", seg.endSeconds);
-          map.put("Action", seg.action);
+          map.put("StartSeconds", matrix.getSegmentStartMs(i) / 1000.0);
+          map.put("EndSeconds", matrix.getSegmentEndMs(i) / 1000.0);
+          map.put("Action", 0);
           result[i] = map;
         }
         return result;
@@ -130,9 +182,9 @@ public class CommercialSkipAPI {
       public Object runSafely(Catbert.FastStack stack) throws Exception{
         int idx = getInt(stack);
         MediaFile mf = getMediaFile(stack);
-        java.util.ArrayList<EdlWriter.Segment> segs = CommercialDetectionManager.getInstance().getSegments(mf);
-        if (idx < 0 || idx >= segs.size()) return 0.0;
-        return segs.get(idx).startSeconds;
+        SkipMatrix matrix = getSkipMatrixForFile(stack, mf);
+        if (matrix == null || idx < 0 || idx >= matrix.getSegmentCount()) return 0.0;
+        return matrix.getSegmentStartMs(idx) / 1000.0;
       }});
 
     rft.put(new PredefinedJEPFunction("CommercialSkip", "GetCommercialSegmentEnd", new String[] { "MediaFile", "Index" })
@@ -140,9 +192,9 @@ public class CommercialSkipAPI {
       public Object runSafely(Catbert.FastStack stack) throws Exception{
         int idx = getInt(stack);
         MediaFile mf = getMediaFile(stack);
-        java.util.ArrayList<EdlWriter.Segment> segs = CommercialDetectionManager.getInstance().getSegments(mf);
-        if (idx < 0 || idx >= segs.size()) return 0.0;
-        return segs.get(idx).endSeconds;
+        SkipMatrix matrix = getSkipMatrixForFile(stack, mf);
+        if (matrix == null || idx < 0 || idx >= matrix.getSegmentCount()) return 0.0;
+        return matrix.getSegmentEndMs(idx) / 1000.0;
       }});
 
     rft.put(new PredefinedJEPFunction("CommercialSkip", "GetCommercialSegmentTimes", new String[] { "MediaFile" })
@@ -158,12 +210,14 @@ public class CommercialSkipAPI {
        */
       public Object runSafely(Catbert.FastStack stack) throws Exception{
         MediaFile mf = getMediaFile(stack);
-        java.util.ArrayList<EdlWriter.Segment> segs = CommercialDetectionManager.getInstance().getSegments(mf);
-        double[] result = new double[segs.size() * 2];
-        for (int i = 0; i < segs.size(); i++)
+        SkipMatrix matrix = getSkipMatrixForFile(stack, mf);
+        if (matrix == null || matrix.getSegmentCount() == 0)
+          return new double[0];
+        double[] result = new double[matrix.getSegmentCount() * 2];
+        for (int i = 0; i < matrix.getSegmentCount(); i++)
         {
-          result[i * 2] = segs.get(i).startSeconds;
-          result[i * 2 + 1] = segs.get(i).endSeconds;
+          result[i * 2] = matrix.getSegmentStartMs(i) / 1000.0;
+          result[i * 2 + 1] = matrix.getSegmentEndMs(i) / 1000.0;
         }
         return result;
       }});
@@ -924,7 +978,11 @@ public class CommercialSkipAPI {
       public Object runSafely(Catbert.FastStack stack) throws Exception{
         long timeMs = getLong(stack);
         MediaFile mf = getMediaFile(stack);
-        return isInCommercialSegment(mf, timeMs);
+        SkipMatrix matrix = getSkipMatrixForFile(stack, mf);
+        if (matrix == null) return false;
+        // Convert epoch ms to file-relative ms
+        long fileStartMs = mf.getStart(0);
+        return matrix.isInCommercial(timeMs - fileStartMs);
       }});
 
     rft.put(new PredefinedJEPFunction("CommercialSkip", "GetCommercialEndTime", new String[] { "MediaFile", "TimeMs" })
@@ -942,7 +1000,12 @@ public class CommercialSkipAPI {
       public Object runSafely(Catbert.FastStack stack) throws Exception{
         long timeMs = getLong(stack);
         MediaFile mf = getMediaFile(stack);
-        return getCommercialEndTimeMs(mf, timeMs);
+        SkipMatrix matrix = getSkipMatrixForFile(stack, mf);
+        if (matrix == null) return -1L;
+        // Convert epoch ms to file-relative ms
+        long fileStartMs = mf.getStart(0);
+        long endMs = matrix.getCommercialEnd(timeMs - fileStartMs);
+        return endMs >= 0 ? fileStartMs + endMs : -1L;
       }});
 
     rft.put(new PredefinedJEPFunction("CommercialSkip", "GetCommercialSegmentCount", new String[] { "MediaFile" })
@@ -957,10 +1020,8 @@ public class CommercialSkipAPI {
        */
       public Object runSafely(Catbert.FastStack stack) throws Exception{
         MediaFile mf = getMediaFile(stack);
-        if (mf == null) return 0;
-        java.io.File recFile = mf.getRecordingFile();
-        if (recFile == null) return 0;
-        return EdlWriter.readEdl(recFile).size();
+        SkipMatrix matrix = getSkipMatrixForFile(stack, mf);
+        return matrix != null ? matrix.getSegmentCount() : 0;
       }});
 
     // ── Auto-Skip Settings ──
@@ -1035,37 +1096,5 @@ public class CommercialSkipAPI {
       }
     }
     return sb.toString();
-  }
-
-  private static boolean isInCommercialSegment(MediaFile mf, long timeMs)
-  {
-    if (mf == null) return false;
-    java.io.File recFile = mf.getRecordingFile();
-    if (recFile == null) return false;
-    // Convert epoch ms to file-relative seconds
-    long fileStartMs = mf.getStart(0);
-    double timeSec = (timeMs - fileStartMs) / 1000.0;
-    for (EdlWriter.Segment seg : EdlWriter.readEdl(recFile))
-    {
-      if (seg.action == 0 && timeSec >= seg.startSeconds && timeSec < seg.endSeconds)
-        return true;
-    }
-    return false;
-  }
-
-  private static long getCommercialEndTimeMs(MediaFile mf, long timeMs)
-  {
-    if (mf == null) return -1;
-    java.io.File recFile = mf.getRecordingFile();
-    if (recFile == null) return -1;
-    // Convert epoch ms to file-relative seconds
-    long fileStartMs = mf.getStart(0);
-    double timeSec = (timeMs - fileStartMs) / 1000.0;
-    for (EdlWriter.Segment seg : EdlWriter.readEdl(recFile))
-    {
-      if (seg.action == 0 && timeSec >= seg.startSeconds && timeSec < seg.endSeconds)
-        return fileStartMs + (long)(seg.endSeconds * 1000);
-    }
-    return -1;
   }
 }

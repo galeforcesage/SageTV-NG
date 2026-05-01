@@ -1238,6 +1238,21 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
               }
             }
           }
+          // ── Commercial skip check ──
+          // Check if current playback position is in a commercial segment.
+          // This runs inside the existing monitoring loop — no extra threads or timers.
+          checkCommercialSkip(baseTime);
+          // Cap waitTime so we wake up before the next commercial boundary
+          if (commSkipMatrix != null && commSkipMatrix.getSegmentCount() > 0 && waitTime > 500)
+          {
+            long nextBoundaryMs = getNextCommercialBoundary(baseTime);
+            if (nextBoundaryMs > 0)
+            {
+              long timeToNext = nextBoundaryMs - baseTime;
+              if (timeToNext > 0 && timeToNext < waitTime)
+                waitTime = Math.max(250, timeToNext - 200); // wake up 200ms before the boundary
+            }
+          }
         }
 
         if (currJob == null) continue;
@@ -2582,6 +2597,8 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
               new Object[] { sage.plugin.PluginEventManager.VAR_MEDIAFILE, currFile, sage.plugin.PluginEventManager.VAR_UICONTEXT, uiMgr.getLocalUIClientName(),
               sage.plugin.PluginEventManager.VAR_DURATION, new Long(getDurationMillis()), sage.plugin.PluginEventManager.VAR_MEDIATIME, new Long(getMediaTimeMillis()),
               sage.plugin.PluginEventManager.VAR_CHAPTERNUM, new Integer(getDVDChapter()), sage.plugin.PluginEventManager.VAR_TITLENUM, new Integer(getDVDTitle()) });
+          // Load commercial skip matrix for this file (safe — returns empty on any error)
+          loadCommercialSkipMatrix(currFile);
           // Reset the inactivity timer since the user is basically in a wait state so we don't want the OSD to autohide
           // in this situation
           uiMgr.getRouter().resetInactivityTimers();
@@ -3717,8 +3734,133 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     ccHandler = null;
     lastSubType = null;
     embeddedSubStreamType = null;
+    commSkipMatrix = null;
+    wasInCommercial = false;
     currFile = null;
     downer = null;
+  }
+
+  /**
+   * Loads the commercial skip matrix for the given media file.
+   * Safe — catches all exceptions so playback is never disrupted.
+   */
+  private void loadCommercialSkipMatrix(MediaFile mf)
+  {
+    commSkipMatrix = null;
+    wasInCommercial = false;
+    try
+    {
+      if (mf == null || mf.isDVD() || mf.isBluRay() || mf.isMusic() || mf.isAnyLiveStream())
+        return;
+      java.io.File recFile = mf.getFile(0);
+      if (recFile == null) return;
+      sage.commercial.SkipMatrix matrix = sage.commercial.SkipMatrix.load(recFile);
+      if (matrix.getSegmentCount() > 0)
+      {
+        commSkipMatrix = matrix;
+        if (Sage.DBG) System.out.println("VideoFrame: Loaded commercial skip matrix with " +
+            matrix.getSegmentCount() + " segment(s) for " + recFile.getName());
+      }
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("VideoFrame: Error loading commercial skip matrix: " + t);
+      commSkipMatrix = null;
+    }
+  }
+
+  /**
+   * Checks if the current playback position is inside a commercial segment and
+   * either auto-skips or fires a UI hook for the STV popup. Called from the
+   * main monitoring loop — no extra threads.
+   *
+   * @param baseTimeMs the current base media time in milliseconds (relative to segment start)
+   */
+  private void checkCommercialSkip(long baseTimeMs)
+  {
+    try
+    {
+      sage.commercial.SkipMatrix matrix = commSkipMatrix;
+      if (matrix == null || matrix.getSegmentCount() == 0) return;
+      if (currFile == null || player == null) return;
+      if (!isPlayin() || isDVD() || isBluRay()) return;
+      // Don't skip during fast-forward or rewind
+      MediaPlayer mp = player;
+      if (mp != null)
+      {
+        double rate = mp.getPlaybackRate();
+        if (rate > 1.001 || rate < -0.001) return;
+      }
+
+      // Use absolute media time for the SkipMatrix lookup
+      // SkipMatrix times are milliseconds from file start (converted from EDL seconds)
+      boolean inCommercial = matrix.isInCommercial(baseTimeMs);
+
+      if (inCommercial && !wasInCommercial)
+      {
+        // Just entered a commercial break
+        if (sage.commercial.CommercialDetectionManager.getInstance().isAutoSkipEnabled())
+        {
+          long endMs = matrix.getCommercialEnd(baseTimeMs);
+          if (endMs > 0)
+          {
+            // Convert base-relative ms to absolute media time for seeking
+            long absoluteEnd = endMs + currFile.getStart(segment);
+            if (Sage.DBG) System.out.println("VideoFrame: Auto-skipping commercial at " +
+                baseTimeMs + "ms, seeking to " + endMs + "ms (absolute=" + absoluteEnd + ")");
+            timeSelected(absoluteEnd, true);
+            wasInCommercial = false; // We've skipped past it
+            return;
+          }
+        }
+        else
+        {
+          // Auto-skip disabled — notify the STV to show a popup
+          if (Sage.DBG) System.out.println("VideoFrame: Entered commercial at " + baseTimeMs + "ms, firing UI hook");
+          long endMs = matrix.getCommercialEnd(baseTimeMs);
+          Catbert.processUISpecificHook("CommercialBreakEntered",
+              new Object[] { "MediaFile", currFile, "CommercialEndTime",
+              new Long(endMs > 0 ? endMs + currFile.getStart(segment) : 0) }, uiMgr, true);
+          sage.plugin.PluginEventManager.postEvent(sage.plugin.PluginEventManager.COMMERCIAL_ENTERED,
+              new Object[] { sage.plugin.PluginEventManager.VAR_MEDIAFILE, currFile,
+              sage.plugin.PluginEventManager.VAR_UICONTEXT, uiMgr.getLocalUIClientName() });
+        }
+      }
+      else if (!inCommercial && wasInCommercial)
+      {
+        // Just left the commercial break
+        Catbert.processUISpecificHook("CommercialBreakExited", null, uiMgr, true);
+        sage.plugin.PluginEventManager.postEvent(sage.plugin.PluginEventManager.COMMERCIAL_EXITED,
+            new Object[] { sage.plugin.PluginEventManager.VAR_MEDIAFILE, currFile,
+            sage.plugin.PluginEventManager.VAR_UICONTEXT, uiMgr.getLocalUIClientName() });
+      }
+      wasInCommercial = inCommercial;
+    }
+    catch (Throwable t)
+    {
+      // Never let commercial skip logic crash playback
+      if (Sage.DBG) System.out.println("VideoFrame: Error in commercial skip check: " + t);
+      commSkipMatrix = null; // Disable for this session to prevent repeated errors
+    }
+  }
+
+  /**
+   * Returns the next commercial segment boundary (start or end) after the given position,
+   * or -1 if there are no upcoming boundaries. Used to cap the monitoring loop wait time.
+   */
+  private long getNextCommercialBoundary(long baseTimeMs)
+  {
+    sage.commercial.SkipMatrix matrix = commSkipMatrix;
+    if (matrix == null) return -1;
+    long nearest = Long.MAX_VALUE;
+    for (int i = 0; i < matrix.getSegmentCount(); i++)
+    {
+      long start = matrix.getSegmentStartMs(i);
+      long end = matrix.getSegmentEndMs(i);
+      if (start > baseTimeMs && start < nearest) nearest = start;
+      if (end > baseTimeMs && end < nearest) nearest = end;
+    }
+    return nearest == Long.MAX_VALUE ? -1 : nearest;
   }
 
   private long getRealDurMillis()
@@ -4224,6 +4366,14 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   public MediaFile getCurrFile()
   {
     return currFile;
+  }
+
+  /**
+   * Returns the loaded SkipMatrix for the currently playing file, or null if none.
+   */
+  public sage.commercial.SkipMatrix getCommercialSkipMatrix()
+  {
+    return commSkipMatrix;
   }
 
   public int getCurrSegment()
@@ -5868,6 +6018,10 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   // to pass through (like with local file playback). This is needed for repeat play of a single
   // item to work correctly.
   protected boolean restartOnRedundantWatch;
+
+  // Commercial skip state — loaded from SkipMatrix on playback start, checked in monitoring loop
+  private sage.commercial.SkipMatrix commSkipMatrix;
+  private boolean wasInCommercial;
 
   protected Watched dvdResumeTarget;
   protected boolean dvdResumeTitleSetDone;
