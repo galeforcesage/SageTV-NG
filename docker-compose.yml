@@ -1,24 +1,36 @@
+###############################################################################
+# sagetv-mine — Docker Compose (shared-data model)
+#
+# Shared across all SageTV instances:  Wiz.bin, Sage.properties, recordings
+# Isolated to this container:          JARs, plugins, jetty, logs, native libs
+#
+# Build:   docker compose build
+# Run:     docker compose up -d
+# Logs:    docker compose logs -f
+# Stop:    docker compose down
+###############################################################################
 services:
-  sagetv:
+  sagetv-mine:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: sagetv-server
+    image: sagetv-mine:current
+    container_name: sagetv-mine
     restart: unless-stopped
-    ports:
-      - "8080:8080"   # Web UI
-      - "7818:7818"   # SageTV client connections
-      - "31099:31099" # Placeshifter
-    volumes:
-      - sagetv-config:/opt/sagetv/server
-      - media-videos:/var/media/videos
-      - media-pictures:/var/media/pictures
-      - media-music:/var/media/music
-    environment:
-      - JAVA_OPTS=-Xmx768m
+    network_mode: host
 
-volumes:
-  sagetv-config:
-  media-videos:
-  media-pictures:
-  media-music:
+    volumes:
+      # ── Shared configuration & database (READ/WRITE) ──
+      - /opt/sagetv/shared/Wiz.bin:/opt/sagetv/server/Wiz.bin
+      - /opt/sagetv/shared/Sage.properties:/opt/sagetv/server/Sage.properties
+
+      # ── Shared recordings / media libraries (READ/WRITE) ──
+      - /media/sagetv/nextcloud/SageTV9:/var/media/nextcloud-sagetv9
+      - /media/sagetv/SixTB/SageTV9Recordings:/var/media/sixtb-sagetv9
+      - /media/sagetv/SixTB1/SageV9Recordings:/var/media/sixtb1-sagetv9
+      - /media/sagetv/SageTV64/SageV9Recordings:/var/media/sagetv64-sagetv9
+
+      # ── sagetv-mine isolated runtime state ──
+      - /opt/sagetv/docker/mine/runtime/plugins:/opt/sagetv/server/plugins
+      - /opt/sagetv/docker/mine/runtime/jetty:/opt/sagetv/server/jetty
+      - /opt/sagetv/docker/mine/runtime/logs:/opt/sagetv/server/logs
