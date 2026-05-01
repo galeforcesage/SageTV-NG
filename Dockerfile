@@ -207,8 +207,8 @@ RUN chmod +x /usr/local/bin/ffmpeg-wrapper \
 #   31099 - Placeshifter
 EXPOSE 8080 7818 31099
 
-# Volumes for persistent data (config and media only, NOT the server dir)
-VOLUME ["/opt/sagetv/config", "/var/media"]
+# No VOLUME declarations — all persistence handled via explicit bind mounts
+# at container creation time (see docker-compose.yml)
 
 ENV LD_LIBRARY_PATH=/opt/sagetv/server:/opt/sagetv/server/lib:/opt/sagetv/server/irtunerplugins
 
