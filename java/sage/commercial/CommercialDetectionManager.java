@@ -780,6 +780,26 @@ public class CommercialDetectionManager
     Sage.putInt("commercial_detection/auto_skip_delay_ms", ms);
   }
 
+  public int getAutoSkipStopDelayMs()
+  {
+    return Sage.getInt("commercial_detection/auto_skip_stop_delay_ms", 0);
+  }
+
+  public void setAutoSkipStopDelayMs(int ms)
+  {
+    Sage.putInt("commercial_detection/auto_skip_stop_delay_ms", ms);
+  }
+
+  public int getMinCommercialDurationMs()
+  {
+    return Sage.getInt("commercial_detection/min_commercial_duration_ms", 0);
+  }
+
+  public void setMinCommercialDurationMs(int ms)
+  {
+    Sage.putInt("commercial_detection/min_commercial_duration_ms", ms);
+  }
+
   /**
    * Check if the given playback position (in seconds) is inside a commercial segment.
    * Used by autoskip and OSD marker logic (from JREkiwi ComskipPlayback).

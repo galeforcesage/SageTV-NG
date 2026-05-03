@@ -635,6 +635,107 @@ public class CommercialSkipAPI {
         return null;
       }});
 
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "GetAutoSkipStopDelayMs", true)
+    {
+      /**
+       * Returns the stop delay in milliseconds — how early before a commercial ends to resume playback.
+       * @return the stop delay in ms (0 = seek to exact end)
+       * @since 9.3
+       *
+       * @declaration public int GetAutoSkipStopDelayMs();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return CommercialDetectionManager.getInstance().getAutoSkipStopDelayMs();
+      }});
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "SetAutoSkipStopDelayMs", new String[] { "DelayMs" }, true)
+    {
+      /**
+       * Sets how early before a commercial ends to resume playback.
+       * @param DelayMs the stop delay in ms (0 = seek to exact end)
+       * @since 9.3
+       *
+       * @declaration public void SetAutoSkipStopDelayMs(int DelayMs);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        int ms = getInt(stack);
+        CommercialDetectionManager.getInstance().setAutoSkipStopDelayMs(ms);
+        return null;
+      }});
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "GetMinCommercialDurationMs", true)
+    {
+      /**
+       * Returns the minimum commercial segment duration in ms to trigger a skip.
+       * Segments shorter than this are ignored. 0 = skip all.
+       * @return the minimum duration in ms
+       * @since 9.3
+       *
+       * @declaration public int GetMinCommercialDurationMs();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return CommercialDetectionManager.getInstance().getMinCommercialDurationMs();
+      }});
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "SetMinCommercialDurationMs", new String[] { "DurationMs" }, true)
+    {
+      /**
+       * Sets the minimum commercial duration to trigger auto-skip.
+       * @param DurationMs the minimum duration in ms (0 = skip all)
+       * @since 9.3
+       *
+       * @declaration public void SetMinCommercialDurationMs(int DurationMs);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        int ms = getInt(stack);
+        CommercialDetectionManager.getInstance().setMinCommercialDurationMs(ms);
+        return null;
+      }});
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "GetNextCommercialBoundaryTime", new String[] { "MediaFile", "TimeMs" })
+    {
+      /**
+       * Returns the next commercial segment boundary (start or end) after the given time,
+       * in epoch milliseconds. Returns -1 if no boundary exists.
+       * @param MediaFile the MediaFile being played
+       * @param TimeMs the current playback time in epoch milliseconds
+       * @return next boundary time in epoch ms, or -1
+       * @since 9.3
+       *
+       * @declaration public long GetNextCommercialBoundaryTime(MediaFile MediaFile, long TimeMs);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        long timeMs = getLong(stack);
+        MediaFile mf = getMediaFile(stack);
+        SkipMatrix matrix = getSkipMatrixForFile(stack, mf);
+        if (matrix == null) return -1L;
+        long fileStartMs = mf.getStart(0);
+        long boundary = matrix.getNextBoundary(timeMs - fileStartMs);
+        return boundary >= 0 ? fileStartMs + boundary : -1L;
+      }});
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "GetPreviousCommercialBoundaryTime", new String[] { "MediaFile", "TimeMs" })
+    {
+      /**
+       * Returns the previous commercial segment boundary (start or end) before the given time,
+       * in epoch milliseconds. Returns -1 if no boundary exists.
+       * @param MediaFile the MediaFile being played
+       * @param TimeMs the current playback time in epoch milliseconds
+       * @return previous boundary time in epoch ms, or -1
+       * @since 9.3
+       *
+       * @declaration public long GetPreviousCommercialBoundaryTime(MediaFile MediaFile, long TimeMs);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        long timeMs = getLong(stack);
+        MediaFile mf = getMediaFile(stack);
+        SkipMatrix matrix = getSkipMatrixForFile(stack, mf);
+        if (matrix == null) return -1L;
+        long fileStartMs = mf.getStart(0);
+        long boundary = matrix.getPreviousBoundary(timeMs - fileStartMs);
+        return boundary >= 0 ? fileStartMs + boundary : -1L;
+      }});
+
     // ── Queue Management (from tmiranda ComskipManager) ──
 
     rft.put(new PredefinedJEPFunction("CommercialSkip", "GetCommercialDetectQueueSize", true)

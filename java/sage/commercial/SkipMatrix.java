@@ -172,11 +172,81 @@ public class SkipMatrix
   }
 
   /**
+   * Returns the duration in milliseconds of the given segment index.
+   */
+  public long getSegmentDurationMs(int index)
+  {
+    return durationMs[index] & 0xFFFFFFFFL;
+  }
+
+  /**
    * Returns the confidence (0-100) of the given segment index.
    */
   public int getSegmentConfidence(int index)
   {
     return confidence[index] & 0xFF;
+  }
+
+  /**
+   * Returns the next commercial boundary (start or end of any segment) after the given position,
+   * or -1 if no boundary exists after this position. Uses binary search for efficiency.
+   *
+   * @param positionMs file-relative position in ms
+   * @return next boundary in file-relative ms, or -1
+   */
+  public long getNextBoundary(long positionMs)
+  {
+    if (length == 0) return -1;
+    long nearest = Long.MAX_VALUE;
+    // Find the first segment whose start is after positionMs
+    int idx = Arrays.binarySearch(startMs, 0, length, positionMs);
+    int searchFrom = (idx >= 0) ? idx : -(idx + 1);
+    // Check segment starts from searchFrom onward
+    if (searchFrom < length && startMs[searchFrom] > positionMs)
+      nearest = startMs[searchFrom];
+    // Check segment ends — the segment just before searchFrom might end after positionMs
+    int endCheck = (searchFrom > 0) ? searchFrom - 1 : 0;
+    for (int i = endCheck; i <= searchFrom && i < length; i++)
+    {
+      long endMs = startMs[i] + (durationMs[i] & 0xFFFFFFFFL);
+      if (endMs > positionMs && endMs < nearest)
+        nearest = endMs;
+    }
+    return nearest == Long.MAX_VALUE ? -1 : nearest;
+  }
+
+  /**
+   * Returns the previous commercial boundary (start or end of any segment) before the given position,
+   * or -1 if no boundary exists before this position.
+   *
+   * @param positionMs file-relative position in ms
+   * @return previous boundary in file-relative ms, or -1
+   */
+  public long getPreviousBoundary(long positionMs)
+  {
+    if (length == 0) return -1;
+    long nearest = -1;
+    // Find insertion point
+    int idx = Arrays.binarySearch(startMs, 0, length, positionMs);
+    int searchUpTo = (idx >= 0) ? idx : -(idx + 1);
+    // Check segment starts before positionMs
+    for (int i = searchUpTo - 1; i >= 0; i--)
+    {
+      if (startMs[i] < positionMs)
+      {
+        nearest = startMs[i];
+        break;
+      }
+    }
+    // Check segment ends before positionMs
+    for (int i = searchUpTo; i >= 0 && i < length; i--)
+    {
+      long endMs = startMs[i] + (durationMs[i] & 0xFFFFFFFFL);
+      if (endMs < positionMs && endMs > nearest)
+        nearest = endMs;
+      if (i == 0) break;
+    }
+    return nearest;
   }
 
   /**

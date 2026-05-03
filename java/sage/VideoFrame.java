@@ -3825,10 +3825,26 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
           long endMs = matrix.getCommercialEnd(fileRelativeMs);
           if (endMs > 0)
           {
+            // Skip if commercial duration meets minimum threshold
+            long segDuration = endMs - fileRelativeMs;
+            int minDuration = sage.commercial.CommercialDetectionManager.getInstance().getMinCommercialDurationMs();
+            if (minDuration > 0 && segDuration < minDuration)
+            {
+              if (Sage.DBG) System.out.println("VideoFrame: Ignoring short commercial (" +
+                  segDuration + "ms < " + minDuration + "ms threshold)");
+              wasInCommercial = inCommercial;
+              return;
+            }
+            // Apply stop delay — resume playback slightly before the commercial ends
+            int stopDelay = sage.commercial.CommercialDetectionManager.getInstance().getAutoSkipStopDelayMs();
+            long seekTarget = endMs;
+            if (stopDelay > 0 && stopDelay < segDuration)
+              seekTarget = endMs - stopDelay;
             // Convert file-relative end back to epoch for seeking
-            long epochTarget = endMs + commSkipFileStart;
+            long epochTarget = seekTarget + commSkipFileStart;
             if (Sage.DBG) System.out.println("VideoFrame: Auto-skipping commercial at " +
-                fileRelativeMs + "ms (file-relative), seeking to " + endMs + "ms (epoch=" + epochTarget + ")");
+                fileRelativeMs + "ms (file-relative), seeking to " + seekTarget + "ms (epoch=" + epochTarget + ")" +
+                (stopDelay > 0 ? " stopDelay=" + stopDelay : ""));
             timeSelected(epochTarget, true);
             wasInCommercial = false; // We've skipped past it
             commSkipCooldownUntil = Sage.time() + 2000; // 2-second cooldown
@@ -3879,15 +3895,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   {
     sage.commercial.SkipMatrix matrix = commSkipMatrix;
     if (matrix == null) return -1;
-    long nearest = Long.MAX_VALUE;
-    for (int i = 0; i < matrix.getSegmentCount(); i++)
-    {
-      long start = matrix.getSegmentStartMs(i);
-      long end = matrix.getSegmentEndMs(i);
-      if (start > fileRelativeMs && start < nearest) nearest = start;
-      if (end > fileRelativeMs && end < nearest) nearest = end;
-    }
-    return nearest == Long.MAX_VALUE ? -1 : nearest;
+    return matrix.getNextBoundary(fileRelativeMs);
   }
 
   private long getRealDurMillis()

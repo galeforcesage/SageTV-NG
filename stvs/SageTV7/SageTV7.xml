@@ -12140,13 +12140,29 @@
        <Branch Name="true" Sym="BASE-52983">
         <Action Name="DisplayTimebarStatus = true" Sym="BASE-52984">
          <Action Ref="3766" Name="&quot;REM Display extra bot..."/>
-         <Conditional Name="HasCommercialMarkers(GetCurrentMediaFile()) &amp;&amp; IsInCommercial(GetCurrentMediaFile(), GetMediaTime())" Sym="COMSKIP-790">
+         <Conditional Name="HasCommercialMarkers(GetCurrentMediaFile())" Sym="COMSKIP-790">
           <Branch Name="true" Sym="COMSKIP-791">
-           <Action Name="CommSkipEndTime = GetCommercialEndTime(GetCurrentMediaFile(), GetMediaTime())" Sym="COMSKIP-792">
-            <Conditional Name="CommSkipEndTime &gt; 0" Sym="COMSKIP-793">
-             <Action Name="Seek(CommSkipEndTime)" Sym="COMSKIP-794"/>
-            </Conditional>
-           </Action>
+           <Conditional Name="IsInCommercial(GetCurrentMediaFile(), GetMediaTime())" Sym="COMSKIP-790a">
+            <Branch Name="true" Sym="COMSKIP-790b">
+             <Action Name="CommSkipEndTime = GetCommercialEndTime(GetCurrentMediaFile(), GetMediaTime())" Sym="COMSKIP-792">
+              <Conditional Name="CommSkipEndTime &gt; 0" Sym="COMSKIP-793">
+               <Action Name="Seek(CommSkipEndTime)" Sym="COMSKIP-794"/>
+              </Conditional>
+             </Action>
+            </Branch>
+            <Branch Name="false" Sym="COMSKIP-790c">
+             <Action Name="NextBoundary = GetNextCommercialBoundaryTime(GetCurrentMediaFile(), GetMediaTime())" Sym="COMSKIP-790d">
+              <Conditional Name="NextBoundary &gt; 0" Sym="COMSKIP-790e">
+               <Branch Name="true" Sym="COMSKIP-790f">
+                <Action Name="Seek(NextBoundary)" Sym="COMSKIP-790g"/>
+               </Branch>
+               <Branch Name="false" Sym="COMSKIP-790h">
+                <Action Name="SkipForward()" Sym="COMSKIP-790i"/>
+               </Branch>
+              </Conditional>
+             </Action>
+            </Branch>
+           </Conditional>
           </Branch>
           <Branch Name="false" Sym="COMSKIP-795">
            <Action Name="SkipForward()" Sym="BASE-52985"/>
@@ -12187,7 +12203,23 @@
        <Branch Name="true" Sym="BASE-53000">
         <Action Name="DisplayTimebarStatus = true" Sym="BASE-53001">
          <Action Ref="3766" Name="&quot;REM Display extra bot..."/>
-         <Action Name="SkipBackwards()" Sym="BASE-53002"/>
+         <Conditional Name="HasCommercialMarkers(GetCurrentMediaFile())" Sym="COMSKIP-796">
+          <Branch Name="true" Sym="COMSKIP-796a">
+           <Action Name="PrevBoundary = GetPreviousCommercialBoundaryTime(GetCurrentMediaFile(), GetMediaTime())" Sym="COMSKIP-796b">
+            <Conditional Name="PrevBoundary &gt; 0" Sym="COMSKIP-796c">
+             <Branch Name="true" Sym="COMSKIP-796d">
+              <Action Name="Seek(PrevBoundary)" Sym="COMSKIP-796e"/>
+             </Branch>
+             <Branch Name="false" Sym="COMSKIP-796f">
+              <Action Name="SkipBackwards()" Sym="COMSKIP-796g"/>
+             </Branch>
+            </Conditional>
+           </Action>
+          </Branch>
+          <Branch Name="false" Sym="COMSKIP-796h">
+           <Action Name="SkipBackwards()" Sym="BASE-53002"/>
+          </Branch>
+         </Conditional>
         </Action>
        </Branch>
        <Branch Name="false" Sym="BASE-53003">
@@ -82776,6 +82808,58 @@
             <Listener Ref="22627" Name="Right"/>
             <Attribute Name="HelpText" Sym="COMSKIP-391">
              <Value>"Milliseconds to wait before automatically skipping a detected commercial during playback. Default is 250."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="AutoSkipStopDelay" Sym="COMSKIP-392">
+           <Text Name="Auto-Skip Stop Delay (ms)" Sym="COMSKIP-393"/>
+           <Item Name="Modify" Sym="COMSKIP-394">
+            <Action Name="GetAutoSkipStopDelayMs()" Sym="COMSKIP-395">
+             <Text Name="" Sym="COMSKIP-396"/>
+            </Action>
+            <Action Name="Title = DialogTitle" Sym="COMSKIP-395a">
+             <Action Name="NewNum = GetAutoSkipStopDelayMs()" Sym="COMSKIP-395b">
+              <OptionsMenu Ref="10189" Name="GetNewNum (NonZero Int..."/>
+              <Conditional Name="NewNum != 0" Sym="COMSKIP-395c">
+               <Action Name="SetAutoSkipStopDelayMs(NewNum)" Sym="COMSKIP-395d">
+                <Action Name="Refresh()" Sym="COMSKIP-395e"/>
+               </Action>
+              </Conditional>
+             </Action>
+            </Action>
+            <Attribute Name="DialogTitle" Sym="COMSKIP-395f">
+             <Value>"How many milliseconds before the end of a commercial to resume playback (0 = exact end):"</Value>
+            </Attribute>
+            <Listener Ref="22627" Name="Right"/>
+            <Attribute Name="HelpText" Sym="COMSKIP-397">
+             <Value>"Milliseconds before the end of a commercial break to resume playback. Helps avoid cutting into the show. Default is 0 (seek to exact end)."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="MinCommercialDuration" Sym="COMSKIP-398">
+           <Text Name="Min Commercial Duration (ms)" Sym="COMSKIP-398a"/>
+           <Item Name="Modify" Sym="COMSKIP-398b">
+            <Action Name="GetMinCommercialDurationMs()" Sym="COMSKIP-398c">
+             <Text Name="" Sym="COMSKIP-398d"/>
+            </Action>
+            <Action Name="Title = DialogTitle" Sym="COMSKIP-398e">
+             <Action Name="NewNum = GetMinCommercialDurationMs()" Sym="COMSKIP-398f">
+              <OptionsMenu Ref="10189" Name="GetNewNum (NonZero Int..."/>
+              <Conditional Name="NewNum != 0" Sym="COMSKIP-398g">
+               <Action Name="SetMinCommercialDurationMs(NewNum)" Sym="COMSKIP-398h">
+                <Action Name="Refresh()" Sym="COMSKIP-398i"/>
+               </Action>
+              </Conditional>
+             </Action>
+            </Action>
+            <Attribute Name="DialogTitle" Sym="COMSKIP-398j">
+             <Value>"Minimum commercial duration in milliseconds to trigger auto-skip (0 = skip all):"</Value>
+            </Attribute>
+            <Listener Ref="22627" Name="Right"/>
+            <Attribute Name="HelpText" Sym="COMSKIP-398k">
+             <Value>"Commercial segments shorter than this duration will be ignored during auto-skip. Useful for filtering out short bumpers or false detections. Default is 0 (skip all)."</Value>
             </Attribute>
            </Item>
            <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
