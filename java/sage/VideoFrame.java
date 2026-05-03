@@ -1240,15 +1240,17 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
           }
           // ── Commercial skip check ──
           // Check if current playback position is in a commercial segment.
-          // This runs inside the existing monitoring loop — no extra threads or timers.
-          checkCommercialSkip(baseTime);
+          // Uses epoch time (matching ComskipPlayback's GetMediaTime() model).
+          long epochTime = getMediaTimeMillis(false);
+          checkCommercialSkip(epochTime);
           // Cap waitTime so we wake up before the next commercial boundary
           if (commSkipMatrix != null && commSkipMatrix.getSegmentCount() > 0 && waitTime > 500)
           {
-            long nextBoundaryMs = getNextCommercialBoundary(baseTime);
+            long fileRelPos = epochTime - commSkipFileStart;
+            long nextBoundaryMs = getNextCommercialBoundary(fileRelPos);
             if (nextBoundaryMs > 0)
             {
-              long timeToNext = nextBoundaryMs - baseTime;
+              long timeToNext = nextBoundaryMs - fileRelPos;
               if (timeToNext > 0 && timeToNext < waitTime)
                 waitTime = Math.max(250, timeToNext - 200); // wake up 200ms before the boundary
             }
@@ -3747,7 +3749,9 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   private void loadCommercialSkipMatrix(MediaFile mf)
   {
     commSkipMatrix = null;
+    commSkipFileStart = 0;
     wasInCommercial = false;
+    commSkipCooldownUntil = 0;
     try
     {
       if (mf == null || mf.isDVD() || mf.isBluRay() || mf.isMusic() || mf.isAnyLiveStream())
@@ -3758,8 +3762,10 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       if (matrix.getSegmentCount() > 0)
       {
         commSkipMatrix = matrix;
+        commSkipFileStart = mf.getStart(0); // epoch ms of segment 0 — anchor for all time conversions
         if (Sage.DBG) System.out.println("VideoFrame: Loaded commercial skip matrix with " +
-            matrix.getSegmentCount() + " segment(s) for " + recFile.getName());
+            matrix.getSegmentCount() + " segment(s) for " + recFile.getName() +
+            " fileStart=" + commSkipFileStart);
       }
     }
     catch (Throwable t)
@@ -3773,10 +3779,16 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
    * Checks if the current playback position is inside a commercial segment and
    * either auto-skips or fires a UI hook for the STV popup. Called from the
    * main monitoring loop — no extra threads.
+   * <p>
+   * Time model (matching ComskipPlayback STV plugin by JREkiwi):
+   * - This method receives epoch ms (from getMediaTimeMillis)
+   * - Converts to file-relative ms for SkipMatrix lookups: fileRel = epoch - fileStart
+   * - Converts SkipMatrix results back to epoch for seeking: epoch = fileRel + fileStart
+   * - All comparisons use a single consistent reference frame
    *
-   * @param baseTimeMs the current base media time in milliseconds (relative to segment start)
+   * @param epochTimeMs the current media time in epoch milliseconds
    */
-  private void checkCommercialSkip(long baseTimeMs)
+  private void checkCommercialSkip(long epochTimeMs)
   {
     try
     {
@@ -3792,35 +3804,46 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         if (rate > 1.001 || rate < -0.001) return;
       }
 
-      // Use absolute media time for the SkipMatrix lookup
-      // SkipMatrix times are milliseconds from file start (converted from EDL seconds)
-      boolean inCommercial = matrix.isInCommercial(baseTimeMs);
+      // Cooldown: after an auto-skip, ignore for 2 seconds so the player can settle
+      // at the new position without re-triggering
+      long now = Sage.time();
+      if (commSkipCooldownUntil > 0 && now < commSkipCooldownUntil) return;
+      commSkipCooldownUntil = 0;
+
+      // Convert epoch time to file-relative ms for SkipMatrix lookup
+      // SkipMatrix times are ms from file start (EDL seconds * 1000)
+      long fileRelativeMs = epochTimeMs - commSkipFileStart;
+      if (fileRelativeMs < 0) return; // before file start, nothing to check
+
+      boolean inCommercial = matrix.isInCommercial(fileRelativeMs);
 
       if (inCommercial && !wasInCommercial)
       {
         // Just entered a commercial break
         if (sage.commercial.CommercialDetectionManager.getInstance().isAutoSkipEnabled())
         {
-          long endMs = matrix.getCommercialEnd(baseTimeMs);
+          long endMs = matrix.getCommercialEnd(fileRelativeMs);
           if (endMs > 0)
           {
-            // Convert base-relative ms to absolute media time for seeking
-            long absoluteEnd = endMs + currFile.getStart(segment);
+            // Convert file-relative end back to epoch for seeking
+            long epochTarget = endMs + commSkipFileStart;
             if (Sage.DBG) System.out.println("VideoFrame: Auto-skipping commercial at " +
-                baseTimeMs + "ms, seeking to " + endMs + "ms (absolute=" + absoluteEnd + ")");
-            timeSelected(absoluteEnd, true);
+                fileRelativeMs + "ms (file-relative), seeking to " + endMs + "ms (epoch=" + epochTarget + ")");
+            timeSelected(epochTarget, true);
             wasInCommercial = false; // We've skipped past it
+            commSkipCooldownUntil = Sage.time() + 2000; // 2-second cooldown
             return;
           }
         }
         else
         {
           // Auto-skip disabled — notify the STV to show a popup
-          if (Sage.DBG) System.out.println("VideoFrame: Entered commercial at " + baseTimeMs + "ms, firing UI hook");
-          long endMs = matrix.getCommercialEnd(baseTimeMs);
+          if (Sage.DBG) System.out.println("VideoFrame: Entered commercial at " + fileRelativeMs + "ms, firing UI hook");
+          long endMs = matrix.getCommercialEnd(fileRelativeMs);
+          long epochEnd = endMs > 0 ? endMs + commSkipFileStart : 0;
           Catbert.processUISpecificHook("CommercialBreakEntered",
               new Object[] { "MediaFile", currFile, "CommercialEndTime",
-              new Long(endMs > 0 ? endMs + currFile.getStart(segment) : 0) }, uiMgr, true);
+              new Long(epochEnd) }, uiMgr, true);
           sage.plugin.PluginEventManager.postEvent(sage.plugin.PluginEventManager.COMMERCIAL_ENTERED,
               new Object[] { sage.plugin.PluginEventManager.VAR_MEDIAFILE, currFile,
               sage.plugin.PluginEventManager.VAR_UICONTEXT, uiMgr.getLocalUIClientName() });
@@ -3846,9 +3869,13 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
 
   /**
    * Returns the next commercial segment boundary (start or end) after the given position,
-   * or -1 if there are no upcoming boundaries. Used to cap the monitoring loop wait time.
+   * in file-relative milliseconds, or -1 if there are no upcoming boundaries.
+   * Used to cap the monitoring loop wait time.
+   *
+   * @param fileRelativeMs current position in milliseconds from file start
+   * @return next boundary in file-relative ms, or -1
    */
-  private long getNextCommercialBoundary(long baseTimeMs)
+  private long getNextCommercialBoundary(long fileRelativeMs)
   {
     sage.commercial.SkipMatrix matrix = commSkipMatrix;
     if (matrix == null) return -1;
@@ -3857,8 +3884,8 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     {
       long start = matrix.getSegmentStartMs(i);
       long end = matrix.getSegmentEndMs(i);
-      if (start > baseTimeMs && start < nearest) nearest = start;
-      if (end > baseTimeMs && end < nearest) nearest = end;
+      if (start > fileRelativeMs && start < nearest) nearest = start;
+      if (end > fileRelativeMs && end < nearest) nearest = end;
     }
     return nearest == Long.MAX_VALUE ? -1 : nearest;
   }
@@ -6021,7 +6048,9 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
 
   // Commercial skip state — loaded from SkipMatrix on playback start, checked in monitoring loop
   private sage.commercial.SkipMatrix commSkipMatrix;
+  private long commSkipFileStart; // epoch ms of segment 0 start — base for file-relative conversions
   private boolean wasInCommercial;
+  private long commSkipCooldownUntil; // wall-clock time until which skip checks are suppressed
 
   protected Watched dvdResumeTarget;
   protected boolean dvdResumeTitleSetDone;
