@@ -4,6 +4,9 @@
 # Shared across all SageTV instances:  Wiz.bin, Sage.properties, recordings
 # Isolated to this container:          JARs, plugins, jetty, logs, native libs
 #
+# IMPORTANT: Use identity mounts (same path host:container) for media volumes
+# so that paths stored in Wiz.bin resolve correctly inside the container.
+#
 # Build:   docker compose build
 # Run:     docker compose up -d
 # Logs:    docker compose logs -f
@@ -24,11 +27,19 @@ services:
       - /opt/sagetv/server/Wiz.bin:/opt/sagetv/server/Wiz.bin
       - /opt/sagetv/server/Sage.properties:/opt/sagetv/server/Sage.properties
 
-      # ── Shared recordings / media libraries (READ/WRITE) ──
-      - /media/sagetv/nextcloud/SageTV9:/var/media/nextcloud-sagetv9
-      - /media/sagetv/SixTB/SageTV9Recordings:/var/media/sixtb-sagetv9
-      - /media/sagetv/SixTB1/SageV9Recordings:/var/media/sixtb1-sagetv9
-      - /media/sagetv/SageTV64/SageV9Recordings:/var/media/sagetv64-sagetv9
+      # ── Shared recordings / media libraries (identity mounts) ──
+      # Add your recording drives here. Use identity mounts so Wiz.bin paths match.
+      # Example:
+      # - /media/recordings/drive1:/media/recordings/drive1
+      # - /media/recordings/drive2:/media/recordings/drive2
+      # If a drive was renamed, alias the old path:
+      # - /media/recordings/drive1:/media/recordings/old-drive-name
+
+      # ── Import directories ──
+      # - /var/media/tv:/var/media/tv
+      # - /var/media/videos:/var/media/videos
+      # - /var/media/pictures:/var/media/pictures
+      # - /var/media/music:/var/media/music
 
       # ── sagetv-mine isolated runtime state ──
       - /opt/sagetv/docker/mine/SageTVPlugins:/opt/sagetv/server/SageTVPlugins
