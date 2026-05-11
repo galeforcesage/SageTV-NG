@@ -1437,6 +1437,18 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
                 signalLost = true;
                 Catbert.processUISpecificHook("MediaPlayerPlayStateChanged", null, uiMgr, true);
               }
+              // Hard timeout: if file still has 0 bytes after max wait, abort playback attempt
+              long maxWaitForData = uiMgr.getLong("videoframe/max_wait_for_recording_data", 30000);
+              if (liveDelayWait < -1 * maxWaitForData)
+              {
+                if (Sage.DBG) System.out.println("VF ABORTING: recording file has no data after " + maxWaitForData + "ms, encoder is not producing data");
+                watchQueue.remove(currJob);
+                if (currJob.file != null)
+                  currJob.file.cleanupLocalFile();
+                watchQueue.insertElementAt(new VFJob(STD_COMPLETE), 0);
+                waitTime = -1;
+                continue;
+              }
               else
               {
                 // Reset the inactivity timer since the user is basically in a wait state so we don't want the OSD to autohide
@@ -2541,6 +2553,14 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
           // Now change to the configured default audio track and the default subtitle track
           selectDefaultAudioLanguage();
           selectDefaultSubpicLanguage();
+          // Re-apply the persisted CC state to the freshly loaded external sub
+          // handler so the user's previous "Captions (CC1)" selection survives
+          // navigation between recordings.
+          {
+            int persistedCC = uiMgr.getInt(prefs + LAST_CC_STATE, MediaPlayer.CC_DISABLED);
+            if (persistedCC != MediaPlayer.CC_DISABLED)
+              applyCCStateToExternalSubs(persistedCC);
+          }
 
           // Don't select TrueHD audio in Matroska files by default for media extenders unless HD audio output is enabled
           if (currFile != null && sage.media.format.MediaFormat.MATROSKA.equals(currFile.getContainerFormat()) &&
@@ -4133,9 +4153,9 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   {
     uiMgr.putInt(prefs + LAST_CC_STATE, ccState);
     MediaPlayer mp = player;
+    boolean rv = false;
     if (ccHandler != null)
     {
-      boolean rv = false;
       if (ccState == MediaPlayer.CC_DISABLED)
       {
         if (ccHandler.isEnabled())
@@ -4154,22 +4174,104 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
           rv = true;
         }
       }
-      if (rv)
-      {
-        Catbert.processUISpecificHook("MediaPlayerPlayStateChanged", null, uiMgr, true);
-        kick();
-      }
-      return rv;
     }
     else if (mp != null)
     {
-      boolean rv = mp.setClosedCaptioningState(ccState);
-      if (rv)
-        Catbert.processUISpecificHook("MediaPlayerPlayStateChanged", null, uiMgr, true);
-      return rv;
+      rv = mp.setClosedCaptioningState(ccState);
     }
-    else
+    // Also drive the external-subpicture handler so the same CC1/CC2 toggle
+    // turns on a sidecar SRT when the file has one but no in-stream CC. The
+    // CC slots map to ordered language tracks (CC1 -> 1st, CC2 -> 2nd, ...).
+    if (applyCCStateToExternalSubs(ccState))
+      rv = true;
+    if (rv)
+    {
+      Catbert.processUISpecificHook("MediaPlayerPlayStateChanged", null, uiMgr, true);
+      kick();
+    }
+    return rv;
+  }
+
+  /**
+   * Map a CC slot ({@link MediaPlayer#CC_ENABLED_CAPTION1} etc) onto the file's
+   * external subtitle handler so the standard "Captions (CC1)" toggle also
+   * controls SRT sidecars. Returns true if the handler state changed.
+   */
+  private boolean applyCCStateToExternalSubs(int ccState)
+  {
+    sage.media.sub.SubtitleHandler sh = subHandler;
+    if (sh == null || !sh.hasExternalSubtitles())
       return false;
+    if (ccState == MediaPlayer.CC_DISABLED)
+    {
+      externalSubsBoundToCC = false;
+      if (sh.isEnabled())
+      {
+        sh.setEnabled(false);
+        return true;
+      }
+      return false;
+    }
+    String[] langs = sh.getLanguages();
+    if (langs == null || langs.length == 0)
+      return false;
+    int slot;
+    switch (ccState)
+    {
+      case MediaPlayer.CC_ENABLED_CAPTION1: slot = 0; break;
+      case MediaPlayer.CC_ENABLED_CAPTION2: slot = 1; break;
+      case MediaPlayer.CC_ENABLED_TEXT1:    slot = 2; break;
+      case MediaPlayer.CC_ENABLED_TEXT2:    slot = 3; break;
+      default: slot = 0; break;
+    }
+    if (slot >= langs.length) slot = 0; // collapse to first track if slot doesn't exist
+    String target = langs[slot];
+    boolean changed = false;
+    if (!sh.isEnabled())
+    {
+      sh.setEnabled(true);
+      changed = true;
+    }
+    if (!target.equals(sh.getCurrLanguage()))
+    {
+      sh.setCurrLanguage(target);
+      changed = true;
+    }
+    externalSubsBoundToCC = true;
+    return changed;
+  }
+
+  /**
+   * True when the standard "Captions (CC1)" toggle is currently driving an
+   * external sidecar (SRT) instead of an in-stream CEA-608/708 stream. The
+   * subtitle component uses this to render with the user's Caption font prefs
+   * (cc/font_*) rather than the Subtitle font prefs, so the OSD
+   * "Caption Font Size" slider actually affects what the user sees.
+   */
+  public boolean isExternalSubsBoundToCC()
+  {
+    return externalSubsBoundToCC;
+  }
+
+  /**
+   * Returns a human-friendly description of the current CC state for OSD use.
+   * Examples: "Off", "CC1", "CC1: English" (when an SRT track is bound to that slot).
+   * Distinct from {@link #getCCState()} which returns the raw slot code that the
+   * STV's state machine cycles.
+   */
+  public String getCCStateLabel()
+  {
+    int ccState = getCCState();
+    String base = BasicVideoFrame.getCCStateName(ccState);
+    if (ccState == MediaPlayer.CC_DISABLED)
+      return base;
+    sage.media.sub.SubtitleHandler sh = subHandler;
+    if (sh == null || !sh.hasExternalSubtitles())
+      return base;
+    String lang = sh.getCurrLanguage();
+    if (lang == null || lang.isEmpty())
+      return base;
+    return base + ": " + lang;
   }
 
   public void setMute(boolean x)
@@ -6088,6 +6190,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   private ZLabel subtitleComp;
   private ZCCLabel ccComp;
   private sage.media.sub.SubtitleHandler subHandler;
+  private boolean externalSubsBoundToCC;
   private sage.media.sub.CCSubtitleHandler ccHandler;
   private byte[] subpicBuff;
   private long subtitleDelay;

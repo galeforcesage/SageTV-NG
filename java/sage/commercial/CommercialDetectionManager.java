@@ -46,6 +46,13 @@ public class CommercialDetectionManager
   private final ConcurrentLinkedDeque<Integer> pendingQueue = new ConcurrentLinkedDeque<>();
   private volatile boolean restrictedTimeRetryScheduled;
 
+  // ── Auto-skip in-memory state (mirrors JREkiwi ComskipPlayback STV vars — NOT persisted) ──
+  // Toggled at runtime via OSD menu / API; defaults to ON when commercial data is available.
+  private volatile boolean autoSkipEnabled = true;
+  private volatile int autoSkipDelayMs = 0;
+  private volatile int autoSkipStopDelayMs = 0;
+  private volatile int minCommercialDurationMs = 0;
+
   private CommercialDetectionManager()
   {
     int maxJobs = Sage.getInt("commercial_detection/max_concurrent_jobs", 1);
@@ -758,46 +765,48 @@ public class CommercialDetectionManager
     Sage.putBoolean("commercial_detection/live_detection", enabled);
   }
 
-  // ── Auto Skip During Playback (from JREkiwi ComskipPlayback) ──
+  // ── Auto Skip During Playback (ported from JREkiwi ComskipPlayback) ──
+  // These are in-memory only — they mirror the STV variables used by the original
+  // plugin (comautoskip, etc.) and are NOT persisted in Sage.properties.
 
   public boolean isAutoSkipEnabled()
   {
-    return Sage.getBoolean("commercial_detection/auto_skip", false);
+    return autoSkipEnabled;
   }
 
   public void setAutoSkipEnabled(boolean enabled)
   {
-    Sage.putBoolean("commercial_detection/auto_skip", enabled);
+    autoSkipEnabled = enabled;
   }
 
   public int getAutoSkipDelayMs()
   {
-    return Sage.getInt("commercial_detection/auto_skip_delay_ms", 0);
+    return autoSkipDelayMs;
   }
 
   public void setAutoSkipDelayMs(int ms)
   {
-    Sage.putInt("commercial_detection/auto_skip_delay_ms", ms);
+    autoSkipDelayMs = ms;
   }
 
   public int getAutoSkipStopDelayMs()
   {
-    return Sage.getInt("commercial_detection/auto_skip_stop_delay_ms", 0);
+    return autoSkipStopDelayMs;
   }
 
   public void setAutoSkipStopDelayMs(int ms)
   {
-    Sage.putInt("commercial_detection/auto_skip_stop_delay_ms", ms);
+    autoSkipStopDelayMs = ms;
   }
 
   public int getMinCommercialDurationMs()
   {
-    return Sage.getInt("commercial_detection/min_commercial_duration_ms", 0);
+    return minCommercialDurationMs;
   }
 
   public void setMinCommercialDurationMs(int ms)
   {
-    Sage.putInt("commercial_detection/min_commercial_duration_ms", ms);
+    minCommercialDurationMs = ms;
   }
 
   /**

@@ -1350,6 +1350,11 @@ uint32_t VideoFormat( uint8_t StreamType, uint8_t* pDesc, int nBytes )
 		return SAGE_FOURCC( "H264" );
 	}
 	else
+	if ( StreamType == HEVC_STREAM_TYPE )
+	{
+		return SAGE_FOURCC( "HEVC" );
+	}
+	else
 	if ( StreamType == VC1_STREAM_TYPE )
 	{
 		return SAGE_FOURCC( "VC1 " );
@@ -1368,6 +1373,11 @@ uint32_t TVVideoFormat( uint8_t StreamType, uint8_t* pDesc, int nBytes )
 	if ( StreamType == H264_STREAM_TYPE )
 	{
 		return SAGE_FOURCC( "H264" );
+	}
+	else
+	if ( StreamType == HEVC_STREAM_TYPE )
+	{
+		return SAGE_FOURCC( "HEVC" );
 	}
 	else
 	//if ( StreamType == VC1_STREAM_TYPE )
@@ -1429,6 +1439,10 @@ uint32_t AudioFormatByStreamType( uint8_t StreamType )
 	if ( StreamType == E_AC3_STREAM_TYPE || StreamType == E_AC3_STREAM2_TYPE )
 	{
 		return SAGE_FOURCC( "AC3E" );  
+	}
+	if ( StreamType == AC4_STREAM_TYPE )
+	{
+		return SAGE_FOURCC( "AC4 " );  /* Dolby AC-4, ATSC A/342 Part 2 */
 	}
 	if ( StreamType == LPCM_STREAM_TYPE )
 	{

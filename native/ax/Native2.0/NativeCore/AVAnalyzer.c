@@ -65,6 +65,17 @@ static int AnylyzeVideoFormat( AV_ELEMENT *pAVElmnt, uint32_t FormatFourCC, cons
 			return 1;
 		}
 	} else
+	if ( FormatFourCC == SAGE_FOURCC( "HEVC" ) )
+	{
+		/* HEVC/H.265 (ATSC 3.0): no native SPS parser bundled.
+		 * Mark the stream as video and pass FourCC through; downstream
+		 * code (ffmpeg-ac4 transcode path) re-parses the bitstream.
+		 * Width/height/framerate stay zero — UI shows "HEVC" without
+		 * resolution detail until/unless a HEVC SPS reader is added. */
+		pAVElmnt->content_type = VIDEO_DATA;
+		pAVElmnt->format_fourcc = SAGE_FOURCC( "HEVC" );
+		return 1;
+	} else
 	if ( FormatFourCC == SAGE_FOURCC( "VC1 " ) )
 	{
 		MPEG_VIDEO mpeg_video;

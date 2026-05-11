@@ -471,6 +471,9 @@ int AnylyzePSESElement( ES_ELEMENT *pESElmnt, PSM_LIST *pPSMList, const unsigned
 				if (  stream_type == H264_STREAM_TYPE )
 					pESElmnt->format_fourcc = SAGE_FOURCC( "H264" );
 				else
+				if (  stream_type == HEVC_STREAM_TYPE )
+					pESElmnt->format_fourcc = SAGE_FOURCC( "HEVC" );
+				else
 				if (  stream_type == VIDEO_STREAM_TYPE )
 					pESElmnt->format_fourcc = SAGE_FOURCC( "MPGV" );
 

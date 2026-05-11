@@ -17,6 +17,7 @@ package sage.api;
 
 import sage.*;
 import sage.commercial.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * API methods for commercial detection / skip functionality, callable from STV.
@@ -24,15 +25,31 @@ import sage.commercial.*;
 public class CommercialSkipAPI {
   private CommercialSkipAPI() {}
 
+  // Cache for skip matrix results to avoid repeated disk I/O from STV list rendering.
+  // Key: absolute path of recording file. Value: CachedMatrix with TTL.
+  private static final ConcurrentHashMap<String, CachedMatrix> skipMatrixCache = new ConcurrentHashMap<>();
+  private static final long CACHE_TTL_MS = 30000; // 30 seconds
+
+  private static class CachedMatrix {
+    final SkipMatrix matrix; // null means "no markers"
+    final long timestamp;
+    CachedMatrix(SkipMatrix matrix) {
+      this.matrix = matrix;
+      this.timestamp = System.currentTimeMillis();
+    }
+    boolean isExpired() {
+      return System.currentTimeMillis() - timestamp > CACHE_TTL_MS;
+    }
+  }
+
   /**
    * Returns the SkipMatrix for the given MediaFile.
    * Uses VideoFrame's cached matrix if this is the currently playing file,
-   * otherwise loads from disk (.skip sidecar or .edl fallback).
+   * otherwise uses a time-based cache backed by disk (.skip sidecar or .edl fallback).
    */
   private static SkipMatrix getSkipMatrixForFile(Catbert.FastStack stack, MediaFile mf)
   {
     if (mf == null) {
-      if (sage.Sage.DBG) System.out.println("CommSkipAPI.getSkipMatrixForFile: mf is null");
       return null;
     }
     try
@@ -42,32 +59,38 @@ public class CommercialSkipAPI {
       {
         SkipMatrix matrix = vf.getCommercialSkipMatrix();
         if (matrix != null) {
-          if (sage.Sage.DBG) System.out.println("CommSkipAPI.getSkipMatrixForFile: using cached matrix, segments=" + matrix.getSegmentCount());
           return matrix;
         }
       }
     }
     catch (Exception e) {
-      if (sage.Sage.DBG) System.out.println("CommSkipAPI.getSkipMatrixForFile: VideoFrame check failed: " + e);
+      // Fall through to disk load
     }
-    // Fall back to loading from file
+    // Fall back to cached disk load
     java.io.File recFile = mf.getFile(0);
     if (recFile == null) {
-      if (sage.Sage.DBG) System.out.println("CommSkipAPI.getSkipMatrixForFile: mf.getFile(0) returned null for mf=" + mf);
       return null;
     }
-    if (sage.Sage.DBG) System.out.println("CommSkipAPI.getSkipMatrixForFile: loading from file " + recFile.getAbsolutePath());
+    String cacheKey = recFile.getAbsolutePath();
+    CachedMatrix cached = skipMatrixCache.get(cacheKey);
+    if (cached != null && !cached.isExpired()) {
+      return cached.matrix;
+    }
+    // Cache miss or expired — load from disk
+    SkipMatrix matrix = null;
     try
     {
-      SkipMatrix matrix = SkipMatrix.load(recFile);
-      if (sage.Sage.DBG) System.out.println("CommSkipAPI.getSkipMatrixForFile: loaded matrix segments=" + matrix.getSegmentCount());
-      return matrix.getSegmentCount() > 0 ? matrix : null;
+      matrix = SkipMatrix.load(recFile);
+      if (matrix.getSegmentCount() == 0) matrix = null;
+      if (sage.Sage.DBG) System.out.println("CommSkipAPI: loaded skip matrix for " + recFile.getName() +
+          " segments=" + (matrix != null ? matrix.getSegmentCount() : 0));
     }
     catch (Exception e)
     {
-      if (sage.Sage.DBG) System.out.println("CommSkipAPI.getSkipMatrixForFile: load failed: " + e);
-      return null;
+      if (sage.Sage.DBG) System.out.println("CommSkipAPI: load failed for " + recFile.getName() + ": " + e);
     }
+    skipMatrixCache.put(cacheKey, new CachedMatrix(matrix));
+    return matrix;
   }
 
   public static void init(Catbert.ReflectionFunctionTable rft)
@@ -142,11 +165,8 @@ public class CommercialSkipAPI {
        */
       public Object runSafely(Catbert.FastStack stack) throws Exception{
         MediaFile mf = getMediaFile(stack);
-        if (sage.Sage.DBG) System.out.println("CommSkipAPI.HasCommercialMarkers called, mf=" + mf + " (class=" + (mf != null ? mf.getClass().getName() : "null") + ")");
         SkipMatrix matrix = getSkipMatrixForFile(stack, mf);
-        boolean result = matrix != null && matrix.getSegmentCount() > 0;
-        if (sage.Sage.DBG) System.out.println("CommSkipAPI.HasCommercialMarkers returning " + result);
-        return result;
+        return matrix != null && matrix.getSegmentCount() > 0;
       }});
 
     rft.put(new PredefinedJEPFunction("CommercialSkip", "GetCommercialSegments", new String[] { "MediaFile" })
@@ -1125,37 +1145,6 @@ public class CommercialSkipAPI {
         return matrix != null ? matrix.getSegmentCount() : 0;
       }});
 
-    // ── Auto-Skip Settings ──
-
-    rft.put(new PredefinedJEPFunction("CommercialSkip", "IsAutoSkipEnabled")
-    {
-      /**
-       * Returns whether automatic commercial skipping during playback is enabled.
-       * When enabled, playback will automatically seek past commercial segments.
-       * When disabled, a "Skip Commercial" popup will appear instead.
-       * @return true if auto-skip is enabled
-       * @since 9.3
-       *
-       * @declaration public boolean IsAutoSkipEnabled();
-       */
-      public Object runSafely(Catbert.FastStack stack) throws Exception{
-        return Sage.getBoolean("commercial_detection/auto_skip", false);
-      }});
-
-    rft.put(new PredefinedJEPFunction("CommercialSkip", "SetAutoSkipEnabled", new String[] { "Enabled" }, true)
-    {
-      /**
-       * Enables or disables automatic commercial skipping during playback.
-       * @param Enabled true to enable auto-skip, false for popup mode
-       * @since 9.3
-       *
-       * @declaration public void SetAutoSkipEnabled(boolean Enabled);
-       */
-      public Object runSafely(Catbert.FastStack stack) throws Exception{
-        boolean enabled = evalBool(stack.pop());
-        Sage.putBoolean("commercial_detection/auto_skip", enabled);
-        return null;
-      }});
   }
 
   // ── Helpers ──

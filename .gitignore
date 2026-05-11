@@ -7,6 +7,31 @@ config*.log
 
 /java/sage/SageConstants.java.bak
 
+# Local host-specific deploy / debug helpers (NOT for upstream).
+# These contain hardcoded sudo passwords, host IPs, container names,
+# and one-shot snapshot/cutover scripts that won't run elsewhere.
+/check-*.sh
+/clean-*.sh
+/deploy-*.sh
+/diag-*.sh
+/docker-cp-*.sh
+/extract-*.sh
+/find-*.sh
+/phase*.sh
+/redeploy-*.sh
+/trigger-*.sh
+/verify-*.sh
+/entrypoint-state.sh
+/Dockerfile.entrypoint-overlay
+
+# Local-only reference / build artifacts
+/decompile_*.txt
+/stv_diff.txt
+/reference_*
+/sage/
+/build/plugins/
+/.vscode/
+
 # sage logging
 /sagetv
 /sagetv_*.txt
@@ -1034,7 +1059,8 @@ native/SageWorkspace.VC.VC.opendb
 /nbproject/private/
 /nbbuild/
 /dist/
-f i x - s t p - c o n f i g . s h  
+f i x - s t p - c o n f i g . s h 
+ 
  
 latest_log.txt
 vf_debug.txt
