@@ -52,6 +52,7 @@ public abstract class MediaFormat
   public static final String MPEG1_VIDEO = "MPEG1-Video";
   public static final String MPEG4_VIDEO = "MPEG4-Video";
   public static final String HEVC = "HEVC";
+  public static final String AC4 = "AC-4"; // Dolby AC-4 audio (ATSC A/342 Part 2)
   public static final String MPEG4X = "MPEG4X"; // this is our private stream format we put inside MPEG2 PS for MPEG4/DivX video on Windows
   public static final String AVI = "AVI";
   public static final String WAV = "WAV";

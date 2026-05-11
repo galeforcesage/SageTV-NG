@@ -15,6 +15,9 @@
  */
 package sage;
 
+import sage.hdhr.HDHomeRunLineup;
+import sage.hdhr.HttpPullCaptureJob;
+
 /**
  * @abstract HDHomeRun capture device class
  * @author  David DeHaven
@@ -67,6 +70,8 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
 
   public long getRecordedBytes()
   {
+    HttpPullCaptureJob hp = httpPullJob;
+    if (hp != null) return hp.getBytesWritten();
     synchronized (caplock)
     {
       return currRecordedBytes;
@@ -111,6 +116,39 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
       tuneToChannel(channel);
     }
 
+    // ---- ATSC 3.0 HTTP-pull path (HEVC non-DRM only) ----
+    // Routes around libhdhomerun (which refuses ATSC 3.0 vchannels on FLEX 4K
+    // firmware). We pull the device's /auto/v<channel> HTTP endpoint via
+    // ffmpeg -c copy. Disk file is identical-shape MPEG-TS; demuxer Phase 1
+    // covers HEVC stream_type 0x24 + AC-4 0xAC.
+    if (encodeFile != null && channel != null && channel.length() > 0
+        && Sage.getBoolean("hdhr/atsc3_http_pull_enabled", true))
+    {
+      String host = resolveLineupHost();
+      if (host != null)
+      {
+        HDHomeRunLineup lu = HDHomeRunLineup.forHost(host);
+        if (lu.isHevcNonDrm(channel))
+        {
+          String url = lu.getHttpUrl(channel);
+          if (url != null)
+          {
+            if (Sage.DBG) System.out.println("HDHR ATSC3 HTTP-pull: chan=" + channel
+                + " url=" + url + " file=" + encodeFile);
+            HttpPullCaptureJob job = new HttpPullCaptureJob(url, encodeFile);
+            httpPullJob = job;
+            recFilename = encodeFile;
+            recStart = Sage.time();
+            freshCapture = true;
+            httpPullThread = new Thread(job, getName() + "-HttpPull");
+            httpPullThread.setDaemon(true);
+            httpPullThread.start();
+            return;
+          }
+        }
+      }
+    }
+
     currentlyRecordingBufferSize = recordBufferSize;
     // new file
     setupEncoding0(pHandle, encodeFile, currentlyRecordingBufferSize);
@@ -141,6 +179,21 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
     if (Sage.DBG) System.out.println("stopEncoding for "+ getName());
     recFilename = null;
     recStart = 0;
+
+    HttpPullCaptureJob hp = httpPullJob;
+    if (hp != null)
+    {
+      hp.requestStop();
+      Thread t = httpPullThread;
+      if (t != null)
+      {
+        try { t.join(5000); } catch (Exception e) {}
+      }
+      httpPullJob = null;
+      httpPullThread = null;
+      return;
+    }
+
     stopCapture = true;
     if (capThread != null)
     {
@@ -159,6 +212,21 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
     //		if (channel != null)
     //			tuneToChannel(channel);
     freshCapture = false;
+
+    HttpPullCaptureJob hp = httpPullJob;
+    if (hp != null)
+    {
+      hp.switchFile(switchFile);
+      synchronized (caplock)
+      {
+        recFilename = switchFile;
+        recStart = Sage.time();
+        currRecordedBytes = 0;
+        caplock.notifyAll();
+      }
+      return;
+    }
+
     synchronized (caplock)
     {
       nextRecFilename = switchFile;
@@ -441,4 +509,83 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
 
   private boolean inDataScanMode = false;
   private java.util.Set requestedDataScanCDIs = new java.util.HashSet();
+
+  /** Active ATSC 3.0 HTTP-pull capture job (null when on libhdhomerun path). */
+  private volatile HttpPullCaptureJob httpPullJob;
+  private volatile Thread             httpPullThread;
+
+  /**
+   * Resolve the HDHomeRun's HTTP host for /lineup.json.
+   *
+   * Precedence (user is NOT expected to configure anything here):
+   *   1. Per-device-name property: hdhr/lineup_host_&lt;captureDeviceName&gt;
+   *   2. Per-device-id property:   hdhr/lineup_host_&lt;hexid&gt;  (auto-cached
+   *      after a successful UDP discovery — supports multi-antenna setups
+   *      where each FLEX 4K points at a different market).
+   *   3. Parse "@ip" from device name (legacy device naming).
+   *   4. UDP broadcast discovery on port 65001 (libhdhomerun protocol),
+   *      results written back to property #2 for next time.
+   *   5. Global hdhr/lineup_host (last-resort manual override; not advertised).
+   *
+   * Returns null if no host can be determined (caller falls back to libhdhr).
+   */
+  private String resolveLineupHost()
+  {
+    // 1. Per-device-name override
+    String override = Sage.get("hdhr/lineup_host_" + captureDeviceName, null);
+    if (override != null && override.length() > 0) return override;
+
+    // 2. Per-device-id (hex) cached entry
+    String hexId = parseHexDeviceId(captureDeviceName);
+    if (hexId != null)
+    {
+      String byId = Sage.get("hdhr/lineup_host_" + hexId, null);
+      if (byId != null && byId.length() > 0) return byId;
+    }
+
+    // 3. Legacy "@ip" embedded in device name
+    if (captureDeviceName != null)
+    {
+      int at = captureDeviceName.indexOf('@');
+      if (at > 0 && at + 1 < captureDeviceName.length())
+        return captureDeviceName.substring(at + 1);
+    }
+
+    // 4. UDP discovery — automatic, no user action required
+    if (hexId != null)
+    {
+      String ip = sage.hdhr.HDHomeRunDiscover.findIp(hexId);
+      if (ip != null && ip.length() > 0)
+      {
+        // Cache for future tunes so we don't broadcast every recording start
+        Sage.put("hdhr/lineup_host_" + hexId, ip);
+        if (Sage.DBG) System.out.println("HDHomeRunCaptureDevice: auto-discovered "
+            + "lineup host " + ip + " for device " + hexId + " (cached)");
+        return ip;
+      }
+    }
+
+    // 5. Last-resort global override (undocumented; mainly for tests)
+    override = Sage.get("hdhr/lineup_host", null);
+    if (override != null && override.length() > 0) return override;
+
+    return null;
+  }
+
+  /**
+   * Extract the 8-hex-digit device id from a Sage HDHR device name. Handles
+   * both the native-discovered form "HDHomeRun <hexid> Tuner N" and the
+   * legacy/network-tuner form "...<HEXID>-N..." or "<HEXID>@<ip>".
+   * Returns lower-case 8-char hex, or null if no id present.
+   */
+  private static String parseHexDeviceId(String devName)
+  {
+    if (devName == null) return null;
+    // Match the first run of >=8 hex chars that aren't part of a longer word.
+    java.util.regex.Matcher m = HEX_ID_PATTERN.matcher(devName);
+    return m.find() ? m.group(1).toLowerCase() : null;
+  }
+
+  private static final java.util.regex.Pattern HEX_ID_PATTERN =
+      java.util.regex.Pattern.compile("\\b([0-9A-Fa-f]{8})\\b");
 }

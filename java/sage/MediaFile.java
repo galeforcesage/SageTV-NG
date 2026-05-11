@@ -5686,6 +5686,21 @@ public class MediaFile extends DBObject implements SegmentedFile
 
   public void setMediafileFormat(ContainerFormat newFormat)
   {
+    // Preserve any external subtitle streams (e.g. extracted SRT sidecars) that were added
+    // to the previous format. Format probes that read only the primary file will not see
+    // these injected SubpictureFormat entries and would otherwise drop them.
+    if (newFormat != null && fileFormat != null)
+    {
+      sage.media.format.SubpictureFormat[] oldSubs = fileFormat.getSubpictureFormats();
+      for (int i = 0; oldSubs != null && i < oldSubs.length; i++)
+      {
+        String p = oldSubs[i].getPath();
+        if (p != null && p.length() > 0 && !newFormat.formatHasSubtitlePath(p))
+        {
+          newFormat.addStream(oldSubs[i]);
+        }
+      }
+    }
     // Check to see if we've changed the stream format or IDs for any of the streams; and if so we should have anybody playing this file reload it.
     boolean majorChange = false;
     if (fileFormat != null)

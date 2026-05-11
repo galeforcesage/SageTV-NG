@@ -477,7 +477,34 @@ public class SageProperties
         // a system wide impact to do so.
         outStream.getFD().sync();
         outStream.close();
-        tmpWriteFile.renameTo(prefFile);
+        if (!tmpWriteFile.renameTo(prefFile))
+        {
+          // rename(2) over the live target failed. This typically happens when prefFile is a
+          // single-file bind mount (e.g. Docker), where the kernel returns EBUSY because the
+          // destination path is a mountpoint. Fall back to writing the contents in-place so
+          // the bound inode actually receives the new data.
+          if (Sage.DBG) System.out.println("renameTo(" + prefFile + ") failed; falling back to in-place copy of " + tmpWriteFile);
+          java.io.FileInputStream fin = null;
+          java.io.FileOutputStream fout = null;
+          try
+          {
+            fin = new java.io.FileInputStream(tmpWriteFile);
+            fout = new java.io.FileOutputStream(prefFile, false);
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = fin.read(buf)) > 0)
+              fout.write(buf, 0, n);
+            fout.getFD().sync();
+          }
+          finally
+          {
+            if (fout != null) try { fout.close(); } catch (Exception e) {}
+            if (fin != null) try { fin.close(); } catch (Exception e) {}
+          }
+          tmpWriteFile.delete();
+          // Restore the autobackup name as the prior contents we displaced
+          // (best-effort; the in-place copy already wrote new data to prefFile).
+        }
         if (Sage.DBG) System.out.println("Done writing out the data to the properties file");
         //backupFile.delete();
         abortSaves = false;

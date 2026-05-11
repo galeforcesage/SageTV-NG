@@ -12939,6 +12939,50 @@
        <IgnoreThemeProps>false</IgnoreThemeProps>
        <Action Ref="993" Name="SageCommand(&quot;Power Off&quot;)"/>
       </Item>
+      <Conditional Name="IsTVFile(MediaFile)" Sym="COMSKIP-700">
+       <Item Name="Commercial Auto Skip Toggle" Sym="COMSKIP-701">
+        <Action Name="&quot;Com. Auto Skip: &quot; + If(IsAutoSkipEnabled(), &quot;Enabled&quot;, &quot;Disabled&quot;)" Sym="COMSKIP-702">
+         <Text Name="Untitled" Sym="COMSKIP-716"/>
+        </Action>
+        <Action Name="SetAutoSkipEnabled(!IsAutoSkipEnabled())" Sym="COMSKIP-703">
+         <Action Name="Refresh()" Sym="COMSKIP-717"/>
+        </Action>
+       </Item>
+       <Item Name="Commercial Skip Start Adjust" Sym="COMSKIP-705">
+        <Action Name="&quot;CS start adjust: &quot; + (GetAutoSkipDelayMs() / 1000.0) + &quot; Sec&quot;" Sym="COMSKIP-704">
+         <Text Name="Untitled" Sym="COMSKIP-718"/>
+        </Action>
+        <Listener Sym="COMSKIP-706">
+         <ListenerEvent>Left</ListenerEvent>
+         <Action Name="SetAutoSkipDelayMs(GetAutoSkipDelayMs() - 100)" Sym="COMSKIP-707">
+          <Action Name="Refresh()" Sym="COMSKIP-719"/>
+         </Action>
+        </Listener>
+        <Listener Sym="COMSKIP-708">
+         <ListenerEvent>Right</ListenerEvent>
+         <Action Name="SetAutoSkipDelayMs(GetAutoSkipDelayMs() + 100)" Sym="COMSKIP-709">
+          <Action Name="Refresh()" Sym="COMSKIP-720"/>
+         </Action>
+        </Listener>
+       </Item>
+       <Item Name="Commercial Skip Stop Adjust" Sym="COMSKIP-711">
+        <Action Name="&quot;CS stop adjust: &quot; + (GetAutoSkipStopDelayMs() / 1000) + &quot; Sec&quot;" Sym="COMSKIP-710">
+         <Text Name="Untitled" Sym="COMSKIP-721"/>
+        </Action>
+        <Listener Sym="COMSKIP-712">
+         <ListenerEvent>Left</ListenerEvent>
+         <Action Name="SetAutoSkipStopDelayMs(GetAutoSkipStopDelayMs() - 1000)" Sym="COMSKIP-713">
+          <Action Name="Refresh()" Sym="COMSKIP-722"/>
+         </Action>
+        </Listener>
+        <Listener Sym="COMSKIP-714">
+         <ListenerEvent>Right</ListenerEvent>
+         <Action Name="SetAutoSkipStopDelayMs(GetAutoSkipStopDelayMs() + 1000)" Sym="COMSKIP-715">
+          <Action Name="Refresh()" Sym="COMSKIP-723"/>
+         </Action>
+        </Listener>
+       </Item>
+      </Conditional>
      </Panel>
      <Panel Name="Left Side Panel" Sym="BASE-53354">
       <Layout>Vertical</Layout>
@@ -16011,7 +16055,7 @@
        <Conditional Name="true" Sym="OPUS4-111415">
         <Branch Name="ShowDVDCaptionOptions" Sym="OPUS4-111416">
          <Item Name="DVD Caption On/Off" Sym="BASE-53557">
-          <Action ID="5313" Name="&quot;Captions (&quot; + GetMediaPlayerClosedCaptionState() + &quot;)&quot;" Sym="BASE-53558">
+          <Action ID="5313" Name="&quot;Captions (&quot; + GetMediaPlayerClosedCaptionStateLabel() + &quot;)&quot;" Sym="BASE-53558">
            <Text Name="Untitled" Sym="BASE-53559"/>
           </Action>
           <Conditional ID="5315" Name="GetMediaPlayerClosedCaptionState()" Sym="BASE-53560">

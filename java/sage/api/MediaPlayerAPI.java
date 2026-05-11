@@ -1192,6 +1192,21 @@ public class MediaPlayerAPI {
       public Object runSafely(Catbert.FastStack stack) throws Exception{
         return BasicVideoFrame.getCCStateName(stack.getUIMgrSafe().getVideoFrame().getCCState());
       }});
+    rft.put(new PredefinedJEPFunction("MediaPlayer", "GetMediaPlayerClosedCaptionStateLabel")
+    {
+      /**
+       * Gets a human-friendly label for the current MediaPlayer closed captioning state, suitable
+       * for OSD display. Returns the same value as GetMediaPlayerClosedCaptionState() for files
+       * with in-stream captions, but appends the language of the bound subtitle track when the
+       * captions are being driven from an external SRT sidecar (e.g. "CC1: English").
+       * @return human-readable label such as "Off", "CC1", or "CC1: English"
+       * @since 9.3
+       *
+       * @declaration public String GetMediaPlayerClosedCaptionStateLabel();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return stack.getUIMgrSafe().getVideoFrame().getCCStateLabel();
+      }});
     rft.put(new PredefinedJEPFunction("MediaPlayer", "SetMediaPlayerClosedCaptionState", new String[] { "CCType" })
     {
       /**

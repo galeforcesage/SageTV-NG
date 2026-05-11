@@ -409,6 +409,12 @@ int  AVElmntInfo( AV_ELEMENT *pAVElmnt, char* pBuffer, int nSize )
 			pos += snprintf( p+pos, nSize-pos, "f=H.264;" );
 			pos += H264VideoInf( &pAVElmnt->d.v.h264, p+pos, nSize-pos );
 		} else
+		if ( pAVElmnt->format_fourcc == SAGE_FOURCC( "HEVC" ) && nSize-pos > 0 )	
+		{
+			/* H.265/HEVC — no SPS parsed yet, so just emit the format tag.
+			 * MediaFormat.HEVC = "HEVC" matches Java side. */
+			pos += snprintf( p+pos, nSize-pos, "f=HEVC;" );
+		} else
 		if ( pAVElmnt->format_fourcc == SAGE_FOURCC( "VC1 " ) && nSize-pos > 0 )	
 		{
 			pos += snprintf( p+pos, nSize-pos, "f=VC1;" );
@@ -433,6 +439,12 @@ int  AVElmntInfo( AV_ELEMENT *pAVElmnt, char* pBuffer, int nSize )
 		{
 			pos += snprintf( p+pos, nSize-pos, "f=EAC3;" );
 			pos += AC3AudioInf( pAVElmnt, p+pos, nSize-pos );
+		} else
+		if ( pAVElmnt->format_fourcc == SAGE_FOURCC( "AC4 " ) && nSize-pos > 0 )	
+		{
+			/* Dolby AC-4 (ATSC A/342 Part 2). No bitstream parser bundled;
+			 * properties (channels/rate) are filled by the transcode path. */
+			pos += snprintf( p+pos, nSize-pos, "f=AC-4;" );
 		} else
 		if ( pAVElmnt->format_fourcc == SAGE_FOURCC( "DTS " ) && nSize-pos > 0 )	
 		{

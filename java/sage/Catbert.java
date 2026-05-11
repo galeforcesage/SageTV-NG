@@ -2198,6 +2198,7 @@ public class Catbert
       sage.api.UserRecordAPI.init(this);
       sage.api.Security.init(this);
       sage.api.CommercialSkipAPI.init(this);
+      sage.api.CaptionsAPI.init(this);
       // Load the commonly reflected API calls to speed them up
       loadCommonlyReflectedAPI(this);
     }

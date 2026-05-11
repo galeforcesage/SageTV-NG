@@ -21,6 +21,7 @@ public abstract class CaptureDevice
 {
   static final String ENCODERS = "encoders";
   static final String ENCODER_MERIT = "encoder_merit";
+  static final String ENCODER_DISABLED = "disabled";
   static final String CAPTURE_CONFIG = "capture_config";
   static final String VIDEO_ENCODING_PARAMS = "video_encoding_params";
   static final String DEFAULT_DEVICE_QUALITY = "default_device_quality";
@@ -92,6 +93,7 @@ public abstract class CaptureDevice
     lastCrossType = Sage.getInt(prefs + LAST_CROSS_TYPE, 1);
     lastCrossIndex = Sage.getInt(prefs + LAST_CROSS_INDEX, 0);
     encoderMerit = Sage.getInt(prefs + ENCODER_MERIT, 0);
+    encoderDisabled = Sage.getBoolean(prefs + ENCODER_DISABLED, false);
     neverStopEncoding = Sage.getBoolean(prefs + "never_stop_encoding", false);
     captureDeviceName = Sage.get(prefs + VIDEO_CAPTURE_DEVICE_NAME, "");
     captureDeviceNum = Sage.getInt(prefs + VIDEO_CAPTURE_DEVICE_NUM, 0);
@@ -358,7 +360,13 @@ public abstract class CaptureDevice
     Sage.put(prefs + DEFAULT_DEVICE_QUALITY, defaultQuality = x);
   }
 
-  public boolean isFunctioning() { return true; }
+  public boolean isFunctioning() { return !encoderDisabled; }
+  public boolean isDisabled() { return encoderDisabled; }
+  public void setDisabled(boolean disabled)
+  {
+    encoderDisabled = disabled;
+    Sage.putBoolean(prefs + ENCODER_DISABLED, disabled);
+  }
 
   public boolean isSameCaptureDevice(String testCapDevName, int testCapDevNum)
   {
@@ -840,6 +848,7 @@ public abstract class CaptureDevice
   protected int lastCrossType = 1;
   protected int lastCrossIndex = 0;
   protected int encoderMerit;
+  protected boolean encoderDisabled;
 
   protected int captureFeatureBits;
 

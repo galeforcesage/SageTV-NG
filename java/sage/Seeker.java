@@ -2714,6 +2714,8 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
           new Object[] { PluginEventManager.VAR_MEDIAFILE, es.switcherFile });
     // Commercial detection hook
     sage.commercial.CommercialDetectionManager.getInstance().onRecordingStopped(es.switcherFile);
+    // Closed-caption sidecar extraction hook
+    sage.captions.CaptionExtractionManager.getInstance().onRecordingStopped(es.switcherFile);
 
     // General file export plugins
     if (es.switcherFile.isCompleteRecording())
@@ -2895,6 +2897,9 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
       // Commercial detection hook
       if (!readySwitch)
         sage.commercial.CommercialDetectionManager.getInstance().onRecordingStopped(es.currRecordFile);
+      // Closed-caption sidecar extraction hook
+      if (!readySwitch)
+        sage.captions.CaptionExtractionManager.getInstance().onRecordingStopped(es.currRecordFile);
 
       // General file export plugins
       if (!readySwitch && es.currRecordFile.isCompleteRecording())

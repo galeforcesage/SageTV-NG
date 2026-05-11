@@ -90,6 +90,7 @@ extern "C" {
 #define VC1_STREAM_TYPE				0xea
 #define MPEG4_STREAM_TYPE			0x10
 #define H264_STREAM_TYPE			0x1b
+#define HEVC_STREAM_TYPE			0x24    /* ISO/IEC 23008-2 (H.265/HEVC), ATSC 3.0 */
 #define AAC_STREAM_TYPE				0x0f
 #define AAC_HE_STREAM_TYPE			0x11
 #define AC3_STREAM_TYPE				0x81
@@ -99,6 +100,7 @@ extern "C" {
 #define HD_DTS_STREAM_TYPE			0x85
 #define HD_MASTER_DTS_STREAM_TYPE	0x86
 #define E_AC3_STREAM2_TYPE			0x87
+#define AC4_STREAM_TYPE				0xAC    /* Dolby AC-4 audio, ATSC A/342 Part 2 */
 
 #define PRIVATE_0x80_STREAM_TYPE    0x80
 #define LPCM_STREAM_TYPE			0x80
@@ -162,8 +164,8 @@ sub-stream 0xEA: VC-1 video
 //#define IsVideoType( StreamType	)  ( StreamType	== 2 ||	StreamType == 1	|| StreamType == 0xf1 || StreamType == 0x1b || StreamType == 0xea || StreamType == 0x80 || StreamType == 0x10  ) 	
 //#define IsAudioType( StreamType	)  ( StreamType	== 3 ||	StreamType == 4	|| StreamType == 0x81 || StreamType == 0x82 || StreamType == 0x83 || StreamType == 0x84 || StreamType == 0x85 || StreamType == 0x86 ||  StreamType == 0x11 || StreamType == 0x0f ) 	
 //#define IsVideoType( StreamType	)  ( StreamType	== 2 ||	StreamType == 1	|| StreamType == 0xf1 || StreamType == 0x1b || StreamType == 0xea || StreamType == 0x10  ) 	
-#define IsVideoType( StreamType	)  ( StreamType	== 2 ||	StreamType == 1	|| StreamType == 0x1b || StreamType == 0xea || StreamType == 0x10 ) 	
-#define IsAudioType( StreamType	)  ( StreamType	== 3 ||	StreamType == 4	|| StreamType == 0x11 || StreamType == 0x0f || (StreamType >= 0x81 && StreamType <= 0x87 ) ) 	
+#define IsVideoType( StreamType	)  ( StreamType	== 2 ||	StreamType == 1	|| StreamType == 0x1b || StreamType == 0x24 || StreamType == 0xea || StreamType == 0x10 ) 	
+#define IsAudioType( StreamType	)  ( StreamType	== 3 ||	StreamType == 4	|| StreamType == 0x11 || StreamType == 0x0f || StreamType == 0xAC || (StreamType >= 0x81 && StreamType <= 0x87 ) ) 	
 #define IsTVAuidoType( StreamType )( StreamType	== 3 ||	StreamType == 4	|| StreamType == 0x81 ||  StreamType == 0x11 || StreamType == 0x0f ) 	
 
 

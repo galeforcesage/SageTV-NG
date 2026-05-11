@@ -8097,7 +8097,32 @@ public class Wizard implements EPGDBPublic2
         dbout.seek(verPos);
         dbout.writeUnencryptedByte(VERSION);
         dbout.close();
-        dbFile.renameTo(realDBFile);
+        if (!dbFile.renameTo(realDBFile))
+        {
+          // rename(2) over the live target failed (commonly EBUSY when realDBFile is a
+          // single-file Docker bind mount). Fall back to copying the contents in-place so
+          // the bound inode actually receives the new data; the database is otherwise lost
+          // every container restart.
+          if (Sage.DBG) System.out.println("Wizard renameTo(" + realDBFile + ") failed; falling back to in-place copy of " + dbFile);
+          java.io.FileInputStream fin = null;
+          java.io.FileOutputStream fout = null;
+          try
+          {
+            fin = new java.io.FileInputStream(dbFile);
+            fout = new java.io.FileOutputStream(realDBFile, false);
+            byte[] buf = new byte[1 << 16];
+            int n;
+            while ((n = fin.read(buf)) > 0)
+              fout.write(buf, 0, n);
+            fout.getFD().sync();
+          }
+          finally
+          {
+            if (fout != null) try { fout.close(); } catch (Exception e) {}
+            if (fin != null) try { fin.close(); } catch (Exception e) {}
+          }
+          dbFile.delete();
+        }
         dbFile = realDBFile;
         // 128k was chosen from observing most random writes are typically less than this distance
         // behind the actual write buffer. The original default of 64k would often miss even with

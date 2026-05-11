@@ -84,7 +84,18 @@ public class ZCCLabel extends ZLabel
     int targetSize;
     int targetStyle;
     String targetFace;
-    if (cc)
+    // When this is the "Subtitle" component but the current playback has its
+    // CC1/CC2 toggle bound to an external SRT (i.e. the user thinks of these
+    // as captions, not subtitles), honor the Caption font prefs so the OSD
+    // "Caption Font Size" slider actually changes what they see.
+    boolean useCCPrefs = cc;
+    if (!useCCPrefs)
+    {
+      VideoFrame vf = uiMgr.getVideoFrame();
+      if (vf != null && vf.isExternalSubsBoundToCC())
+        useCCPrefs = true;
+    }
+    if (useCCPrefs)
     {
       targetFace = uiMgr.get("cc/font_name", Sage.WINDOWS_OS ? "Lucida Console" : (Sage.MAC_OS_X ? "Monaco" : "Monospaced"));
       targetStyle = uiMgr.getInt("cc/font_style", MetaFont.BOLD);

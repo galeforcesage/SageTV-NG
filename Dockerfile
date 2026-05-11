@@ -117,14 +117,30 @@ RUN bash /src/docker/build-modern-ffmpeg.sh \
     && echo "Modern patched FFmpeg 6.1.1 built successfully" \
     || echo "WARN: Modern FFmpeg build failed (will fall back to stock+wrapper)"
 
+# ---- 4a. Build ffmpeg-ac4 (pliu6 fork) for AC-4 decode (ATSC 3.0) ----
+# Independent second FFmpeg binary at /usr/local/bin/ffmpeg-ac4 in runtime.
+# Source + nv-codec-headers tag are pinned in build-ac4-ffmpeg.sh.
+# Strictly separate from /opt/sagetv/server/ffmpeg and /usr/bin/ffmpeg.
+RUN bash /src/docker/build-ac4-ffmpeg.sh \
+    && echo "ffmpeg-ac4 (pliu6 fork) built successfully" \
+    || echo "WARN: ffmpeg-ac4 build failed (AC-4/HEVC ATSC 3.0 path will be unavailable)"
+
 # ---- 4b. Build Comskip commercial detector ----
+# If third_party/comskip is populated (git submodule present) build from source;
+# otherwise the runtime stage installs the Ubuntu package as a fallback so the
+# image always has a working comskip binary.
 WORKDIR /src/third_party/comskip
-RUN ./autogen.sh \
-    && ./configure \
-    && make \
-    && cp comskip /src/build/elf/comskip \
-    && echo "Comskip built successfully" \
-    || echo "WARN: Comskip build failed"
+RUN if [ -f autogen.sh ]; then \
+      ./autogen.sh \
+        && ./configure \
+        && make \
+        && cp comskip /src/build/elf/comskip \
+        && echo "Comskip built from source"; \
+    else \
+      echo "WARN: third_party/comskip empty (submodule missing) - runtime apt fallback will be used"; \
+    fi \
+    && mkdir -p /src/build/elf \
+    && touch /src/build/elf/comskip.marker
 WORKDIR /src/build
 
 # Copy jpegtran if available
@@ -165,6 +181,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libfdk-aac2 \
     libx265-199 \
     libmp3lame0 \
+    comskip \
     && rm -rf /var/lib/apt/lists/*
 
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
@@ -178,6 +195,11 @@ COPY --from=builder /src/build/serverrelease /opt/sagetv/server
 
 # If native build failed, at minimum copy the Sage.jar so the container is useful
 COPY --from=builder /src/build/release/Sage.jar /opt/sagetv/server/Sage.jar
+
+# If comskip was built from source in the builder stage, pull it in too;
+# otherwise the apt-installed comskip from the runtime stage is used.
+COPY --from=builder /src/build/elf/comskip.marker /tmp/.comskip-marker
+COPY --from=builder /src/build/elf/ /tmp/builder-elf/
 
 WORKDIR /opt/sagetv/server
 
@@ -197,7 +219,33 @@ RUN chmod +x /usr/local/bin/ffmpeg-wrapper \
          ln -sf /usr/local/bin/ffmpeg /opt/sagetv/server/ffmpeg; \
        fi \
     && mkdir -p /var/media/videos /var/media/pictures /var/media/music \
-    /opt/sagetv/server/logs \
+    /opt/sagetv/server/logs /opt/sagetv/comskip \
+    && if [ -x /tmp/builder-elf/comskip ]; then \
+         echo "Using comskip built from source in builder stage"; \
+         cp /tmp/builder-elf/comskip /opt/sagetv/comskip/comskip; \
+       else \
+         echo "Using apt-installed comskip"; \
+         ln -sf /usr/bin/comskip /opt/sagetv/comskip/comskip; \
+       fi \
+    && if [ -x /tmp/builder-elf/ffmpeg-ac4 ]; then \
+         echo "Installing ffmpeg-ac4 (pliu6 fork) at /usr/local/bin/ffmpeg-ac4"; \
+         install -m 755 /tmp/builder-elf/ffmpeg-ac4  /usr/local/bin/ffmpeg-ac4; \
+         install -m 755 /tmp/builder-elf/ffprobe-ac4 /usr/local/bin/ffprobe-ac4; \
+       else \
+         echo "WARN: ffmpeg-ac4 not built - AC-4/ATSC 3.0 path will be unavailable"; \
+       fi \
+    && cp /opt/sagetv/server/comskip_profiles/comskip_base.ini /opt/sagetv/comskip/comskip.ini 2>/dev/null || true \
+    # Drop comskip.ini in every location comskip auto-discovers so Sage can
+    # invoke comskip without --ini= argument. Comskip searches: CWD, $HOME
+    # (.comskip.ini), and each $PATH entry for "comskip.ini". Sage runs
+    # comskip from CWD=/opt/sagetv/server with HOME=/opt/sagetv as user sagetv.
+    && if [ -f /opt/sagetv/comskip/comskip.ini ]; then \
+         install -m 644 /opt/sagetv/comskip/comskip.ini /opt/sagetv/server/comskip.ini; \
+         install -m 644 /opt/sagetv/comskip/comskip.ini /opt/sagetv/.comskip.ini; \
+         install -m 644 /opt/sagetv/comskip/comskip.ini /usr/bin/comskip.ini; \
+         install -m 644 /opt/sagetv/comskip/comskip.ini /etc/comskip.ini; \
+       fi \
+    && rm -rf /tmp/builder-elf /tmp/.comskip-marker \
     && chmod -R 755 /opt/sagetv \
     && chown -R sagetv:sagetv /opt/sagetv /var/media
 
