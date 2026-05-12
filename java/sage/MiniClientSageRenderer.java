@@ -4241,6 +4241,19 @@ public class MiniClientSageRenderer extends SageRenderer
           audioCodecs.add(sage.media.format.MediaFormat.MP2);
         if (audioCodecs.remove("MPG1L3"))
           audioCodecs.add(sage.media.format.MediaFormat.MP3);
+        // Normalize Dolby AC-4: clients may advertise "AC4" but Sage's canonical
+        // MediaFormat name is "AC-4" (with dash). Accept both spellings.
+        if (audioCodecs.contains("AC4") || audioCodecs.contains("AC-4"))
+        {
+          audioCodecs.add("AC4");
+          audioCodecs.add(sage.media.format.MediaFormat.AC4.toUpperCase()); // "AC-4"
+        }
+        // Same normalization for E-AC3 / EC-3 / EAC3
+        if (audioCodecs.contains("EAC3") || audioCodecs.contains("EC-3") || audioCodecs.contains("E-AC3"))
+        {
+          audioCodecs.add("EAC3");
+          audioCodecs.add("EC-3");
+        }
         String audCodecsToDisable = uiMgr.get("miniclient/disabled_audio_codecs", "");
         if (audCodecsToDisable.length() > 0)
         {

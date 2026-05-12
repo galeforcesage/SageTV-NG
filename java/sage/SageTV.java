@@ -414,6 +414,12 @@ public class SageTV implements Runnable
     mySeeker = SeekerSelector.prime();
     //		System.gc();
 
+    // Optional one-shot startup hook: re-parse fileFormat for a list of MediaFile IDs.
+    // Set "mediafile/reparse_format_ids=12345,67890,..." in Sage.properties (or "all"
+    // to reparse all local TV recordings). After processing, the property is cleared
+    // so it doesn't run again on the next restart.
+    runStartupFormatReparse();
+
     Ministry.getInstance();
     if (Sage.WINDOWS_OS)
       DShowTVPlayer.autoOptimize(true);
@@ -434,6 +440,84 @@ public class SageTV implements Runnable
         catch (Exception e){}
       }
     }
+  }
+
+  /**
+   * Re-parse {@code MediaFile.fileFormat} on startup for IDs listed in the
+   * property {@code mediafile/reparse_format_ids}. Accepts a comma-separated
+   * list of MediaFile IDs, or the literal {@code all} to reparse every local
+   * TV recording. Clears the property after processing so it only runs once.
+   */
+  private static void runStartupFormatReparse()
+  {
+    String spec = Sage.get("mediafile/reparse_format_ids", "").trim();
+    if (spec.length() == 0) return;
+    if (Sage.client) return;
+    if (Sage.DBG) System.out.println("Startup format reparse requested: " + spec);
+    Wizard wiz = Wizard.getInstance();
+    java.util.ArrayList<MediaFile> targets = new java.util.ArrayList<MediaFile>();
+    if ("all".equalsIgnoreCase(spec))
+    {
+      MediaFile[] all = wiz.getFiles();
+      for (MediaFile mf : all)
+      {
+        if (mf != null && mf.isTV() && mf.isLocalFile() && !mf.isRecording())
+          targets.add(mf);
+      }
+    }
+    else
+    {
+      for (String tok : spec.split("[,\\s]+"))
+      {
+        if (tok.length() == 0) continue;
+        if (tok.startsWith("path:"))
+        {
+          String needle = tok.substring(5);
+          if (needle.length() == 0) continue;
+          MediaFile[] all = wiz.getFiles();
+          int matched = 0;
+          for (MediaFile mf : all)
+          {
+            if (mf == null || !mf.isLocalFile()) continue;
+            java.io.File f = mf.getFile(0);
+            if (f != null && f.getPath().contains(needle))
+            {
+              targets.add(mf);
+              matched++;
+            }
+          }
+          if (Sage.DBG) System.out.println("Startup format reparse: path:" + needle + " matched " + matched + " files");
+          continue;
+        }
+        try
+        {
+          int id = Integer.parseInt(tok);
+          MediaFile mf = wiz.getFileForID(id);
+          if (mf != null) targets.add(mf);
+          else if (Sage.DBG) System.out.println("Startup format reparse: no MediaFile for id=" + id);
+        }
+        catch (NumberFormatException nfe)
+        {
+          if (Sage.DBG) System.out.println("Startup format reparse: bad id token '" + tok + "'");
+        }
+      }
+    }
+    int ok = 0, fail = 0;
+    for (MediaFile mf : targets)
+    {
+      try
+      {
+        if (mf.reparseFileFormat()) ok++; else fail++;
+      }
+      catch (Throwable t)
+      {
+        fail++;
+        if (Sage.DBG) System.out.println("Startup format reparse threw for " + mf + ": " + t);
+      }
+    }
+    if (Sage.DBG) System.out.println("Startup format reparse complete: " + ok + " ok, " + fail + " failed (of " + targets.size() + ")");
+    // Clear so this is genuinely one-shot.
+    Sage.put("mediafile/reparse_format_ids", "");
   }
 
   public void run()

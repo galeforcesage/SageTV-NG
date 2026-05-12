@@ -123,6 +123,7 @@ extern "C" {
 #define DVB_EAC3_DESC				0x7A
 #define DVB_DTS_DESC				0x7B
 #define DVB_AAC_DESC				0x7C
+#define ATSC_AC4_DESC				0xAC    /* ATSC A/342 Part 2 - AC-4 audio descriptor */
 #define VIDEO_DESC					0x02
 #define AUDIO_DESC					0x03
 #define TELTEXT_DESC				0x56
@@ -166,7 +167,7 @@ sub-stream 0xEA: VC-1 video
 //#define IsVideoType( StreamType	)  ( StreamType	== 2 ||	StreamType == 1	|| StreamType == 0xf1 || StreamType == 0x1b || StreamType == 0xea || StreamType == 0x10  ) 	
 #define IsVideoType( StreamType	)  ( StreamType	== 2 ||	StreamType == 1	|| StreamType == 0x1b || StreamType == 0x24 || StreamType == 0xea || StreamType == 0x10 ) 	
 #define IsAudioType( StreamType	)  ( StreamType	== 3 ||	StreamType == 4	|| StreamType == 0x11 || StreamType == 0x0f || StreamType == 0xAC || (StreamType >= 0x81 && StreamType <= 0x87 ) ) 	
-#define IsTVAuidoType( StreamType )( StreamType	== 3 ||	StreamType == 4	|| StreamType == 0x81 ||  StreamType == 0x11 || StreamType == 0x0f ) 	
+#define IsTVAuidoType( StreamType )( StreamType  == 3 || StreamType == 4 || StreamType == 0x81 ||  StreamType == 0x11 || StreamType == 0x0f || StreamType == 0xAC /* Dolby AC-4 (ATSC 3.0) */ ) 
 
 
 typedef struct TS_FILTER_DUMPER

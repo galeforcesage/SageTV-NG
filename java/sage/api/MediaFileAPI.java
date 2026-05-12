@@ -1180,6 +1180,29 @@ public class MediaFileAPI {
         }
         return null;
       }});
+    rft.put(new PredefinedJEPFunction("MediaFile", "ReparseMediaFileFormat", new String[] { "MediaFile" }, true)
+    {
+      /**
+       * Re-runs the native FormatParser on this MediaFile and stores the
+       * resulting format/codec/stream details back into the database. Useful
+       * after upgrading the native libs (e.g. new HEVC / AC-4 recognition) so
+       * existing recordings reflect the new detection without re-importing.
+       * @param MediaFile the MediaFile object
+       * @return true if the format was successfully refreshed
+       * @since 9.3
+       *
+       * @declaration public boolean ReparseMediaFileFormat(MediaFile MediaFile);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        MediaFile mf = getMediaFile(stack);
+        if (mf == null) return Boolean.FALSE;
+        if (Sage.client)
+        {
+          stack.push(mf);
+          return makeNetworkedCall(stack);
+        }
+        return mf.reparseFileFormat() ? Boolean.TRUE : Boolean.FALSE;
+      }});
     /*
 		rft.put(new PredefinedJEPFunction("MediaFile", "", 1, new String[] { "MediaFile" })
 		{public Object runSafely(Catbert.FastStack stack) throws Exception{

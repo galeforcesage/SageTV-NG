@@ -1053,8 +1053,20 @@ uint8_t LookupStreamType( uint32_t lFourCC )
 	if ( lFourCC == SAGE_FOURCC( "H264" ) )
 		return  H264_STREAM_TYPE; 
 	else
+	if ( lFourCC == SAGE_FOURCC( "HEVC" ) )
+		return  HEVC_STREAM_TYPE;  /* HEVC/H.265 (ATSC 3.0) */
+	else
 	if ( lFourCC == SAGE_FOURCC( "AC3 " ) )
 		return  AC3_STREAM_TYPE; 
+	else
+	if ( lFourCC == SAGE_FOURCC( "AC3E" ) )
+		return  E_AC3_STREAM_TYPE;
+	else
+	if ( lFourCC == SAGE_FOURCC( "AC3T" ) )
+		return  TUREHD_AC3_STREAM_TYPE;
+	else
+	if ( lFourCC == SAGE_FOURCC( "AC4 " ) )
+		return  AC4_STREAM_TYPE;   /* Dolby AC-4 (ATSC 3.0) */
 	else
 	if ( lFourCC == SAGE_FOURCC( "DTS " ) )
 		return  DTS_STREAM_TYPE; 

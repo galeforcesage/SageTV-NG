@@ -290,6 +290,16 @@ public final class FastMpeg2Reader
     streamTranscodeMode = x;
     sourceFormat = inSourceFormat;
   }
+  /**
+   * Optional audio codec for AC-4 source media (e.g. "eac3" if the client
+   * supports E-AC-3, otherwise "ac3"). Forwarded to FFMPEGTranscoder when it
+   * is constructed in init().
+   */
+  public void setAc4SourceAudioCodec(String codec)
+  {
+    this.ac4SourceAudioCodec = codec;
+  }
+  private String ac4SourceAudioCodec;
   public void setRemuxToTS(boolean ts)
   {
     remuxToTS = ts;
@@ -362,6 +372,8 @@ public final class FastMpeg2Reader
       inxs.setSourceFile(hostname, mpegFile);
       inxs.setTranscodeFormat(streamTranscodeMode, sourceFormat);
       inxs.setEnableOutputBuffering(true);
+      if (ac4SourceAudioCodec != null && inxs instanceof FFMPEGTranscoder)
+        ((FFMPEGTranscoder) inxs).setAc4SourceAudioCodec(ac4SourceAudioCodec);
       forcedPS = true;
       firstPTS = 45000;
       findFirstPTS = false;

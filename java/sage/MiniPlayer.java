@@ -996,7 +996,51 @@ public class MiniPlayer implements DVDMediaPlayer
         // Check for transcoding
         // NOTE: Always transcode when we're doing push mode with the placeshifter. Non-transcoded push mode
         // doesn't work all that well and people usually connect that way when they want to experiment with transcoding.
-        if (!mediaExtender || lowBandwidth/* && ((fixedPushFormat != null && fixedPushFormat.length() > 0) || uiBandwidthEstimate < 2000000)*/)
+
+        // Profile-aware fast path: if a managed client (e.g. modern Android) supports the
+        // source container + video codec but NOT the audio codec, run an audio-only
+        // transcode (video passthrough). This avoids the legacy MPEG2-DVD path which a
+        // modern Android tablet cannot decode (black screen w/ audio playing fine).
+        boolean audioOnlyEarlyPath = false;
+        boolean enableAO = Sage.getBoolean("miniplayer/enable_audioonly_transcode", true);
+        if (Sage.DBG) System.out.println("MiniPlayer.audioOnlyEval: enable=" + enableAO
+            + " mcsr=" + (mcsr != null) + " currMF=" + (currMF != null)
+            + " ff=" + (currMF != null ? currMF.getFileFormat() : null));
+        if (enableAO && mcsr != null && currMF != null && currMF.getFileFormat() != null)
+        {
+          sage.media.format.ContainerFormat cfEarly = currMF.getFileFormat();
+          sage.media.format.VideoFormat vfEarly = cfEarly.getVideoFormat();
+          sage.media.format.AudioFormat afEarly = cfEarly.getAudioFormat();
+          boolean conOK = (cfEarly.getFormatName() != null) && mcsr.isSupportedPushContainerFormat(cfEarly.getFormatName());
+          boolean vidOK = (vfEarly != null) && mcsr.isSupportedVideoCodec(vfEarly.getFormatName());
+          boolean audOK = (afEarly != null) && mcsr.isSupportedAudioCodec(afEarly.getFormatName());
+          if (Sage.DBG) System.out.println("MiniPlayer.audioOnlyEval: container=" + cfEarly.getFormatName() + "(push=" + conOK + ")"
+              + " video=" + (vfEarly != null ? vfEarly.getFormatName() : "null") + "(ok=" + vidOK + ")"
+              + " audio=" + (afEarly != null ? afEarly.getFormatName() : "null") + "(ok=" + audOK + ")");
+          // Drop strict container-push check: if video codec is supported and audio
+          // codec is NOT, audio-only transcode is the right call regardless of whether
+          // the source container appears in the client's push-container list. Output is
+          // MPEG2-TS, which every modern push-mode client (including Android miniclient)
+          // can demux.
+          if (vfEarly != null && afEarly != null && vidOK && !audOK)
+          {
+            if (Sage.DBG) System.out.println("MiniPlayer: profile-aware audio-only transcode "
+                + "(container=" + cfEarly.getFormatName()
+                + " video=" + vfEarly.getFormatName()
+                + " audio=" + afEarly.getFormatName() + " not supported)");
+            transcoded = true;
+            useOriginalAudioTrack = false;
+            dynamicRateAdjust = false;
+            prefTranscodeMode = "audioonly";
+            audioOnlyEarlyPath = true;
+          }
+        }
+
+        if (audioOnlyEarlyPath)
+        {
+          // skip both the mediaExtender/lowBandwidth and clientCanDoMPEGHD analysis.
+        }
+        else if (!mediaExtender || lowBandwidth/* && ((fixedPushFormat != null && fixedPushFormat.length() > 0) || uiBandwidthEstimate < 2000000)*/)
         {
           if (Sage.DBG) System.out.println("MiniPlayer is using the MPEG4 transcoder");
           transcoded = true;
@@ -1090,7 +1134,20 @@ public class MiniPlayer implements DVDMediaPlayer
             }
             else
             {
-              if ((hasVideo && !videoOK) || (hasAudio && !audioOK)/* ||
+              if (containerOK && hasVideo && videoOK && hasAudio && !audioOK
+                  && Sage.getBoolean("miniplayer/enable_audioonly_transcode", true))
+              {
+                // Client supports the source video codec (e.g. HEVC) and the
+                // container, but not the source audio codec (e.g. Dolby AC-4).
+                // Pass video through, re-encode audio only.
+                if (Sage.DBG) System.out.println("MiniPlayer: video OK, audio NOT OK — using audio-only transcode "
+                    + "(video=" + (vidFormat != null ? vidFormat.getFormatName() : "?")
+                    + ", audio=" + (audFormat != null ? audFormat.getFormatName() : "?") + ")");
+                transcoded = true;
+                prefTranscodeMode = "audioonly";
+                useOriginalAudioTrack = false;
+              }
+              else if ((hasVideo && !videoOK) || (hasAudio && !audioOK)/* ||
 								(!containerOK && !hasVideo && minorTypeHint == MediaFile.MEDIASUBTYPE_MP3)*/)
               {
                 transcoded = true;
@@ -1178,6 +1235,19 @@ public class MiniPlayer implements DVDMediaPlayer
                 
             }
             mpegSrc.setStreamTranscodeMode(prefTranscodeMode, currFileFormat);
+            // If the source has Dolby AC-4 audio (ATSC 3.0), prefer E-AC-3 for
+            // any client that advertises EAC3 (higher quality / 5.1 preserved).
+            // Otherwise fall back to AC-3 (universal among legacy SageTV clients).
+            if (currFileFormat != null
+                && sage.media.format.MediaFormat.AC4.equals(currFileFormat.getPrimaryAudioFormat()))
+            {
+              boolean clientEac3 = (mcsr != null
+                  && mcsr.isSupportedAudioCodec(sage.media.format.MediaFormat.EAC3));
+              String pick = clientEac3 ? "eac3" : "ac3";
+              if (Sage.DBG) System.out.println("MiniPlayer: AC-4 source detected — selecting "
+                  + pick + " (client supports EAC3=" + clientEac3 + ")");
+              mpegSrc.setAc4SourceAudioCodec(pick);
+            }
             transcoded = false;
             serverSideTranscoding = true;
             this.timeshifted = timeshifted = true;

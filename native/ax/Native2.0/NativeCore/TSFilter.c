@@ -1290,6 +1290,10 @@ uint32_t GetSubtitleLanuage( uint8_t *pData, int nBytes )
 
 static uint8_t REG_H264[8]={ 0x48, 0x44, 0x4d, 0x56, 0xff, 0x1b, 0x61, 0x3f };
 static uint8_t REG_LPCM[8]={ 0x48, 0x44, 0x4d, 0x56, 0xff, 0x80, 0x61, 0xff };
+/* ATSC 3.0 / DVB AC-4 registration_descriptor format_identifier 'AC-4' (0x41 0x43 0x2D 0x34) */
+static uint8_t REG_AC4[4] ={ 0x41, 0x43, 0x2D, 0x34 };
+/* ATSC 3.0 / DVB HEVC registration_descriptor format_identifier 'HEVC' (0x48 0x45 0x56 0x43) */
+static uint8_t REG_HEVC[4]={ 0x48, 0x45, 0x56, 0x43 };
 static int HasVideoDesc( uint8_t *pData, int nBytes )
 {
 	uint8_t* desc_ptr;
@@ -1332,12 +1336,19 @@ uint32_t HasAudioDesc( uint8_t *pData, int nBytes )
 		return SAGE_FOURCC("AC3E");
 	if ( ( desc_ptr = GetDescriptor( pData, nBytes, DTS_DESC, &desc_len ) )!= NULL && desc_len > 0 )
 		return SAGE_FOURCC("DTS ");
+	/* ATSC 3.0 / DVB AC-4 audio descriptor (tag 0xAC). Carried alongside
+	 * stream_type 0x06 PES private streams in the PMT. */
+	if ( ( desc_ptr = GetDescriptor( pData, nBytes, ATSC_AC4_DESC, &desc_len ) )!= NULL && desc_len > 0 )
+		return SAGE_FOURCC("AC4 ");
 	if ( ( desc_ptr = GetDescriptor( pData, nBytes, AUDIO_DESC, &desc_len ) )!= NULL && desc_len > 0 )
 		return SAGE_FOURCC("MPGA"); 
 	if ( ( desc_ptr = GetDescriptor( pData, nBytes, REGISTRATION_DESC, &desc_len ) )!= NULL && desc_len > 0 )
 	{
 		if ( desc_len >= 8  && !memcmp( desc_ptr+2, REG_LPCM, 6 ) )
 			return SAGE_FOURCC("LPCM"); 
+		/* ATSC 3.0: AC-4 may also be signaled via registration_descriptor 'AC-4'. */
+		if ( desc_len >= 4  && !memcmp( desc_ptr+2, REG_AC4, 4 ) )
+			return SAGE_FOURCC("AC4 ");
 	}
 
 	return 0;

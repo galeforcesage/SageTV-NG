@@ -3844,6 +3844,61 @@ public class MediaFile extends DBObject implements SegmentedFile
     return true;
   }
 
+  /**
+   * Re-runs FormatParser on the primary file and persists the resulting
+   * {@link sage.media.format.ContainerFormat} into Wiz.bin. Useful after a
+   * native-side parser fix (e.g. new codec recognition) so existing DB rows
+   * pick up the updated codec / stream details without having to re-import.
+   *
+   * @return true if the format was successfully re-parsed and stored
+   */
+  public boolean reparseFileFormat()
+  {
+    if (Sage.client) return false;
+    if (!isLocalFile()) return false;
+    if (generalType == MEDIAFILE_LIVE_STREAM || generalType == MEDIAFILE_LIVE_BUFFERED_STREAM)
+      return false;
+    File primary;
+    synchronized (this)
+    {
+      primary = files.isEmpty() ? null : files.firstElement();
+    }
+    if (primary == null || !primary.isFile() || primary.length() == 0)
+      return false;
+    sage.media.format.ContainerFormat newFormat = FormatParser.getFileFormat(primary);
+    if (newFormat == null)
+    {
+      if (Sage.DBG) System.out.println("reparseFileFormat: FormatParser returned null for " + primary);
+      return false;
+    }
+    Wizard wiz = Wizard.getInstance();
+    try
+    {
+      wiz.acquireWriteLock(Wizard.MEDIAFILE_CODE);
+      synchronized (this)
+      {
+        // Preserve existing metadata (titles, descriptions, etc.) that the
+        // existing fileFormat may have accumulated; just refresh container +
+        // stream descriptors from the freshly parsed format.
+        if (fileFormat != null)
+        {
+          java.util.Properties oldMeta = fileFormat.getMetadata();
+          if (oldMeta != null && !oldMeta.isEmpty())
+            newFormat.addMetadata(oldMeta);
+        }
+        fileFormat = newFormat;
+      }
+      if (generalType != MEDIAFILE_LOCAL_PLAYBACK)
+        wiz.logUpdate(this, Wizard.MEDIAFILE_CODE);
+    }
+    finally
+    {
+      wiz.releaseWriteLock(Wizard.MEDIAFILE_CODE);
+    }
+    if (Sage.DBG) System.out.println("reparseFileFormat: refreshed format for " + primary + " -> " + fileFormat.getFullPropertyString());
+    return true;
+  }
+
   public synchronized File getRecordingFile()
   {
     return files.isEmpty() ? null : ((File) files.lastElement());
