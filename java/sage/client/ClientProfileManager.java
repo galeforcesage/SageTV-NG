@@ -258,26 +258,49 @@ public class ClientProfileManager
 
   private void loadDefaults()
   {
+    // Profile audio/video/container lists are used to ENFORCE policy when
+    // miniclient/profile_strict_codec_clamp=true. By default they are
+    // advisory only — the client's reported capabilities win, and any
+    // mismatch is logged as a warning. This preserves upstream SageTV
+    // behavior where the client is the source of truth.
+    //
+    // When auditing each profile, lists should be SUPERSETS of what real
+    // hardware in that class actually decodes, so strict-mode users still
+    // get a usable client. Add codecs liberally; strict mode users can
+    // override per-client via overrides JSON.
+
+    // HDx00: Sigma-chip extenders. Real hardware: MPEG2-TS/PS, H.264 + MPEG2,
+    // AC3 + AAC + MP3 + MP2. NOT MPEG4-VIDEO (the chip can but legacy STV won't).
     profiles.put("hd_legacy_strict", new ClientProfile(
         "hd_legacy_strict", "Unmanaged HDx00 extenders", false,
-        Arrays.asList("MPEG2-TS"), Arrays.asList("H.264"), Arrays.asList("AC3", "AAC"),
+        Arrays.asList("MPEG2-TS", "MPEG2-PS"), Arrays.asList("H.264", "MPEG2-VIDEO"), Arrays.asList("AC3", "AAC", "MP3", "MP2"),
         false, ClientProfile.AUTO_REMUX_AGGRESSIVE, 1920, 1080, false));
 
+    // Desktop (placeshifter): wide codec coverage; modern desktop players handle EAC3/MP3/MP2/DTS/FLAC.
     profiles.put("desktop_default", new ClientProfile(
         "desktop_default", "Windows/macOS default", true,
-        Arrays.asList("MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS"), Arrays.asList("H.264"), Arrays.asList("AAC", "AC3"),
+        Arrays.asList("MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS", "MPEG", "MPEG1-PS", "QUICKTIME", "FLASHVIDEO", "OGG", "MP3", "AAC", "WAV"),
+        Arrays.asList("H.264", "MPEG2-VIDEO", "MPEG4-VIDEO", "VC1", "WMV9"),
+        Arrays.asList("AAC", "AC3", "EAC3", "EC-3", "MP3", "MP2", "MPG1L2", "MPG1L3", "DTS", "DCA", "FLAC", "VORBIS", "PCM", "PCM_S16LE"),
         false, ClientProfile.AUTO_REMUX_ON_FAILURE, 0, 0, true));
 
     profiles.put("desktop_hevc_optin", new ClientProfile(
         "desktop_hevc_optin", "Windows/macOS HEVC opt-in", true,
-        Arrays.asList("MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS"), Arrays.asList("H.264", "HEVC"), Arrays.asList("AAC", "AC3"),
+        Arrays.asList("MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS", "MPEG", "MPEG1-PS", "QUICKTIME", "FLASHVIDEO", "OGG", "MP3", "AAC", "WAV"),
+        Arrays.asList("H.264", "HEVC", "MPEG2-VIDEO", "MPEG4-VIDEO", "VC1", "WMV9"),
+        Arrays.asList("AAC", "AC3", "EAC3", "EC-3", "MP3", "MP2", "MPG1L2", "MPG1L3", "DTS", "DCA", "FLAC", "VORBIS", "PCM", "PCM_S16LE", "AC4", "AC-4"),
         true, ClientProfile.AUTO_REMUX_ON_FAILURE, 0, 0, true));
 
+    // Android MiniClient (ExoPlayer / IJKPlayer): mirrors the apk's actual
+    // advertised codec list as of v1.10.x. AC4/AC-4 included for ATSC 3.0.
     profiles.put("android_modern", new ClientProfile(
         "android_modern", "Android MiniClient", true,
-        Arrays.asList("MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS"), Arrays.asList("H.264", "HEVC"), Arrays.asList("AAC", "AC3", "EAC3", "DTS", "DCA", "AC4", "AC-4"),
+        Arrays.asList("MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS", "MPEG", "MPEG1-PS", "QUICKTIME", "FLASHVIDEO", "OGG", "MP3", "AAC", "WAV"),
+        Arrays.asList("H.263", "MPEG4-VIDEO", "MSMPEG4-VIDEO", "H.264", "VC1", "WMV7", "WMV8", "WMV9", "HEVC", "VP8", "VP9"),
+        Arrays.asList("MPEG1", "MP2", "MPG1L2", "MP3", "MPG1L3", "VORBIS", "AAC", "AAC-HE", "FLAC", "ALAC", "PCM", "PCM_S16LE", "DTS", "DCA", "DTS-HD", "DTS-MA", "AC3", "AC4", "AC-4", "EAC3", "EC-3", "DOLBYTRUEHD", "OPUS"),
         true, ClientProfile.AUTO_REMUX_ON_FAILURE, 0, 0, true));
 
+    // PWA / browser: deliberately conservative — MSE baseline.
     profiles.put("pwa_safe", new ClientProfile(
         "pwa_safe", "PWA client", true,
         Arrays.asList("MP4"), Arrays.asList("H.264"), Arrays.asList("AAC"),

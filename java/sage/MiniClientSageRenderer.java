@@ -4524,46 +4524,64 @@ public class MiniClientSageRenderer extends SageRenderer
         {
           if (Sage.DBG) System.out.println("MiniClient resolved profile: " + resolvedProfile);
 
-          // --- Profile is the source of truth for managed clients ---
-          // Intersect profile-allowed codecs/containers with what the client reported.
-          // This enforces server policy while respecting client hardware capabilities.
-          // For unmanaged HDx00, the profile clamps even harder.
+          // --- Profile policy enforcement ---
+          // By default this is WARN-ONLY: we log any codec/container the client
+          // reported that isn't in the profile's allow-list, but we do NOT
+          // remove it. The client's reported capabilities are the source of
+          // truth (matching upstream SageTV behavior). This protects against
+          // incomplete profile lists silently breaking playback.
+          //
+          // Operators who want strict server-side enforcement can opt in:
+          //     miniclient/profile_strict_codec_clamp=true
+          //
+          // The HEVC opt-out is honored regardless of clamp mode, because it
+          // exists for licensing / capability gating reasons.
+          boolean strictClamp = Sage.getBoolean("miniclient/profile_strict_codec_clamp", false);
+          String clampVerb = strictClamp ? "clamped" : "would clamp (warn-only)";
 
-          // Video codecs: keep only what the profile allows
+          // Video codecs
           java.util.Set<String> policyVideoCodecs = resolvedProfile.getVideoCodecs();
           java.util.Set<String> originalVideoCodecs = new java.util.HashSet<>(videoCodecs);
-          videoCodecs.retainAll(policyVideoCodecs);
-          // If HEVC not allowed by profile, ensure it's removed even if client reported it
+          java.util.Set<String> droppedVideo = new java.util.HashSet<>(videoCodecs);
+          droppedVideo.removeAll(policyVideoCodecs);
+          if (strictClamp) videoCodecs.retainAll(policyVideoCodecs);
+          // HEVC opt-out is always honored (licensing/capability gate, not just policy advisory)
           if (!resolvedProfile.isAllowHevc())
           {
             videoCodecs.remove("HEVC");
             videoCodecs.remove("H265");
             videoCodecs.remove("H.265");
           }
-          if (Sage.DBG && !originalVideoCodecs.equals(videoCodecs))
-            System.out.println("MiniClient profile clamped VIDEO_CODECS: " + originalVideoCodecs + " → " + videoCodecs);
+          if (Sage.DBG && !droppedVideo.isEmpty())
+            System.out.println("MiniClient profile " + clampVerb + " VIDEO_CODECS: dropped=" + droppedVideo + " original=" + originalVideoCodecs + " effective=" + videoCodecs);
 
-          // Audio codecs: keep only what the profile allows
+          // Audio codecs
           java.util.Set<String> policyAudioCodecs = resolvedProfile.getAudioCodecs();
           java.util.Set<String> originalAudioCodecs = new java.util.HashSet<>(audioCodecs);
-          audioCodecs.retainAll(policyAudioCodecs);
-          if (Sage.DBG && !originalAudioCodecs.equals(audioCodecs))
-            System.out.println("MiniClient profile clamped AUDIO_CODECS: " + originalAudioCodecs + " → " + audioCodecs);
+          java.util.Set<String> droppedAudio = new java.util.HashSet<>(audioCodecs);
+          droppedAudio.removeAll(policyAudioCodecs);
+          if (strictClamp) audioCodecs.retainAll(policyAudioCodecs);
+          if (Sage.DBG && !droppedAudio.isEmpty())
+            System.out.println("MiniClient profile " + clampVerb + " AUDIO_CODECS: dropped=" + droppedAudio + " original=" + originalAudioCodecs + " effective=" + audioCodecs);
 
-          // Push containers: keep only what the profile allows
+          // Push containers
           java.util.Set<String> policyContainers = resolvedProfile.getContainers();
           java.util.Set<String> originalPushContainers = new java.util.HashSet<>(pushContainers);
-          pushContainers.retainAll(policyContainers);
-          if (Sage.DBG && !originalPushContainers.equals(pushContainers))
-            System.out.println("MiniClient profile clamped PUSH_AV_CONTAINERS: " + originalPushContainers + " → " + pushContainers);
+          java.util.Set<String> droppedPush = new java.util.HashSet<>(pushContainers);
+          droppedPush.removeAll(policyContainers);
+          if (strictClamp) pushContainers.retainAll(policyContainers);
+          if (Sage.DBG && !droppedPush.isEmpty())
+            System.out.println("MiniClient profile " + clampVerb + " PUSH_AV_CONTAINERS: dropped=" + droppedPush + " original=" + originalPushContainers + " effective=" + pushContainers);
 
-          // Pull containers: keep only what the profile allows
+          // Pull containers
           if (pullContainers != null && !pullContainers.isEmpty())
           {
             java.util.Set<String> originalPullContainers = new java.util.HashSet<>(pullContainers);
-            pullContainers.retainAll(policyContainers);
-            if (Sage.DBG && !originalPullContainers.equals(pullContainers))
-              System.out.println("MiniClient profile clamped PULL_AV_CONTAINERS: " + originalPullContainers + " → " + pullContainers);
+            java.util.Set<String> droppedPull = new java.util.HashSet<>(pullContainers);
+            droppedPull.removeAll(policyContainers);
+            if (strictClamp) pullContainers.retainAll(policyContainers);
+            if (Sage.DBG && !droppedPull.isEmpty())
+              System.out.println("MiniClient profile " + clampVerb + " PULL_AV_CONTAINERS: dropped=" + droppedPull + " original=" + originalPullContainers + " effective=" + pullContainers);
           }
 
           // If the profile specifies a preferred container and the client has no
