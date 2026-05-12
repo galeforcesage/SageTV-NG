@@ -275,7 +275,7 @@ public class ClientProfileManager
 
     profiles.put("android_modern", new ClientProfile(
         "android_modern", "Android MiniClient", true,
-        Arrays.asList("MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS"), Arrays.asList("H.264", "HEVC"), Arrays.asList("AAC", "AC3", "EAC3", "DTS", "DCA"),
+        Arrays.asList("MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS"), Arrays.asList("H.264", "HEVC"), Arrays.asList("AAC", "AC3", "EAC3", "DTS", "DCA", "AC4", "AC-4"),
         true, ClientProfile.AUTO_REMUX_ON_FAILURE, 0, 0, true));
 
     profiles.put("pwa_safe", new ClientProfile(

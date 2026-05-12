@@ -26,6 +26,20 @@ public class FFMPEGTranscoder implements TranscodeEngine
   {
   }
 
+  /**
+   * Optional audio-codec override for AC-4 source media. When non-null and the
+   * source's primary audio is AC-4, the audio codec in the assembled ffmpeg
+   * command line is rewritten to this value (and the bitrate adjusted to match)
+   * just before exec. Callers set this from MiniPlayer based on the connected
+   * client's reported audio capabilities — e.g. "eac3" when the client advertises
+   * E-AC-3 (higher quality), otherwise "ac3" as the safe universal fallback.
+   */
+  public void setAc4SourceAudioCodec(String codec)
+  {
+    this.ac4SourceAudioCodec = codec;
+  }
+  private String ac4SourceAudioCodec;
+
   public long getAvailableTranscodeBytes()
   {
     if (bufferOutput)
@@ -487,6 +501,13 @@ public class FFMPEGTranscoder implements TranscodeEngine
           {
             xcodeParams += " -acodec " + substituteName(aformat);
           }
+          else if (sage.media.format.MediaFormat.AC4.equalsIgnoreCase(aformat) ||
+                   sage.media.format.MediaFormat.EAC3.equalsIgnoreCase(aformat))
+          {
+            // Dolby AC-4 / E-AC-3: route to AC-3 for universal client compatibility.
+            // (ffmpeg has no AC-4 encoder; legacy SageTV clients understand AC-3.)
+            xcodeParams += " -acodec ac3";
+          }
           else if (af.getChannels() <= 2)
             xcodeParams += " -acodec mp2";
           else
@@ -544,6 +565,19 @@ public class FFMPEGTranscoder implements TranscodeEngine
     {
       iOSMode = true;
       dynamicRateAdjust = true;
+    }
+    else if ("audioonly".equalsIgnoreCase(str))
+    {
+      // Audio-only transcode: pass video through (-vcodec copy), re-encode
+      // audio only. Used when the client supports the source video codec
+      // (e.g. HEVC) but not the audio codec (e.g. Dolby AC-4).
+      // The specific audio codec is picked in maybeOverrideAc4AudioCodec()
+      // when the source is AC-4; otherwise default to AC-3.
+      String acodec = (ac4SourceAudioCodec != null && ac4SourceAudioCodec.length() > 0)
+          ? ac4SourceAudioCodec : "ac3";
+      String abps = Sage.get("miniplayer/audioonly_audio_bitrate",
+          "eac3".equalsIgnoreCase(acodec) ? "640k" : "384k");
+      xcodeParams = "-f mpegts -vcodec copy -acodec " + acodec + " -b:a " + abps;
     }
     else
     {
@@ -665,12 +699,107 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
   public static String getTranscoderPath()
   {
+    return getTranscoderPath(null);
+  }
+
+  /**
+   * Select the ffmpeg binary, swapping in the AC-4 capable build for source
+   * media that contains HEVC video or AC-4 audio. The stock SageTV-patched
+   * ffmpeg and most distro builds cannot decode Dolby AC-4 (ATSC A/342 Part 2);
+   * the AC-4 build (default /usr/local/bin/ffmpeg-ac4) is used as a drop-in
+   * substitute for those sources only.
+   *
+   * Honors {@code miniplayer/transcode_ffmpeg_ac4} (default
+   * {@code /usr/local/bin/ffmpeg-ac4}). Set to empty to disable the override.
+   */
+  public static String getTranscoderPath(sage.media.format.ContainerFormat src)
+  {
+    if (needsAc4Ffmpeg(src))
+    {
+      String ac4 = Sage.get("miniplayer/transcode_ffmpeg_ac4", "/usr/local/bin/ffmpeg-ac4");
+      if (ac4 != null && ac4.length() > 0 && new java.io.File(ac4).isFile())
+      {
+        if (Sage.DBG) System.out.println("FFMPEGTranscoder: using AC-4 capable ffmpeg at " + ac4
+            + " (source has HEVC/AC-4)");
+        return ac4;
+      }
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: WARNING source has HEVC/AC-4 but "
+          + "miniplayer/transcode_ffmpeg_ac4 (" + ac4 + ") is missing; falling back to default ffmpeg "
+          + "(AC-4 decode will fail).");
+    }
     if (new java.io.File(Sage.getToolPath("SageTVTranscoder")).isFile())
       return Sage.getToolPath("SageTVTranscoder");
     else if (new java.io.File(Sage.getToolPath("ffmpeg")).isFile())
       return Sage.getToolPath("ffmpeg");
     else
       throw new RuntimeException("Transcoder executable is missing!!! checked at: " + Sage.getToolPath("SageTVTranscoder") + " and " + Sage.getToolPath("ffmpeg"));
+  }
+
+  /**
+   * @return true if {@code src} reports HEVC video or AC-4 audio, meaning the
+   *         stock ffmpeg cannot decode it and we must route through the AC-4
+   *         capable build.
+   */
+  private static boolean needsAc4Ffmpeg(sage.media.format.ContainerFormat src)
+  {
+    if (src == null) return false;
+    String v = src.getPrimaryVideoFormat();
+    if (sage.media.format.MediaFormat.HEVC.equals(v)) return true;
+    String a = src.getPrimaryAudioFormat();
+    if (sage.media.format.MediaFormat.AC4.equals(a)) return true;
+    return false;
+  }
+
+  /**
+   * If the source's primary audio is AC-4 and a client-preferred codec was set
+   * via {@link #setAc4SourceAudioCodec(String)}, rewrite the audio codec in the
+   * assembled ffmpeg parameter list. Accepts both legacy ({@code -acodec}) and
+   * modern ({@code -c:a}) forms. Also bumps the audio bitrate to a sensible
+   * default for E-AC-3 (640k) when not already overridden in the profile.
+   */
+  @SuppressWarnings({"rawtypes","unchecked"})
+  private void maybeOverrideAc4AudioCodec(java.util.ArrayList xcodeParamsVec)
+  {
+    if (ac4SourceAudioCodec == null || ac4SourceAudioCodec.length() == 0) return;
+    if (sourceFormat == null) return;
+    if (!sage.media.format.MediaFormat.AC4.equals(sourceFormat.getPrimaryAudioFormat())) return;
+    boolean replaced = false;
+    int abIndex = -1;
+    for (int i = 0; i < xcodeParamsVec.size() - 1; i++)
+    {
+      Object o = xcodeParamsVec.get(i);
+      if (!(o instanceof String)) continue;
+      String tok = (String) o;
+      if (tok.equals("-acodec") || tok.equals("-c:a") || tok.equals("-codec:a"))
+      {
+        xcodeParamsVec.set(i + 1, ac4SourceAudioCodec);
+        replaced = true;
+      }
+      else if (tok.equals("-ab") || tok.equals("-b:a"))
+      {
+        abIndex = i + 1;
+      }
+    }
+    if (!replaced)
+    {
+      // Profile had no explicit audio codec — append one so AC-4 source actually decodes.
+      xcodeParamsVec.add("-c:a");
+      xcodeParamsVec.add(ac4SourceAudioCodec);
+    }
+    // E-AC-3 default bitrate bump for 5.1 — ac3 stays at whatever the profile chose.
+    if ("eac3".equalsIgnoreCase(ac4SourceAudioCodec))
+    {
+      String eac3Bps = Sage.get("miniplayer/eac3_bitrate", "640k");
+      if (abIndex >= 0)
+        xcodeParamsVec.set(abIndex, eac3Bps);
+      else
+      {
+        xcodeParamsVec.add("-b:a");
+        xcodeParamsVec.add(eac3Bps);
+      }
+    }
+    if (Sage.DBG) System.out.println("FFMPEGTranscoder: AC-4 source — audio codec overridden to "
+        + ac4SourceAudioCodec + (abIndex >= 0 ? " (bitrate slot=" + abIndex + ")" : ""));
   }
 
   public void startTranscode() throws java.io.IOException
@@ -682,8 +811,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // Reduce process priority this way on non-windows platforms
     if (!Sage.WINDOWS_OS && Sage.getBoolean("xcode_reduce_process_priority", true))
       xcodeParamsVec.add("nice");
-    // Find the transcoder engine
-    xcodeParamsVec.add(getTranscoderPath());
+    // Find the transcoder engine — pass the source format so we can swap to the
+    // AC-4 capable ffmpeg build when the source is HEVC/AC-4 (ATSC 3.0).
+    xcodeParamsVec.add(getTranscoderPath(sourceFormat));
 
     currStreamOverheadPerct = 0.10f; // about 10% for MPEG 2 program stream
 
@@ -1338,6 +1468,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
     }
     else
       xcodeParamsVec.add("-");
+    // AC-4 source audio override: when the source is AC-4 and the consuming
+    // client has declared its preference (eac3 vs ac3 etc.), rewrite the audio
+    // codec the profile picked. Keeps the rest of the profile (mux, video,
+    // sync, channels) intact and avoids forking every transcode profile.
+    maybeOverrideAc4AudioCodec(xcodeParamsVec);
     String[] xcodeParamArray = (String[]) xcodeParamsVec.toArray(Pooler.EMPTY_STRING_ARRAY);
     // Always log the FFmpeg command line for diagnosability (disable with xcode_cmdline_debug=FALSE)
     if (Sage.DBG && !"FALSE".equals(Sage.get("xcode_cmdline_debug", "TRUE"))) System.out.println("Executing xcoding process with args: " + java.util.Arrays.asList(xcodeParamArray));

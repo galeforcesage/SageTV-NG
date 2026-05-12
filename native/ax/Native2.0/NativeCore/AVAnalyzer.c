@@ -247,6 +247,15 @@ static int AnylyzeAudioFormat( AV_ELEMENT *pAVElmnt, uint32_t FormatFourCC, cons
 			return 1;
 		}
 	} else
+	if ( FormatFourCC  == SAGE_FOURCC( "AC4 " ) )
+	{
+		/* Dolby AC-4 (ATSC A/342 Part 2). No bitstream parser bundled yet;
+		 * trust the PMT-derived fourcc and avoid the generic MPEG-audio
+		 * fallback which produces false-positive MPGA tagging on AC-4 ES. */
+		pAVElmnt->content_type = AUDIO_DATA;
+		pAVElmnt->format_fourcc = FormatFourCC;
+		return 1;
+	} else
 	if ( FormatFourCC  == SAGE_FOURCC( "MPGA" ) )
 	{
 		MPEG_AUDIO  MpegAudio;

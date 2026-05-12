@@ -489,6 +489,9 @@ int AnylyzePSESElement( ES_ELEMENT *pESElmnt, PSM_LIST *pPSMList, const unsigned
 				else
 				if (  stream_type == 0x11 )
 					pESElmnt->format_fourcc = SAGE_FOURCC( "AACH" ); //SAGE_FOURCC( "MP4A" );
+				else
+				if (  stream_type == AC4_STREAM_TYPE ) /* 0xAC Dolby AC-4 (ATSC 3.0) */
+					pESElmnt->format_fourcc = SAGE_FOURCC( "AC4 " );
 				return 1;
 			} else
 			{
