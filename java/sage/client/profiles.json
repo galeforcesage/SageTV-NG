@@ -19,7 +19,7 @@
         "max_bitrate_kbps": 6000,
         "video_bitrate_kbps": 5616,
         "audio_bitrate_kbps": 384,
-        "nvenc_preset": "p4",
+        "hwenc_preset": "p4",
         "scale_width": 1920,
         "scale_height": 1080
       }
@@ -42,7 +42,7 @@
         "max_bitrate_kbps": 8000,
         "video_bitrate_kbps": 7616,
         "audio_bitrate_kbps": 384,
-        "nvenc_preset": "p4",
+        "hwenc_preset": "p4",
         "scale_width": 0,
         "scale_height": 0
       }
@@ -65,7 +65,7 @@
         "max_bitrate_kbps": 12000,
         "video_bitrate_kbps": 11360,
         "audio_bitrate_kbps": 640,
-        "nvenc_preset": "p5",
+        "hwenc_preset": "p5",
         "scale_width": 0,
         "scale_height": 0
       }
@@ -88,7 +88,7 @@
         "max_bitrate_kbps": 10000,
         "video_bitrate_kbps": 9616,
         "audio_bitrate_kbps": 384,
-        "nvenc_preset": "p4",
+        "hwenc_preset": "p4",
         "scale_width": 0,
         "scale_height": 0
       }
@@ -111,7 +111,7 @@
         "max_bitrate_kbps": 4000,
         "video_bitrate_kbps": 3744,
         "audio_bitrate_kbps": 256,
-        "nvenc_preset": "p4",
+        "hwenc_preset": "p4",
         "scale_width": 1280,
         "scale_height": 720
       }

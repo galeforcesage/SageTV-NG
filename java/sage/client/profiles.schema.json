@@ -75,7 +75,9 @@
             "max_bitrate_kbps": { "type": "integer", "minimum": 0 },
             "video_bitrate_kbps": { "type": "integer", "minimum": 0 },
             "audio_bitrate_kbps": { "type": "integer", "minimum": 0 },
-            "nvenc_preset": { "type": "string", "pattern": "^p[1-7]$" },
+            "hwenc_preset": { "type": "string", "description": "Portable preset hint (p1..p7 or fast|medium|slow|quality|speed|balanced); HwEncoder maps per backend" },
+            "nvenc_preset": { "type": "string", "pattern": "^p[1-7]$", "description": "DEPRECATED legacy alias for hwenc_preset" },
+            "hw_accel": { "type": "string", "enum": ["auto", "nvenc", "vaapi", "qsv", "amf", "videotoolbox", "none"], "default": "auto" },
             "scale_width": { "type": "integer", "minimum": 0 },
             "scale_height": { "type": "integer", "minimum": 0 }
           }

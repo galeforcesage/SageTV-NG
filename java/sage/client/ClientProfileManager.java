@@ -182,6 +182,11 @@ public class ClientProfileManager
     String ltBlock = extractObjectBlock(json, "live_transcode");
     if (ltBlock != null)
     {
+      // Prefer the generic key "hwenc_preset" but fall back to the legacy
+      // "nvenc_preset" for older profiles.json files. Same for "hw_accel".
+      String preset = extractString(ltBlock, "hwenc_preset");
+      if (preset == null) preset = extractString(ltBlock, "nvenc_preset");
+      String hw = extractString(ltBlock, "hw_accel");
       lt = new LiveTranscodeProfile(
           extractBoolean(ltBlock, "prefer_atsc3", false),
           extractString(ltBlock, "video_codec"),
@@ -189,7 +194,7 @@ public class ClientProfileManager
           extractInt(ltBlock, "max_bitrate_kbps", 8000),
           extractInt(ltBlock, "video_bitrate_kbps", 7616),
           extractInt(ltBlock, "audio_bitrate_kbps", 384),
-          extractString(ltBlock, "nvenc_preset"),
+          preset, hw,
           extractInt(ltBlock, "scale_width", 0),
           extractInt(ltBlock, "scale_height", 0));
     }

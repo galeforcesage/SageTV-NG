@@ -583,18 +583,43 @@ public class FFMPEGTranscoder implements TranscodeEngine
       String abps = Sage.get("miniplayer/audioonly_audio_bitrate", defaultBps);
 
       // Video pass-through by default. If client property
-      // miniplayer/audioonly_video_codec is set to e.g. "h264_nvenc"
-      // or "libx264", we re-encode video too. Useful for clients whose
+      // miniplayer/audioonly_video_codec is set to e.g. "h264_nvenc",
+      // "libx264", or "auto", we re-encode video too. Useful for clients whose
       // HW decoder can't handle HEVC Main 10 reliably (e.g. Shield Tube /
       // Tegra X1) — symptom is black screen even though the TS is well-formed.
-      // Default changed to "h264_nvenc" because in practice the audio-only
-      // transcode is triggered for HEVC sources that legacy push clients can't
-      // demux/decode reliably anyway. Set to "copy" to disable re-encode.
+      // Default kept as "h264_nvenc" so existing NVENC deployments are
+      // unaffected. Set to "auto" to let HwEncoder pick the best available
+      // backend (nvenc / vaapi / qsv / amf / videotoolbox / libx264 fallback).
+      // Set to "copy" to disable re-encode.
       String vcodec = Sage.get("miniplayer/audioonly_video_codec", "h264_nvenc");
       String vparams;
       if (vcodec == null || vcodec.length() == 0 || "copy".equalsIgnoreCase(vcodec))
       {
         vparams = "-vcodec copy";
+      }
+      else if ("auto".equalsIgnoreCase(vcodec))
+      {
+        // Generic HW-encoder selection. Defaults to H.264 (broadest client
+        // compatibility); operators wanting HEVC out should set vcodec
+        // explicitly to hevc_nvenc / hevc_vaapi / etc.
+        sage.HwEncoder.Kind k = sage.HwEncoder.pick("h264");
+        String enc = sage.HwEncoder.encoderName(k, "h264");
+        if (enc == null) enc = "libx264";
+        String presetHint = Sage.get("miniplayer/audioonly_hwenc_preset", "p4");
+        String preset = sage.HwEncoder.preset(k, presetHint);
+        String presetFlag = sage.HwEncoder.presetFlag(k);
+        StringBuilder sb = new StringBuilder();
+        for (String g : sage.HwEncoder.globalArgs(k)) { sb.append(g).append(' '); }
+        sb.append("-vf ").append(sage.HwEncoder.videoFilter(k, "yuv420p", null));
+        sb.append(" -c:v ").append(enc);
+        if (preset != null && preset.length() > 0)
+          sb.append(' ').append(presetFlag).append(' ').append(preset);
+        String extra = Sage.get("miniplayer/audioonly_hwenc_params",
+            "-b:v 8M -maxrate 12M -bufsize 16M");
+        if (extra != null && extra.length() > 0) sb.append(' ').append(extra);
+        vparams = sb.toString();
+        if (Sage.DBG) System.out.println("FFMPEGTranscoder.audioonly: hwAuto picked "
+            + k + " -> " + enc);
       }
       else if ("h264_nvenc".equalsIgnoreCase(vcodec))
       {
