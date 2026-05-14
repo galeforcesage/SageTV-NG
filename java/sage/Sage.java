@@ -899,6 +899,26 @@ public final class Sage
     linuxConsumeStdinout = getBoolean("linux/consume_main_stdout_stdin", true);
     NUM_OUTPUT_FILES = Math.max(2, getInt("num_logfiles_to_keep", 4)) - 1;
     logFileDir = getLogPath(null);
+
+    // Phase 1 logging modernization: opt-in SLF4J/Logback bridge.
+    // When logging/use_slf4j=true, route System.out/err through SLF4J
+    // (configured by /opt/sagetv/server/logback.xml) and skip the legacy
+    // rolling-file PrintStream. Default false preserves existing behavior.
+    if (!TESTING && getBoolean("logging/use_slf4j", false))
+    {
+      try
+      {
+        SageLogBridge.install(prefix);
+        return;
+      }
+      catch (Throwable t)
+      {
+        // Fall through to legacy redirection on any class-loading or
+        // Logback init failure so the server keeps logging.
+        System.err.println("SageLogBridge install failed, falling back to legacy logger: " + t);
+      }
+    }
+
     if (DBG || !Sage.WINDOWS_OS)
     {
       rolloverLogs(prefix);
