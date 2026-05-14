@@ -89,6 +89,21 @@ public class HDHomeRunLineup
         lastFetchMs = System.currentTimeMillis();
         if (Sage.DBG) System.out.println("HDHomeRunLineup: " + host
             + " cached " + parsed.size() + " channels");
+        if (Sage.getBoolean("hdhr/atsc3_variant_pairing_enabled", true))
+        {
+          // Best-effort attach: skipped silently if Wizard isn't yet ready
+          // (boot ordering) -- next refresh will retry.
+          try
+          {
+            sage.Wizard wiz = sage.Wizard.getInstance();
+            if (wiz != null)
+              ChannelVariantAttacher.attach(this, hostToHexId(host));
+          }
+          catch (Throwable t)
+          {
+            if (Sage.DBG) System.out.println("ATSC3: attach error " + t);
+          }
+        }
       }
     }
     catch (Throwable t)
@@ -96,6 +111,14 @@ public class HDHomeRunLineup
       if (Sage.DBG) System.out.println("HDHomeRunLineup: refresh failed for "
           + host + ": " + t);
     }
+  }
+
+  /** Best-effort: HDHR hex device id lives in Sage.properties keyed by host. */
+  private static String hostToHexId(String host)
+  {
+    if (host == null) return "";
+    String hex = Sage.get("hdhr/host_to_devid/" + host, "");
+    return hex == null ? "" : hex;
   }
 
   private void maybeRefresh()
@@ -108,7 +131,35 @@ public class HDHomeRunLineup
   {
     if (channelNumber == null || channelNumber.length() == 0) return null;
     maybeRefresh();
-    return byChannel.get(channelNumber);
+    Map<String, Entry> snap = byChannel;
+    // Direct hit (e.g. "109.1" matches GuideNumber "109.1").
+    Entry e = snap.get(channelNumber);
+    if (e != null) return e;
+    // Major-only key (e.g. Sage tunes "109" but lineup uses "109.1"). Find any
+    // GuideNumber whose major part matches; prefer HEVC (ATSC 3.0) when more
+    // than one virtual subchannel shares the same major.
+    if (channelNumber.indexOf('.') < 0)
+    {
+      String majorDot = channelNumber + ".";
+      Entry best = null;
+      for (Map.Entry<String, Entry> me : snap.entrySet())
+      {
+        String k = me.getKey();
+        if (k == null) continue;
+        if (k.equals(channelNumber) || k.startsWith(majorDot))
+        {
+          Entry cand = me.getValue();
+          if (cand == null) continue;
+          if (best == null) { best = cand; continue; }
+          // Prefer HEVC over non-HEVC; among same-codec ties, keep first.
+          boolean bestIsHevc = "HEVC".equalsIgnoreCase(best.videoCodec);
+          boolean candIsHevc = "HEVC".equalsIgnoreCase(cand.videoCodec);
+          if (candIsHevc && !bestIsHevc) best = cand;
+        }
+      }
+      return best;
+    }
+    return null;
   }
 
   /**
@@ -126,6 +177,14 @@ public class HDHomeRunLineup
   {
     Entry e = lookup(channelNumber);
     return e == null ? null : e.url;
+  }
+
+  /** Snapshot of all current cache entries (Phase B variant pairing). */
+  public java.util.List<Entry> allEntries()
+  {
+    maybeRefresh();
+    Map<String, Entry> snap = byChannel;
+    return new java.util.ArrayList<Entry>(snap.values());
   }
 
   private Map<String, Entry> fetchAndParse() throws Exception
