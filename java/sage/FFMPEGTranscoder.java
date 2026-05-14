@@ -571,13 +571,53 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // Audio-only transcode: pass video through (-vcodec copy), re-encode
       // audio only. Used when the client supports the source video codec
       // (e.g. HEVC) but not the audio codec (e.g. Dolby AC-4).
-      // The specific audio codec is picked in maybeOverrideAc4AudioCodec()
-      // when the source is AC-4; otherwise default to AC-3.
+      // The specific audio codec is picked by MiniPlayer's fallback ladder
+      // (eac3 -> ac3 -> aac -> mp2) via setAc4SourceAudioCodec(); default ac3.
       String acodec = (ac4SourceAudioCodec != null && ac4SourceAudioCodec.length() > 0)
           ? ac4SourceAudioCodec : "ac3";
-      String abps = Sage.get("miniplayer/audioonly_audio_bitrate",
-          "eac3".equalsIgnoreCase(acodec) ? "640k" : "384k");
-      xcodeParams = "-f mpegts -vcodec copy -acodec " + acodec + " -b:a " + abps;
+      String defaultBps;
+      if ("eac3".equalsIgnoreCase(acodec))      defaultBps = "640k"; // 5.1 surround
+      else if ("ac3".equalsIgnoreCase(acodec))  defaultBps = "384k"; // 5.1 surround
+      else if ("aac".equalsIgnoreCase(acodec))  defaultBps = "256k"; // 2.0/5.1 (no passthrough)
+      else                                      defaultBps = "192k"; // mp2 stereo floor
+      String abps = Sage.get("miniplayer/audioonly_audio_bitrate", defaultBps);
+
+      // Video pass-through by default. If client property
+      // miniplayer/audioonly_video_codec is set to e.g. "h264_nvenc"
+      // or "libx264", we re-encode video too. Useful for clients whose
+      // HW decoder can't handle HEVC Main 10 reliably (e.g. Shield Tube /
+      // Tegra X1) — symptom is black screen even though the TS is well-formed.
+      // Default changed to "h264_nvenc" because in practice the audio-only
+      // transcode is triggered for HEVC sources that legacy push clients can't
+      // demux/decode reliably anyway. Set to "copy" to disable re-encode.
+      String vcodec = Sage.get("miniplayer/audioonly_video_codec", "h264_nvenc");
+      String vparams;
+      if (vcodec == null || vcodec.length() == 0 || "copy".equalsIgnoreCase(vcodec))
+      {
+        vparams = "-vcodec copy";
+      }
+      else if ("h264_nvenc".equalsIgnoreCase(vcodec))
+      {
+        // NVENC H.264 8-bit, broadly compatible. Tunable via
+        // miniplayer/audioonly_h264_nvenc_params.
+        String nvParams = Sage.get("miniplayer/audioonly_h264_nvenc_params",
+            "-preset p4 -tune hq -profile:v high -b:v 8M -maxrate 12M -bufsize 16M");
+        vparams = "-vf format=yuv420p -c:v h264_nvenc " + nvParams;
+      }
+      else if ("libx264".equalsIgnoreCase(vcodec))
+      {
+        String swParams = Sage.get("miniplayer/audioonly_libx264_params",
+            "-preset veryfast -profile:v high -b:v 6M -maxrate 9M -bufsize 12M");
+        vparams = "-vf format=yuv420p -c:v libx264 " + swParams;
+      }
+      else
+      {
+        // Raw codec name + optional extra params property
+        String extra = Sage.get("miniplayer/audioonly_video_codec_extra", "");
+        vparams = "-c:v " + vcodec + (extra.length() > 0 ? " " + extra : "");
+      }
+      xcodeParams = "-f mpegts " + vparams + " -acodec " + acodec + " -b:a " + abps;
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder.audioonly: xcodeParams=" + xcodeParams);
     }
     else
     {
@@ -872,12 +912,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
         Sage.getBoolean("xcode_fix_broken_hdpvr_streams", false))
       xcodeParamsVec.add("-brokendts");
 
-    // Establish these index points to insert sync parameters later
-    int syncIndexInsert = xcodeParamsVec.size();
-    xcodeParamsVec.add("");
-    xcodeParamsVec.add("");
-    xcodeParamsVec.add("");
-    xcodeParamsVec.add("");
+    // FFmpeg 7+: -vsync/-async are removed and replaced by -fps_mode and
+    // -af aresample=async=N. Both are OUTPUT options, so we no longer reserve
+    // slots before -i; instead the sync block below appends them to the output
+    // side of the command (right before the output filename).
 
     // We need a very high bitrate tolerance in order to prevent FFMPEG from trying to compensate for our adaptive bitrate changes.
     // This is limited by 32-bits
@@ -899,7 +937,13 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (activeFile)
       xcodeParamsVec.add("-activefile");
 
-    xcodeParamsVec.add("-stdinctrl");
+    // -stdinctrl is a SageTV-specific patch on the bundled ffmpeg. Upstream ffmpeg
+    // (e.g. our /usr/local/bin/ffmpeg-ac4 build for HEVC/AC-4 sources) does not
+    // recognize it and exits printing usage — producing zero output bytes and
+    // silent black playback on the client. Suppress it for non-Sage builds.
+    if (!needsAc4Ffmpeg(sourceFormat))
+      xcodeParamsVec.add("-stdinctrl");
+    else if (Sage.DBG) System.out.println("FFMPEGTranscoder: skipping -stdinctrl (upstream ffmpeg-ac4 has no SageTV patch)");
 
     // Having this on puts us in too much danger of underflow since it doesn't give us enough control
     //if (Sage.getBoolean("media_server/dont_transcode_faster_than_realtime", true))
@@ -1425,9 +1469,13 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // We only want to use these sync parameters if we're doing dynamic adjustment placeshifting
     // Although, I'm pretty sure we want to switch to the other set of params, but we need more testing before we do that
     // NOTE: 10/16/06 - the other set of params totally screw up our A/V sync for fixed rate placeshifting @ 15fps !!!!
+    // FFMPEG 5+: -vsync N has been removed in favor of -fps_mode <mode>, and -async N
+    // has been removed in favor of -af aresample=async=N. Map the legacy values:
+    //   -vsync 0 -> -fps_mode passthrough
+    //   -vsync 1 -> -fps_mode cfr
     if (dynamicRateAdjust || (isMpeg4Codec && outputFile == null))
     {
-      xcodeParamsVec.set(syncIndexInsert, "-vsync");
+      xcodeParamsVec.add("-fps_mode");
       // For AVI source files we need to allow video frame dropping for it to get proper initial sync if there was
       // also a seek
       // NARFLEX: 4/2/09 - using 'vsync 1' fixes a new bug where we have an error if we try to start transcoding in the middle
@@ -1435,18 +1483,18 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // NARFLEX: 10/29/10 - For frame decimation, we need to do -vsync 1 or we won't be able to drop frames for the h264 encoder properly
       if (httplsMode || (transcodeStartSeekTime != 0 && sourceFormat != null && (sage.media.format.MediaFormat.AVI.equals(sourceFormat.getFormatName()) ||
           sage.media.format.MediaFormat.MATROSKA.equals(sourceFormat.getFormatName()))))
-        xcodeParamsVec.set(syncIndexInsert + 1, "1");
+        xcodeParamsVec.add("cfr");
       else
-        xcodeParamsVec.set(syncIndexInsert + 1, "0");
-      xcodeParamsVec.set(syncIndexInsert + 2, "-async");
-      xcodeParamsVec.set(syncIndexInsert + 3, "1");
+        xcodeParamsVec.add("passthrough");
+      xcodeParamsVec.add("-af");
+      xcodeParamsVec.add("aresample=async=1");
     }
     else //if (xcodeParams.indexOf("-f mp4") != -1 || xcodeParams.indexOf("-f 3gp") != -1 || xcodeParams.indexOf("-f psp") != -1)
     {
-      xcodeParamsVec.set(syncIndexInsert, "-vsync");
-      xcodeParamsVec.set(syncIndexInsert + 1, "1");
-      xcodeParamsVec.set(syncIndexInsert + 2, "-async");
-      xcodeParamsVec.set(syncIndexInsert + 3, "100");
+      xcodeParamsVec.add("-fps_mode");
+      xcodeParamsVec.add("cfr");
+      xcodeParamsVec.add("-af");
+      xcodeParamsVec.add("aresample=async=100");
     }
 
     if (Sage.DBG && "TRUE".equals(Sage.get("xcode_video_bitrate_stats", null)))

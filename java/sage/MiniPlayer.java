@@ -1017,6 +1017,15 @@ public class MiniPlayer implements DVDMediaPlayer
           if (Sage.DBG) System.out.println("MiniPlayer.audioOnlyEval: container=" + cfEarly.getFormatName() + "(push=" + conOK + ")"
               + " video=" + (vfEarly != null ? vfEarly.getFormatName() : "null") + "(ok=" + vidOK + ")"
               + " audio=" + (afEarly != null ? afEarly.getFormatName() : "null") + "(ok=" + audOK + ")");
+
+          // NOTE: We previously had a "COPY-directive override" that honored
+          // FIXED_PUSH_REMUX_FORMAT=container=mpegts;videocodec=COPY;audiocodec=COPY
+          // as if it were proof the client could decode anything. That assumption is
+          // wrong — the Android miniclient sends that string as a hardcoded default,
+          // not as a real capability claim. Trusting it caused Shield (no AC-4 HW) to
+          // get raw AC-4 pushed and play silent video. The right behavior when audio
+          // is unsupported is the audio-only transcode path below.
+
           // Drop strict container-push check: if video codec is supported and audio
           // codec is NOT, audio-only transcode is the right call regardless of whether
           // the source container appears in the client's push-container list. Output is
@@ -1024,6 +1033,10 @@ public class MiniPlayer implements DVDMediaPlayer
           // can demux.
           if (vfEarly != null && afEarly != null && vidOK && !audOK)
           {
+            // Take the audio-only transcode path: video copy + audio re-encode.
+            // Works for both Shield (HEVC video copies cleanly) and Galaxy Tab
+            // (re-test pending — if HEVC video copy fails on Tab, narrow with a
+            // client-aware override later, NOT a blanket HEVC->full-transcode).
             if (Sage.DBG) System.out.println("MiniPlayer: profile-aware audio-only transcode "
                 + "(container=" + cfEarly.getFormatName()
                 + " video=" + vfEarly.getFormatName()
@@ -1045,13 +1058,33 @@ public class MiniPlayer implements DVDMediaPlayer
           if (Sage.DBG) System.out.println("MiniPlayer is using the MPEG4 transcoder");
           transcoded = true;
           useOriginalAudioTrack = false;
-          dynamicRateAdjust = (fixedPushFormat == null || fixedPushFormat.length() == 0);
-          if (dynamicRateAdjust)
-            prefTranscodeMode = majorTypeHint == MediaFile.MEDIATYPE_AUDIO ?
-                ((uiBandwidthEstimate > 256000) ? "music128" : "music") :
-                  ((mcsr != null && mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS)) ? "dynamic" : "dynamicts");
-                else
-                  prefTranscodeMode = fixedPushFormat;
+          // HEVC source: legacy push clients can't actually decode it (their caps lie),
+          // and their fixedPushFormat uses fps=SOURCE/resolution=SOURCE which becomes
+          // "-r 0 -s 0x0" because the HEVC source format has no parsed dims. Force
+          // the dynamic MPEG4/MP2 path which has sane defaults.
+          sage.media.format.ContainerFormat _cfHe = (currMF != null) ? currMF.getFileFormat() : null;
+          sage.media.format.VideoFormat _vfHe = (_cfHe != null) ? _cfHe.getVideoFormat() : null;
+          boolean hevcSrcLegacy = (_vfHe != null
+              && (sage.media.format.MediaFormat.HEVC.equalsIgnoreCase(_vfHe.getFormatName())
+                  || "H.265".equalsIgnoreCase(_vfHe.getFormatName())));
+          if (hevcSrcLegacy)
+          {
+            dynamicRateAdjust = false;
+            prefTranscodeMode = (mcsr != null && mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS))
+                ? "dynamic" : "dynamicts";
+            if (Sage.DBG) System.out.println("MiniPlayer: HEVC source — forcing prefTranscodeMode=" + prefTranscodeMode
+                + " (legacy fixedPushFormat would produce -r 0 -s 0x0)");
+          }
+          else
+          {
+            dynamicRateAdjust = (fixedPushFormat == null || fixedPushFormat.length() == 0);
+            if (dynamicRateAdjust)
+              prefTranscodeMode = majorTypeHint == MediaFile.MEDIATYPE_AUDIO ?
+                  ((uiBandwidthEstimate > 256000) ? "music128" : "music") :
+                    ((mcsr != null && mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS)) ? "dynamic" : "dynamicts");
+                  else
+                    prefTranscodeMode = fixedPushFormat;
+          }
         }
         else
         {
@@ -1165,6 +1198,13 @@ public class MiniPlayer implements DVDMediaPlayer
             }
           }
         }
+
+        // (Reverted: previous FINAL OVERRIDE forced HEVC->dynamic transcode for ALL
+        // legacy push clients. This blanket-forced transcode also on NVIDIA Shield,
+        // which has hardware HEVC and may actually be able to play push-mode HEVC.
+        // Removed so Shield (legacy client) can be tested raw. Galaxy Tab still
+        // fails — re-add a client-aware version (MAC/name match) once we know
+        // which clients truly cannot decode HEVC.)
       }
 
       // --- Profile decision diagnostic (schema v2) ---
@@ -1218,8 +1258,23 @@ public class MiniPlayer implements DVDMediaPlayer
               currFileFormat = sage.media.format.FormatParser.getFileFormat(file);
             
             //Check to see if there was a fixed format defined for transcoding and that the file has video
-            if(fixedPushFormat != null && fixedPushFormat.length() > 0 
-                    && currFileFormat != null && currFileFormat.getVideoFormats().length > 0)
+            // BUT: do NOT clobber a profile-aware "audioonly" decision. Audio-only transcode keeps
+            // the source video codec via -vcodec copy; the legacy fixedPushFormat parser would
+            // re-encode video (defaulting to mpeg4) and uses fps=SOURCE/resolution=SOURCE which
+            // explodes when the source format lacks fps/dimensions (e.g. HEVC ATSC 3.0 streams
+            // probed with native parser only — no width/height/fps detected).
+            // ALSO skip the override for HEVC sources: the legacy MiniClient v1.x cannot
+            // actually decode HEVC (its caps advertise it but the push decoder is mpeg4-only)
+            // AND the fixedPushFormat template fps=SOURCE/res=SOURCE produces invalid
+            // -r 0 -s 0x0 ffmpeg args from a 0x0/0fps HEVC source format.
+            sage.media.format.VideoFormat _vfFP = (currFileFormat != null) ? currFileFormat.getVideoFormat() : null;
+            boolean _hevcSrcFP = (_vfFP != null
+                && (sage.media.format.MediaFormat.HEVC.equalsIgnoreCase(_vfFP.getFormatName())
+                    || "H.265".equalsIgnoreCase(_vfFP.getFormatName())));
+            if(fixedPushFormat != null && fixedPushFormat.length() > 0
+                    && currFileFormat != null && currFileFormat.getVideoFormats().length > 0
+                    && !"audioonly".equalsIgnoreCase(prefTranscodeMode)
+                    && !_hevcSrcFP)
             {
                 if(fixedPushRemuxFormat != null && fixedPushRemuxFormat.length() > 0 
                         && videoCodecSupported && audioCodecSupported && !containerSupported)
@@ -1234,6 +1289,11 @@ public class MiniPlayer implements DVDMediaPlayer
                 }
                 
             }
+            else if (Sage.DBG && "audioonly".equalsIgnoreCase(prefTranscodeMode)
+                     && fixedPushFormat != null && fixedPushFormat.length() > 0)
+            {
+              System.out.println("MiniPlayer: keeping audio-only transcode (skipping client fixedPushFormat override)");
+            }
             mpegSrc.setStreamTranscodeMode(prefTranscodeMode, currFileFormat);
             // If the source has Dolby AC-4 audio (ATSC 3.0), prefer E-AC-3 for
             // any client that advertises EAC3 (higher quality / 5.1 preserved).
@@ -1241,11 +1301,22 @@ public class MiniPlayer implements DVDMediaPlayer
             if (currFileFormat != null
                 && sage.media.format.MediaFormat.AC4.equals(currFileFormat.getPrimaryAudioFormat()))
             {
-              boolean clientEac3 = (mcsr != null
-                  && mcsr.isSupportedAudioCodec(sage.media.format.MediaFormat.EAC3));
-              String pick = clientEac3 ? "eac3" : "ac3";
+              // Audio fallback ladder (best -> worst preserving surround where possible):
+              //   1. EAC3  — 5.1, 640k, HDMI passthrough capable, ExoPlayer >= 1.x
+              //   2. AC3   — 5.1, 384k, HDMI passthrough capable, universal
+              //   3. AAC   — 2.0/5.1, 256k, decoder always present, no passthrough
+              //   4. MP2   — stereo only, 192k, last-resort universal floor
+              String pick;
+              if (mcsr != null && mcsr.isSupportedAudioCodec(sage.media.format.MediaFormat.EAC3))
+                pick = "eac3";
+              else if (mcsr != null && mcsr.isSupportedAudioCodec(sage.media.format.MediaFormat.AC3))
+                pick = "ac3";
+              else if (mcsr != null && mcsr.isSupportedAudioCodec(sage.media.format.MediaFormat.AAC))
+                pick = "aac";
+              else
+                pick = "mp2";
               if (Sage.DBG) System.out.println("MiniPlayer: AC-4 source detected — selecting "
-                  + pick + " (client supports EAC3=" + clientEac3 + ")");
+                  + pick + " (fallback ladder: eac3 -> ac3 -> aac -> mp2)");
               mpegSrc.setAc4SourceAudioCodec(pick);
             }
             transcoded = false;
@@ -1380,6 +1451,49 @@ public class MiniPlayer implements DVDMediaPlayer
             else if ("music".equals(prefTranscodeMode) || "music128".equals(prefTranscodeMode))
             {
               formatString = "f=MPEG2-PS;[bf=aud;f=MP2]";
+            }
+            else if ("audioonly".equals(prefTranscodeMode))
+            {
+              // Audio-only transcode keeps source video via -vcodec copy and remuxes
+              // into MPEG2-TS with EAC3 (or AC3) audio. Tell the client EXACTLY that
+              // so it sets up its TS demuxer + correct decoders. Without this the
+              // client falls back to its FIXED_PUSH_MEDIA_FORMAT default (often
+              // matroska/mp2) and renders nothing because the wire format doesn't
+              // match the demuxer it initialized.
+              sage.media.format.ContainerFormat srcCf = currMF.getFileFormat();
+              sage.media.format.VideoFormat srcVf = (srcCf != null) ? srcCf.getVideoFormat() : null;
+              sage.media.format.AudioFormat srcAf = (srcCf != null) ? srcCf.getAudioFormat() : null;
+              // Map the active audioonly video codec setting to the wire codec name we
+              // advertise to the client. If we're not doing -vcodec copy then the bytes
+              // on the wire are NOT the source codec — telling the client they are will
+              // make it spin up the wrong decoder (e.g. HEVC for an H.264 stream → black).
+              String aoVc = Sage.get("miniplayer/audioonly_video_codec", "h264_nvenc");
+              String vcName;
+              if (aoVc == null || aoVc.length() == 0 || "copy".equalsIgnoreCase(aoVc))
+                vcName = (srcVf != null && srcVf.getFormatName() != null) ? srcVf.getFormatName() : sage.media.format.MediaFormat.H264;
+              else if ("h264_nvenc".equalsIgnoreCase(aoVc) || "libx264".equalsIgnoreCase(aoVc) || "h264".equalsIgnoreCase(aoVc))
+                vcName = sage.media.format.MediaFormat.H264;
+              else if ("hevc_nvenc".equalsIgnoreCase(aoVc) || "libx265".equalsIgnoreCase(aoVc) || "hevc".equalsIgnoreCase(aoVc) || "h265".equalsIgnoreCase(aoVc))
+                vcName = sage.media.format.MediaFormat.HEVC;
+              else
+                vcName = sage.media.format.MediaFormat.H264;
+              boolean clientEac3 = (mcsr != null && mcsr.isSupportedAudioCodec(sage.media.format.MediaFormat.EAC3));
+              String acName = (srcAf != null && sage.media.format.MediaFormat.AC4.equals(srcAf.getFormatName()))
+                  ? (clientEac3 ? sage.media.format.MediaFormat.EAC3 : sage.media.format.MediaFormat.AC3)
+                  : ((srcAf != null && srcAf.getFormatName() != null) ? srcAf.getFormatName() : sage.media.format.MediaFormat.AC3);
+              StringBuilder fb = new StringBuilder();
+              fb.append("f=").append(sage.media.format.MediaFormat.MPEG2_TS).append(";");
+              fb.append("[bf=vid;f=").append(vcName);
+              if (srcVf != null)
+              {
+                if (srcVf.getWidth() > 0)  fb.append(";w=").append(srcVf.getWidth());
+                if (srcVf.getHeight() > 0) fb.append(";h=").append(srcVf.getHeight());
+                if (srcVf.getFps() > 0)    fb.append(";fps=").append(srcVf.getFps());
+              }
+              fb.append(";]");
+              fb.append("[bf=aud;f=").append(acName).append(";]");
+              formatString = fb.toString();
+              if (Sage.DBG) System.out.println("MiniPlayer: audio-only push format hint -> " + formatString);
             }
           }
           if (cf != null)
