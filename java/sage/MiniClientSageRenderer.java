@@ -4515,6 +4515,7 @@ public class MiniClientSageRenderer extends SageRenderer
               iPhoneMode,
               remoteVersion,
               videoCodecs,
+              audioCodecs,
               streamingProtocols);
           if (Sage.DBG && resolvedProfile != null)
             System.out.println("MiniClient auto-detected profile: " + resolvedProfile);
