@@ -134,6 +134,14 @@ dependencies {
     'third_party/Lucene/lucene-core-4.10.4.jar',
     'third_party/Lucene/lucene-analyzers-common-4.10.4.jar',
     'third_party/JCIFS/jcifs-1.1.6.jar',
+
+    // SLF4J + Logback (Phase 1 logging modernization).
+    // SLF4J API is compiled against; Logback is the runtime backend selected
+    // via /opt/sagetv/server/logback.xml when sage property logging/use_slf4j=true.
+    // Both jars must also be present in the runtime JARs/ classpath dir.
+    'third_party/SLF4J/slf4j-api-2.0.16.jar',
+    'third_party/SLF4J/logback-classic-1.5.13.jar',
+    'third_party/SLF4J/logback-core-1.5.13.jar',
   )
 
   implementation 'com.apple:AppleJavaExtensions:1.4'
@@ -205,6 +213,13 @@ task sageJar(type: Jar) {
   from 'images/SageTV/'
   from('i18n') {
     include '*.properties'
+  }
+
+  // Phase 1 logging: bundle default logback.xml as a classpath resource
+  // so SLF4J/Logback finds it without needing -Dlogback.configurationFile.
+  // Operators can still override at runtime by setting that JVM arg.
+  from('installer/conf') {
+    include 'logback.xml'
   }
 
   doLast {

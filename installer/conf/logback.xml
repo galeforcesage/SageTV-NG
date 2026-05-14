@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SageTV Phase 1 logging configuration (SLF4J + Logback).
+
+  Activated when:
+    - Sage property logging/use_slf4j=true (in Sage.properties), AND
+    - This file is on the classpath OR pointed at via:
+        -Dlogback.configurationFile=/opt/sagetv/server/logback.xml
+
+  When the property is FALSE the legacy rolling-text-file logger built
+  into Sage.java continues to handle stdout/stderr exactly as before.
+
+  Per-package level overrides:
+    -Dsage.epg.sd.level=DEBUG
+    -Dsage.hdhr.level=TRACE
+  (See <logger> entries near bottom; uncomment to use.)
+-->
+<configuration scan="true" scanPeriod="30 seconds">
+
+  <!-- Where to write log files. Override with -Dsage.log.dir=/path -->
+  <property name="LOG_DIR" value="${sage.log.dir:-/opt/sagetv/server}"/>
+  <property name="LOG_FILE" value="${LOG_DIR}/sagetv_0.txt"/>
+
+  <!-- Common pattern: timestamp, level, thread, logger, message. -->
+  <property name="PATTERN"
+            value="%d{HH:mm:ss.SSS} %-5level [%thread] %logger{30} - %msg%n"/>
+
+  <!-- Rolling file appender: rotate at 50MB, keep 14 archives. -->
+  <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>${LOG_FILE}</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+      <fileNamePattern>${LOG_DIR}/sagetv_%d{yyyy-MM-dd}_%i.txt.gz</fileNamePattern>
+      <maxFileSize>50MB</maxFileSize>
+      <maxHistory>14</maxHistory>
+      <totalSizeCap>2GB</totalSizeCap>
+    </rollingPolicy>
+    <encoder>
+      <pattern>${PATTERN}</pattern>
+    </encoder>
+  </appender>
+
+  <!-- Async wrapper so logging never blocks the recording or scheduler thread. -->
+  <appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
+    <queueSize>2048</queueSize>
+    <discardingThreshold>0</discardingThreshold>
+    <neverBlock>true</neverBlock>
+    <appender-ref ref="FILE"/>
+  </appender>
+
+  <!-- NO console appender for sage.stdout / sage.stderr loggers:
+       SageLogBridge replaces System.out with a PrintStream that re-captures
+       its own output. A ConsoleAppender writing to System.out would
+       therefore loop. The file appender is sufficient; container stdout
+       still shows entrypoint-state output (which doesn't go through the
+       bridge). -->
+
+  <!-- Bridged legacy stdout/stderr (everything from existing System.out.println sites). -->
+  <logger name="sage.stdout" level="INFO" additivity="false">
+    <appender-ref ref="ASYNC_FILE"/>
+  </logger>
+  <logger name="sage.stderr" level="WARN" additivity="false">
+    <appender-ref ref="ASYNC_FILE"/>
+  </logger>
+
+  <!-- Per-package overrides for new SageLog-based call sites.
+       Uncomment + adjust as needed.
+  <logger name="sage.epg.sd"   level="DEBUG"/>
+  <logger name="sage.hdhr"     level="DEBUG"/>
+  <logger name="sage.HwEncoder" level="DEBUG"/>
+  -->
+
+  <root level="INFO">
+    <appender-ref ref="ASYNC_FILE"/>
+  </root>
+</configuration>
