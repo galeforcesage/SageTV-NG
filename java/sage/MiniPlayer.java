@@ -1471,12 +1471,20 @@ public class MiniPlayer implements DVDMediaPlayer
               String vcName;
               if (aoVc == null || aoVc.length() == 0 || "copy".equalsIgnoreCase(aoVc))
                 vcName = (srcVf != null && srcVf.getFormatName() != null) ? srcVf.getFormatName() : sage.media.format.MediaFormat.H264;
-              else if ("h264_nvenc".equalsIgnoreCase(aoVc) || "libx264".equalsIgnoreCase(aoVc) || "h264".equalsIgnoreCase(aoVc))
+              else if ("auto".equalsIgnoreCase(aoVc))
+              {
+                // HwEncoder auto-pick targets H.264 by default (see FFMPEGTranscoder
+                // audioonly path); advertise H.264 to the client to match.
                 vcName = sage.media.format.MediaFormat.H264;
-              else if ("hevc_nvenc".equalsIgnoreCase(aoVc) || "libx265".equalsIgnoreCase(aoVc) || "hevc".equalsIgnoreCase(aoVc) || "h265".equalsIgnoreCase(aoVc))
-                vcName = sage.media.format.MediaFormat.HEVC;
+              }
               else
-                vcName = sage.media.format.MediaFormat.H264;
+              {
+                String norm = sage.HwEncoder.normalizeCodec(aoVc);
+                if ("hevc".equals(norm))
+                  vcName = sage.media.format.MediaFormat.HEVC;
+                else
+                  vcName = sage.media.format.MediaFormat.H264;
+              }
               boolean clientEac3 = (mcsr != null && mcsr.isSupportedAudioCodec(sage.media.format.MediaFormat.EAC3));
               String acName = (srcAf != null && sage.media.format.MediaFormat.AC4.equals(srcAf.getFormatName()))
                   ? (clientEac3 ? sage.media.format.MediaFormat.EAC3 : sage.media.format.MediaFormat.AC3)

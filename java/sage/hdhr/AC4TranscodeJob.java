@@ -42,10 +42,12 @@ import java.util.List;
  *
  * Sage.properties knobs:
  *   hdhr/ac4_transcode_enabled    default "auto"  (auto|on|off)
- *                                 auto = on iff h264_nvenc encoder is available
+ *                                 auto = on iff ANY HW H.264 encoder is
+ *                                 available (nvenc/vaapi/qsv/amf/videotoolbox)
  *   hdhr/ac4_transcode_ffmpeg     default /usr/local/bin/ffmpeg-ac4
- *   hdhr/ac4_transcode_vcodec     default h264_nvenc
- *   hdhr/ac4_transcode_preset     default p4
+ *   hdhr/ac4_transcode_vcodec     default "auto" (HwEncoder picks); accepts
+ *                                 explicit names like h264_nvenc, h264_vaapi
+ *   hdhr/ac4_transcode_preset     default p4 (portable hint, mapped per encoder)
  *   hdhr/ac4_transcode_vbitrate   default 8M
  *   hdhr/ac4_transcode_acodec     default ac3
  *   hdhr/ac4_transcode_abitrate   default 384k
@@ -57,8 +59,6 @@ public class AC4TranscodeJob implements Runnable
   public static final String DEFAULT_FFMPEG  = "/usr/local/bin/ffmpeg-ac4";
   public static final String ENABLED_PROP    = "hdhr/ac4_transcode_enabled";
 
-  // Cached result of the one-time NVENC probe.
-  private static volatile Boolean nvencAvailable;
   // Cached result of the one-time isEnabled() decision (logged once).
   private static volatile Boolean enabledCached;
 
@@ -89,12 +89,31 @@ public class AC4TranscodeJob implements Runnable
   public void run()
   {
     String ff       = Sage.get(FFMPEG_BIN_PROP, DEFAULT_FFMPEG);
-    String vcodec   = Sage.get("hdhr/ac4_transcode_vcodec",   "h264_nvenc");
-    String preset   = Sage.get("hdhr/ac4_transcode_preset",   "p4");
+    String vcodec   = Sage.get("hdhr/ac4_transcode_vcodec",   "auto");
+    String presetIn = Sage.get("hdhr/ac4_transcode_preset",   "p4");
     String vbitrate = Sage.get("hdhr/ac4_transcode_vbitrate", "8M");
     String acodec   = Sage.get("hdhr/ac4_transcode_acodec",   "ac3");
     String abitrate = Sage.get("hdhr/ac4_transcode_abitrate", "384k");
     String scale    = Sage.get("hdhr/ac4_transcode_scale",    "1920:1080");
+
+    // Resolve generic "auto" -> concrete encoder via HwEncoder.
+    sage.HwEncoder.Kind hwKind;
+    String resolvedEncoder;
+    if ("auto".equalsIgnoreCase(vcodec))
+    {
+      hwKind = sage.HwEncoder.pick("h264", ff);
+      resolvedEncoder = sage.HwEncoder.encoderName(hwKind, "h264");
+      if (resolvedEncoder == null) resolvedEncoder = "libx264";
+    }
+    else
+    {
+      // Explicit encoder name; figure out which kind it belongs to so we
+      // can translate the portable preset hint correctly.
+      hwKind = encoderToKind(vcodec);
+      resolvedEncoder = vcodec;
+    }
+    String preset = sage.HwEncoder.preset(hwKind, presetIn);
+    String presetFlag = sage.HwEncoder.presetFlag(hwKind);
 
     List<String> cmd = new ArrayList<String>();
     cmd.add(ff);
@@ -102,12 +121,18 @@ public class AC4TranscodeJob implements Runnable
     cmd.add("-nostdin");
     cmd.add("-loglevel"); cmd.add("error");
     cmd.add("-y");
+    // HW-specific global args (e.g. VAAPI device init) must precede -i.
+    for (String g : sage.HwEncoder.globalArgs(hwKind)) cmd.add(g);
     cmd.add("-i"); cmd.add(src);
     cmd.add("-map"); cmd.add("0:v:0");
     cmd.add("-map"); cmd.add("0:a:0");
-    cmd.add("-vf"); cmd.add("scale=" + scale + ":flags=bicubic,format=yuv420p");
-    cmd.add("-c:v"); cmd.add(vcodec);
-    cmd.add("-preset"); cmd.add(preset);
+    String hwFilter = sage.HwEncoder.videoFilter(hwKind, "yuv420p", "scale=" + scale + ":flags=bicubic");
+    cmd.add("-vf"); cmd.add(hwFilter);
+    cmd.add("-c:v"); cmd.add(resolvedEncoder);
+    if (preset != null && preset.length() > 0)
+    {
+      cmd.add(presetFlag); cmd.add(preset);
+    }
     cmd.add("-b:v"); cmd.add(vbitrate);
     cmd.add("-c:a"); cmd.add(acodec);
     cmd.add("-b:a"); cmd.add(abitrate);
@@ -161,8 +186,8 @@ public class AC4TranscodeJob implements Runnable
    * True if AC-4 transcode is permitted. Honors hdhr/ac4_transcode_enabled:
    *   "on"   - always on
    *   "off"  - always off
-   *   "auto" - on iff h264_nvenc is present in ffmpeg-ac4's encoder list
-   *            (default; logs a clear WARN once when auto-disabled).
+   *   "auto" - on iff any HW H.264 encoder is available (default; logs a
+   *            clear WARN once when auto-disabled).
    */
   public static boolean isEnabled()
   {
@@ -183,14 +208,21 @@ public class AC4TranscodeJob implements Runnable
       }
       else // "auto" or anything else
       {
-        v = hasNvenc();
+        String ff = Sage.get(FFMPEG_BIN_PROP, DEFAULT_FFMPEG);
+        sage.HwEncoder.Kind k = sage.HwEncoder.pick("h264", ff);
+        v = (k != null && k != sage.HwEncoder.Kind.NONE);
         if (!v && Sage.DBG)
         {
-          System.out.println("AC4TranscodeJob: AUTO-DISABLED — no h264_nvenc "
-              + "encoder found in " + Sage.get(FFMPEG_BIN_PROP, DEFAULT_FFMPEG)
+          System.out.println("AC4TranscodeJob: AUTO-DISABLED — no HW H.264 "
+              + "encoder (nvenc/vaapi/qsv/amf/videotoolbox) found in " + ff
               + ". ATSC 3.0 recording still works; modern clients play HEVC+AC-4 "
               + "natively. To force software transcode for legacy clients, set "
               + ENABLED_PROP + "=on (CPU-bound, may not be real-time).");
+        }
+        else if (Sage.DBG)
+        {
+          System.out.println("AC4TranscodeJob: AUTO-ENABLED — using " + k
+              + " (" + sage.HwEncoder.encoderName(k, "h264") + ")");
         }
       }
       enabledCached = Boolean.valueOf(v);
@@ -199,44 +231,27 @@ public class AC4TranscodeJob implements Runnable
   }
 
   /**
-   * Probe ffmpeg-ac4 once for the h264_nvenc encoder. Result is cached for
-   * the lifetime of the JVM (re-probe on config change requires restart).
+   * @deprecated Use {@code sage.HwEncoder.availableFor("h264")} for the
+   * generic check, or {@code sage.HwEncoder.pick("h264", ff) == NVENC}
+   * specifically. Kept as a thin alias so any caller (or test) still compiles.
    */
+  @Deprecated
   public static boolean hasNvenc()
   {
-    Boolean c = nvencAvailable;
-    if (c != null) return c.booleanValue();
-    synchronized (AC4TranscodeJob.class)
-    {
-      if (nvencAvailable != null) return nvencAvailable.booleanValue();
-      boolean found = false;
-      String ff = Sage.get(FFMPEG_BIN_PROP, DEFAULT_FFMPEG);
-      try
-      {
-        Process p = new ProcessBuilder(ff, "-hide_banner", "-encoders")
-            .redirectErrorStream(true).start();
-        BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
-        try
-        {
-          String line;
-          while ((line = r.readLine()) != null)
-          {
-            if (line.contains("h264_nvenc")) { found = true; break; }
-          }
-        }
-        finally { try { r.close(); } catch (IOException ie) {} }
-        // Drain remainder so the process can exit cleanly.
-        try { while (p.getInputStream().read() >= 0); } catch (IOException ie) {}
-        try { p.waitFor(); } catch (InterruptedException ie) { p.destroy(); }
-      }
-      catch (Throwable t)
-      {
-        if (Sage.DBG) System.out.println("AC4TranscodeJob: NVENC probe failed: " + t);
-      }
-      nvencAvailable = Boolean.valueOf(found);
-      if (Sage.DBG) System.out.println("AC4TranscodeJob: h264_nvenc "
-          + (found ? "available" : "NOT available"));
-      return found;
-    }
+    String ff = Sage.get(FFMPEG_BIN_PROP, DEFAULT_FFMPEG);
+    return sage.HwEncoder.detect(ff).contains(sage.HwEncoder.Kind.NVENC);
+  }
+
+  /** Map an explicit ffmpeg encoder name to its HwEncoder.Kind. */
+  private static sage.HwEncoder.Kind encoderToKind(String enc)
+  {
+    if (enc == null) return sage.HwEncoder.Kind.NONE;
+    String e = enc.toLowerCase();
+    if (e.endsWith("_nvenc"))        return sage.HwEncoder.Kind.NVENC;
+    if (e.endsWith("_vaapi"))        return sage.HwEncoder.Kind.VAAPI;
+    if (e.endsWith("_qsv"))          return sage.HwEncoder.Kind.QSV;
+    if (e.endsWith("_amf"))          return sage.HwEncoder.Kind.AMF;
+    if (e.endsWith("_videotoolbox")) return sage.HwEncoder.Kind.VIDEOTOOLBOX;
+    return sage.HwEncoder.Kind.NONE;
   }
 }
