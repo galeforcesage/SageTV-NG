@@ -113,6 +113,18 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
       // If the channel is nothing, then use the last one. This happens with default live.
       if (channel.length() == 0)
         channel = activeSource.getChannel();
+      // ---- Phase C/D: variant selection (recording_policy + LiveTV) ----
+      // Map "109" -> "109.1" (or "109.2") according to policy, leveraging
+      // ChannelVariants that were attached at scan time. Falls through
+      // unchanged when no variants are registered for this station.
+      String remapped = pickVariantTuningLocator(channel, encodeFile);
+      if (remapped != null && !remapped.equals(channel))
+      {
+        if (Sage.DBG) System.out.println("ATSC3: livetv/rec chan=" + channel
+            + " remapped=" + remapped + " (policy="
+            + Sage.get("mmc/atsc3/recording_policy", "prefer_atsc3") + ")");
+        channel = remapped;
+      }
       tuneToChannel(channel);
     }
 
@@ -143,6 +155,49 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
             httpPullThread = new Thread(job, getName() + "-HttpPull");
             httpPullThread.setDaemon(true);
             httpPullThread.start();
+
+            // ---- Phase C/G: pre-populate MediaFile format ----
+            // The HTTP-pull path bypasses native capture, so the C-side never
+            // sends the AV-INF format message that normally drives
+            // MediaFile.setMediafileFormat(). Without it, MediaFile.hasValidFileFormat()
+            // stays false (numStreams==0), VideoFrame.shouldIWaitToStartPlayback()
+            // never clears, and LoadMF spins until the 30s
+            // videoframe/max_wait_for_recording_data hard timeout fires.
+            //
+            // The codec identity is already known at tune time from the lineup
+            // (HEVC video + AC-4 audio in MPEG-TS), so seed the format directly.
+            // No probe needed; legacy ffprobe can't decode AC-4 anyway.
+            try
+            {
+              MediaFile mf = Wizard.getInstance().getFileForFilePath(new java.io.File(encodeFile));
+              if (mf != null)
+              {
+                sage.media.format.ContainerFormat existing = mf.getFileFormat();
+                if (existing == null || existing.getNumberOfStreams() == 0)
+                {
+                  sage.media.format.ContainerFormat cf = new sage.media.format.ContainerFormat();
+                  cf.setFormatName(sage.media.format.MediaFormat.MPEG2_TS);
+                  sage.media.format.VideoFormat vf = new sage.media.format.VideoFormat();
+                  vf.setFormatName(sage.media.format.MediaFormat.HEVC);
+                  sage.media.format.AudioFormat af = new sage.media.format.AudioFormat();
+                  af.setFormatName(sage.media.format.MediaFormat.AC4);
+                  cf.setStreamFormats(new sage.media.format.BitstreamFormat[] { vf, af });
+                  mf.setMediafileFormat(cf);
+                  if (Sage.DBG) System.out.println("ATSC3 HTTP-pull: seeded MediaFile format=" + cf
+                      + " mf=" + mf);
+                  VideoFrame.kickAll();
+                }
+              }
+              else if (Sage.DBG)
+              {
+                System.out.println("ATSC3 HTTP-pull: WARNING no MediaFile found for path="
+                    + encodeFile + " (format seed skipped)");
+              }
+            }
+            catch (Throwable t)
+            {
+              if (Sage.DBG) System.out.println("ATSC3 HTTP-pull: format seed failed: " + t);
+            }
             return;
           }
         }
@@ -588,4 +643,61 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
 
   private static final java.util.regex.Pattern HEX_ID_PATTERN =
       java.util.regex.Pattern.compile("\\b([0-9A-Fa-f]{8})\\b");
+
+  /**
+   * Phase C/D variant selection. Reads {@link ChannelVariants} attached to the
+   * resolved stationID and returns the tuning locator that matches the
+   * effective policy. Returns {@code channel} unchanged when no variants are
+   * registered or when the policy is {@code explicit}.
+   *
+   * <p>Policy comes from {@code mmc/atsc3/recording_policy} (default
+   * {@code prefer_atsc3} per user requirement). Recordings and LiveTV share
+   * the same policy in this revision; per-client LiveTV shaping is layered
+   * on top later via {@code ClientProfile.liveTranscode.preferAtsc3}.</p>
+   */
+  private String pickVariantTuningLocator(String channel, String encodeFile)
+  {
+    if (channel == null || channel.length() == 0) return channel;
+    String policy = Sage.get("mmc/atsc3/recording_policy", "prefer_atsc3");
+    if ("explicit".equalsIgnoreCase(policy)) return channel;
+
+    int sid = resolveStationID(channel);
+    if (sid <= 0) return channel;
+
+    java.util.List<ChannelVariant> vars = ChannelVariants.forStation(sid);
+    if (vars.isEmpty()) return channel;
+
+    boolean wantAtsc3 = !"prefer_atsc1".equalsIgnoreCase(policy);
+    ChannelVariant chosen = null;
+    for (ChannelVariant v : vars)
+    {
+      if (wantAtsc3 && v.isAtsc3()) { chosen = v; break; }
+      if (!wantAtsc3 && !v.isAtsc3()) { chosen = v; break; }
+    }
+    if (chosen == null)
+    {
+      // Requested ATSC3 but only ATSC1 (or vice versa) — honor what's there.
+      chosen = vars.get(0);
+    }
+    String loc = chosen.getTuningLocator();
+    return (loc == null || loc.length() == 0) ? channel : loc;
+  }
+
+  private int resolveStationID(String channel)
+  {
+    try
+    {
+      EPG epg = EPG.getInstance();
+      if (epg == null || activeSource == null) return 0;
+      long provID = activeSource.getProviderID();
+      if (provID == 0) return 0;
+      return epg.guessStationID(provID, channel);
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("ATSC3: resolveStationID failed for "
+          + channel + ": " + t);
+      return 0;
+    }
+  }
 }
