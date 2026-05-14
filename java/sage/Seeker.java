@@ -5133,6 +5133,19 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
     // we need to insert it into the schedule. We also need to check to see
     // if the Airing is the currRecord if it's not over yet before we bail.
 
+    // If the airing already has a bound, completed (non-live, non-recording) MediaFile,
+    // route directly to the MediaFile overload. This is what modern clients do, and it
+    // avoids the encoder-resolution / "currRecord on same stationID" substitution path
+    // below that mis-resolves recordings whose Airing has a generic/duplicate title
+    // (e.g. "No Data" channels) when the airing's scheduling slot is in the past.
+    {
+      MediaFile boundMF = wiz.getFileForAiring(watchAir);
+      if (boundMF != null && !boundMF.isAnyLiveStream() && !boundMF.isRecording())
+      {
+        if (Sage.DBG) System.out.println("Seeker.requestWatch(Airing) routing to bound MediaFile=" + boundMF);
+        return requestWatch(boundMF, errorReturn, uiClient);
+      }
+    }
 
     boolean alreadyStarted = (watchAir.getSchedulingStart() <= Sage.time()) || wiz.getFileForAiring(watchAir) != null;
     boolean airingDone = (watchAir.getSchedulingEnd() <= Sage.time()) || (watchAir instanceof MediaFile.FakeAiring);
