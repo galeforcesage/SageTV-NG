@@ -64,6 +64,21 @@
           "type": "boolean",
           "default": true,
           "description": "Whether clients can send override keys for this profile"
+        },
+        "live_transcode": {
+          "type": "object",
+          "description": "Per-profile live-transcode shaping for ATSC 3.0 / HEVC sources",
+          "properties": {
+            "prefer_atsc3": { "type": "boolean", "default": false },
+            "video_codec": { "type": "string", "enum": ["H264", "HEVC"] },
+            "audio_codec": { "type": "string", "enum": ["AC4", "EAC3", "AC3", "AAC"] },
+            "max_bitrate_kbps": { "type": "integer", "minimum": 0 },
+            "video_bitrate_kbps": { "type": "integer", "minimum": 0 },
+            "audio_bitrate_kbps": { "type": "integer", "minimum": 0 },
+            "nvenc_preset": { "type": "string", "pattern": "^p[1-7]$" },
+            "scale_width": { "type": "integer", "minimum": 0 },
+            "scale_height": { "type": "integer", "minimum": 0 }
+          }
         }
       },
       "required": ["containers", "video_codecs", "audio_codecs", "auto_remux"]

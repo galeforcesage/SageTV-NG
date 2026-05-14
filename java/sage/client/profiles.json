@@ -2,16 +2,27 @@
   "schema_version": 2,
   "profiles": {
     "hd_legacy_strict": {
-      "description": "Unmanaged HDx00 extenders - strictest safety path",
+      "description": "Unmanaged HDx00 extenders (HD300 etc) - native MPEG-2 + H.264 only",
       "managed": false,
       "containers": ["MPEG2-TS"],
-      "video_codecs": ["H.264"],
+      "video_codecs": ["MPEG2VIDEO", "H.264"],
       "audio_codecs": ["AC3", "AAC"],
       "allow_hevc": false,
       "auto_remux": "aggressive",
       "max_video_width": 1920,
       "max_video_height": 1080,
-      "allow_client_overrides": false
+      "allow_client_overrides": false,
+      "live_transcode": {
+        "prefer_atsc3": false,
+        "video_codec": "H264",
+        "audio_codec": "AC3",
+        "max_bitrate_kbps": 6000,
+        "video_bitrate_kbps": 5616,
+        "audio_bitrate_kbps": 384,
+        "nvenc_preset": "p4",
+        "scale_width": 1920,
+        "scale_height": 1080
+      }
     },
     "desktop_default": {
       "description": "Windows/macOS managed clients - default profile",
@@ -23,7 +34,18 @@
       "auto_remux": "on_failure",
       "max_video_width": 0,
       "max_video_height": 0,
-      "allow_client_overrides": true
+      "allow_client_overrides": true,
+      "live_transcode": {
+        "prefer_atsc3": false,
+        "video_codec": "H264",
+        "audio_codec": "AC3",
+        "max_bitrate_kbps": 8000,
+        "video_bitrate_kbps": 7616,
+        "audio_bitrate_kbps": 384,
+        "nvenc_preset": "p4",
+        "scale_width": 0,
+        "scale_height": 0
+      }
     },
     "desktop_hevc_optin": {
       "description": "Windows/macOS managed clients - HEVC opt-in",
@@ -35,19 +57,41 @@
       "auto_remux": "on_failure",
       "max_video_width": 0,
       "max_video_height": 0,
-      "allow_client_overrides": true
+      "allow_client_overrides": true,
+      "live_transcode": {
+        "prefer_atsc3": true,
+        "video_codec": "HEVC",
+        "audio_codec": "EAC3",
+        "max_bitrate_kbps": 12000,
+        "video_bitrate_kbps": 11360,
+        "audio_bitrate_kbps": 640,
+        "nvenc_preset": "p5",
+        "scale_width": 0,
+        "scale_height": 0
+      }
     },
     "android_modern": {
-      "description": "Android MiniClient - supports HEVC in MKV",
+      "description": "Android MiniClient - HEVC capable; per-client audio caps drive transcode decisions",
       "managed": true,
       "containers": ["MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS"],
       "video_codecs": ["H.264", "HEVC"],
-      "audio_codecs": ["AAC", "AC3", "EAC3", "DTS", "DCA"],
+      "audio_codecs": ["AAC", "AC3", "EAC3", "EC-3", "AC4", "AC-4", "DTS", "DCA", "MP3", "MP2"],
       "allow_hevc": true,
       "auto_remux": "on_failure",
       "max_video_width": 0,
       "max_video_height": 0,
-      "allow_client_overrides": true
+      "allow_client_overrides": true,
+      "live_transcode": {
+        "prefer_atsc3": true,
+        "video_codec": "HEVC",
+        "audio_codec": "EAC3",
+        "max_bitrate_kbps": 10000,
+        "video_bitrate_kbps": 9616,
+        "audio_bitrate_kbps": 384,
+        "nvenc_preset": "p4",
+        "scale_width": 0,
+        "scale_height": 0
+      }
     },
     "pwa_safe": {
       "description": "PWA client - browser sandbox constraints",
@@ -59,7 +103,18 @@
       "auto_remux": "on_failure",
       "max_video_width": 0,
       "max_video_height": 0,
-      "allow_client_overrides": true
+      "allow_client_overrides": true,
+      "live_transcode": {
+        "prefer_atsc3": false,
+        "video_codec": "H264",
+        "audio_codec": "AAC",
+        "max_bitrate_kbps": 4000,
+        "video_bitrate_kbps": 3744,
+        "audio_bitrate_kbps": 256,
+        "nvenc_preset": "p4",
+        "scale_width": 1280,
+        "scale_height": 720
+      }
     }
   }
 }

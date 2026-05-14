@@ -39,11 +39,22 @@ public class ClientProfile
   private final int maxVideoWidth;
   private final int maxVideoHeight;
   private final boolean allowClientOverrides;
+  private final LiveTranscodeProfile liveTranscode;
 
   public ClientProfile(String profileId, String description, boolean managed,
       Collection<String> containers, Collection<String> videoCodecs,
       Collection<String> audioCodecs, boolean allowHevc, String autoRemux,
       int maxVideoWidth, int maxVideoHeight, boolean allowClientOverrides)
+  {
+    this(profileId, description, managed, containers, videoCodecs, audioCodecs,
+        allowHevc, autoRemux, maxVideoWidth, maxVideoHeight, allowClientOverrides, null);
+  }
+
+  public ClientProfile(String profileId, String description, boolean managed,
+      Collection<String> containers, Collection<String> videoCodecs,
+      Collection<String> audioCodecs, boolean allowHevc, String autoRemux,
+      int maxVideoWidth, int maxVideoHeight, boolean allowClientOverrides,
+      LiveTranscodeProfile liveTranscode)
   {
     this.profileId = profileId;
     this.description = description;
@@ -59,6 +70,7 @@ public class ClientProfile
     this.maxVideoWidth = maxVideoWidth;
     this.maxVideoHeight = maxVideoHeight;
     this.allowClientOverrides = allowClientOverrides;
+    this.liveTranscode = liveTranscode;
   }
 
   public String getProfileId() { return profileId; }
@@ -72,6 +84,12 @@ public class ClientProfile
   public int getMaxVideoWidth() { return maxVideoWidth; }
   public int getMaxVideoHeight() { return maxVideoHeight; }
   public boolean isAllowClientOverrides() { return allowClientOverrides; }
+  /** Live-transcode shaping for this profile. Never null -- safe defaults
+   *  are returned if the profile JSON omits the {@code liveTranscode} block. */
+  public LiveTranscodeProfile getLiveTranscode()
+  {
+    return liveTranscode != null ? liveTranscode : LiveTranscodeProfile.safeDefault();
+  }
 
   public boolean isContainerAllowed(String container)
   {
@@ -149,7 +167,7 @@ public class ClientProfile
     return new ClientProfile(profileId, description, managed,
         effectiveContainers, effectiveVideoCodecs, effectiveAudioCodecs,
         effectiveAllowHevc, effectiveAutoRemux,
-        maxVideoWidth, maxVideoHeight, allowClientOverrides);
+        maxVideoWidth, maxVideoHeight, allowClientOverrides, liveTranscode);
   }
 
   @Override

@@ -178,9 +178,52 @@ public class ClientProfileManager
     if (containers.isEmpty())
       return null;
 
+    LiveTranscodeProfile lt = null;
+    String ltBlock = extractObjectBlock(json, "live_transcode");
+    if (ltBlock != null)
+    {
+      lt = new LiveTranscodeProfile(
+          extractBoolean(ltBlock, "prefer_atsc3", false),
+          extractString(ltBlock, "video_codec"),
+          extractString(ltBlock, "audio_codec"),
+          extractInt(ltBlock, "max_bitrate_kbps", 8000),
+          extractInt(ltBlock, "video_bitrate_kbps", 7616),
+          extractInt(ltBlock, "audio_bitrate_kbps", 384),
+          extractString(ltBlock, "nvenc_preset"),
+          extractInt(ltBlock, "scale_width", 0),
+          extractInt(ltBlock, "scale_height", 0));
+    }
+
     return new ClientProfile(profileId, description, managed,
         containers, videoCodecs, audioCodecs, allowHevc, autoRemux,
-        maxW, maxH, allowOverrides);
+        maxW, maxH, allowOverrides, lt);
+  }
+
+  /**
+   * Extract a balanced {@code "key": { ... }} sub-object from {@code json}.
+   * Returns null when the key is missing. Used for nested config groups
+   * like {@code live_transcode}.
+   */
+  private String extractObjectBlock(String json, String key)
+  {
+    String search = "\"" + key + "\"";
+    int idx = json.indexOf(search);
+    if (idx < 0) return null;
+    int colonIdx = json.indexOf(':', idx + search.length());
+    if (colonIdx < 0) return null;
+    int braceStart = json.indexOf('{', colonIdx + 1);
+    if (braceStart < 0) return null;
+    int depth = 1;
+    int pos = braceStart + 1;
+    while (pos < json.length() && depth > 0)
+    {
+      char c = json.charAt(pos);
+      if (c == '{') depth++;
+      else if (c == '}') depth--;
+      if (depth > 0) pos++;
+    }
+    if (depth != 0) return null;
+    return json.substring(braceStart, pos + 1);
   }
 
   private String extractString(String json, String key)
@@ -292,12 +335,24 @@ public class ClientProfileManager
         true, ClientProfile.AUTO_REMUX_ON_FAILURE, 0, 0, true));
 
     // Android MiniClient (ExoPlayer / IJKPlayer): mirrors the apk's actual
-    // advertised codec list as of v1.10.x. AC4/AC-4 included for ATSC 3.0.
+    // advertised codec list. AC4/AC-4 included — ExoPlayer >= 2.19.1 (shipped
+    // in MiniClient apk versions AFTER v1.14.0) decodes Dolby AC-4 natively.
+    // Older clients are routed to android_legacy by autoDetectProfile() based
+    // on the FIRMWARE_VERSION string the apk reports.
     profiles.put("android_modern", new ClientProfile(
         "android_modern", "Android MiniClient", true,
         Arrays.asList("MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS", "MPEG", "MPEG1-PS", "QUICKTIME", "FLASHVIDEO", "OGG", "MP3", "AAC", "WAV"),
         Arrays.asList("H.263", "MPEG4-VIDEO", "MSMPEG4-VIDEO", "H.264", "VC1", "WMV7", "WMV8", "WMV9", "HEVC", "VP8", "VP9"),
         Arrays.asList("MPEG1", "MP2", "MPG1L2", "MP3", "MPG1L3", "VORBIS", "AAC", "AAC-HE", "FLAC", "ALAC", "PCM", "PCM_S16LE", "DTS", "DCA", "DTS-HD", "DTS-MA", "AC3", "AC4", "AC-4", "EAC3", "EC-3", "DOLBYTRUEHD", "OPUS"),
+        true, ClientProfile.AUTO_REMUX_ON_FAILURE, 0, 0, true));
+
+    // Legacy Android MiniClient (v1.14.0 and earlier): HEVC video OK, but no AC-4 audio.
+    // Server must transcode AC-4 audio (e.g. ATSC 3.0 sources) to E-AC3 before pushing.
+    profiles.put("android_legacy", new ClientProfile(
+        "android_legacy", "Legacy Android MiniClient (pre-AC4)", true,
+        Arrays.asList("MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS", "MPEG", "MPEG1-PS", "QUICKTIME", "FLASHVIDEO", "OGG", "MP3", "AAC", "WAV"),
+        Arrays.asList("H.263", "MPEG4-VIDEO", "MSMPEG4-VIDEO", "H.264", "VC1", "WMV7", "WMV8", "WMV9", "HEVC", "VP8", "VP9"),
+        Arrays.asList("MPEG1", "MP2", "MPG1L2", "MP3", "MPG1L3", "VORBIS", "AAC", "AAC-HE", "FLAC", "ALAC", "PCM", "PCM_S16LE", "DTS", "DCA", "DTS-HD", "DTS-MA", "AC3", "EAC3", "EC-3", "DOLBYTRUEHD", "OPUS"),
         true, ClientProfile.AUTO_REMUX_ON_FAILURE, 0, 0, true));
 
     // PWA / browser: deliberately conservative — MSE baseline.
@@ -418,6 +473,22 @@ public class ClientProfileManager
       String firmwareVersion, java.util.Set clientVideoCodecs,
       java.util.Set clientStreamingProtocols)
   {
+    return autoDetectProfile(clientName, isExtender, isIOS, firmwareVersion,
+        clientVideoCodecs, null, clientStreamingProtocols);
+  }
+
+  /**
+   * Audio-aware overload kept for callers that already have the client AUDIO_CODECS set.
+   * The {@code clientAudioCodecs} arg is currently informational only — server-side
+   * transcode decisions are driven by intersecting the resolved profile's audio set
+   * with the client's reported set, so a single Android profile suffices for both
+   * AC-4-capable and legacy clients.
+   */
+  public ClientProfile autoDetectProfile(String clientName, boolean isExtender, boolean isIOS,
+      String firmwareVersion, java.util.Set clientVideoCodecs,
+      java.util.Set clientAudioCodecs,
+      java.util.Set clientStreamingProtocols)
+  {
     synchronized (profiles)
     {
       // 1. Check for admin override in Sage.properties
@@ -474,13 +545,65 @@ public class ClientProfileManager
         // Extender (no mouse) but not HDx00
         if (hasHevc)
         {
-          if (sage.Sage.DBG) System.out.println("ClientProfileManager: Auto-detected modern extender with HEVC → android_modern");
-          return getOrFallback("android_modern");
+          // Route by MiniClient app version. ExoPlayer >= 2.19.1 (shipped in
+          // MiniClient apk versions AFTER 1.14.0) decodes Dolby AC-4. Older
+          // builds advertise AC4 in their caps but cannot actually decode it
+          // (silent playback observed on Shield + Galaxy Tab v1.14.0).
+          //
+          //   MiniClient apk     ExoPlayer    AC-4 decode
+          //   <= 1.14.0          <= 2.18.1    NO  -> android_legacy
+          //   >= 1.15.0          >= 2.19.1    YES -> android_modern
+          //
+          // If the version is unknown/empty, default to android_legacy (safer:
+          // server transcodes AC-4 -> EAC3 instead of pushing undecodable AC-4).
+          // Users with newer apks can pin via Sage.properties:
+          //   miniclient/profile/<MAC>=android_modern
+          boolean isModernApk = isMiniClientAtLeast(firmwareVersion, 1, 15);
+          if (isModernApk)
+          {
+            if (sage.Sage.DBG) System.out.println("ClientProfileManager: Auto-detected modern extender with HEVC (apk="
+                + firmwareVersion + " >= 1.15) → android_modern");
+            return getOrFallback("android_modern");
+          }
+          if (sage.Sage.DBG) System.out.println("ClientProfileManager: Auto-detected extender with HEVC (apk="
+              + firmwareVersion + " < 1.15 or unknown) → android_legacy (no AC-4 decode)");
+          return getOrFallback("android_legacy");
         }
         // 6. Non-HD extender without HEVC — use legacy strict as safe default
         if (sage.Sage.DBG) System.out.println("ClientProfileManager: Auto-detected extender without HEVC → hd_legacy_strict");
         return getOrFallback("hd_legacy_strict");
       }
+    }
+  }
+
+  /**
+   * Compare a MiniClient apk version string against a minimum (major, minor).
+   * Accepts strings like "1.14.0", "1.15.0-beta", "v2.0.1". Returns false on
+   * unparseable / null / empty (safer default = treat as legacy).
+   */
+  private boolean isMiniClientAtLeast(String version, int minMajor, int minMinor)
+  {
+    if (version == null || version.isEmpty()) return false;
+    // Strip leading 'v' and any trailing build/qualifier (e.g. "-beta")
+    String v = version.trim();
+    if (v.startsWith("v") || v.startsWith("V")) v = v.substring(1);
+    int dash = v.indexOf('-');
+    if (dash >= 0) v = v.substring(0, dash);
+    int space = v.indexOf(' ');
+    if (space >= 0) v = v.substring(0, space);
+    String[] parts = v.split("\\.");
+    if (parts.length < 2) return false;
+    try
+    {
+      int major = Integer.parseInt(parts[0]);
+      int minor = Integer.parseInt(parts[1]);
+      if (major > minMajor) return true;
+      if (major < minMajor) return false;
+      return minor >= minMinor;
+    }
+    catch (NumberFormatException e)
+    {
+      return false;
     }
   }
 
