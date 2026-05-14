@@ -1230,12 +1230,35 @@ public class ZRoot extends java.awt.Canvas
               if (thisRenderHasVideo && ("XAlways".equals(uiMgr.get("display_video_on_menus", null)) || !lastRenderHadVideo ||
                   lastActiveMenu != uiMgr.getCurrUI()))
               {
-                if (!isFileLoaded)
+                if (!isFileLoaded && !uiMgr.getBoolean("ui/disable_default_async_watch", false))
                 {
-                  Pooler.execute(new Runnable()
+                  // Stock behavior: when a menu's preview pane has nothing loaded,
+                  // auto-launch live TV so the pane shows something. This is awful UX
+                  // when it fires immediately after a user-initiated watch attempt
+                  // failed (player rejected codec/container) because the user appears
+                  // to have asked for one recording and gotten live TV instead.
+                  // Set ui/disable_default_async_watch=true (typically per-client) to
+                  // suppress this auto-launch and let the preview pane stay empty.
+                  //
+                  // Additive guard: if the user submitted a WATCH_MF within the last
+                  // ui/default_async_watch_user_attempt_holdoff_msec milliseconds, suppress
+                  // the auto-launch this render pass. Lets a failed user watch surface as
+                  // an empty pane instead of a silent bounce to live TV. Default 5000ms;
+                  // set to 0 to restore stock behavior.
+                  long holdoff = uiMgr.getLong("ui/default_async_watch_user_attempt_holdoff_msec", 5000L);
+                  long lastAttempt = (holdoff > 0) ? vf.getLastUserWatchAttemptTime() : 0L;
+                  if (holdoff <= 0 || lastAttempt == 0 || (Sage.eventTime() - lastAttempt) > holdoff)
                   {
-                    public void run(){ uiMgr.watchTV(uiMgr.getBoolean("ui/default_video_live_seek", false)); }
-                  }, "DefaultAsyncWatch");
+                    Pooler.execute(new Runnable()
+                    {
+                      public void run(){ uiMgr.watchTV(uiMgr.getBoolean("ui/default_video_live_seek", false)); }
+                    }, "DefaultAsyncWatch");
+                  }
+                  else if (Sage.DBG)
+                  {
+                    System.out.println("DefaultAsyncWatch suppressed: user WATCH_MF " +
+                        (Sage.eventTime() - lastAttempt) + "ms ago (holdoff=" + holdoff + "ms)");
+                  }
                 }
               }
 

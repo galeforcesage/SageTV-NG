@@ -662,6 +662,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
             // Update the channel MRU list
             if (watchAir.stationID != 0)
               Sage.getRawProperties().updateMRUList("recent_channels", Integer.toString(watchAir.stationID), 10);
+            lastUserWatchAttemptTime = Sage.eventTime();
             submitJob(new VFJob(WATCH_MF, watchThisFile, sourcePlaylist));
             iWantToBeLive = forceLive;
           }
@@ -728,7 +729,10 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         if (watchAir.stationID != 0)
           Sage.getRawProperties().updateMRUList("recent_channels", Integer.toString(watchAir.stationID), 10);
         if (!lockTunerOnly)
+        {
+          lastUserWatchAttemptTime = Sage.eventTime();
           submitJob(new VFJob(WATCH_MF, watchThisFile, sourcePlaylist));
+        }
         return WATCH_OK;
       }
       else
@@ -3506,6 +3510,13 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         //					new PlaybackException(PlaybackException.VIDEO_RENDER, 0)}, uiMgr,
         //					true);
       }
+      else if (Sage.DBG)
+      {
+        // TV branch used to swallow the trace silently — log it so we can diagnose
+        // transcode-startup / seek failures (e.g. AC-4 ffmpeg launch issues).
+        System.out.println("VideoFrame.timeSelected2 TV-branch caught (swallowed) exception: " + e);
+        e.printStackTrace();
+      }
       mightWait = 0;
       return false;
     }
@@ -5549,6 +5560,9 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
 
   public long getLastVideoChangeTime() { return lastVideoOpTime; }
 
+  /** Returns Sage.eventTime() of the most recent user-initiated WATCH_MF submission, or 0 if none. */
+  public long getLastUserWatchAttemptTime() { return lastUserWatchAttemptTime; }
+
   public boolean isMediaPlayerSignaLost()
   {
     if (signalLost) return true;
@@ -6148,6 +6162,13 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   // Used to detect whether or not the video rendering system may be pushing back a new video frame
   // soon so the final renderer will wait a bit so there's not sync issues in the 2 rendering pipelines
   protected long lastVideoOpTime;
+
+  // Set whenever a user-initiated WATCH_MF is submitted. Consumed by ZRoot's
+  // DefaultAsyncWatch trigger to suppress the auto-launch-live-TV behavior
+  // for a short window after a user-requested playback attempt, so a player
+  // failure (codec/container mismatch) does not silently bounce the user to
+  // live TV. See java/sage/ZRoot.java DefaultAsyncWatch comment.
+  protected long lastUserWatchAttemptTime;
 
   protected Playlist nowPlayingPlaylist;
 
