@@ -1236,6 +1236,32 @@ public class FormatParser
     }
   }
 
+  /**
+   * Scan a small leading buffer for MPEG-TS sync alignment: an offset {@code i} where
+   * {@code data[i] == 0x47} and {@code data[i + 188] == 0x47}, with both transport_error
+   * indicators clear. Catches .mpg-misnamed TS captures (e.g. HEVC ATSC 3.0) without
+   * paying the cost of the full native CheckTSPacket() scan.
+   *
+   * Buffer must be at least 188*2+1 bytes; only the first {@code Math.min(len, 189)}
+   * candidate offsets are tried, so the per-file overhead is bounded.
+   *
+   * @return offset of the first sync byte, or -1 if no aligned pair was found.
+   */
+  private static int scanForTsSync(byte[] data, int len)
+  {
+    if (data == null || len < 188 * 2 + 1) return -1;
+    int maxStart = Math.min(len - 188 - 1, 188);
+    for (int i = 0; i <= maxStart; i++)
+    {
+      if (data[i] != 0x47) continue;
+      if ((data[i + 1] & 0x80) != 0) continue;
+      int p = i + 188;
+      if (data[p] != 0x47 || (data[p + 1] & 0x80) != 0) continue;
+      return i;
+    }
+    return -1;
+  }
+
   private static boolean setContainerTypeEasy(java.io.File f, ContainerFormat cf)
   {
     java.io.InputStream inStream = null;
@@ -1243,8 +1269,13 @@ public class FormatParser
     try
     {
       inStream = new java.io.FileInputStream(fstr);
-      byte[] readBuf = new byte[189];
-      inStream.read(readBuf);
+      // Read just enough to scan for TS sync at any offset within the first 188 bytes
+      // (188*2 + 4 = 380). Keeps per-file probe I/O close to the historical 189-byte
+      // cost so menu rendering of network-mounted libraries doesn't stall.
+      final int TS_SCAN_BUF = 188 * 2 + 4;
+      byte[] readBuf = new byte[TS_SCAN_BUF];
+      int readBufLen = inStream.read(readBuf);
+      if (readBufLen < 0) readBufLen = 0;
       // Check for MPEG2 PS or interleaved PES first
       if ((readBuf[0] == 0 && readBuf[1] == 0 && readBuf[2] == 1 && ((byte)(readBuf[3] & 0xFF)) == ((byte)0xBA) &&
           ((readBuf[4] & 0xC0) == 0x40)) /* PS */)
@@ -1268,9 +1299,11 @@ public class FormatParser
         cf.setFormatName(MediaFormat.MPEG1);
         return true;
       }
-      else if (readBuf[0] == 0x47 && readBuf[188] == 0x47)
+      else if (scanForTsSync(readBuf, readBufLen) >= 0)
       {
-        // Check for MPEG2 TS
+        // MPEG2-TS: scan for 6 consecutive 0x47 sync bytes at 188-byte spacing.
+        // Matches the native CheckTSPacket() logic in TSnative/AVUtility.c so .mpg
+        // files containing TS content are demuxed correctly even with leading garbage.
         cf.setFormatName(MediaFormat.MPEG2_TS);
         return true;
       }
