@@ -41,15 +41,29 @@ public class PlaybackDecisionEngine
     public final String targetContainer;
     public final String targetVideoCodec;
     public final String targetAudioCodec;
+    /**
+     * Suggested target bitrate in Kbps for the transcoder when the decision is
+     * REMUX or TRANSCODE. {@code 0} means "no hint" (use existing dynamic
+     * adjustment / profile defaults).
+     */
+    public final int targetBitrateKbps;
 
     public PlaybackDecision(Decision decision, String reason,
         String targetContainer, String targetVideoCodec, String targetAudioCodec)
+    {
+      this(decision, reason, targetContainer, targetVideoCodec, targetAudioCodec, 0);
+    }
+
+    public PlaybackDecision(Decision decision, String reason,
+        String targetContainer, String targetVideoCodec, String targetAudioCodec,
+        int targetBitrateKbps)
     {
       this.decision = decision;
       this.reason = reason;
       this.targetContainer = targetContainer;
       this.targetVideoCodec = targetVideoCodec;
       this.targetAudioCodec = targetAudioCodec;
+      this.targetBitrateKbps = targetBitrateKbps;
     }
 
     @Override
@@ -57,7 +71,9 @@ public class PlaybackDecisionEngine
     {
       return "PlaybackDecision[" + decision + " reason=" + reason +
           " container=" + targetContainer + " video=" + targetVideoCodec +
-          " audio=" + targetAudioCodec + "]";
+          " audio=" + targetAudioCodec
+          + (targetBitrateKbps > 0 ? " targetBitrateKbps=" + targetBitrateKbps : "")
+          + "]";
     }
   }
 
@@ -82,6 +98,39 @@ public class PlaybackDecisionEngine
       String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
       int mediaWidth, int mediaHeight, boolean isHDx00Extender)
   {
+    return evaluate(profile, mediaContainer, mediaVideoCodec, mediaAudioCodec,
+        mediaWidth, mediaHeight, isHDx00Extender, 0, 0);
+  }
+
+  /**
+   * Quality- and bandwidth-aware variant.
+   *
+   * <p>In addition to the codec / container / resolution checks of the legacy
+   * 7-arg overload, this form considers:
+   * <ul>
+   *   <li><b>Source bitrate vs. available bandwidth.</b> If the codec/container
+   *       set would normally allow {@code DIRECT_PLAY} but the measured client
+   *       bandwidth is below the source bitrate (with a safety factor, default
+   *       0.85; tunable via {@code playback/bandwidth_safety_factor}), the
+   *       decision is downgraded to {@link Decision#TRANSCODE} with a target
+   *       bitrate clamped to {@code BW * safety} and capped by the profile's
+   *       {@code liveTranscode.max_bitrate_kbps}.</li>
+   *   <li><b>Source-aware target codec selection.</b> When transcode IS chosen,
+   *       prefer source codec pass-through (highest fidelity) when the profile
+   *       allows it, then HEVC over H.264 (better quality at given bitrate),
+   *       then H.264. For audio prefer source pass-through, then EAC3 / AC3
+   *       (multi-channel), then AAC (stereo).</li>
+   * </ul>
+   *
+   * @param sourceBitrateKbps source media bitrate in Kbps, or {@code 0} if unknown
+   * @param availableBandwidthKbps measured push-mode bandwidth to the client in
+   *                                Kbps, or {@code 0} if unknown / unmetered
+   */
+  public static PlaybackDecision evaluate(ClientProfile profile,
+      String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
+      int mediaWidth, int mediaHeight, boolean isHDx00Extender,
+      int sourceBitrateKbps, int availableBandwidthKbps)
+  {
     if (profile == null)
       return new PlaybackDecision(Decision.DIRECT_PLAY, "No profile (legacy path)", null, null, null);
 
@@ -101,11 +150,31 @@ public class PlaybackDecisionEngine
           " video=" + mediaVideoCodec + "(" + videoOK + ")" +
           " audio=" + mediaAudioCodec + "(" + audioOK + ")" +
           " resolution=" + mediaWidth + "x" + mediaHeight + "(" + resolutionOK + ")" +
+          " sourceKbps=" + sourceBitrateKbps + " availableKbps=" + availableBandwidthKbps +
           " profile=" + profile.getProfileId());
+
+    // Bandwidth budget check: if source bitrate is known and exceeds the
+    // measured client bandwidth (with safety factor), we MUST transcode down
+    // even if codecs would otherwise allow direct play. Skip the check if
+    // either value is unknown (== 0) so behavior matches the old 7-arg form
+    // for callers that haven't been updated.
+    boolean bandwidthOK = true;
+    int targetBitrateKbps = 0;
+    if (sourceBitrateKbps > 0 && availableBandwidthKbps > 0)
+    {
+      float safety = sage.Sage.getFloat("playback/bandwidth_safety_factor", 0.85f);
+      if (safety <= 0f || safety > 1f) safety = 0.85f;
+      int budgetKbps = (int) (availableBandwidthKbps * safety);
+      if (sourceBitrateKbps > budgetKbps)
+      {
+        bandwidthOK = false;
+        targetBitrateKbps = clampToProfileCeiling(profile, budgetKbps);
+      }
+    }
 
     // HDx00 special risk rule: even if format looks playable, treat risky patterns
     // (e.g., certain TS+H.264 combos) as needing remux/transcode sooner
-    if (isHDx00Extender && containerOK && videoOK && audioOK && resolutionOK)
+    if (isHDx00Extender && containerOK && videoOK && audioOK && resolutionOK && bandwidthOK)
     {
       if (isRiskyForHDx00(mediaContainer, mediaVideoCodec))
       {
@@ -119,15 +188,16 @@ public class PlaybackDecisionEngine
       }
     }
 
-    // 1. Direct play — everything compatible
-    if (containerOK && videoOK && audioOK && resolutionOK)
+    // 1. Direct play -- everything compatible AND bandwidth fits
+    if (containerOK && videoOK && audioOK && resolutionOK && bandwidthOK)
     {
       return new PlaybackDecision(Decision.DIRECT_PLAY,
           "All formats compatible", mediaContainer, mediaVideoCodec, mediaAudioCodec);
     }
 
-    // 2. Remux — codecs OK but container mismatch
-    if (videoOK && audioOK && resolutionOK && !containerOK && profile.isAutoRemuxEnabled())
+    // 2. Remux -- codecs OK, resolution+bw OK, but container mismatch
+    if (videoOK && audioOK && resolutionOK && bandwidthOK
+        && !containerOK && profile.isAutoRemuxEnabled())
     {
       String targetContainer = selectBestContainer(profile, mediaContainer);
       return new PlaybackDecision(Decision.REMUX,
@@ -135,19 +205,29 @@ public class PlaybackDecisionEngine
           targetContainer, mediaVideoCodec, mediaAudioCodec);
     }
 
-    // 3. Transcode — codec or resolution incompatible
+    // 3. Transcode -- codec, resolution, or bandwidth incompatible. Pick the
+    // highest-quality target codecs the profile + source permit.
     String targetContainer = selectBestContainer(profile, null);
-    String targetVideo = videoOK && resolutionOK ? mediaVideoCodec : selectBestVideoCodec(profile);
-    String targetAudio = audioOK ? mediaAudioCodec : selectBestAudioCodec(profile);
+    String targetVideo = (videoOK && resolutionOK)
+        ? mediaVideoCodec
+        : selectBestVideoCodec(profile, mediaVideoCodec);
+    String targetAudio = audioOK
+        ? mediaAudioCodec
+        : selectBestAudioCodec(profile, mediaAudioCodec);
 
     String reason;
-    if (!videoOK) reason = "Video codec " + mediaVideoCodec + " not supported";
-    else if (!audioOK) reason = "Audio codec " + mediaAudioCodec + " not supported";
+    if (!videoOK)        reason = "Video codec " + mediaVideoCodec + " not supported";
+    else if (!audioOK)   reason = "Audio codec " + mediaAudioCodec + " not supported";
     else if (!resolutionOK) reason = "Resolution " + mediaWidth + "x" + mediaHeight + " exceeds limits";
-    else reason = "Container " + mediaContainer + " not supported and remux disabled";
+    else if (!bandwidthOK) reason = "Source " + sourceBitrateKbps + " kbps exceeds available "
+        + availableBandwidthKbps + " kbps (target " + targetBitrateKbps + " kbps)";
+    else                 reason = "Container " + mediaContainer + " not supported and remux disabled";
+
+    if (targetBitrateKbps == 0)
+      targetBitrateKbps = profileCeiling(profile);
 
     return new PlaybackDecision(Decision.TRANSCODE, reason,
-        targetContainer, targetVideo, targetAudio);
+        targetContainer, targetVideo, targetAudio, targetBitrateKbps);
   }
 
   /**
@@ -175,19 +255,74 @@ public class PlaybackDecisionEngine
     return profile.getContainers().iterator().next();
   }
 
-  private static String selectBestVideoCodec(ClientProfile profile)
+  /**
+   * Choose a target video codec for transcode that maximizes quality:
+   * (1) source codec pass-through if profile allows (no re-encode needed),
+   * (2) HEVC if profile allows it (better quality at the same bitrate),
+   * (3) H.264 (universal fallback),
+   * (4) first allowed codec.
+   */
+  private static String selectBestVideoCodec(ClientProfile profile, String sourceCodec)
   {
-    // Prefer H264 as it's the most universally compatible
+    if (sourceCodec != null && profile.isVideoCodecAllowed(sourceCodec))
+      return sourceCodec;
+    if (profile.isAllowHevc() && profile.getVideoCodecs().contains("HEVC"))
+      return "HEVC";
+    if (profile.getVideoCodecs().contains("H.264"))
+      return "H.264";
     if (profile.getVideoCodecs().contains("H264"))
       return "H264";
     return profile.getVideoCodecs().iterator().next();
   }
 
-  private static String selectBestAudioCodec(ClientProfile profile)
+  /** Backward-compat overload (no source hint). */
+  @SuppressWarnings("unused")
+  private static String selectBestVideoCodec(ClientProfile profile)
   {
-    // Prefer AAC as it's the most universally compatible
+    return selectBestVideoCodec(profile, null);
+  }
+
+  /**
+   * Choose a target audio codec for transcode that maximizes quality:
+   * (1) source codec pass-through if profile allows,
+   * (2) EAC3 / EC-3 (multi-channel surround, broadly supported on modern AVRs),
+   * (3) AC3 (5.1 surround, near-universal),
+   * (4) AAC (stereo / lower quality, last resort).
+   */
+  private static String selectBestAudioCodec(ClientProfile profile, String sourceCodec)
+  {
+    if (sourceCodec != null && profile.isAudioCodecAllowed(sourceCodec))
+      return sourceCodec;
+    if (profile.getAudioCodecs().contains("EAC3"))
+      return "EAC3";
+    if (profile.getAudioCodecs().contains("EC-3"))
+      return "EC-3";
+    if (profile.getAudioCodecs().contains("AC3"))
+      return "AC3";
     if (profile.getAudioCodecs().contains("AAC"))
       return "AAC";
     return profile.getAudioCodecs().iterator().next();
+  }
+
+  /** Backward-compat overload (no source hint). */
+  @SuppressWarnings("unused")
+  private static String selectBestAudioCodec(ClientProfile profile)
+  {
+    return selectBestAudioCodec(profile, null);
+  }
+
+  /** Profile's live-transcode max bitrate ceiling, or {@code 0} if unset. */
+  private static int profileCeiling(ClientProfile profile)
+  {
+    LiveTranscodeProfile lt = profile.getLiveTranscode();
+    return (lt != null) ? lt.getMaxBitrateKbps() : 0;
+  }
+
+  /** Clamp a budget bitrate to the profile's live-transcode ceiling. */
+  private static int clampToProfileCeiling(ClientProfile profile, int budgetKbps)
+  {
+    int ceiling = profileCeiling(profile);
+    if (ceiling > 0 && budgetKbps > ceiling) return ceiling;
+    return budgetKbps;
   }
 }

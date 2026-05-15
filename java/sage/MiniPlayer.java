@@ -966,10 +966,17 @@ public class MiniPlayer implements DVDMediaPlayer
           mediaW = cf.getVideoFormat().getWidth();
           mediaH = cf.getVideoFormat().getHeight();
         }
+        int sourceBitrateKbps = (cf != null) ? cf.getBitrate() : 0;
+        // uiBandwidthEstimate is bits/sec; engine expects Kbps. The 50 Mbps
+        // sentinel value (line ~931) means "not a low-bandwidth extender";
+        // treat that as unmetered (0 = skip the BW check).
+        int availableBwKbps = 0;
+        if (uiBandwidthEstimate > 0 && uiBandwidthEstimate < 49000000L)
+          availableBwKbps = (int) (uiBandwidthEstimate / 1000L);
         boolean isHDx00 = effectiveProfile.getProfileId().equals("hd_legacy_strict");
         profileDecision = sage.client.PlaybackDecisionEngine.evaluate(
             effectiveProfile, mediaContainer, mediaVideo, mediaAudio,
-            mediaW, mediaH, isHDx00);
+            mediaW, mediaH, isHDx00, sourceBitrateKbps, availableBwKbps);
         if (Sage.DBG) System.out.println("MiniPlayer profile decision: " + profileDecision);
       }
       // --- End profile decision ---
@@ -1207,15 +1214,54 @@ public class MiniPlayer implements DVDMediaPlayer
         // which clients truly cannot decode HEVC.)
       }
 
-      // --- Profile decision diagnostic (schema v2) ---
-      // The profile now enforces policy by clamping videoCodecs/audioCodecs/pushContainers/pullContainers
-      // in MiniClientSageRenderer.initMini(). The existing format-checking logic above operates on the
-      // already-clamped sets, so no override is needed here. We log the decision for diagnostics.
+      // --- Profile decision diagnostic + authoritative override (schema v2) ---
+      // The profile clamps videoCodecs/audioCodecs/pushContainers/pullContainers in
+      // MiniClientSageRenderer.initMini() and the legacy format-checking logic above
+      // SHOULD operate on those clamped sets. In practice the legacy path can still
+      // miss the rejection (e.g. MPEG2-Video special-case branch around line 1100,
+      // codec-name normalization mismatches between profile clamp and
+      // mcsr.isSupportedVideoCodec(), or the clientCanDoMPEGHD bypass). When that
+      // happens the server would direct-play a codec the client never advertised
+      // (observed: SD MPEG2-PS/MPEG2-Video/AC3 Dick Van Dyke recording sent raw
+      // to a Shield/android_modern client). Treat the profile decision as
+      // authoritative and honor the priority order: raw (DIRECT_PLAY) > remux
+      // (container-only fix) > transcode (last resort).
       if (profileDecision != null)
       {
         if (Sage.DBG) System.out.println("MiniPlayer: Profile decision=" + profileDecision.decision +
             " reason=" + profileDecision.reason +
             " (enforced via clamped codec/container sets, existing logic result: transcoded=" + transcoded + ")");
+
+        if (!transcoded
+            && pushMode && mcsr != null
+            && majorTypeHint == MediaFile.MEDIATYPE_VIDEO
+            && (fixedPushFormat == null || fixedPushFormat.length() == 0))
+        {
+          if (profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.REMUX)
+          {
+            // Container-only fix: codecs are fine, just rewrap. mpeg2psremux
+            // does an in-process TS->PS rewrap (RemuxTranscodeEngine) without
+            // re-encoding video or audio.
+            transcoded = true;
+            useOriginalAudioTrack = true;
+            prefTranscodeMode = "mpeg2psremux";
+            dynamicRateAdjust = false;
+            if (Sage.DBG) System.out.println("MiniPlayer: profile-authoritative override forces REMUX (legacy missed it) mode="
+                + prefTranscodeMode + " reason=" + profileDecision.reason);
+          }
+          else if (profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.TRANSCODE)
+          {
+            // Last-resort full transcode. Pick MPEG2-PS dynamic if the client
+            // supports PS push, otherwise MPEG2-TS dynamic.
+            transcoded = true;
+            useOriginalAudioTrack = false;
+            prefTranscodeMode = mcsr.isSupportedPushContainerFormat(
+                sage.media.format.MediaFormat.MPEG2_PS) ? "dynamic" : "dynamicts";
+            dynamicRateAdjust = true;
+            if (Sage.DBG) System.out.println("MiniPlayer: profile-authoritative override forces TRANSCODE (legacy missed it) mode="
+                + prefTranscodeMode + " reason=" + profileDecision.reason);
+          }
+        }
       }
       // --- End profile decision diagnostic ---
 
