@@ -792,44 +792,36 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
     for (ChannelVariant v : vars)
     {
       if (!v.isAtsc3() && atsc1Fallback == null) atsc1Fallback = v;
+      // Skip DRM-locked HEVC variants entirely -- never recordable.
+      if (v.isAtsc3() && v.isDrm()) continue;
       if (wantAtsc3 && v.isAtsc3()) { chosen = v; break; }
       if (!wantAtsc3 && !v.isAtsc3()) { chosen = v; break; }
     }
     if (chosen == null)
     {
-      // Requested ATSC3 but only ATSC1 (or vice versa) -- honor what's there.
-      chosen = vars.get(0);
+      // Requested ATSC3 but only ATSC1 is recordable (or vice versa) --
+      // honor whatever non-DRM option we have. Walk again, DRM filter only.
+      for (ChannelVariant v : vars)
+      {
+        if (v.isAtsc3() && v.isDrm()) continue;
+        chosen = v;
+        break;
+      }
+    }
+    if (chosen == null)
+    {
+      // Every variant is DRM-locked HEVC. Nothing to do; let the caller's
+      // fail-fast in startEncoding throw cleanly.
+      if (Sage.DBG) System.out.println("ATSC3: all variants DRM-locked for channel="
+          + channel + " (policy=" + policy + ") -- recording will fail-fast");
+      return channel;
     }
 
-    // DRM coexistence: if we picked an ATSC3 variant but the live lineup says
-    // it's DRM-locked right now, fall back to the ATSC1 sibling so the record
-    // succeeds with the unencrypted equivalent (e.g. WBBM-NG 102.1 DRM ->
-    // CBS2-HD 2.1). Lineup is consulted at pick time because a service can
-    // flip DRM on/off per broadcast.
-    if (chosen.isAtsc3() && atsc1Fallback != null
-        && Sage.getBoolean("hdhr/atsc3_drm_fallback_to_atsc1", true))
+    if (Sage.DBG && !chosen.getTuningLocator().equals(channel))
     {
-      String host = resolveLineupHost();
-      if (host != null)
-      {
-        try
-        {
-          HDHomeRunLineup.Entry e = HDHomeRunLineup.forHost(host)
-              .lookup(chosen.getTuningLocator());
-          if (e != null && e.drm)
-          {
-            if (Sage.DBG) System.out.println("ATSC3: DRM-locked variant "
-                + chosen.getTuningLocator() + " -> falling back to ATSC1 sibling "
-                + atsc1Fallback.getTuningLocator() + " for channel=" + channel);
-            chosen = atsc1Fallback;
-          }
-        }
-        catch (Throwable t)
-        {
-          if (Sage.DBG) System.out.println("ATSC3: DRM check failed for "
-              + chosen.getTuningLocator() + ": " + t + " -- proceeding with ATSC3");
-        }
-      }
+      System.out.println("ATSC3: variant pick channel=" + channel
+          + " -> " + chosen.getTuningLocator()
+          + " (" + chosen.getVariantType() + ", policy=" + policy + ")");
     }
 
     String loc = chosen.getTuningLocator();

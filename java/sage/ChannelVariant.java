@@ -46,15 +46,25 @@ public final class ChannelVariant
   private final String audioCodecHint;
   private final String tuningLocator;
   private final String sourceDeviceId;
+  private final boolean drm;
 
+  /** Backward-compatible ctor (no DRM flag => clear). */
   public ChannelVariant(String variantType, String videoCodecHint,
       String audioCodecHint, String tuningLocator, String sourceDeviceId)
+  {
+    this(variantType, videoCodecHint, audioCodecHint, tuningLocator, sourceDeviceId, false);
+  }
+
+  public ChannelVariant(String variantType, String videoCodecHint,
+      String audioCodecHint, String tuningLocator, String sourceDeviceId,
+      boolean drm)
   {
     this.variantType    = variantType    == null ? TYPE_ATSC1 : variantType;
     this.videoCodecHint = videoCodecHint == null ? ""         : videoCodecHint;
     this.audioCodecHint = audioCodecHint == null ? ""         : audioCodecHint;
     this.tuningLocator  = tuningLocator  == null ? ""         : tuningLocator;
     this.sourceDeviceId = sourceDeviceId == null ? ""         : sourceDeviceId;
+    this.drm            = drm;
   }
 
   public String getVariantType()    { return variantType; }
@@ -62,16 +72,19 @@ public final class ChannelVariant
   public String getAudioCodecHint() { return audioCodecHint; }
   public String getTuningLocator()  { return tuningLocator; }
   public String getSourceDeviceId() { return sourceDeviceId; }
+  public boolean isDrm()            { return drm; }
   public boolean isAtsc3()          { return TYPE_ATSC3.equals(variantType); }
   public boolean isHevc()           { return VCODEC_HEVC.equalsIgnoreCase(videoCodecHint); }
   public boolean isAc4()            { return ACODEC_AC4.equalsIgnoreCase(audioCodecHint); }
 
   /** Pipe-delimited persistence form. Keep stable -- it round-trips through
-   *  Sage.properties via {@link ChannelVariants}. */
+   *  Sage.properties via {@link ChannelVariants}. Field 6 (drm) is appended
+   *  optionally so older 5-field strings deserialize cleanly with drm=false. */
   public String toPersistedString()
   {
     return variantType + '|' + videoCodecHint + '|' + audioCodecHint + '|'
-         + escape(tuningLocator) + '|' + escape(sourceDeviceId);
+         + escape(tuningLocator) + '|' + escape(sourceDeviceId)
+         + '|' + (drm ? "1" : "0");
   }
 
   public static ChannelVariant fromPersistedString(String s)
@@ -79,12 +92,14 @@ public final class ChannelVariant
     if (s == null || s.length() == 0) return null;
     String[] parts = s.split("\\|", -1);
     if (parts.length < 4) return null;
+    boolean drm = parts.length > 5 && "1".equals(parts[5]);
     return new ChannelVariant(
         parts[0],
         parts[1],
         parts[2],
         unescape(parts[3]),
-        parts.length > 4 ? unescape(parts[4]) : "");
+        parts.length > 4 ? unescape(parts[4]) : "",
+        drm);
   }
 
   private static String escape(String s)
