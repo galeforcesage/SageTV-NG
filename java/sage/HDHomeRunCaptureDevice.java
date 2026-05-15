@@ -140,6 +140,19 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
       if (host != null)
       {
         HDHomeRunLineup lu = HDHomeRunLineup.forHost(host);
+        // Fail-fast for HEVC channels that ARE DRM-locked: native libhdhomerun
+        // can't decrypt them either, so falling through would just produce a
+        // 0-byte capture that gets reaped 30s later. Throwing here surfaces a
+        // clean error to the scheduler instead of a silent timeout cycle.
+        HDHomeRunLineup.Entry lu_entry = lu.lookup(channel);
+        if (lu_entry != null && lu_entry.drm
+            && "HEVC".equalsIgnoreCase(lu_entry.videoCodec))
+        {
+          if (Sage.DBG) System.out.println("HDHR ATSC3: refusing to record DRM-locked "
+              + "HEVC channel " + channel + " (" + lu_entry.guideName
+              + ") -- no decryption key available");
+          throw new EncodingException(EncodingException.CAPTURE_DEVICE_INSTALL, 0);
+        }
         if (lu.isHevcNonDrm(channel))
         {
           String url = lu.getHttpUrl(channel);
@@ -447,8 +460,114 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
                   country_region += TVTuningFrequencies.doesCountryHaveDVBCRegions(country_code) ? "-" +
                       Sage.get("mmc/dvbc_region", "" ) : "";
 
-                      return scanChannel0( pHandle, tuneString, country_region, getTunerStreamType() /* this is ultimately ignored, not sure why it's here */ );
-                      //		return (doTuneChannel( tuneString, true ) ? "1" : "");
+    String nativeResult = scanChannel0( pHandle, tuneString, country_region, getTunerStreamType() /* this is ultimately ignored, not sure why it's here */ );
+    return maybeAppendAtsc3LineupScan(nativeResult);
+  }
+
+  /** Last doScanChannelInfo() call timestamp; >30s gap = new scan session. */
+  private long lastScanInfoCallMs = 0L;
+  /** Set true once per scan session after we've appended /lineup.json HEVC entries. */
+  private boolean atsc3LineupEmittedThisSession = false;
+
+  /**
+   * ATSC 3.0 vchannel discovery via HDHomeRun /lineup.json.
+   *
+   * Sage's native scan iterates physical RF channels (2-69 in US) and reads
+   * PSIP from each multiplex. ATSC 3.0 services on a NextGen TV station are
+   * addressed by virtual channel (e.g. 102.1, 109.1) and live behind PLPs
+   * the RF-only scan never enumerates. Without augmentation the user sees
+   * zero ATSC 3.0 channels in the channel list even though the device can
+   * tune them via /auto/v&lt;channel&gt; HTTP-pull.
+   *
+   * On the first scan call of each session (detected via a &gt;30s gap from
+   * the previous call) we fetch /lineup.json once and append HEVC-marked
+   * entries to the SCANINFO result, formatted as
+   *   &lt;major&gt;-&lt;major&gt;-&lt;minor&gt;(&lt;name&gt;)&lt;tag&gt;;
+   * which the STV channel-scan parser ingests just like an ATSC 1.0 entry.
+   * Tuning of the resulting Channel records is handled by the existing
+   * ATSC 3.0 HTTP-pull path in startEncoding() above.
+   */
+  private synchronized String maybeAppendAtsc3LineupScan(String nativeResult)
+  {
+    String base = nativeResult == null ? "" : nativeResult;
+    if (!Sage.getBoolean("hdhr/atsc3_scan_enabled", true)) return base;
+
+    long now = Sage.time();
+    if (now - lastScanInfoCallMs > 30_000L) atsc3LineupEmittedThisSession = false;
+    lastScanInfoCallMs = now;
+
+    if (atsc3LineupEmittedThisSession) return base;
+
+    String host = resolveLineupHost();
+    if (host == null) return base;
+
+    java.util.List<HDHomeRunLineup.Entry> entries;
+    try
+    {
+      entries = HDHomeRunLineup.forHost(host).allEntries();
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("HDHR ATSC3 scan augment: lineup fetch failed: " + t);
+      return base;
+    }
+    if (entries == null || entries.isEmpty()) return base;
+
+    StringBuilder sb = new StringBuilder(base.length() + 256);
+    sb.append(base);
+    if (base.length() > 0 && base.charAt(base.length() - 1) != ';') sb.append(';');
+
+    // DRM-locked HEVC services can never be recorded by Sage (no key), so by
+    // default we skip them entirely at scan time -- their ATSC 1.0 sibling on
+    // major-100 is what gets recorded instead. Set to true to surface them in
+    // the channel list anyway (browsing only; record will fail-fast).
+    boolean includeDrm = Sage.getBoolean("hdhr/atsc3_scan_include_drm", false);
+    // The stock SageTV7 STV parser only branches on BroadcastType "ATSC"/"QAM",
+    // so emit the same "ATSC" tag by default; channels still get added to the
+    // lineup and the ATSC3 HTTP-pull tuning path picks them up automatically
+    // via /lineup.json lookup (HEVC+non-DRM => HTTP-pull). Set to false to emit
+    // the more descriptive ATSC3/ATSC3DRM tags for STVs that recognize them.
+    boolean useAtscTag = Sage.getBoolean("hdhr/atsc3_scan_emit_atsc_tag", true);
+    int added = 0;
+    for (HDHomeRunLineup.Entry e : entries)
+    {
+      if (e == null || e.guideNumber == null) continue;
+      // FLEX 4K marks ATSC 3.0 services with VideoCodec=HEVC + AudioCodec=AC4.
+      if (!"HEVC".equalsIgnoreCase(e.videoCodec)) continue;
+      if (e.drm && !includeDrm) continue;
+
+      int dot = e.guideNumber.indexOf('.');
+      String major = dot > 0 ? e.guideNumber.substring(0, dot) : e.guideNumber;
+      String minor = dot > 0 ? e.guideNumber.substring(dot + 1) : "1";
+      String name  = sanitizeScanName(e.guideName != null ? e.guideName
+                                                          : ("ATSC3-" + e.guideNumber));
+
+      String tag = useAtscTag ? "ATSC" : (e.drm ? "ATSC3DRM" : "ATSC3");
+      sb.append(major).append('-').append(major).append('-').append(minor)
+        .append('(').append(name).append(')')
+        .append(tag).append(';');
+      added++;
+    }
+
+    atsc3LineupEmittedThisSession = true;
+    if (Sage.DBG) System.out.println("HDHR ATSC3 scan augment: appended " + added
+        + " HEVC entries from " + host + "/lineup.json");
+    return sb.toString();
+  }
+
+  /** Strip characters that would break the ;()-delimited SCANINFO format. */
+  private static String sanitizeScanName(String s)
+  {
+    if (s == null) return "";
+    int n = s.length();
+    StringBuilder sb = new StringBuilder(n);
+    for (int i = 0; i < n; i++)
+    {
+      char c = s.charAt(i);
+      if (c == '(' || c == ')' || c == ';') sb.append(' ');
+      else sb.append(c);
+    }
+    return sb.toString();
   }
 
   private int getTunerStreamType()
@@ -669,16 +788,50 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
 
     boolean wantAtsc3 = !"prefer_atsc1".equalsIgnoreCase(policy);
     ChannelVariant chosen = null;
+    ChannelVariant atsc1Fallback = null;
     for (ChannelVariant v : vars)
     {
+      if (!v.isAtsc3() && atsc1Fallback == null) atsc1Fallback = v;
       if (wantAtsc3 && v.isAtsc3()) { chosen = v; break; }
       if (!wantAtsc3 && !v.isAtsc3()) { chosen = v; break; }
     }
     if (chosen == null)
     {
-      // Requested ATSC3 but only ATSC1 (or vice versa) — honor what's there.
+      // Requested ATSC3 but only ATSC1 (or vice versa) -- honor what's there.
       chosen = vars.get(0);
     }
+
+    // DRM coexistence: if we picked an ATSC3 variant but the live lineup says
+    // it's DRM-locked right now, fall back to the ATSC1 sibling so the record
+    // succeeds with the unencrypted equivalent (e.g. WBBM-NG 102.1 DRM ->
+    // CBS2-HD 2.1). Lineup is consulted at pick time because a service can
+    // flip DRM on/off per broadcast.
+    if (chosen.isAtsc3() && atsc1Fallback != null
+        && Sage.getBoolean("hdhr/atsc3_drm_fallback_to_atsc1", true))
+    {
+      String host = resolveLineupHost();
+      if (host != null)
+      {
+        try
+        {
+          HDHomeRunLineup.Entry e = HDHomeRunLineup.forHost(host)
+              .lookup(chosen.getTuningLocator());
+          if (e != null && e.drm)
+          {
+            if (Sage.DBG) System.out.println("ATSC3: DRM-locked variant "
+                + chosen.getTuningLocator() + " -> falling back to ATSC1 sibling "
+                + atsc1Fallback.getTuningLocator() + " for channel=" + channel);
+            chosen = atsc1Fallback;
+          }
+        }
+        catch (Throwable t)
+        {
+          if (Sage.DBG) System.out.println("ATSC3: DRM check failed for "
+              + chosen.getTuningLocator() + ": " + t + " -- proceeding with ATSC3");
+        }
+      }
+    }
+
     String loc = chosen.getTuningLocator();
     return (loc == null || loc.length() == 0) ? channel : loc;
   }
