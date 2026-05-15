@@ -86,20 +86,6 @@ INFERRED). Native-side `TSEPGParser` may need a lightweight standalone
 JNI entry point to parse a captured EIT slice without spinning up the
 full TSFilter capture graph.
 
-### Phase 2 — Verify SD station mapping for ATSC3 (109.x ↔ 9.x)  *(config / docs)*
-
-If SD does NOT auto-map 109.1 → 9.1, expose a property
-`epg/atsc3_alias_offset` (default `100`) and a per-channel override so
-`Channel.guideNumber` 109.1 inherits the SD station ID assigned to 9.1.
-This is purely lineup-side; no scanning needed. Likely a 1-day fix.
-
-### Phase 3 — Network-callsign EPG fallback  *(low-yield, last)*
-
-For orphan ATSC3 channels with no ATSC1 sibling and no SD data,
-fall back to "show me whatever NBC/CBS/ABC is airing now" using
-nationally-aligned schedules. Lower confidence; tag `dataSource =
-"INFERRED"`. Probably never needed in Chicago lineup but cheap to add.
-
 ### Phase 4 — True ATSC3 ESG over ROUTE  *(long-term, optional)*
 
 Only if the FLEX 4K firmware ever exposes the LLS/ESG ROUTE flow
@@ -133,6 +119,17 @@ Phases 0–3 cover real-world need without touching the broadcast stack.
 
 ## Done
 
+- ATSC 3.0 / ATSC 1.0 sibling EPG aliasing (Phase 2) + callsign fallback
+  (Phase 3): new `sage.epg.EpgFallbackResolver`,
+  `Wizard.getAiringsWithFallback()`, hooked into
+  `Database.GetAiringsOnChannelAtTime` and
+  `GetAiringsOnViewableChannelsAtTime`. Properties:
+  `epg/atsc3_alias_offset` (default 100),
+  `epg/atsc3_alias_enabled` (default true),
+  `epg/callsign_fallback_enabled` (default false / opt-in),
+  `epg/callsign_strip_suffixes` (default `-NG,-DT,-HD,-LD,-CD,-TV`).
+  Read-time only; never mutates the database; recording / conflict
+  detection paths still use strict `getAirings()`.
 - ATSC 3.0 channel scan (lineup.json + DRM detection) — `5ad71b14`,
   `c8e8b197`
 - ATSC 3.0 HDHR HTTP-pull capture (HEVC + AC-4) — `a4a32ca8`

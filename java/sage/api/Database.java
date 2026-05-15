@@ -2111,7 +2111,7 @@ public class Database {
         long end = getLong(stack);
         long start = getLong(stack);
         Channel c = getChannel(stack);
-        return (c == null) ? null : Wizard.getInstance().getAirings(c.getStationID(), start, end, must);
+        return (c == null) ? null : Wizard.getInstance().getAiringsWithFallback(c.getStationID(), start, end, must);
       }});
     rft.put(new PredefinedJEPFunction("Database", "GetAiringsOnViewableChannelsAtTime", 3, new String[] {"StartTime",
         "EndTime","MustStartDuringTime"})
@@ -2134,7 +2134,7 @@ public class Database {
         Channel[] currChans = Wizard.getInstance().getChannels();
         for (int j = 0; j < currChans.length; j++)
           if (currChans[j].isViewable())
-            rv.addAll(java.util.Arrays.asList(Wizard.getInstance().getAirings(currChans[j].getStationID(), start, end, must)));
+            rv.addAll(java.util.Arrays.asList(Wizard.getInstance().getAiringsWithFallback(currChans[j].getStationID(), start, end, must)));
         return rv.toArray(Pooler.EMPTY_AIRING_ARRAY);
       }});
     rft.put(new PredefinedJEPFunction("Database", "GetAllNonMusicWithPerson", 1, new String[] {"Person"})

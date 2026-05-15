@@ -5079,6 +5079,31 @@ public class Wizard implements EPGDBPublic2
     }
   }
 
+  /**
+   * Same as {@link #getAirings(int, long, long, boolean)} but, if the
+   * primary query returns no airings, consults
+   * {@link sage.epg.EpgFallbackResolver} for an alias / sibling station
+   * (ATSC 3.0 +offset, callsign fallback) and returns that station's
+   * airings instead. Used by the EPG matrix STV functions so a viewer
+   * sees something on 109.x channels even when no Schedules Direct data
+   * was inserted for them.
+   *
+   * <p>This method NEVER mutates the database and never inserts the
+   * fallback airings under the source stationID &mdash; it just returns
+   * them by reference. Recording / conflict-detection callers continue
+   * to use the strict {@link #getAirings(int, long, long, boolean)} form
+   * so they don't double-book the tuner against an aliased program.
+   */
+  public Airing[] getAiringsWithFallback(int stationID, long startTime,
+      long endTime, boolean mustStart)
+  {
+    Airing[] primary = getAirings(stationID, startTime, endTime, mustStart);
+    if (primary != null && primary.length > 0) return primary;
+    int fallbackID = sage.epg.EpgFallbackResolver.getInstance().resolveFallback(stationID);
+    if (fallbackID == 0 || fallbackID == stationID) return primary;
+    return getAirings(fallbackID, startTime, endTime, mustStart);
+  }
+
   public Airing[] getAirings(Show forMe, long startingAfter)
   {
     return getAirings(forMe, startingAfter, false);
