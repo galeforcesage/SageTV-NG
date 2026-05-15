@@ -200,6 +200,88 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
                       + " mf=" + mf);
                   VideoFrame.kickAll();
                 }
+
+                // ---- Phase G+: deferred ffmpeg re-probe ----
+                // Once the on-disk capture has enough bytes for ffmpeg to
+                // identify width/height/fps/pixel-format/language tags/CC,
+                // re-run FormatParser and merge the richer info into the
+                // MediaFile. This is the equivalent of the ATSC1 native
+                // path receiving a richer AV-INF after demuxer lock-in.
+                // Audio codec identity (AC-4) is preserved even if ffprobe
+                // can't determine sample rate / channels (which is normal
+                // for AC-4 in current ffmpeg builds).
+                final java.io.File reprobeFile = new java.io.File(encodeFile);
+                final MediaFile reprobeMf = mf;
+                Thread t = new Thread(new Runnable() {
+                  @Override public void run()
+                  {
+                    long deadline = Sage.time() + 60000L; // 60s budget
+                    long minBytes = Sage.getLong("hdhr/atsc3_reprobe_min_bytes", 4L * 1024 * 1024);
+                    while (Sage.time() < deadline)
+                    {
+                      if (reprobeFile.length() >= minBytes) break;
+                      try { Thread.sleep(500); } catch (InterruptedException ie) { return; }
+                    }
+                    if (reprobeFile.length() < 64 * 1024) return; // never grew
+                    try
+                    {
+                      sage.media.format.ContainerFormat probed =
+                          probeAtsc3FileWithFFMPEG(reprobeFile.toString());
+                      if (probed == null) return;
+                      sage.media.format.ContainerFormat current = reprobeMf.getFileFormat();
+                      java.util.List<VideoFrame> active;
+                      try { active = VideoFrame.getVFsUsingMediaFile(reprobeMf); }
+                      catch (Throwable ignore) { active = java.util.Collections.emptyList(); }
+                      boolean hasActive = active != null && !active.isEmpty();
+
+                      // If a player is currently using this MediaFile, mutate the
+                      // existing stream objects in-place so we don't trigger
+                      // MediaFile.setMediafileFormat()'s majorChange path (which
+                      // would call reloadFile() on every active VideoFrame and
+                      // yank live HEVC playback). UI displays will pick up the
+                      // richer info on next refresh; players keep playing.
+                      // Extra streams (e.g. 2nd-language AC-4) cannot be added
+                      // without a reload -- they appear on the next start of the
+                      // file. This mirrors the ATSC1 behavior where the native
+                      // demuxer issues a single AV-INF after PMT lock-in.
+                      if (hasActive && current != null)
+                      {
+                        enrichInPlace(current, probed);
+                        if (Sage.DBG) System.out.println("ATSC3 HTTP-pull: enriched format in-place ("
+                            + active.size() + " active VF) format=" + current + " mf=" + reprobeMf);
+                        return;
+                      }
+
+                      // No active player: safe to swap in the full probe (may
+                      // declare majorChange and reload, but nothing is playing).
+                      sage.media.format.BitstreamFormat[] probedStreams = probed.getStreamFormats();
+                      if (probedStreams != null && current != null)
+                      {
+                        for (int i = 0; i < probedStreams.length; i++)
+                        {
+                          sage.media.format.BitstreamFormat ps = probedStreams[i];
+                          if (ps != null && (ps.getFormatName() == null || ps.getFormatName().length() == 0))
+                          {
+                            sage.media.format.BitstreamFormat cs = current.getStreamFormat(i);
+                            if (cs != null && cs.getFormatName() != null)
+                              ps.setFormatName(cs.getFormatName());
+                          }
+                        }
+                      }
+                      if (probed.getFormatName() == null || probed.getFormatName().length() == 0)
+                        probed.setFormatName(sage.media.format.MediaFormat.MPEG2_TS);
+                      reprobeMf.setMediafileFormat(probed);
+                      if (Sage.DBG) System.out.println("ATSC3 HTTP-pull: re-probed format="
+                          + probed + " mf=" + reprobeMf);
+                    }
+                    catch (Throwable th)
+                    {
+                      if (Sage.DBG) System.out.println("ATSC3 HTTP-pull: re-probe failed: " + th);
+                    }
+                  }
+                }, getName() + "-FormatReprobe");
+                t.setDaemon(true);
+                t.start();
               }
               else if (Sage.DBG)
               {
@@ -844,5 +926,246 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
           + channel + ": " + t);
       return 0;
     }
+  }
+
+  /**
+   * Probe an ATSC 3.0 capture (HEVC + AC-4 in MPEG-TS) using the dedicated
+   * ffprobe-ac4 binary and return a populated ContainerFormat. Stock ffmpeg
+   * shipped with Sage cannot decode AC-4 sample rate / channels and rejects
+   * the {@code -dumpmetadata} option used by FormatParser, so this path
+   * shells out to {@code /usr/local/bin/ffprobe-ac4} (pliu6 fork) directly
+   * and parses its JSON output.
+   *
+   * Returns null if the probe binary is missing or fails. Caller is expected
+   * to fall back to the seeded codec identities in that case.
+   */
+  static sage.media.format.ContainerFormat probeAtsc3FileWithFFMPEG(String filePath)
+  {
+    String probeBin = sage.Sage.get("hdhr/atsc3_ffprobe_path", "/usr/local/bin/ffprobe-ac4");
+    if (!new java.io.File(probeBin).canExecute())
+    {
+      if (sage.Sage.DBG) System.out.println("ATSC3 probe: " + probeBin + " not executable");
+      return null;
+    }
+    String json;
+    try
+    {
+      json = sage.IOUtils.exec(new String[] {
+          probeBin, "-v", "error",
+          "-show_streams", "-show_format", "-of", "json",
+          filePath
+      }, true, true, true);
+    }
+    catch (Throwable t)
+    {
+      if (sage.Sage.DBG) System.out.println("ATSC3 probe exec failed: " + t);
+      return null;
+    }
+    if (json == null || json.length() < 16) return null;
+
+    sage.media.format.ContainerFormat cf = new sage.media.format.ContainerFormat();
+    cf.setFormatName(sage.media.format.MediaFormat.MPEG2_TS);
+    // bitrate from format.bit_rate (string)
+    try
+    {
+      String br = jsonStr(json, "bit_rate");
+      if (br != null) cf.setBitrate(Integer.parseInt(br));
+      String dur = jsonStr(json, "duration");
+      if (dur != null) cf.setDuration((long)(Double.parseDouble(dur) * 1000));
+    } catch (Throwable ignore) {}
+
+    java.util.List<sage.media.format.BitstreamFormat> streams = new java.util.ArrayList<>();
+    int searchFrom = 0;
+    int idx = 0;
+    while (true)
+    {
+      int s = json.indexOf("\"index\"", searchFrom);
+      if (s < 0) break;
+      int next = json.indexOf("\"index\"", s + 1);
+      String block = (next < 0) ? json.substring(s) : json.substring(s, next);
+      searchFrom = (next < 0) ? json.length() : next;
+      String ctype = jsonStr(block, "codec_type");
+      String cname = jsonStr(block, "codec_name");
+      String lang  = jsonStr(block, "language");
+      String pid   = jsonStr(block, "id");
+      if ("video".equals(ctype))
+      {
+        sage.media.format.VideoFormat vf = new sage.media.format.VideoFormat();
+        vf.setOrderIndex(idx);
+        vf.setFormatName(sage.media.format.FormatParser.substituteName(cname == null ? "" : cname));
+        try { String w = jsonStr(block, "width");  if (w != null) vf.setWidth(Integer.parseInt(w)); } catch (Throwable ignore) {}
+        try { String h = jsonStr(block, "height"); if (h != null) vf.setHeight(Integer.parseInt(h)); } catch (Throwable ignore) {}
+        String fr = jsonStr(block, "r_frame_rate");
+        if (fr != null && fr.indexOf('/') > 0)
+        {
+          try {
+            String[] p = fr.split("/");
+            int num = Integer.parseInt(p[0]);
+            int den = Integer.parseInt(p[1]);
+            if (den > 0) vf.setFps(((float) num) / den);
+          } catch (Throwable ignore) {}
+        }
+        String dar = jsonStr(block, "display_aspect_ratio");
+        if (dar != null && dar.indexOf(':') > 0)
+        {
+          try {
+            String[] p = dar.split(":");
+            int an = Integer.parseInt(p[0]);
+            int ad = Integer.parseInt(p[1]);
+            if (ad > 0) {
+              vf.setArNum(an); vf.setArDen(ad);
+              vf.setAspectRatio(((float) an) / ad);
+            }
+          } catch (Throwable ignore) {}
+        }
+        // AVC/HEVC are progressive in this pipeline (HDHR delivers progressive).
+        vf.setInterlaced(false);
+        if (pid != null) vf.setId(pid);
+        streams.add(vf);
+      }
+      else if ("audio".equals(ctype))
+      {
+        sage.media.format.AudioFormat af = new sage.media.format.AudioFormat();
+        af.setOrderIndex(idx);
+        af.setFormatName(sage.media.format.FormatParser.substituteName(cname == null ? "" : cname));
+        try { String sr = jsonStr(block, "sample_rate"); if (sr != null) af.setSamplingRate(Integer.parseInt(sr)); } catch (Throwable ignore) {}
+        try { String ch = jsonStr(block, "channels");    if (ch != null) af.setChannels(Integer.parseInt(ch)); } catch (Throwable ignore) {}
+        if (lang != null) af.setLanguage(lang);
+        if (pid != null) af.setId(pid);
+        streams.add(af);
+      }
+      else if ("subtitle".equals(ctype))
+      {
+        sage.media.format.SubpictureFormat sf = new sage.media.format.SubpictureFormat();
+        sf.setOrderIndex(idx);
+        sf.setFormatName(sage.media.format.FormatParser.substituteName(cname == null ? "" : cname));
+        if (lang != null) sf.setLanguage(lang);
+        if (pid != null) sf.setId(pid);
+        streams.add(sf);
+      }
+      // Skip data streams (e.g. STPP / bin_data)
+      idx++;
+    }
+    if (streams.isEmpty()) return null;
+    cf.setStreamFormats(streams.toArray(new sage.media.format.BitstreamFormat[0]));
+    return cf;
+  }
+
+  /**
+   * Mutate the existing {@code current} ContainerFormat's streams in place
+   * from the richer {@code probed} format. Only updates fields that are
+   * unset/zero in {@code current} and present in {@code probed} so we never
+   * "downgrade" already-seeded data. Does NOT add or remove streams (that
+   * would force a player reload). Does NOT call setMediafileFormat() —
+   * mutations are visible to anyone holding the format reference, including
+   * a live VideoFrame, without triggering MAJOR-change detection.
+   */
+  private static void enrichInPlace(sage.media.format.ContainerFormat current,
+      sage.media.format.ContainerFormat probed)
+  {
+    if (current == null || probed == null) return;
+    if (current.getBitrate() <= 0 && probed.getBitrate() > 0)
+      current.setBitrate(probed.getBitrate());
+    if (current.getDuration() <= 0 && probed.getDuration() > 0)
+      current.setDuration(probed.getDuration());
+
+    // Match probed streams to current ones by codec type + index, then by codec type.
+    sage.media.format.BitstreamFormat[] cs = current.getStreamFormats();
+    sage.media.format.BitstreamFormat[] ps = probed.getStreamFormats();
+    if (cs == null || ps == null) return;
+    boolean[] usedProbed = new boolean[ps.length];
+
+    for (int i = 0; i < cs.length; i++)
+    {
+      sage.media.format.BitstreamFormat c = cs[i];
+      if (c == null) continue;
+      // First try exact index match.
+      sage.media.format.BitstreamFormat match = null;
+      if (i < ps.length && ps[i] != null && sameKind(c, ps[i]))
+      {
+        match = ps[i]; usedProbed[i] = true;
+      }
+      else
+      {
+        for (int j = 0; j < ps.length; j++)
+        {
+          if (usedProbed[j] || ps[j] == null) continue;
+          if (sameKind(c, ps[j])) { match = ps[j]; usedProbed[j] = true; break; }
+        }
+      }
+      if (match == null) continue;
+      enrichStream(c, match);
+    }
+  }
+
+  private static boolean sameKind(sage.media.format.BitstreamFormat a,
+      sage.media.format.BitstreamFormat b)
+  {
+    return (a instanceof sage.media.format.VideoFormat
+            && b instanceof sage.media.format.VideoFormat)
+        || (a instanceof sage.media.format.AudioFormat
+            && b instanceof sage.media.format.AudioFormat)
+        || (a instanceof sage.media.format.SubpictureFormat
+            && b instanceof sage.media.format.SubpictureFormat);
+  }
+
+  private static void enrichStream(sage.media.format.BitstreamFormat c,
+      sage.media.format.BitstreamFormat p)
+  {
+    if (c.getId() == null && p.getId() != null) c.setId(p.getId());
+    if (p instanceof sage.media.format.VideoFormat
+        && c instanceof sage.media.format.VideoFormat)
+    {
+      sage.media.format.VideoFormat cv = (sage.media.format.VideoFormat) c;
+      sage.media.format.VideoFormat pv = (sage.media.format.VideoFormat) p;
+      if (cv.getWidth()  <= 0 && pv.getWidth()  > 0) cv.setWidth(pv.getWidth());
+      if (cv.getHeight() <= 0 && pv.getHeight() > 0) cv.setHeight(pv.getHeight());
+      if (cv.getFps()    <= 0 && pv.getFps()    > 0) cv.setFps(pv.getFps());
+      if (cv.getAspectRatio() <= 0 && pv.getAspectRatio() > 0)
+      {
+        cv.setAspectRatio(pv.getAspectRatio());
+        cv.setArNum(pv.getArNum());
+        cv.setArDen(pv.getArDen());
+      }
+    }
+    else if (p instanceof sage.media.format.AudioFormat
+        && c instanceof sage.media.format.AudioFormat)
+    {
+      sage.media.format.AudioFormat ca = (sage.media.format.AudioFormat) c;
+      sage.media.format.AudioFormat pa = (sage.media.format.AudioFormat) p;
+      if (ca.getSamplingRate() <= 0 && pa.getSamplingRate() > 0) ca.setSamplingRate(pa.getSamplingRate());
+      if (ca.getChannels()     <= 0 && pa.getChannels()     > 0) ca.setChannels(pa.getChannels());
+      if ((ca.getLanguage() == null || ca.getLanguage().length() == 0) && pa.getLanguage() != null)
+        ca.setLanguage(pa.getLanguage());
+    }
+  }
+
+  /** Tiny JSON value extractor for {@code "key": "value"} or {@code "key": value}. First match wins. */
+  private static String jsonStr(String json, String key)
+  {
+    String k = "\"" + key + "\"";
+    int i = json.indexOf(k);
+    if (i < 0) return null;
+    int colon = json.indexOf(':', i + k.length());
+    if (colon < 0) return null;
+    int p = colon + 1;
+    while (p < json.length() && Character.isWhitespace(json.charAt(p))) p++;
+    if (p >= json.length()) return null;
+    char c = json.charAt(p);
+    if (c == '"')
+    {
+      int end = json.indexOf('"', p + 1);
+      if (end < 0) return null;
+      return json.substring(p + 1, end);
+    }
+    int end = p;
+    while (end < json.length())
+    {
+      char ec = json.charAt(end);
+      if (ec == ',' || ec == '\n' || ec == '\r' || ec == '}' || ec == ']') break;
+      end++;
+    }
+    String s = json.substring(p, end).trim();
+    return s.length() == 0 ? null : s;
   }
 }

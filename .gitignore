@@ -23,6 +23,13 @@ config*.log
 /verify-*.sh
 /entrypoint-state.sh
 /Dockerfile.entrypoint-overlay
+# Throwaway debug shell scripts and probe artifacts (lineup.json, etc.)
+/scripts/
+/tmp-*.sh
+/tmp-*/
+/lineup.json
+/discover.json
+/scan-tail.txt
 
 # Local-only reference / build artifacts
 /decompile_*.txt
