@@ -123,11 +123,13 @@ public final class ChannelVariantAttacher
             normCodec(atsc3.videoCodec, ChannelVariant.VCODEC_HEVC),
             normCodec(atsc3.audioCodec, ChannelVariant.ACODEC_AC4),
             atsc3.guideNumber,
-            hdhrDeviceHexId);
+            hdhrDeviceHexId,
+            atsc3.drm);
         ChannelVariants.add(sid, v);
         attached++;
         if (Sage.DBG) System.out.println("ATSC3: paired GuideNumber="
             + atsc3.guideNumber + " callsign=" + atsc3.guideName
+            + (atsc3.drm ? " [DRM]" : "")
             + " -> stationID=" + sid + " name=" + chan.getName()
             + " (twin=" + (atsc1 != null ? atsc1.guideNumber : "<none>")
             + " method=" + matchMethodHint(chan, probe, major) + ")");
