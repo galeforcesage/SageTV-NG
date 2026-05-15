@@ -148,6 +148,23 @@ public class SkipMatrix
   }
 
   /**
+   * Returns the start time (ms) of the commercial segment containing the given position,
+   * or -1 if the position is not in a commercial.
+   */
+  public long getCommercialStart(long positionMs)
+  {
+    if (length == 0) return -1;
+    int idx = Arrays.binarySearch(startMs, 0, length, positionMs);
+    if (idx >= 0)
+      return startMs[idx];
+    int insertionPoint = -(idx + 1);
+    if (insertionPoint == 0) return -1;
+    int prev = insertionPoint - 1;
+    long endMs = startMs[prev] + (durationMs[prev] & 0xFFFFFFFFL);
+    return (positionMs < endMs) ? startMs[prev] : -1;
+  }
+
+  /**
    * Returns the number of commercial segments.
    */
   public int getSegmentCount()

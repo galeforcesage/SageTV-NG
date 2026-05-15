@@ -1840,7 +1840,32 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         else
         {
           lastVideoOpTime = Sage.eventTime();
-          timeSelected(getMediaTimeMillis() + daJob.time, false);
+          long rewTarget = getMediaTimeMillis() + daJob.time;
+          // Comskip-aware rewind: if the rewind would land inside a detected
+          // commercial segment, the auto-skip monitor would immediately bounce
+          // the user forward to the end — defeating the rewind. Instead, land
+          // the user a configurable preroll (default 15s) BEFORE the start of
+          // the commercial so they can see the lead-in.
+          sage.commercial.SkipMatrix sm = commSkipMatrix;
+          if (sm != null && sm.getSegmentCount() > 0)
+          {
+            long fileRel = rewTarget - commSkipFileStart;
+            if (fileRel >= 0 && sm.isInCommercial(fileRel))
+            {
+              long commStartFileRel = sm.getCommercialStart(fileRel);
+              if (commStartFileRel >= 0)
+              {
+                long preroll = uiMgr.getLong(prefs + "comskip_rew_preroll_ms", 15000L);
+                long adjustedFileRel = Math.max(0L, commStartFileRel - preroll);
+                long adjustedEpoch = adjustedFileRel + commSkipFileStart;
+                if (Sage.DBG) System.out.println("VideoFrame: REW landed inside commercial at fileRel=" +
+                    fileRel + "ms; adjusting to " + adjustedFileRel + "ms (commStart=" +
+                    commStartFileRel + "ms - preroll=" + preroll + "ms)");
+                rewTarget = adjustedEpoch;
+              }
+            }
+          }
+          timeSelected(rewTarget, false);
         }
         notifyPlaybackSeek();
         Catbert.processUISpecificHook("MediaPlayerSeekCompleted", null, uiMgr, true, SEEK_COMPLETE_HOOK_DELAY);
