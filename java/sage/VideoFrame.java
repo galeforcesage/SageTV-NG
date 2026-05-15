@@ -1846,8 +1846,11 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
           // the user forward to the end — defeating the rewind. Instead, land
           // the user a configurable preroll (default 15s) BEFORE the start of
           // the commercial so they can see the lead-in.
+          // Only active when auto-skip is enabled; in manual mode the user
+          // explicitly wants to land where they pressed REW.
           sage.commercial.SkipMatrix sm = commSkipMatrix;
-          if (sm != null && sm.getSegmentCount() > 0)
+          if (sm != null && sm.getSegmentCount() > 0
+              && sage.commercial.CommercialDetectionManager.getInstance().isAutoSkipEnabled())
           {
             long fileRel = rewTarget - commSkipFileStart;
             if (fileRel >= 0 && sm.isInCommercial(fileRel))
