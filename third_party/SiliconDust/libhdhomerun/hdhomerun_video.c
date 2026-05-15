@@ -242,6 +242,116 @@ static void hdhomerun_video_parse_rtp(struct hdhomerun_video_sock_t *vs, struct 
 	}
 }
 
+/*
+ * SageTV-mine: dynamic RTP header parsing.
+ *
+ * The original libhdhomerun code accepted only two exact datagram sizes:
+ *   1316 (raw MPEG-TS, no RTP)            == VIDEO_DATA_PACKET_SIZE
+ *   1328 (12-byte RTP header + 1316 TS)   == VIDEO_RTP_DATA_PACKET_SIZE
+ * and silently dropped everything else. The HDHomeRun FLEX 4K firmware
+ * 20260326+ began emitting RTP datagrams with extension headers and/or
+ * CSRC lists, producing 1336/1340/1344-byte packets that the original
+ * code dropped, breaking ALL tuning/scanning on this firmware.
+ *
+ * This helper parses any RFC-3550 RTP-over-UDP datagram or raw-TS datagram
+ * and returns the byte offset of the MPEG-TS payload (header length to
+ * advance past), or -1 if the packet is malformed / not recognized.
+ *
+ *   buf, len: raw datagram from recvfrom()
+ * Returns: header offset (0 for raw TS, 12+ for RTP), or -1 on error.
+ *
+ * Validation: payload (len - hdr) must be a positive multiple of TS_PACKET_SIZE
+ * and the first payload byte must be 0x47 (TS sync byte).
+ */
+static int hdhomerun_video_parse_packet_header(const uint8_t *buf, size_t len)
+{
+	if (len < TS_PACKET_SIZE) {
+		return -1;
+	}
+
+	/* Raw MPEG-TS, no RTP wrapper (legacy / non-RTP target mode). */
+	if (len == VIDEO_DATA_PACKET_SIZE && buf[0] == 0x47) {
+		return 0;
+	}
+
+	/* RTP version 2: top two bits of byte 0 must be 0b10. */
+	if ((buf[0] & 0xC0) != 0x80) {
+		return -1;
+	}
+
+	/* RTP fixed header is 12 bytes; CC field (low nibble) adds 4 bytes per CSRC. */
+	uint32_t cc = buf[0] & 0x0F;
+	uint32_t hdr = 12 + (cc * 4);
+	if (len < hdr + TS_PACKET_SIZE) {
+		return -1;
+	}
+
+	/* Extension header present (X bit = bit 4 of byte 0). */
+	if (buf[0] & 0x10) {
+		if (len < hdr + 4) {
+			return -1;
+		}
+		/* Bytes hdr+2..hdr+3 are extension length in 32-bit words (excluding the
+		 * 4-byte ext header itself). Network byte order. */
+		uint32_t ext_words = ((uint32_t)buf[hdr + 2] << 8) | (uint32_t)buf[hdr + 3];
+		hdr += 4 + (ext_words * 4);
+		if (len < hdr + TS_PACKET_SIZE) {
+			return -1;
+		}
+	}
+
+	/* Validate payload: must be exactly VIDEO_DATA_PACKET_SIZE (7 TS packets,
+	 * 1316 bytes). The rest of libhdhomerun (ring buffer wrap math, recv
+	 * chunking, stats loop) is built around this fixed-size contract; the
+	 * HDHomeRun device has always sent 7 TS packets per RTP datagram and is
+	 * expected to continue doing so. The variable size we observe on FLEX 4K
+	 * firmware 20260326+ comes from the RTP WRAPPER (extension header /
+	 * CSRC list), not the payload itself.
+	 */
+	size_t payload = len - hdr;
+	if (payload != VIDEO_DATA_PACKET_SIZE) {
+		return -1;
+	}
+	if (buf[hdr] != 0x47) {
+		return -1;
+	}
+
+	return (int)hdr;
+}
+
+/*
+ * Rate-limited diagnostic print of observed datagram sizes.
+ * Activated only when env var HDHOMERUN_VIDEO_DEBUG=1 is set.
+ *
+ *   - First 64 packets: print every datagram's (size, header_offset).
+ *   - Thereafter: print one sample per 10000 packets.
+ *
+ * Output goes to stderr so it survives regardless of where Sage's logger
+ * sends stdout (legacy file rotation, SLF4J bridge, etc.).
+ */
+static void hdhomerun_video_debug_size(size_t len, int hdr_off)
+{
+	static volatile int s_debug_enabled = -1; /* -1 = not yet checked */
+	static volatile uint32_t s_packet_seen = 0;
+
+	if (s_debug_enabled == -1) {
+		const char *env = getenv("HDHOMERUN_VIDEO_DEBUG");
+		s_debug_enabled = (env && *env == '1') ? 1 : 0;
+	}
+	if (!s_debug_enabled) {
+		return;
+	}
+
+	uint32_t n = ++s_packet_seen;
+	if (n <= 64 || (n % 10000) == 0) {
+		fprintf(stderr,
+			"HDHR_VIDEO: pkt=%u udp_len=%zu rtp_hdr=%d ts_payload=%zu\n",
+			(unsigned)n, len, hdr_off,
+			(hdr_off >= 0) ? (len - (size_t)hdr_off) : (size_t)0);
+		fflush(stderr);
+	}
+}
+
 static void hdhomerun_video_thread_send_keepalive(struct hdhomerun_video_sock_t *vs)
 {
 	thread_mutex_lock(&vs->lock);
@@ -277,22 +387,38 @@ static void hdhomerun_video_thread_execute(void *arg)
 		struct hdhomerun_pkt_t pkt;
 		hdhomerun_pkt_reset(&pkt);
 
-		size_t length = VIDEO_RTP_DATA_PACKET_SIZE;
+		/*
+		 * SageTV-mine: ask for up to a full Ethernet MTU rather than the
+		 * historical 1328-byte ceiling. The pkt buffer is 3074 bytes so this
+		 * is safe; the previous tight ceiling caused the kernel to truncate
+		 * (or drop) larger RTP datagrams emitted by FLEX 4K firmware
+		 * 20260326+ which prepends extension headers and/or CSRC lists.
+		 */
+		size_t length = VIDEO_RTP_MAX_PACKET_SIZE;
 		if (!hdhomerun_sock_recv(vs->sock, pkt.end, &length, 25)) {
 			continue;
 		}
 
 		pkt.end += length;
 
-		if (length == VIDEO_RTP_DATA_PACKET_SIZE) {
-			hdhomerun_video_parse_rtp(vs, &pkt);
-			length = pkt.end - pkt.pos;
-		}
-
-		if (length != VIDEO_DATA_PACKET_SIZE) {
+		/*
+		 * Detect packet type and skip past any RTP wrapper. Returns header
+		 * length (0 for raw TS, 12+ for RTP) or -1 if malformed.
+		 */
+		int hdr_off = hdhomerun_video_parse_packet_header(pkt.pos, length);
+		hdhomerun_video_debug_size(length, hdr_off);
+		if (hdr_off < 0) {
 			/* Data received but not valid - ignore. */
 			continue;
 		}
+
+		if (hdr_off > 0) {
+			/* RTP packet: track sequence numbers, then skip the header. */
+			hdhomerun_video_parse_rtp(vs, &pkt);
+			pkt.pos = pkt.start + hdr_off;
+		}
+
+		length = pkt.end - pkt.pos;
 
 		thread_mutex_lock(&vs->lock);
 
