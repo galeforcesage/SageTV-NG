@@ -7,33 +7,6 @@ each track. Items move to a `## Done` section once shipped.
 
 ## ATSC 3.0 / EPG track
 
-### Phase 0 — "no data" placeholder Airing uniqueness  *(small bug, ship first)*
-
-**Symptom.** When the EPG has no data for a channel/time-slot, SageTV
-creates placeholder Airings that all reference a single shared "no data"
-Show row. Recordings made against those airings inherit the same Show
-identity, so:
-
-- The recording list collapses many distinct recordings into one row.
-- Deleting that one row cascades a delete to *every* placeholder
-  recording across all channels — even ones the user wanted to keep.
-
-**Fix sketch.**
-
-- Mint a **unique Show identity per (channel, start-time, duration)** for
-  no-data placeholders, e.g. `ShowExternalID = "NODATA::<chanID>::<startUTC>"`.
-- Title can stay user-facing as "(no data)" but the underlying Show row
-  must be distinct so cascade deletes only hit the one airing.
-- Backfill / migration: a one-shot Wizard pass that finds existing
-  shared "no data" Shows referenced by >1 Airing and splits them.
-- Add a regression test that creates two placeholder airings on
-  different channels, records both, deletes one, asserts the other is
-  still present and playable.
-
-**Files likely touched.** `java/sage/EPG.java`, `java/sage/Wizard.java`
-(Show creation path), `java/sage/Airing.java`. Look for code paths that
-construct an Airing without an Show ID (the "stub" case).
-
 ### Phase 1 — ATSC1 subchannel EPG via idle-tuner PSIP/EIT scan  *(real EPG win)*
 
 **Why this and not "ATSC3 ESG over ROUTE."** SD already covers ATSC3
@@ -119,6 +92,12 @@ Phases 0–3 cover real-world need without touching the broadcast stack.
 
 ## Done
 
+- "No data" placeholder Show uniqueness (Phase 0): `Wizard.addMediaFile`
+  and `addMediaFileRecovered` now fork a unique Show + Airing pair
+  (extID `NODATA::<stationID>::<recStart>`) for any recording made
+  against the global noShow placeholder, so the recordings UI no longer
+  collapses unrelated no-data recordings into one row and "Delete" no
+  longer cascades across them. Original placeholder Airing is preserved.
 - ATSC 3.0 / ATSC 1.0 sibling EPG aliasing (Phase 2) + callsign fallback
   (Phase 3): new `sage.epg.EpgFallbackResolver`,
   `Wizard.getAiringsWithFallback()`, hooked into

@@ -715,6 +715,53 @@ public class Wizard implements EPGDBPublic2
     Sage.putInt(prefsRoot + NOSHOW_ID, noShowID = noShow.id);
   }
 
+  /**
+   * Phase 0 fix: when a recording is being made against the global noShow
+   * placeholder Airing, mint a unique Show + Airing pair keyed on
+   * (stationID, recordingStart). This prevents the recording-list UI from
+   * collapsing all "(no data)" recordings into a single grouped row, and
+   * stops "delete Show" from cascading across unrelated recordings.
+   *
+   * The original placeholder Airing (a long-duration future-spanning row)
+   * is left untouched so the EPG continues to render normally.
+   *
+   * @return the new forked Airing on success, or {@code null} on failure
+   *         (caller falls back to {@code basedOn}).
+   */
+  Airing forkNoDataAiring(Airing basedOn, long recStart)
+  {
+    if (basedOn == null) return null;
+    try
+    {
+      String extID = "NODATA::" + basedOn.stationID + "::" + recStart;
+      Show uniqueShow = getShowForExternalID(extID);
+      if (uniqueShow == null)
+      {
+        uniqueShow = addShow(Sage.rez("EPG_Cell_No_Data"), null, null, null, 0,
+            null, null, null, null, null, null, null, null, extID,
+            null, 0, DBObject.MEDIA_MASK_TV,
+            (short) 0, (short) 0, false,
+            (byte) 0, (byte) 0, (byte) 0, (byte) 0,
+            (byte) 0, (byte) 0, (byte) 0, (byte) 0);
+      }
+      if (uniqueShow == null) return null;
+      // Pick a sensible duration: cap the long-future placeholder at 6h so
+      // the cloned Airing stays bounded (rec engine writes its real duration
+      // when recording finishes).
+      long dur = Math.max(60000L, Math.min(basedOn.duration, 6L * Sage.MILLIS_PER_HR));
+      Airing forked = addAiring(uniqueShow, basedOn.stationID, recStart, dur,
+          basedOn.partsB, basedOn.miscB, basedOn.prB, basedOn.getMediaMask());
+      if (Sage.DBG) System.out.println("Wizard: forked no-data airing " + basedOn.id +
+          " -> show extID=" + extID + " new airing=" + (forked != null ? forked.id : -1));
+      return forked;
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("Wizard: forkNoDataAiring failed: " + t);
+      return null;
+    }
+  }
+
   void mpause() { if (primed) { try{Thread.sleep(50);}catch(Exception e){} } }
 
   void maintenance()
@@ -3543,6 +3590,15 @@ public class Wizard implements EPGDBPublic2
     {
       basedOn = ((ManualRecord.FakeAiring) basedOn).getManualRecord().getContentAiring();
     }
+    // Phase 0: ensure each "no data" recording gets its own unique Show
+    // identity. Otherwise every placeholder recording across all channels
+    // shares the single global noShow row, the UI collapses them into one
+    // entry, and a single delete cascades to every other no-data recording.
+    if (basedOn != null && noShowID != 0 && basedOn.showID == noShowID)
+    {
+      Airing forked = forkNoDataAiring(basedOn, recStart);
+      if (forked != null) basedOn = forked;
+    }
     MediaFile mf;
     try {
       acquireWriteLock(MEDIAFILE_CODE);
@@ -3600,6 +3656,12 @@ public class Wizard implements EPGDBPublic2
 
   public MediaFile addMediaFileRecovered(Airing basedOn, File theFile)
   {
+    // Phase 0: same per-recording unique-Show treatment for recovered files.
+    if (basedOn != null && noShowID != 0 && basedOn.showID == noShowID)
+    {
+      Airing forked = forkNoDataAiring(basedOn, basedOn.getStartTime());
+      if (forked != null) basedOn = forked;
+    }
     MediaFile mf;
     try {
       acquireWriteLock(MEDIAFILE_CODE);
