@@ -595,8 +595,26 @@ char *HDHRDevice::scanChannel(char *channelName, char *region, int streamFormat)
 		mTuningParams.tuningFrequency = 0;
 		mTuningParams.aft = true;
 		mTuningParams.outputFormat = (streamFormat == 31) ? 1 : 0; // 31 = MPEG PS, 32 = MPEG TS
-		
-		return mChannel->scanChannel(channelName, region, mTuningParams.outputFormat);
+
+		// PSIP/PAT/PMT bytes only reach DTVChannel::ProcessScan when the
+		// capture thread is pumping data via mChannel->pushData(). The
+		// recording path (setupEncoding) starts that thread; the scan path
+		// historically did not, so SCANINFO came back empty for every RF
+		// even when the tuner had a strong lock. Bring up the capture thread
+		// here in data-scan mode (NULL output file = no disk write) for the
+		// duration of this single-channel scan, then tear it down so the
+		// next scanChannel() / setChannel() call starts from a clean state.
+		bool startedCaptureThread = false;
+		if (!mCaptureThreadRunning) {
+			startedCaptureThread = setupEncoding(NULL, 0);
+		}
+
+		char *result = mChannel->scanChannel(channelName, region, mTuningParams.outputFormat);
+
+		if (startedCaptureThread) {
+			stopCapture();
+		}
+		return result;
 	}
 	return NULL;
 }
