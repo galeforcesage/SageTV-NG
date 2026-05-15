@@ -135,10 +135,20 @@ public class HDHomeRunLineup
     // Direct hit (e.g. "109.1" matches GuideNumber "109.1").
     Entry e = snap.get(channelNumber);
     if (e != null) return e;
+    // Sage stores ATSC channels in dash form ("109-1") after the STV's scan
+    // parser splits major/minor on '-'. /lineup.json uses dot form ("109.1"),
+    // so try the dash->dot translation before falling through to major-only.
+    int dash = channelNumber.indexOf('-');
+    if (dash > 0 && channelNumber.indexOf('.') < 0)
+    {
+      String dotted = channelNumber.substring(0, dash) + "." + channelNumber.substring(dash + 1);
+      e = snap.get(dotted);
+      if (e != null) return e;
+    }
     // Major-only key (e.g. Sage tunes "109" but lineup uses "109.1"). Find any
     // GuideNumber whose major part matches; prefer HEVC (ATSC 3.0) when more
     // than one virtual subchannel shares the same major.
-    if (channelNumber.indexOf('.') < 0)
+    if (channelNumber.indexOf('.') < 0 && channelNumber.indexOf('-') < 0)
     {
       String majorDot = channelNumber + ".";
       Entry best = null;
