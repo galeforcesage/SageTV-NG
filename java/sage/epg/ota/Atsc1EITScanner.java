@@ -277,18 +277,29 @@ public final class Atsc1EITScanner
       {
         Airing[] a = wiz.getAirings(ch.getStationID(), now, horizon, false);
         int total = (a == null) ? 0 : a.length;
-        int sd = 0, nodata = 0, ota = 0;
-        if (a != null) for (Airing x : a)
+        int sd = 0, nodata = 0, ota = 0, noshow = 0;
+        StringBuilder sample = new StringBuilder();
+        if (a != null) for (int i = 0; i < a.length; i++)
         {
+          Airing x = a[i];
           Show sh = x.getShow(); String ext = sh != null ? sh.getExternalID() : null;
           if (ext == null) continue;
           if (ext.startsWith("NODATA::")) nodata++;
           else if (ext.startsWith("OTA::") || ext.startsWith("OTA-OVERRIDE::")) ota++;
+          else if (ext.equals("NoShow")) noshow++;
           else sd++;
+          if (i < 2)
+          {
+            String t = sh != null ? sh.getTitle() : "?";
+            long durMin = (x.getEndTime() - x.getStartTime()) / 60000L;
+            sample.append(" {ext=").append(ext).append(" title='").append(t)
+              .append("' dur=").append(durMin).append("m}");
+          }
         }
         System.out.println("Atsc1EITScanner[dbg]: " + le.guideNumber + " (" + le.guideName
           + ") stationID=" + ch.getStationID() + " airings total=" + total
-          + " sd=" + sd + " nodata=" + nodata + " ota=" + ota + " covered=" + covered);
+          + " sd=" + sd + " noshow=" + noshow + " nodata=" + nodata + " ota=" + ota
+          + " covered=" + covered + sample.toString());
       }
       if (!covered) anyUncovered = true;
     }
@@ -312,8 +323,13 @@ public final class Atsc1EITScanner
       Show sh = a.getShow();
       String ext = (sh != null) ? sh.getExternalID() : null;
       if (ext == null) continue;
-      // NODATA::... = our placeholder, OTA::... = our scanner output — neither counts as SD.
-      if (ext.startsWith("NODATA::") || ext.startsWith("OTA::") || ext.startsWith("OTA-OVERRIDE::")) continue;
+      // Exclude:
+      //   NODATA::   — our placeholder
+      //   OTA::      — our scanner output (would self-confirm)
+      //   OTA-OVERRIDE:: — our override marker (likewise)
+      //   NoShow     — SD's "no data available" placeholder (title="No Data")
+      if (ext.startsWith("NODATA::") || ext.startsWith("OTA::")
+          || ext.startsWith("OTA-OVERRIDE::") || ext.equals("NoShow")) continue;
       long s = Math.max(a.getStartTime(), start);
       long e = Math.min(a.getEndTime(),   end);
       if (e > s) covered += (e - s);
