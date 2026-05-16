@@ -376,7 +376,7 @@ public class MiniMPlayerPlugin implements Runnable
             (USE_STDIN ? "" : " -slave") + " " + InputValidator.sanitizeMPlayerArgs(MiniClient.myProperties.getProperty("extra_mplayer_args", ""));
         int streamBufferSize = (pushMode ?
             Integer.parseInt(MiniClient.myProperties.getProperty("push_mode_stream_buffer_size", "8192")) :
-              Integer.parseInt(MiniClient.myProperties.getProperty("stream_buffer_size", "65536")));
+              Integer.parseInt(MiniClient.myProperties.getProperty("stream_buffer_size", "262144")));
 
         int cacheSize = pushMode ? Integer.parseInt(MiniClient.myProperties.getProperty("push_mode_cache_size_kb", "128")) : 2048;
         boolean disableCache = false;
@@ -526,17 +526,17 @@ public class MiniMPlayerPlugin implements Runnable
         }
         if (pushMode)
         {
-          if (MiniClient.myProperties.getProperty("enable_video_postprocessing", "true").equalsIgnoreCase("true"))
+          if (MiniClient.myProperties.getProperty("enable_video_postprocessing", "false").equalsIgnoreCase("true"))
             cmdOpt2 += " -vf pp7";
         }
         else if (file.toLowerCase().indexOf(".mpg") != -1 || file.toLowerCase().indexOf(".ts") != -1)
         {
-          if ( MiniClient.myProperties.getProperty("disable_deinterlacing", "false").equalsIgnoreCase("false") )
+          if ( MiniClient.myProperties.getProperty("disable_deinterlacing", "true").equalsIgnoreCase("false") )
           {
             // Don't deinterlace for opengl mode and xvmc on Linux
             if ("false".equals(MiniClient.myProperties.getProperty("xvmc", "false")))
             {
-              if (!disablePPInPullMode && MiniClient.myProperties.getProperty("enable_video_postprocessing", "true").equalsIgnoreCase("true"))
+              if (!disablePPInPullMode && MiniClient.myProperties.getProperty("enable_video_postprocessing", "false").equalsIgnoreCase("true"))
                 cmdOpt2 += " -vf fspp,pp=fd";
               else
                 cmdOpt2 += " -vf pp=fd";
@@ -847,7 +847,7 @@ public class MiniMPlayerPlugin implements Runnable
               System.out.println("stderr:" + s);
               if (s.startsWith("FATAL: Could not initialize video filters") && pushMode)
               {
-                if (MiniClient.myProperties.getProperty("enable_video_postprocessing", "true").equalsIgnoreCase("true"))
+                if (MiniClient.myProperties.getProperty("enable_video_postprocessing", "false").equalsIgnoreCase("true"))
                 {
                   System.out.println("Video rendering failed with post-processing. Try again without it...");
                   MiniClient.myProperties.setProperty("enable_video_postprocessing", "false");
