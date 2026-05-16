@@ -579,6 +579,11 @@ public class SageTV implements Runnable
     {
       try { sage.epg.ota.Atsc1EITScanner.getInstance().start(); }
       catch (Throwable ex) { if (Sage.DBG) { System.out.println("Atsc1EITScanner start failed: " + ex); ex.printStackTrace(); } }
+
+      // ATSC3 <-> ATSC1 EPG/lineup mirror (server-side, off by default; flip
+      // atsc3/mirror_enabled=true to activate).
+      try { sage.epg.atsc3.Atsc3MirrorManager.getInstance().start(); }
+      catch (Throwable ex) { if (Sage.DBG) { System.out.println("Atsc3MirrorManager start failed: " + ex); ex.printStackTrace(); } }
     }
 
     t = new Thread(god, "Carny");

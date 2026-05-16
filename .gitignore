@@ -1072,3 +1072,6 @@ f i x - s t p - c o n f i g . s h 
 latest_log.txt
 vf_debug.txt
 .mailmap
+
+# Local diagnostic scripts with hardcoded host info (do not commit)
+tools/
