@@ -65,6 +65,8 @@ public final class Atsc1EITScanner
   private static final String PROP_MIN_LOOKAHEAD_MS   = "epg/ota_scan_min_lookahead_ms";
   private static final String PROP_GLOBAL_BUDGET_MS   = "epg/ota_scan_global_budget_ms_per_hour";
   private static final String PROP_SKIP_RF            = "epg/ota_scan_skip_rf";
+  /** CSV of RF major-channel numbers to dump per-subchannel mapping/coverage details for. */
+  private static final String PROP_DEBUG_RFS          = "epg/ota_scan_debug_rfs";
 
   private static final long DEFAULT_INTERVAL_MS        = 3L * 60L * 60L * 1000L;  // 3h
   private static final long DEFAULT_SPORTS_INTERVAL_MS = 10L * 60L * 1000L;       // 10min
@@ -247,14 +249,50 @@ public final class Atsc1EITScanner
     long now = Sage.time();
     long horizon = now + lookaheadMs;
     Wizard wiz = Wizard.getInstance();
+    boolean debug = isDebugRf(subs);
     int mapped = 0, unmapped = 0;
+    boolean anyUncovered = false;
     for (HdhrControl.LineupEntry le : subs)
     {
       Channel ch = findChannelByGuideNumber(wiz, le.guideNumber);
-      if (ch == null) { unmapped++; continue; } // unmapped — can't attach EPG anyway
+      if (ch == null)
+      {
+        unmapped++;
+        if (debug) System.out.println("Atsc1EITScanner[dbg]: " + le.guideNumber
+          + " (" + le.guideName + ") - UNMAPPED in SageTV");
+        continue;
+      }
+      // Stations the user has marked unavailable (in every EPG source) are not
+      // our business — skip them entirely instead of treating empty airings as a
+      // gap that needs scanning.
+      if (isStationUnavailableInAllSources(ch.getStationID()))
+      {
+        if (debug) System.out.println("Atsc1EITScanner[dbg]: " + le.guideNumber
+          + " (" + le.guideName + ") stationID=" + ch.getStationID() + " UNAVAILABLE in all sources - skip");
+        continue;
+      }
       mapped++;
-      if (!hasSdCoverage(wiz, ch.getStationID(), now, horizon)) return false;
+      boolean covered = hasSdCoverage(wiz, ch.getStationID(), now, horizon);
+      if (debug)
+      {
+        Airing[] a = wiz.getAirings(ch.getStationID(), now, horizon, false);
+        int total = (a == null) ? 0 : a.length;
+        int sd = 0, nodata = 0, ota = 0;
+        if (a != null) for (Airing x : a)
+        {
+          Show sh = x.getShow(); String ext = sh != null ? sh.getExternalID() : null;
+          if (ext == null) continue;
+          if (ext.startsWith("NODATA::")) nodata++;
+          else if (ext.startsWith("OTA::") || ext.startsWith("OTA-OVERRIDE::")) ota++;
+          else sd++;
+        }
+        System.out.println("Atsc1EITScanner[dbg]: " + le.guideNumber + " (" + le.guideName
+          + ") stationID=" + ch.getStationID() + " airings total=" + total
+          + " sd=" + sd + " nodata=" + nodata + " ota=" + ota + " covered=" + covered);
+      }
+      if (!covered) anyUncovered = true;
     }
+    if (anyUncovered) return false;
     // If nothing on this RF is mapped to a SageTV channel, OTA scanning has no place
     // to deposit the data — treat as "covered" (skip) and log the situation once.
     if (mapped == 0 && Sage.DBG)
@@ -327,6 +365,43 @@ public final class Atsc1EITScanner
   {
     if (s == null) return "";
     return s.trim().replace('-', '.');
+  }
+
+  /**
+   * True if the station is marked unavailable in every EPG provider that has
+   * an opinion. (canViewStation defaults to true for sources that have never
+   * heard of the station, so we only consider sources where the station is
+   * either explicitly available or explicitly unavailable to be informative —
+   * but in practice the simpler "every source says unavailable" check is what
+   * we want: if no provider can serve real data, the airings are stubs.)
+   */
+  private boolean isStationUnavailableInAllSources(int stationID)
+  {
+    sage.EPG epg = sage.EPG.getInstance();
+    if (epg == null) return false;
+    long[] provs = epg.getAllProviderIDs();
+    if (provs == null || provs.length == 0) return false;
+    boolean anyAvailable = false;
+    for (long p : provs)
+    {
+      sage.EPGDataSource ds = epg.getSourceForProviderID(p);
+      if (ds != null && ds.canViewStation(stationID)) { anyAvailable = true; break; }
+    }
+    return !anyAvailable;
+  }
+
+  /** True if any subchannel's major number matches the comma-separated debug RF list. */
+  private boolean isDebugRf(List<HdhrControl.LineupEntry> subs)
+  {
+    String csv = Sage.get(PROP_DEBUG_RFS, "");
+    if (csv == null || csv.trim().isEmpty() || subs == null || subs.isEmpty()) return false;
+    String first = subs.get(0).guideNumber;
+    int dot = first.indexOf('.');
+    if (dot < 0) dot = first.indexOf('-');
+    String major = (dot > 0) ? first.substring(0, dot) : first;
+    for (String t : csv.split(","))
+      if (major.equals(t.trim())) return true;
+    return false;
   }
 
   // ------------------------------------------------------------------
