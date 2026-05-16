@@ -883,7 +883,7 @@ public class MiniClientManagerFrame extends javax.swing.JFrame implements java.a
 
     // Set the current parameters
     exitAppWhenConnClosedC.setSelected(MiniClient.myProperties.getProperty("exit_app_on_server_close", "false").equalsIgnoreCase("true"));
-    enableVideoPPC.setSelected(MiniClient.myProperties.getProperty("enable_video_postprocessing", "true").equalsIgnoreCase("true"));
+    enableVideoPPC.setSelected(MiniClient.myProperties.getProperty("enable_video_postprocessing", "false").equalsIgnoreCase("true"));
     enable3DC.setSelected(MiniClient.myProperties.getProperty("opengl", "true").equalsIgnoreCase("true"));
     enableCustomTitleBarC.setSelected(MiniClient.myProperties.getProperty("enable_custom_title_bar", MiniClient.MAC_OS_X ? "false" : "true").
         equalsIgnoreCase("true"));
