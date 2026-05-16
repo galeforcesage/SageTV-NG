@@ -70,9 +70,9 @@ public final class Atsc1EITScanner
 
   private static final long DEFAULT_INTERVAL_MS        = 3L * 60L * 60L * 1000L;  // 3h
   private static final long DEFAULT_SPORTS_INTERVAL_MS = 10L * 60L * 1000L;       // 10min
-  private static final long DEFAULT_PER_RF_MS          = 30_000L;
+  private static final long DEFAULT_PER_RF_MS          = 60_000L;                 // 60s: catches more of the EIT-1/2/3 carousel for sparse senders
   private static final long DEFAULT_MIN_LOOKAHEAD_MS   = 4L * 60L * 60L * 1000L;  // 4h
-  private static final long DEFAULT_GLOBAL_BUDGET_MS   = 5L * 60L * 1000L;        // 5min/hr
+  private static final long DEFAULT_GLOBAL_BUDGET_MS   = 10L * 60L * 1000L;       // 10min/hr (scales with 60s per_rf)
   private static final long DEFAULT_REC_LOOKAHEAD_MS   = 5L * 60L * 1000L;        // 5min
 
   private static Atsc1EITScanner instance;
