@@ -247,12 +247,20 @@ public final class Atsc1EITScanner
     long now = Sage.time();
     long horizon = now + lookaheadMs;
     Wizard wiz = Wizard.getInstance();
+    int mapped = 0, unmapped = 0;
     for (HdhrControl.LineupEntry le : subs)
     {
       Channel ch = findChannelByGuideNumber(wiz, le.guideNumber);
-      if (ch == null) continue; // unmapped — not our problem
+      if (ch == null) { unmapped++; continue; } // unmapped — can't attach EPG anyway
+      mapped++;
       if (!hasSdCoverage(wiz, ch.getStationID(), now, horizon)) return false;
     }
+    // If nothing on this RF is mapped to a SageTV channel, OTA scanning has no place
+    // to deposit the data — treat as "covered" (skip) and log the situation once.
+    if (mapped == 0 && Sage.DBG)
+      System.out.println("Atsc1EITScanner: no mapped SageTV channels for any of "
+        + subs.size() + " subchannels (numbers like "
+        + (subs.isEmpty() ? "?" : subs.get(0).guideNumber) + ") - skip");
     return true;
   }
 
@@ -301,14 +309,24 @@ public final class Atsc1EITScanner
   private Channel findChannelByGuideNumber(Wizard wiz, String guideNumber)
   {
     // Strategy: walk all channels, match against their primary number per any provider.
+    // SageTV stores OTA channel numbers with a hyphen separator (e.g. "62-1") while
+    // HDHomeRun's lineup.json reports them with a dot ("62.1"). Normalize both for compare.
     Channel[] all = wiz.getChannels();
     if (all == null) return null;
+    String want = normalizeGuideNumber(guideNumber);
     for (Channel c : all)
     {
       String n = c.getNumber();
-      if (n != null && n.equals(guideNumber)) return c;
+      if (n != null && normalizeGuideNumber(n).equals(want)) return c;
     }
     return null;
+  }
+
+  /** Normalize a virtual channel number for comparison: strip whitespace, replace '-' with '.'. */
+  private static String normalizeGuideNumber(String s)
+  {
+    if (s == null) return "";
+    return s.trim().replace('-', '.');
   }
 
   // ------------------------------------------------------------------
