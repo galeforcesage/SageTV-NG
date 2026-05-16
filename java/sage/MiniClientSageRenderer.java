@@ -3872,6 +3872,9 @@ public class MiniClientSageRenderer extends SageRenderer
         sendGetPropertyAsync("CAP_SCHEMA_VERSION");
         sendGetPropertyAsync("CAP_PROFILE_ID");
         sendGetPropertyAsync("CAP_OVERRIDES");
+        // NG capability-protocol version. Empty on stock 9.x miniclients; non-empty
+        // (e.g. "1.0.1") on NG-aware miniclients. Independent of FIRMWARE_VERSION.
+        sendGetPropertyAsync("SAGETV_NG_VERSION");
         sendBufferNow();
         // Now get capabilities properties for this specific miniclient
         // The default is to use image maps for text rendering
@@ -4496,6 +4499,13 @@ public class MiniClientSageRenderer extends SageRenderer
           overridesMap = parseSimpleJsonOverrides(capOverridesProp.trim());
         }
 
+        // NG capability-protocol version. Empty on stock 9.x miniclients that don't
+        // implement the SAGETV_NG_VERSION GetProperty handler.
+        ngVersion = recvr.getStringReply();
+        if (ngVersion != null) ngVersion = ngVersion.trim();
+        else ngVersion = "";
+        if (Sage.DBG) System.out.println("MiniClient SAGETV_NG_VERSION=" + ngVersion);
+
         // Resolve the effective client profile
         sage.client.ClientProfileManager profileMgr = sage.client.ClientProfileManager.getInstance();
         resolvedProfile = profileMgr.resolveProfile(
@@ -4514,6 +4524,7 @@ public class MiniClientSageRenderer extends SageRenderer
               isMediaExtender(),
               iPhoneMode,
               remoteVersion,
+              ngVersion,
               videoCodecs,
               audioCodecs,
               streamingProtocols);
@@ -7184,6 +7195,17 @@ public class MiniClientSageRenderer extends SageRenderer
     return remoteVersion;
   }
 
+  /**
+   * Returns the SageTV-NG capability-protocol version reported by the
+   * connected miniclient (e.g. "1.0.1"), or empty string for stock 9.x
+   * miniclients that don't speak NG. Independent of getRemoteVersion()
+   * which returns the legacy FIRMWARE_VERSION channel.
+   */
+  public String getNgVersion()
+  {
+    return ngVersion;
+  }
+
   public static String getBarPrefix(String s)
   {
     if (s == null) return s;
@@ -7710,6 +7732,7 @@ public class MiniClientSageRenderer extends SageRenderer
 
   private String hdmiAutodetectedConnector;
   private String remoteVersion = "";
+  private String ngVersion = "";
   private boolean remoteWindowedSystem;
   private boolean supportsForcedMediaReconnect;
 

@@ -1831,6 +1831,26 @@ public class Global {
         }
         return "";
       }});
+    rft.put(new PredefinedJEPFunction("Global", "GetMiniclientNgVersion")
+    {
+      /**
+       * Returns the SageTV-NG capability-protocol version reported by the connected
+       * miniclient (e.g. "1.0.1"), or empty string for stock 9.x miniclients that
+       * don't speak NG. Independent of GetRemoteClientVersion (which returns the
+       * legacy FIRMWARE_VERSION channel - "9.0.0" today).
+       *
+       * @return NG protocol version or empty string
+       *
+       * @declaration public String GetMiniclientNgVersion();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        UIManager uiMgr = stack.getUIMgr();
+        if (uiMgr != null && uiMgr.getUIClientType() == UIClient.REMOTE_UI)
+        {
+          return ((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine()).getNgVersion();
+        }
+        return "";
+      }});
     rft.put(new PredefinedJEPFunction("Global", "GetRemoteUIType")
     {
       /**
