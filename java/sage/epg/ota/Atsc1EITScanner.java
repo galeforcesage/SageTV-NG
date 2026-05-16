@@ -8,6 +8,7 @@ package sage.epg.ota;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -17,8 +18,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import sage.Airing;
+import sage.CaptureDevice;
 import sage.Channel;
+import sage.MMC;
 import sage.Sage;
+import sage.Seeker;
 import sage.Show;
 import sage.Wizard;
 
@@ -52,6 +56,9 @@ public final class Atsc1EITScanner
   private static final String PROP_DEVICE_ID          = "epg/ota_scan_device_id";
   private static final String PROP_DEVICE_IP          = "epg/ota_scan_device_ip";
   private static final String PROP_TUNER              = "epg/ota_scan_tuner";
+  private static final String PROP_TUNERS_CSV         = "epg/ota_scan_tuners";
+  private static final String PROP_ALLOW_DUAL         = "epg/ota_scan_allow_dual_tuner";
+  private static final String PROP_REC_LOOKAHEAD_MS   = "epg/ota_scan_recording_lookahead_ms";
   private static final String PROP_INTERVAL_MS        = "epg/ota_scan_interval_ms";
   private static final String PROP_SPORTS_INTERVAL_MS = "epg/ota_scan_sports_interval_ms";
   private static final String PROP_PER_RF_MS          = "epg/ota_scan_per_rf_duration_ms";
@@ -64,6 +71,7 @@ public final class Atsc1EITScanner
   private static final long DEFAULT_PER_RF_MS          = 30_000L;
   private static final long DEFAULT_MIN_LOOKAHEAD_MS   = 4L * 60L * 60L * 1000L;  // 4h
   private static final long DEFAULT_GLOBAL_BUDGET_MS   = 5L * 60L * 1000L;        // 5min/hr
+  private static final long DEFAULT_REC_LOOKAHEAD_MS   = 5L * 60L * 1000L;        // 5min
 
   private static Atsc1EITScanner instance;
   public static synchronized Atsc1EITScanner getInstance()
@@ -149,6 +157,7 @@ public final class Atsc1EITScanner
   {
     String deviceIp = Sage.get(PROP_DEVICE_IP, "");
     if (deviceIp.isEmpty()) return;
+    if (!safetyGateOpen(deviceIp, "coverage")) return;
     Map<Integer, List<HdhrControl.LineupEntry>> byRf = loadRfGroups(deviceIp);
     if (byRf.isEmpty()) return;
     long minLookahead = Sage.getLong(PROP_MIN_LOOKAHEAD_MS, DEFAULT_MIN_LOOKAHEAD_MS);
@@ -166,6 +175,8 @@ public final class Atsc1EITScanner
         if (Sage.DBG) System.out.println("Atsc1EITScanner: RF " + rf + " fully SD-covered, skip");
         continue;
       }
+      // Re-check safety between RFs in case a recording started during the cycle.
+      if (!safetyGateOpen(deviceIp, "coverage")) return;
       scanRf(rf, subs, /*reason*/ "coverage");
     }
   }
@@ -174,6 +185,7 @@ public final class Atsc1EITScanner
   {
     String deviceIp = Sage.get(PROP_DEVICE_IP, "");
     if (deviceIp.isEmpty()) return;
+    if (!safetyGateOpen(deviceIp, "sports")) return;
     Map<Integer, List<HdhrControl.LineupEntry>> byRf = loadRfGroups(deviceIp);
     if (byRf.isEmpty()) return;
 
@@ -182,6 +194,7 @@ public final class Atsc1EITScanner
     {
       if (!running.get()) return;
       if (!hasLiveSportsNow(e.getValue(), now)) continue;
+      if (!safetyGateOpen(deviceIp, "sports")) return;
       scanRf(e.getKey(), e.getValue(), "sports");
     }
   }
@@ -313,24 +326,15 @@ public final class Atsc1EITScanner
 
     String deviceId = Sage.get(PROP_DEVICE_ID, "");
     String deviceIp = Sage.get(PROP_DEVICE_IP, "");
-    int tunerIdx    = (int) Sage.getLong(PROP_TUNER, 1L);
     if (deviceId.isEmpty() || deviceIp.isEmpty()) return;
 
     HdhrControl ctrl = new HdhrControl(deviceId);
 
-    // Pre-check tuner is idle (won't disturb a recording in progress on it).
-    try
+    // Pick a tuner using merit (lowest-merit = least preferred for recording).
+    int tunerIdx = selectIdleTunerByMerit(ctrl, deviceId);
+    if (tunerIdx < 0)
     {
-      HdhrControl.Status st = ctrl.queryStatus(tunerIdx);
-      if (st.isLocked() || st.isStreaming())
-      {
-        if (Sage.DBG) System.out.println("Atsc1EITScanner: tuner " + tunerIdx + " busy (ch=" + st.channel + ", bps=" + st.bps + "), defer");
-        return;
-      }
-    }
-    catch (IOException ioe)
-    {
-      if (Sage.DBG) System.out.println("Atsc1EITScanner: status check failed: " + ioe);
+      if (Sage.DBG) System.out.println("Atsc1EITScanner: no idle tuner available on " + deviceId + ", defer");
       return;
     }
 
@@ -492,6 +496,212 @@ public final class Atsc1EITScanner
       return false;
     }
     catch (IOException e) { return false; }
+  }
+
+  // ------------------------------------------------------------------
+  //  Safety gating: tuner-count policy + upcoming-recording check
+  // ------------------------------------------------------------------
+
+  /**
+   * Master safety check before any scan attempt. Enforces:
+   * <ul>
+   *   <li>1-tuner device → never scan (would block recording).</li>
+   *   <li>2-tuner device → only scan if {@code epg/ota_scan_allow_dual_tuner=true}
+   *       (default false) AND at least one tuner remains idle AFTER we
+   *       grab one (i.e. both currently idle).</li>
+   *   <li>3+ tuner device → scan if at least N-1 tuners remain idle after
+   *       we grab one (i.e. at most one currently busy).</li>
+   *   <li>Defer if SageTV has a recording scheduled within the next
+   *       {@code epg/ota_scan_recording_lookahead_ms} (default 5 min) on
+   *       any channel this device's lineup contains.</li>
+   * </ul>
+   */
+  private boolean safetyGateOpen(String deviceIp, String reason)
+  {
+    HdhrControl.Discover disc;
+    try { disc = HdhrControl.fetchDiscover(deviceIp); }
+    catch (IOException ioe)
+    {
+      if (Sage.DBG) System.out.println("Atsc1EITScanner: discover failed (" + reason + "): " + ioe);
+      return false;
+    }
+
+    int tunerCount = disc.tunerCount;
+    if (tunerCount <= 0) tunerCount = 1; // fail-safe
+
+    if (tunerCount == 1)
+    {
+      if (Sage.DBG) System.out.println("Atsc1EITScanner: device " + disc.deviceId + " has 1 tuner; refusing to scan");
+      return false;
+    }
+    if (tunerCount == 2 && !Sage.getBoolean(PROP_ALLOW_DUAL, false))
+    {
+      if (Sage.DBG) System.out.println("Atsc1EITScanner: device " + disc.deviceId + " has 2 tuners; set " + PROP_ALLOW_DUAL + "=true to opt in");
+      return false;
+    }
+
+    // Count idle tuners (lock=none AND bps=0). Need at least N-1 idle so
+    // we leave behind the same headroom Sage expects for recording.
+    String deviceId = Sage.get(PROP_DEVICE_ID, "");
+    if (deviceId.isEmpty()) return false;
+    HdhrControl ctrl = new HdhrControl(deviceId);
+    int idle = 0;
+    for (int t = 0; t < tunerCount; t++)
+    {
+      try
+      {
+        HdhrControl.Status st = ctrl.queryStatus(t);
+        if (!st.isLocked() && !st.isStreaming()) idle++;
+      }
+      catch (IOException e) { /* count as busy */ }
+    }
+    if (idle < tunerCount - 1 || idle < 1)
+    {
+      if (Sage.DBG) System.out.println("Atsc1EITScanner: only " + idle + "/" + tunerCount + " tuners idle on " + disc.deviceId + ", defer (" + reason + ")");
+      return false;
+    }
+    if (tunerCount == 2 && idle < 2)
+    {
+      // Dual-tuner rule: BOTH must be idle (we never use the last tuner)
+      if (Sage.DBG) System.out.println("Atsc1EITScanner: 2-tuner device requires both idle; defer (" + reason + ")");
+      return false;
+    }
+
+    // Upcoming-recording check: don't scan if Sage plans to record soon
+    // on a channel this device's lineup contains.
+    long lookahead = Sage.getLong(PROP_REC_LOOKAHEAD_MS, DEFAULT_REC_LOOKAHEAD_MS);
+    if (hasUpcomingRecordingOnDevice(deviceIp, lookahead))
+    {
+      if (Sage.DBG) System.out.println("Atsc1EITScanner: recording scheduled within " + lookahead + "ms on this device; defer (" + reason + ")");
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Pick the tuner with the LOWEST merit (least preferred for recording)
+   * that is currently idle. Falls back to a numeric scan over all tuners
+   * if no merit info is available.
+   */
+  private int selectIdleTunerByMerit(HdhrControl ctrl, String deviceId)
+  {
+    // Build (tunerIdx, merit) list from MMC CaptureDevices matching deviceId
+    String hex = deviceId.toUpperCase();
+    int tunerCount = inferTunerCount(deviceId);
+    int[] order = meritSortedTunerOrder(hex, tunerCount);
+
+    for (int idx : order)
+    {
+      try
+      {
+        HdhrControl.Status st = ctrl.queryStatus(idx);
+        if (!st.isLocked() && !st.isStreaming()) return idx;
+        if (Sage.DBG) System.out.println("Atsc1EITScanner: tuner " + idx + " busy (ch=" + st.channel + ", bps=" + st.bps + ")");
+      }
+      catch (IOException e) { /* try next */ }
+    }
+    return -1;
+  }
+
+  private int inferTunerCount(String deviceId)
+  {
+    String ip = Sage.get(PROP_DEVICE_IP, "");
+    if (!ip.isEmpty())
+    {
+      try { return HdhrControl.fetchDiscover(ip).tunerCount; }
+      catch (IOException ignore) {}
+    }
+    // Fallback to override property; default to 2 (most common HDHR).
+    return (int) Sage.getLong("epg/ota_scan_tuner_count_override", 2L);
+  }
+
+  /**
+   * Return tuner indices [0..count-1] sorted ascending by SageTV merit
+   * (so lowest-merit = first try). Tuners without a configured
+   * CaptureDevice in SageTV are treated as merit=0 (lowest).
+   * An explicit {@code epg/ota_scan_tuners} CSV property overrides
+   * everything if set.
+   */
+  private int[] meritSortedTunerOrder(String hexDeviceId, int tunerCount)
+  {
+    String csv = Sage.get(PROP_TUNERS_CSV, "");
+    if (csv != null && !csv.isEmpty())
+    {
+      List<Integer> r = new ArrayList<>();
+      for (String s : csv.split(","))
+      {
+        try { int v = Integer.parseInt(s.trim()); if (v >= 0 && v < tunerCount) r.add(v); }
+        catch (NumberFormatException e) {}
+      }
+      if (!r.isEmpty()) return r.stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    // Map tuner index -> merit by walking MMC CaptureDevices
+    int[] meritByTuner = new int[tunerCount];
+    Arrays.fill(meritByTuner, 0);
+    try
+    {
+      MMC mmc = MMC.getInstance();
+      if (mmc != null)
+      {
+        CaptureDevice[] all = mmc.getCaptureDevices();
+        if (all != null)
+        {
+          for (CaptureDevice cd : all)
+          {
+            String name = cd.getCaptureDeviceName();
+            if (name == null) continue;
+            if (!name.toUpperCase().contains(hexDeviceId)) continue;
+            int idx = cd.getCaptureDeviceNum();
+            if (idx >= 0 && idx < tunerCount) meritByTuner[idx] = cd.getMerit();
+          }
+        }
+      }
+    }
+    catch (Throwable t) { /* fall through to numeric order */ }
+
+    Integer[] boxed = new Integer[tunerCount];
+    for (int i = 0; i < tunerCount; i++) boxed[i] = i;
+    final int[] merits = meritByTuner;
+    Arrays.sort(boxed, Comparator.comparingInt(i -> merits[i]));
+    int[] out = new int[tunerCount];
+    for (int i = 0; i < tunerCount; i++) out[i] = boxed[i];
+    return out;
+  }
+
+  /**
+   * True if SageTV has any airing scheduled to record within the next
+   * {@code lookaheadMs} on a channel that appears in this HDHR device's
+   * lineup. We use the lineup as a proxy for "channels reachable through
+   * this physical device".
+   */
+  private boolean hasUpcomingRecordingOnDevice(String deviceIp, long lookaheadMs)
+  {
+    long now = Sage.time();
+    Airing[] sched;
+    try { sched = Seeker.getInstance().getInterleavedScheduledAirings(now, now + lookaheadMs); }
+    catch (Throwable t) { return true; /* be conservative */ }
+    if (sched == null || sched.length == 0) return false;
+
+    // Build set of guideNumbers from this device's lineup
+    java.util.Set<String> guideNums = new java.util.HashSet<>();
+    try
+    {
+      for (HdhrControl.LineupEntry le : HdhrControl.fetchLineup(deviceIp))
+        if (le.guideNumber != null) guideNums.add(le.guideNumber);
+    }
+    catch (IOException ioe) { return true; /* conservative */ }
+    if (guideNums.isEmpty()) return false;
+
+    Wizard wiz = Wizard.getInstance();
+    for (Airing a : sched)
+    {
+      Channel ch = wiz.getChannelForStationID(a.getStationID());
+      if (ch == null) continue;
+      String num = ch.getNumber();
+      if (num != null && guideNums.contains(num)) return true;
+    }
+    return false;
   }
 
   // ------------------------------------------------------------------
