@@ -52,6 +52,11 @@ import java.util.List;
  *   hdhr/ac4_transcode_acodec     default ac3
  *   hdhr/ac4_transcode_abitrate   default 384k
  *   hdhr/ac4_transcode_scale      default 1920:1080
+ *   hdhr/ac4_transcode_audio_lang default "" (auto from default_audio_language).
+ *                                 ISO-639-2 3-letter code (e.g. "eng", "spa").
+ *                                 Selects the first audio stream whose ISO_639
+ *                                 language descriptor matches; falls back to
+ *                                 stream 0 if not found or probe fails.
  */
 public class AC4TranscodeJob implements Runnable
 {
@@ -125,7 +130,10 @@ public class AC4TranscodeJob implements Runnable
     for (String g : sage.HwEncoder.globalArgs(hwKind)) cmd.add(g);
     cmd.add("-i"); cmd.add(src);
     cmd.add("-map"); cmd.add("0:v:0");
-    cmd.add("-map"); cmd.add("0:a:0");
+    // Pick audio stream by language preference (e.g. NextGen broadcasts often
+    // carry primary=spa + secondary=eng AC-4 tracks). Falls back to 0:a:0.
+    String audioMap = resolveAudioMap(ff, src);
+    cmd.add("-map"); cmd.add(audioMap);
     String hwFilter = sage.HwEncoder.videoFilter(hwKind, "yuv420p", "scale=" + scale + ":flags=bicubic");
     cmd.add("-vf"); cmd.add(hwFilter);
     cmd.add("-c:v"); cmd.add(resolvedEncoder);
@@ -240,6 +248,112 @@ public class AC4TranscodeJob implements Runnable
   {
     String ff = Sage.get(FFMPEG_BIN_PROP, DEFAULT_FFMPEG);
     return sage.HwEncoder.detect(ff).contains(sage.HwEncoder.Kind.NVENC);
+  }
+
+  /**
+   * Choose the ffmpeg -map argument for the audio track matching the user's
+   * preferred language. Probes the source with ffprobe (assumed to live next
+   * to ff at &lt;dir&gt;/ffprobe, else /usr/bin/ffprobe, else /usr/local/bin/ffprobe).
+   * Returns a string like "0:a:1" (per-type index) or "0:a:0" on any failure.
+   */
+  static String resolveAudioMap(String ff, String src)
+  {
+    String prefIso = Sage.get("hdhr/ac4_transcode_audio_lang", "").trim().toLowerCase();
+    if (prefIso.length() == 0)
+      prefIso = mapDefaultAudioLangToIso(Sage.get("default_audio_language", "English"));
+    if (prefIso == null || prefIso.length() == 0)
+      return "0:a:0";
+
+    String[] probeCandidates = new String[] {
+      siblingFfprobe(ff),
+      "/usr/bin/ffprobe",
+      "/usr/local/bin/ffprobe"
+    };
+    String probe = null;
+    for (String c : probeCandidates)
+    {
+      if (c != null && new java.io.File(c).canExecute()) { probe = c; break; }
+    }
+    if (probe == null)
+    {
+      if (Sage.DBG) System.out.println("AC4TranscodeJob: no ffprobe available; using 0:a:0");
+      return "0:a:0";
+    }
+
+    try
+    {
+      // One line per audio stream (in -map index order), containing just the
+      // ISO-639 language tag (or empty if untagged).
+      ProcessBuilder pb = new ProcessBuilder(probe,
+        "-v", "error",
+        "-select_streams", "a",
+        "-show_entries", "stream_tags=language",
+        "-of", "default=nw=1:nk=1",
+        src);
+      pb.redirectErrorStream(true);
+      Process p = pb.start();
+      java.io.BufferedReader r = new java.io.BufferedReader(
+          new java.io.InputStreamReader(p.getInputStream()));
+      java.util.List<String> langs = new java.util.ArrayList<String>();
+      String line;
+      while ((line = r.readLine()) != null)
+      {
+        langs.add(line.trim().toLowerCase());
+      }
+      try { p.waitFor(); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+      if (langs.isEmpty()) return "0:a:0";
+      for (int i = 0; i < langs.size(); i++)
+      {
+        if (prefIso.equals(langs.get(i)))
+        {
+          if (Sage.DBG) System.out.println("AC4TranscodeJob: selected audio track " + i + " (lang=" + prefIso + ") of " + langs);
+          return "0:a:" + i;
+        }
+      }
+      if (Sage.DBG) System.out.println("AC4TranscodeJob: no audio track matches lang=" + prefIso + " in " + langs + "; falling back to 0:a:0");
+      return "0:a:0";
+    }
+    catch (java.io.IOException e)
+    {
+      if (Sage.DBG) System.out.println("AC4TranscodeJob: ffprobe failed: " + e + "; using 0:a:0");
+      return "0:a:0";
+    }
+  }
+
+  private static String siblingFfprobe(String ff)
+  {
+    if (ff == null) return null;
+    int slash = ff.lastIndexOf('/');
+    String dir = slash >= 0 ? ff.substring(0, slash) : ".";
+    return dir + "/ffprobe";
+  }
+
+  /**
+   * Translate a SageTV default_audio_language full name (e.g. "English") to
+   * the first ISO-639-2 3-letter code Sage maps it to. Mirrors VideoFrame's
+   * MediaLangInfo table without triggering VideoFrame's DShow static init.
+   */
+  static String mapDefaultAudioLangToIso(String fullName)
+  {
+    if (fullName == null) return "eng";
+    String src = Sage.get("media_language_options",
+      "en;English;eng|ar;Arabic;ara|bg;Bulgarian;bul|zh;Chinese;chi,zho|cs;Czech;ces,cze|da;Danish;dan|nl;Dutch;nld,dut,nla|fi;Finnish;fin|fr;French;fra,fre|de;German;deu,ger|el;Greek;gre,ell|he;Hebrew;heb|hu;Hungarian;hun|it;Italian;ita|ja;Japanese;jpn|ko;Korean;kor|no;Norwegian;nor|pl;Polish;pol|pt;Portugese;por|ru;Russian;rus|sl;Slovenian;slv|es;Spanish;esl,spa|sv;Swedish;sve,swe|to;Tonga;ton,tog|tr;Turkish;tur");
+    java.util.StringTokenizer t = new java.util.StringTokenizer(src, "|");
+    while (t.hasMoreTokens())
+    {
+      String tok = t.nextToken();
+      int s1 = tok.indexOf(';');
+      int s2 = tok.lastIndexOf(';');
+      if (s1 < 0 || s2 <= s1) continue;
+      String full = tok.substring(s1 + 1, s2);
+      if (fullName.equalsIgnoreCase(full))
+      {
+        String three = tok.substring(s2 + 1);
+        int comma = three.indexOf(',');
+        return (comma >= 0 ? three.substring(0, comma) : three).trim().toLowerCase();
+      }
+    }
+    return "eng";
   }
 
   /** Map an explicit ffmpeg encoder name to its HwEncoder.Kind. */
