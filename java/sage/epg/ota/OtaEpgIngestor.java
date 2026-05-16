@@ -80,7 +80,16 @@ public final class OtaEpgIngestor
         continue;
       }
       List<PsipTables.EitEvent> list = events.get(chan.sourceId);
-      if (list == null || list.isEmpty()) continue;
+      if (list == null || list.isEmpty())
+      {
+        if (Sage.DBG) System.out.println("OtaEpgIngestor: " + chan.majorChannelNumber + "." +
+            chan.minorChannelNumber + " (" + chan.shortName + ") sourceId=" + chan.sourceId +
+            " — 0 EIT events from broadcaster");
+        continue;
+      }
+      if (Sage.DBG) System.out.println("OtaEpgIngestor: " + chan.majorChannelNumber + "." +
+          chan.minorChannelNumber + " (" + chan.shortName + ") sourceId=" + chan.sourceId +
+          " — " + list.size() + " EIT events");
       for (PsipTables.EitEvent ev : list)
       {
         long startMs = PsipTables.gpsToUnixMillis(ev.startGps);
