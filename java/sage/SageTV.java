@@ -574,6 +574,13 @@ public class SageTV implements Runnable
     t.setPriority(Thread.MIN_PRIORITY);
     t.start();
 
+    // ATSC1 OTA PSIP scanner (server-side, opportunistic, yields to recording)
+    if (!Sage.client)
+    {
+      try { sage.epg.ota.Atsc1EITScanner.getInstance().start(); }
+      catch (Throwable ex) { if (Sage.DBG) { System.out.println("Atsc1EITScanner start failed: " + ex); ex.printStackTrace(); } }
+    }
+
     t = new Thread(god, "Carny");
     t.setDaemon(true);
     t.setPriority(Thread.MIN_PRIORITY);
