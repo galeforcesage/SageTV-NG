@@ -182,6 +182,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libx265-199 \
     libmp3lame0 \
     comskip \
+    hdhomerun-config \
     && rm -rf /var/lib/apt/lists/*
 
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
