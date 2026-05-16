@@ -494,6 +494,22 @@ public class ClientProfileManager
       java.util.Set clientAudioCodecs,
       java.util.Set clientStreamingProtocols)
   {
+    return autoDetectProfile(clientName, isExtender, isIOS, firmwareVersion, null,
+        clientVideoCodecs, clientAudioCodecs, clientStreamingProtocols);
+  }
+
+  /**
+   * NG-aware overload. {@code ngVersion} is the SAGETV_NG_VERSION reported by the
+   * miniclient (empty/null on stock 9.x clients). When non-empty and &gt;= 1.0,
+   * the client is treated as modern-protocol regardless of its FIRMWARE_VERSION,
+   * since NG and the legacy server-version space ("9.0.0") are distinct.
+   */
+  public ClientProfile autoDetectProfile(String clientName, boolean isExtender, boolean isIOS,
+      String firmwareVersion, String ngVersion,
+      java.util.Set clientVideoCodecs,
+      java.util.Set clientAudioCodecs,
+      java.util.Set clientStreamingProtocols)
+  {
     synchronized (profiles)
     {
       // 1. Check for admin override in Sage.properties
@@ -563,15 +579,16 @@ public class ClientProfileManager
           // server transcodes AC-4 -> EAC3 instead of pushing undecodable AC-4).
           // Users with newer apks can pin via Sage.properties:
           //   miniclient/profile/<MAC>=android_modern
+          boolean isModernNg = isNgAtLeast(ngVersion, 1, 0);
           boolean isModernApk = isMiniClientAtLeast(firmwareVersion, 1, 15);
-          if (isModernApk)
+          if (isModernNg || isModernApk)
           {
-            if (sage.Sage.DBG) System.out.println("ClientProfileManager: Auto-detected modern extender with HEVC (apk="
-                + firmwareVersion + " >= 1.15) → android_modern");
+            if (sage.Sage.DBG) System.out.println("ClientProfileManager: Auto-detected modern extender with HEVC (ng="
+                + ngVersion + ", apk=" + firmwareVersion + ") → android_modern");
             return getOrFallback("android_modern");
           }
-          if (sage.Sage.DBG) System.out.println("ClientProfileManager: Auto-detected extender with HEVC (apk="
-              + firmwareVersion + " < 1.15 or unknown) → android_legacy (no AC-4 decode)");
+          if (sage.Sage.DBG) System.out.println("ClientProfileManager: Auto-detected extender with HEVC (ng="
+              + ngVersion + ", apk=" + firmwareVersion + " < 1.15 or unknown) → android_legacy (no AC-4 decode)");
           return getOrFallback("android_legacy");
         }
         // 6. Non-HD extender without HEVC — use legacy strict as safe default
@@ -587,6 +604,21 @@ public class ClientProfileManager
    * unparseable / null / empty (safer default = treat as legacy).
    */
   private boolean isMiniClientAtLeast(String version, int minMajor, int minMinor)
+  {
+    return parseAndCompareVersion(version, minMajor, minMinor);
+  }
+
+  /**
+   * Compare an NG capability-protocol version string against a minimum (major, minor).
+   * Same parsing rules as {@link #isMiniClientAtLeast}. Returns false on null/empty,
+   * which correctly identifies stock 9.x clients (no NG handler) as non-NG.
+   */
+  private boolean isNgAtLeast(String version, int minMajor, int minMinor)
+  {
+    return parseAndCompareVersion(version, minMajor, minMinor);
+  }
+
+  private boolean parseAndCompareVersion(String version, int minMajor, int minMinor)
   {
     if (version == null || version.isEmpty()) return false;
     // Strip leading 'v' and any trailing build/qualifier (e.g. "-beta")
