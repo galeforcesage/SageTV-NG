@@ -227,6 +227,29 @@ public final class HdhrControl
     LineupEntry(String n, String name, String u) { guideNumber = n; guideName = name; url = u; }
   }
 
+  public static final class Discover
+  {
+    public final String friendlyName;
+    public final String deviceId;
+    public final int    tunerCount;
+    Discover(String name, String id, int tc) { friendlyName = name; deviceId = id; tunerCount = tc; }
+  }
+
+  /**
+   * Fetch the device's HTTP discover.json. Used to learn the tuner count
+   * so the scanner can decide whether it is safe to grab one.
+   */
+  public static Discover fetchDiscover(String deviceIp) throws IOException
+  {
+    String body = httpGetString("http://" + deviceIp + "/discover.json", 3000, 5000);
+    String name  = extractTop(body, "FriendlyName");
+    String id    = extractTop(body, "DeviceID");
+    String tcStr = extractTop(body, "TunerCount");
+    int tc = 0;
+    try { tc = Integer.parseInt(tcStr); } catch (Exception e) {}
+    return new Discover(name, id, tc);
+  }
+
   /**
    * Fetch the device's HTTP lineup.json. Used as the channel candidate list
    * for the scanner. Filters out ATSC3 entries automatically (those carry
@@ -235,10 +258,16 @@ public final class HdhrControl
    */
   public static List<LineupEntry> fetchLineup(String deviceIp) throws IOException
   {
-    URL u = new URL("http://" + deviceIp + "/lineup.json");
+    String body = httpGetString("http://" + deviceIp + "/lineup.json", 3000, 5000);
+    return parseLineupJson(body);
+  }
+
+  private static String httpGetString(String url, int connectMs, int readMs) throws IOException
+  {
+    URL u = new URL(url);
     HttpURLConnection conn = (HttpURLConnection) u.openConnection();
-    conn.setConnectTimeout(3000);
-    conn.setReadTimeout(5000);
+    conn.setConnectTimeout(connectMs);
+    conn.setReadTimeout(readMs);
     StringBuilder body = new StringBuilder();
     try (InputStream in = conn.getInputStream())
     {
@@ -247,7 +276,13 @@ public final class HdhrControl
       while ((n = in.read(buf)) > 0) body.append(new String(buf, 0, n, java.nio.charset.StandardCharsets.UTF_8));
     }
     finally { conn.disconnect(); }
-    return parseLineupJson(body.toString());
+    return body.toString();
+  }
+
+  /** Extract a top-level JSON field (string or numeric) without quotes. */
+  private static String extractTop(String json, String key)
+  {
+    return extract(json, key); // reuse minimal extractor
   }
 
   /** Minimal JSON array-of-objects parser tuned for HDHR lineup.json. */
