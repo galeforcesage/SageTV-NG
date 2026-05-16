@@ -737,7 +737,35 @@ public class Wizard implements EPGDBPublic2
       Show uniqueShow = getShowForExternalID(extID);
       if (uniqueShow == null)
       {
-        uniqueShow = addShow(Sage.rez("EPG_Cell_No_Data"), null, null, null, 0,
+        // Build a friendly title:
+        //   "Recording - <CallSign> <ChannelNumber> <YYYY-MM-DD> <Time>"
+        // Time honors the user's locale 12h/24h preference (matches the
+        // STV's Use24HourClock derivation from DateFormat.getTimeInstance()).
+        String callSign = "";
+        String chanNum = "";
+        Channel ch = getChannelForStationID(basedOn.stationID);
+        if (ch != null)
+        {
+          callSign = ch.getName();
+          if (callSign == null) callSign = "";
+          chanNum = ch.getNumber();
+          if (chanNum == null) chanNum = "";
+        }
+        java.util.Locale loc = (Sage.userLocale != null) ? Sage.userLocale : java.util.Locale.getDefault();
+        java.text.DateFormat tf = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT, loc);
+        boolean use24 = true;
+        if (tf instanceof java.text.SimpleDateFormat)
+          use24 = !((java.text.SimpleDateFormat) tf).toPattern().contains("a");
+        java.text.SimpleDateFormat dateFmt = new java.text.SimpleDateFormat("yyyy-MM-dd", loc);
+        java.text.SimpleDateFormat timeFmt = new java.text.SimpleDateFormat(use24 ? "HH:mm" : "h:mm a", loc);
+        java.util.Date d = new java.util.Date(recStart);
+        StringBuilder titleBuf = new StringBuilder("Recording");
+        if (callSign.length() > 0) titleBuf.append(" - ").append(callSign);
+        if (chanNum.length() > 0)  titleBuf.append(' ').append(chanNum);
+        titleBuf.append(' ').append(dateFmt.format(d));
+        titleBuf.append(' ').append(timeFmt.format(d));
+        String title = titleBuf.toString();
+        uniqueShow = addShow(title, null, null, null, 0,
             null, null, null, null, null, null, null, null, extID,
             null, 0, DBObject.MEDIA_MASK_TV,
             (short) 0, (short) 0, false,
@@ -752,7 +780,8 @@ public class Wizard implements EPGDBPublic2
       Airing forked = addAiring(uniqueShow, basedOn.stationID, recStart, dur,
           basedOn.partsB, basedOn.miscB, basedOn.prB, basedOn.getMediaMask());
       if (Sage.DBG) System.out.println("Wizard: forked no-data airing " + basedOn.id +
-          " -> show extID=" + extID + " new airing=" + (forked != null ? forked.id : -1));
+          " -> show extID=" + extID + " title=\"" + uniqueShow.title +
+          "\" new airing=" + (forked != null ? forked.id : -1));
       return forked;
     }
     catch (Throwable t)
