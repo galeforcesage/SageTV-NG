@@ -98,6 +98,17 @@ public final class OtaEpgIngestor
       }
     }
     if (Sage.DBG) System.out.println("OtaEpgIngestor: ingest done writes=" + writes + " overrides=" + overrides + " skips=" + skips);
+
+    // If anything changed, nudge Carny + Scheduler so favorites/manual rules
+    // pick up the new airings (or recompute around an OTA-OVERRIDE end-time
+    // change for live sports) without waiting for the next periodic pass.
+    if (writes > 0 || overrides > 0)
+    {
+      try { sage.Carny.getInstance().kick(); }
+      catch (Throwable t) { if (Sage.DBG) System.out.println("OtaEpgIngestor: Carny.kick failed: " + t); }
+      try { sage.SchedulerSelector.getInstance().kick(true); }
+      catch (Throwable t) { if (Sage.DBG) System.out.println("OtaEpgIngestor: Scheduler.kick failed: " + t); }
+    }
   }
 
   // ------------------------------------------------------------------

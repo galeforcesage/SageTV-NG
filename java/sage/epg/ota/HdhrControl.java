@@ -10,9 +10,16 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -99,11 +106,20 @@ public final class HdhrControl
     }, 5000);
   }
 
-  /** Set program filter (0 = full multiplex, including PSIP). */
+  /** Set the program filter (0 = full multiplex, including PSIP). */
   public void setProgram(int tunerIndex, int program) throws IOException
   {
     runConfig(new String[] {
         deviceId, "set", "/tuner" + tunerIndex + "/program", String.valueOf(program)
+    }, 3000);
+  }
+
+  /** Point the tuner's stream target at the given UDP destination. */
+  public void setTargetUdp(int tunerIndex, String hostIp, int port) throws IOException
+  {
+    runConfig(new String[] {
+        deviceId, "set", "/tuner" + tunerIndex + "/target",
+        "udp://" + hostIp + ":" + port
     }, 3000);
   }
 
@@ -135,33 +151,57 @@ public final class HdhrControl
 
   /**
    * Tune the named virtual channel, set program=0 to receive the full multiplex
-   * (so PSIP PID 0x1FFB is included), then HTTP-pull TS bytes from
-   * {@code http://<deviceIp>:5004/tunerN} for up to {@code maxDurationMs},
-   * feeding each chunk to {@code sink}. Yields immediately if {@code gate}
-   * returns true. Always releases the tuner on return.
+   * (so PSIP PID 0x1FFB is included), then capture raw TS bytes for up to
+   * {@code maxDurationMs}, feeding each chunk to {@code sink}. Yields immediately
+   * if {@code gate} returns true. Always releases the tuner on return.
+   *
+   * <p>Uses an HDHomeRun {@code udp://} target so the device pushes the FULL
+   * multiplex (including PID 0x1FFB / PSIP) to a local UDP port. The HTTP pull
+   * endpoint {@code /tunerN/v<vchannel>} only delivers the program ES PIDs
+   * (no PSIP) on current FLEX/CONNECT firmwares; the bare {@code /tunerN}
+   * URL returns 404. UDP target is the only reliable way to get PSIP.
    *
    * @return total bytes captured
    */
   public long captureFullMux(String deviceIp, int tunerIndex, String vchannel,
       long maxDurationMs, ChunkConsumer sink, YieldGate gate) throws IOException
   {
-    tuneVchannel(tunerIndex, vchannel);
-    setProgram(tunerIndex, 0);
-    // Slight settle so signal locks
-    try { Thread.sleep(300); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
-
-    long total = 0;
-    long started = System.currentTimeMillis();
-    HttpURLConnection conn = null;
-    InputStream in = null;
+    // 1. Open UDP socket on an ephemeral local port.
+    DatagramSocket sock = null;
+    int localPort;
+    String localIp;
     try
     {
-      URL u = new URL("http://" + deviceIp + ":5004/tuner" + tunerIndex);
-      conn = (HttpURLConnection) u.openConnection();
-      conn.setConnectTimeout(3000);
-      conn.setReadTimeout(3000);
-      in = conn.getInputStream();
-      byte[] buf = new byte[188 * 64]; // ~12 KB
+      sock = new DatagramSocket();          // ephemeral
+      sock.setReceiveBufferSize(2 * 1024 * 1024);
+      sock.setSoTimeout(2000);
+      localPort = sock.getLocalPort();
+      localIp = Sage.get("epg/ota_local_ip", "");
+      if (localIp.isEmpty()) localIp = pickReachableIp(deviceIp);
+      if (localIp == null || localIp.isEmpty())
+        throw new IOException("could not determine local IP reachable from " + deviceIp);
+    }
+    catch (SocketException se)
+    {
+      if (sock != null) sock.close();
+      throw new IOException("UDP socket setup failed: " + se.getMessage(), se);
+    }
+
+    long total = 0;
+    try
+    {
+      // 2. Tune & set program=0 BEFORE setting target so the first packets are valid.
+      tuneVchannel(tunerIndex, vchannel);
+      setProgram(tunerIndex, 0);
+      // 3. Point the device at our UDP socket.
+      setTargetUdp(tunerIndex, localIp, localPort);
+      // 4. Brief settle so signal locks and target plumbing applies.
+      try { Thread.sleep(300); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+
+      byte[] buf = new byte[1500 * 8];
+      DatagramPacket pkt = new DatagramPacket(buf, buf.length);
+      long started = System.currentTimeMillis();
+      long lastPacketAt = started;
       while (System.currentTimeMillis() - started < maxDurationMs)
       {
         if (gate != null && gate.shouldYield())
@@ -169,20 +209,75 @@ public final class HdhrControl
           if (Sage.DBG) System.out.println("HdhrControl: yielding tuner " + tunerIndex);
           break;
         }
-        int n = in.read(buf);
-        if (n < 0) break;
-        if (n == 0) continue;
+        try
+        {
+          sock.receive(pkt);
+        }
+        catch (SocketTimeoutException ste)
+        {
+          // Nothing for 2s — abandon if the silence outlasts 5s.
+          if (System.currentTimeMillis() - lastPacketAt > 5000)
+          {
+            if (Sage.DBG) System.out.println("HdhrControl: no UDP packets from "
+              + deviceIp + " tuner" + tunerIndex + " for >5s, giving up");
+            break;
+          }
+          continue;
+        }
+        int n = pkt.getLength();
+        if (n <= 0) continue;
+        lastPacketAt = System.currentTimeMillis();
         total += n;
-        if (!sink.accept(buf, n)) break;
+        if (!sink.accept(pkt.getData(), n)) break;
       }
     }
     finally
     {
-      if (in != null) try { in.close(); } catch (IOException ignore) {}
-      if (conn != null) conn.disconnect();
+      // 5. Stop the device pushing to us, then release tuner.
+      try { setTargetUdp(tunerIndex, "0.0.0.0", 0); } catch (IOException ignore) {}
       release(tunerIndex);
+      try { sock.close(); } catch (Exception ignore) {}
     }
     return total;
+  }
+
+  /**
+   * Find a local IPv4 address on an interface that can plausibly reach
+   * {@code deviceIp}. Picks the first non-loopback, non-link-local address
+   * on the same /24 as the device, falling back to any non-loopback IPv4.
+   */
+  private static String pickReachableIp(String deviceIp)
+  {
+    String prefix24 = null;
+    try
+    {
+      String[] o = deviceIp.split("\\.");
+      if (o.length == 4) prefix24 = o[0] + "." + o[1] + "." + o[2] + ".";
+    }
+    catch (Exception ignore) {}
+
+    String fallback = null;
+    try
+    {
+      Enumeration<NetworkInterface> nis = NetworkInterface.getNetworkInterfaces();
+      while (nis != null && nis.hasMoreElements())
+      {
+        NetworkInterface ni = nis.nextElement();
+        if (!ni.isUp() || ni.isLoopback()) continue;
+        Enumeration<InetAddress> addrs = ni.getInetAddresses();
+        while (addrs.hasMoreElements())
+        {
+          InetAddress a = addrs.nextElement();
+          if (a.isLoopbackAddress() || a.isLinkLocalAddress()) continue;
+          String ip = a.getHostAddress();
+          if (ip.indexOf(':') >= 0) continue; // skip IPv6
+          if (prefix24 != null && ip.startsWith(prefix24)) return ip;
+          if (fallback == null) fallback = ip;
+        }
+      }
+    }
+    catch (SocketException ignore) {}
+    return fallback;
   }
 
   // ----------------------------------------------------------------------
