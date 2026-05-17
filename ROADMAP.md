@@ -96,39 +96,76 @@ Phases 0–3 cover real-world need without touching the broadcast stack.
 Bigger architectural changes. Each is independently shippable; order
 below is rough best-ROI-per-effort, not commitment.
 
+### Cross-cutting constraint: OpenSageTV plugin-repo compatibility
+
+Every item in this track MUST preserve compatibility with the existing
+plugin ecosystem at
+[OpenSageTV/sagetv-plugin-repo](https://github.com/OpenSageTV/sagetv-plugin-repo)
+(Phoenix, BMT, sagex APIs, CMT, OpenDCT, Comskip launcher, nielm web
+server, etc.). The stable surfaces plugins depend on:
+
+| Surface | Stability rule |
+|---|---|
+| STV API (`Global.GetXxx()`, `Database.GetYyy()`, etc.) | Additive only — never remove or rename existing entries |
+| `sage.Wizard` Java API | Byte-compatible signatures; storage backend swaps are internal |
+| `SageTVPluginRegistry` / `SageTVPlugin` lifecycle | Untouched |
+| Socket protocol on TCP/7818 | Frozen — new APIs are additive sidecars |
+| MPEG-TS recording files (`.mpg`) | Default container stays MPEG-TS; new containers are opt-in per Channel or global property |
+| HTTP endpoints on 8080 (sagex, MediaStreaming, mobile web) | Additive only |
+| `sage.Sage` static logging facade | Kept as a thin shim over any new logger |
+
+Per-item compatibility plan is called out inline below.
+
 ### Stability / data
 - **Wizard flat-file DB → SQLite or embedded H2 option.** Replace
   `Wiz.bin` (single proprietary file, no transactions) with an ACID
   embedded DB behind the existing `Wizard` API. Wins: crash recovery,
   standard SQL tooling, incremental backups, ~10–100× faster lookups
   on large libraries.
+  *Plugin compat:* keep every public `Wizard` method signature
+  unchanged; backend chosen by `wizard/backend=flatfile|sqlite`
+  (default `flatfile`). Plugins see no change.
 - **`sage.Sage` logging → SLF4J + Logback.** Bridge `sage.Sage.DBG` /
   `printlnObject` onto SLF4J (Logback config already present in
   container). Wins: per-package log levels, built-in rotation, JSON
   output for log aggregators, dynamic level changes via JMX.
+  *Plugin compat:* `sage.Sage` static methods kept as facade — any
+  plugin that calls `sage.Sage.println(...)` keeps working.
 
 ### Modern dependencies
 - **SBBI UPnP → JUPnP.** SBBI is 2005-era and has known IPv6 /
   multi-NIC bugs. JUPnP is maintained, OpenHAB-backed. Fixes DLNA on
   multi-homed servers (relevant to dual-subnet host setups).
+  *Plugin compat:* internal; no plugin exposes SBBI types.
 - **GSON (sun.misc.Unsafe path) → Jackson.** Removes the
   `sun.misc.Unsafe` reflective warnings on Java 17+, futures JDK
   upgrades to 25 LTS+, ~2× JSON parse throughput on large EPG payloads.
+  *Plugin compat:* keep GSON jar on classpath since sagex services
+  serialize through it; only internal call sites move to Jackson.
 
 ### Recording / streaming
 - **Native MP4/MKV recording containers.** Optional end-of-recording
   (or live segment) remux from MPEG-TS to MP4/MKV; codecs unchanged.
   Files become directly playable in VLC/Plex/Jellyfin/browsers without
   re-transcode; multi-lang audio + chapters preserved cleanly.
+  *Plugin compat:* MPEG-TS remains the default. Opt-in via
+  `recording/container_default=mpegts|mp4|mkv` (global) plus
+  per-Channel override. Comskip/BMT keep seeing `.mpg` unless user
+  opts a Channel in.
 - **Transcoding pipeline cleanup: MPlayer → modern FFmpeg profiles.**
   Profile-driven FFmpeg command builder
   (`profile=tablet_720p_hevc` → args), HW-accel paths (NVENC/QSV/VAAPI).
   Wins: smaller bitrates at same quality, more simultaneous transcodes
   via GPU offload, survives distro upgrades that drop MPlayer.
+  *Plugin compat:* keep `mplayer` external launcher available since
+  a few plugins shell out to it; new pipeline is alongside, not
+  replacing.
 - **HLS/DASH streaming (replace `HTTPLSServer`).** Serve recordings +
   live TV as standard HLS playlists / DASH manifests with adaptive
   bitrate ladders. Wins: native playback in browsers / smart TVs /
   Chromecast / AirPlay without an app; ABR adapts to network.
+  *Plugin compat:* new endpoint paths (`/hls/...`, `/dash/...`);
+  `HTTPLSServer` legacy URLs remain.
 
 ### Integration
 - **REST/gRPC API layer alongside socket protocol 7818.** Additive
@@ -136,8 +173,114 @@ below is rough best-ROI-per-effort, not commitment.
   binary protocol keeps working. Wins: Home Assistant / Node-RED /
   shell-script integrations in 10 lines instead of learning the binary
   framing; OpenAPI docs; browser-based test consoles.
+  *Plugin compat:* port 7818 is frozen forever. The new API is a
+  sidecar on a separate port; sagex API + Placeshifter + MiniClient
+  keep using 7818 unchanged.
 
 ---
+
+## Distributed architecture track  *(backlog, not scheduled)*
+
+### Modular frontend / backend separation + multi-server aggregation
+
+**Goal.** Decouple SageTV into independent frontend and backend
+modules so a single "aggregation node" can present a unified UI / EPG
+/ scheduling DB while delegating recording, EPG ingestion, and media
+storage to one or more backend servers — possibly across sites
+(e.g. Chicago + Madison over VPN).
+
+**Why.** Today a SageTV install is a single monolith: one process
+owns tuners, recordings, EPG, scheduling, UI, and all plugins. There
+is no concept of "borrow my friend's tuner when mine is busy" or "I
+have a recording farm in the basement and a UI box upstairs." A clean
+frontend/backend split unlocks:
+
+- Multi-site households / shared SageTV cooperatives
+- Independent scaling of recording capacity vs UI clients
+- Cleaner upgrade story (replace backend without touching the UI)
+- Geographic EPG mixing (catch a Chicago show on a Madison tuner if
+  the Chicago tuner is recording two others)
+
+**Module decomposition.**
+
+*Backend (per server) — modular service responsibilities:*
+- Local recording scheduler + execution
+- EPG ingestion (Schedules Direct, OTA EIT, ATSC3 ESG, future sources)
+- Media storage + metadata management
+- Media serving (streaming endpoints, file access)
+- Backend-class plugin execution (recording rules, EPG augmentation,
+  commercial detection, transcoding)
+
+*Frontend (aggregation node) — primary responsibilities:*
+- Aggregate multiple backends into one logical system
+- Unified EPG, recording schedule UI, media browser/search
+- Manage content-locality preference (prefer local backend; fall back
+  to remote over VPN)
+- Playback routing decisions
+
+**Unified EPG layer.**
+- Merge listings from multiple backends; deduplicate channels and
+  programs when overlapping
+- Maintain source attribution (which backend owns which tuner/channel)
+- Cross-region listings (Chicago + Madison) become a single guide
+- Cross-server scheduling: frontend selects optimal backend per
+  recording (locality, tuner availability, rules); backends report
+  status back; conflicts arbitrated by frontend
+
+**Media flow modes.**
+1. **Direct client → backend** (preferred): client streams from
+   the chosen backend; frontend is control-plane + metadata only.
+2. **Frontend proxy** (fallback): frontend relays stream to client
+   when VPN routing or legacy-client compatibility requires it.
+3. **Hybrid / smart routing:** client attempts direct; falls back
+   to proxy on failure.
+
+**Multi-site / VPN considerations.**
+- Backends advertise location / latency hints
+- Frontend prefers proximity; optional latency- and bandwidth-aware
+  selection
+- Stable identity per backend so reconnects after VPN flaps are clean
+
+**Service APIs required.**
+- *Backend service API:* EPG export, recording control, media catalog,
+  stream endpoints, capability discovery (tuners, codecs, plugin
+  capabilities — important for ATSC 3.0 / AC-4 capability mixing)
+- *Frontend aggregation API:* unified EPG query, cross-server
+  scheduling, global search
+
+**Plugin model — split responsibility.**
+Existing plugins are not cleanly separated, so this needs:
+- *Capability tagging:* every plugin declares
+  `frontend` / `backend` / `hybrid` in its `SageTVPlugin.xml`
+- *Compatibility shim:* untagged legacy plugins default to `hybrid`
+  and run on whichever node ends up doing the work, with a warning
+  about potential duplication
+
+**Known challenges / risks.**
+- Plugin ecosystem fragmentation during the tagging transition
+- Synchronization complexity across backends (clock skew, partition
+  handling)
+- Duplicate-media handling when the same recording exists on multiple
+  servers
+- UI responsiveness with distributed queries (need aggressive
+  frontend caching of EPG slices)
+- Legacy client compatibility, especially HD300 / extender protocol
+  (these will likely always talk to a single backend directly via
+  proxy mode)
+
+**Sequenced sub-deliverables** (rough order, each independently
+useful):
+1. Backend service API definition (OpenAPI / proto) — builds on the
+   "REST/gRPC sidecar" item above
+2. Capability discovery endpoint on existing servers (no behavior
+   change yet, just self-describe)
+3. Plugin capability tagging spec + shim
+4. Read-only frontend aggregator MVP — unified EPG view from N
+   backends, no scheduling yet
+5. Cross-server scheduling + recording arbitration
+6. Media flow modes (direct → proxy fallback)
+7. Latency-aware backend selection
+8. Production multi-site deployment
 
 ---
 
