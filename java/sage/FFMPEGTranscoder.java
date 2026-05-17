@@ -1093,7 +1093,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add("-bufsize");
       xcodeParamsVec.add(currVideoBitrateKbps*5000 + "");
 
-      if (xcodeParams.indexOf("-deinterlace") == -1 && srcVideo != null && srcVideo.isInterlaced() && targetHeight > srcVideo.getHeight()/2 &&
+      // FFmpeg 7.x: -deinterlace is removed; users now express deinterlace via -vf yadif.
+      // Skip auto-add if user already asked for either legacy or modern form.
+      if (xcodeParams.indexOf("-deinterlace") == -1 && xcodeParams.indexOf("yadif") == -1
+          && srcVideo != null && srcVideo.isInterlaced() && targetHeight > srcVideo.getHeight()/2 &&
           Sage.getBoolean("xcode_auto_deinterlace", true))
       {
         if (Sage.DBG) System.out.println("Automatically adding yadif deinterlace filter to transcoding process");
@@ -1320,7 +1323,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
             xcodeParamsVec.add(vidForm.getWidth() + ":" + vidForm.getHeight());
         }
       }
-      if (xcodeParams.indexOf("-deinterlace") == -1 && srcVideo != null && srcVideo.isInterlaced() && targetHeight > srcVideo.getHeight()/2 &&
+      // FFmpeg 7.x: -deinterlace is removed; users now express deinterlace via -vf yadif.
+      // Skip auto-add if user already asked for either legacy or modern form.
+      if (xcodeParams.indexOf("-deinterlace") == -1 && xcodeParams.indexOf("yadif") == -1
+          && srcVideo != null && srcVideo.isInterlaced() && targetHeight > srcVideo.getHeight()/2 &&
           Sage.getBoolean("xcode_auto_deinterlace", true))
       {
         if (Sage.DBG) System.out.println("Automatically adding yadif deinterlace filter to transcoding process");
