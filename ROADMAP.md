@@ -81,17 +81,94 @@ Phases 0–3 cover real-world need without touching the broadcast stack.
 
 ## Playback track
 
-- **Multi-language AC-4 track switching.** Re-probe already detects
-  `eng` + `spa` AC-4 streams; miniplayer transcode pipeline currently
-  hardcodes `-map 0:a:0`. Add per-airing audio track preference + UI
-  selector.
+- **Per-airing audio language UI selector.** Server-side language-aware
+  audio mapping is done (see Done section: `AC4TranscodeJob` honors
+  `default_audio_language` / `hdhr/ac4_transcode_audio_lang`). Still
+  needed: a click-through UI in the STV that lets the user override
+  the language per show without changing the global default.
 - **CTA-708 captions in HEVC SEI.** Accessibility win; needs SEI
   extraction or pass-through to client.
 
 ---
 
+## Longer-term modernization track  *(backlog, not scheduled)*
+
+Bigger architectural changes. Each is independently shippable; order
+below is rough best-ROI-per-effort, not commitment.
+
+### Stability / data
+- **Wizard flat-file DB → SQLite or embedded H2 option.** Replace
+  `Wiz.bin` (single proprietary file, no transactions) with an ACID
+  embedded DB behind the existing `Wizard` API. Wins: crash recovery,
+  standard SQL tooling, incremental backups, ~10–100× faster lookups
+  on large libraries.
+- **`sage.Sage` logging → SLF4J + Logback.** Bridge `sage.Sage.DBG` /
+  `printlnObject` onto SLF4J (Logback config already present in
+  container). Wins: per-package log levels, built-in rotation, JSON
+  output for log aggregators, dynamic level changes via JMX.
+
+### Modern dependencies
+- **SBBI UPnP → JUPnP.** SBBI is 2005-era and has known IPv6 /
+  multi-NIC bugs. JUPnP is maintained, OpenHAB-backed. Fixes DLNA on
+  multi-homed servers (relevant to dual-subnet host setups).
+- **GSON (sun.misc.Unsafe path) → Jackson.** Removes the
+  `sun.misc.Unsafe` reflective warnings on Java 17+, futures JDK
+  upgrades to 25 LTS+, ~2× JSON parse throughput on large EPG payloads.
+
+### Recording / streaming
+- **Native MP4/MKV recording containers.** Optional end-of-recording
+  (or live segment) remux from MPEG-TS to MP4/MKV; codecs unchanged.
+  Files become directly playable in VLC/Plex/Jellyfin/browsers without
+  re-transcode; multi-lang audio + chapters preserved cleanly.
+- **Transcoding pipeline cleanup: MPlayer → modern FFmpeg profiles.**
+  Profile-driven FFmpeg command builder
+  (`profile=tablet_720p_hevc` → args), HW-accel paths (NVENC/QSV/VAAPI).
+  Wins: smaller bitrates at same quality, more simultaneous transcodes
+  via GPU offload, survives distro upgrades that drop MPlayer.
+- **HLS/DASH streaming (replace `HTTPLSServer`).** Serve recordings +
+  live TV as standard HLS playlists / DASH manifests with adaptive
+  bitrate ladders. Wins: native playback in browsers / smart TVs /
+  Chromecast / AirPlay without an app; ABR adapts to network.
+
+### Integration
+- **REST/gRPC API layer alongside socket protocol 7818.** Additive
+  HTTP API exposing channels/recordings/EPG/scheduling. Existing
+  binary protocol keeps working. Wins: Home Assistant / Node-RED /
+  shell-script integrations in 10 lines instead of learning the binary
+  framing; OpenAPI docs; browser-based test consoles.
+
+---
+
+---
+
 ## Done
 
+- **ATSC3 ↔ ATSC1 mirror manager (dry-run by default)** — `b6182006`.
+  New `sage.epg.atsc3.Atsc3MirrorManager` pairs ATSC3 stub channels
+  (1xx.y) with their ATSC1 sibling (xx.y) via
+  `EPG.setOverride`/`clearOverride`, so SD schedule data on the ATSC1
+  station ID can be tuned through the ATSC3 vchan. Properties under
+  `atsc3/`: `mirror_enabled`, `mirror_mode`
+  (`atsc1_only`/`prefer_atsc1`/`prefer_atsc3`), `mirror_dry_run`,
+  `mirror_pairs`, `mirror_drm_stations`, `mirror_refresh_interval_ms`.
+  Auto-detect walks `Wizard.getChannels()` and pairs any 1xx.y with
+  its xx.y sibling. Startup hooked from `SageTV.java` after
+  `Atsc1EITScanner`.
+- **AC4TranscodeJob language-aware audio track selection** — `50109844`.
+  `ffprobe`-driven `-map 0:a:N` matching `default_audio_language` (full
+  name) or new `hdhr/ac4_transcode_audio_lang` ISO override. Required
+  for stations like WGBO 166.1 that broadcast Spanish primary + English
+  secondary AC-4. End-to-end verified: spa+eng AC-4 input →
+  `-map 0:a:1` → transcode TS with `TAG:language=eng`.
+- **NG capability-protocol version channel
+  (`SAGETV_NG_VERSION` / `GetMiniclientNgVersion()`)** — `10140011`.
+  New GetProperty channel separate from `FIRMWARE_VERSION`, so NG
+  miniclients route to `android_modern` based on NG version (1.0.1+)
+  instead of accidentally satisfying the legacy `>= 1.15` gate via
+  `FIRMWARE_VERSION="9.0.0"`. Back-compat: old `autoDetectProfile()`
+  overloads kept, stock 9.x clients return empty NG version and fall
+  back to existing apk-version gate. New `GetMiniclientNgVersion()`
+  STV API exposed in `sage.api.Global`.
 - "No data" placeholder Show uniqueness (Phase 0): `Wizard.addMediaFile`
   and `addMediaFileRecovered` now fork a unique Show + Airing pair
   (extID `NODATA::<stationID>::<recStart>`) for any recording made
