@@ -107,23 +107,13 @@ RUN make -C ../third_party/SageTV-LGPL/imageload && cp ../third_party/SageTV-LGP
 # -- 3d. Essential: Freetype --
 RUN make -C ../native/crosslibs/Freetype && cp ../native/crosslibs/Freetype/*.so so/ || true
 
-# ---- 4. Build modern FFmpeg 6.1.1 with SageTV patches (forward-ported) ----
-# Uses docker/build-modern-ffmpeg.sh which downloads FFmpeg 6.1.1 source,
-# applies SageTV custom patches (-stdinctrl, -activefile, -dumpmetadata,
-# -brokendts), and builds with libx264, libx265, libfdk-aac, etc.
-RUN bash /src/docker/build-modern-ffmpeg.sh \
-    && mkdir -p /src/build/elf \
-    && cp /tmp/ffmpeg-build/ffmpeg-6.1.1/ffmpeg /src/build/elf/ffmpeg \
-    && echo "Modern patched FFmpeg 6.1.1 built successfully" \
-    || echo "WARN: Modern FFmpeg build failed (will fall back to stock+wrapper)"
-
-# ---- 4a. Build ffmpeg-ac4 (pliu6 fork) for AC-4 decode (ATSC 3.0) ----
-# Independent second FFmpeg binary at /usr/local/bin/ffmpeg-ac4 in runtime.
-# Source + nv-codec-headers tag are pinned in build-ac4-ffmpeg.sh.
-# Strictly separate from /opt/sagetv/server/ffmpeg and /usr/bin/ffmpeg.
-RUN bash /src/docker/build-ac4-ffmpeg.sh \
-    && echo "ffmpeg-ac4 (pliu6 fork) built successfully" \
-    || echo "WARN: ffmpeg-ac4 build failed (AC-4/HEVC ATSC 3.0 path will be unavailable)"
+# ---- 4. Build the unified SageTV FFmpeg binary ----
+# One binary with: all four SageTV custom flags (-stdinctrl, -activefile,
+# -dumpmetadata, -brokendts) + AC-4 decode + NVENC + libx264/x265/fdk-aac/xvid.
+# Replaces the old dual build-modern-ffmpeg.sh + build-ac4-ffmpeg.sh setup
+# and removes the need for ffmpeg-wrapper.sh. See docs/FFMPEG_UNIFICATION_PLAN.md.
+RUN bash /src/docker/build-sagetv-ffmpeg.sh \
+    && echo "Unified SageTV FFmpeg built successfully"
 
 # ---- 4b. Build Comskip commercial detector ----
 # If third_party/comskip is populated (git submodule present) build from source;
@@ -204,20 +194,16 @@ COPY --from=builder /src/build/elf/ /tmp/builder-elf/
 
 WORKDIR /opt/sagetv/server
 
-# FFmpeg setup — prefer SageTV's patched binary (supports -stdinctrl,
-# -activefile, -dumpmetadata, -brokendts for full transcoder functionality).
-# If the patched build failed, fall back to stock FFmpeg with a compatibility
-# wrapper that strips the unsupported flags (basic transcoding still works,
-# but dynamic rate adaptation and active-file playback won't be available).
-COPY docker/ffmpeg-wrapper.sh /usr/local/bin/ffmpeg-wrapper
-RUN chmod +x /usr/local/bin/ffmpeg-wrapper \
-    && if [ -x /opt/sagetv/server/ffmpeg ]; then \
-         echo "Using SageTV patched FFmpeg (full feature support)"; \
+# FFmpeg setup — install the unified SageTV-patched + AC-4-capable binary at
+# /opt/sagetv/server/{ffmpeg,ffprobe}. Built in stage 1 by build-sagetv-ffmpeg.sh.
+# Stock /usr/bin/ffmpeg (apt) is kept for comskip and unrelated tools.
+RUN if [ -x /tmp/builder-elf/sagetv-ffmpeg ]; then \
+         echo "Installing unified SageTV FFmpeg at /opt/sagetv/server/{ffmpeg,ffprobe}"; \
+         install -m 755 /tmp/builder-elf/sagetv-ffmpeg  /opt/sagetv/server/ffmpeg; \
+         install -m 755 /tmp/builder-elf/sagetv-ffprobe /opt/sagetv/server/ffprobe; \
        else \
-         echo "Patched FFmpeg not built — falling back to stock + wrapper"; \
-         mv /usr/bin/ffmpeg /usr/local/bin/ffmpeg.real; \
-         cp /usr/local/bin/ffmpeg-wrapper /usr/local/bin/ffmpeg; \
-         ln -sf /usr/local/bin/ffmpeg /opt/sagetv/server/ffmpeg; \
+         echo "ERROR: sagetv-ffmpeg not built - transcoding paths will be broken" >&2; \
+         exit 1; \
        fi \
     && mkdir -p /var/media/videos /var/media/pictures /var/media/music \
     /opt/sagetv/server/logs /opt/sagetv/comskip \
@@ -227,13 +213,6 @@ RUN chmod +x /usr/local/bin/ffmpeg-wrapper \
        else \
          echo "Using apt-installed comskip"; \
          ln -sf /usr/bin/comskip /opt/sagetv/comskip/comskip; \
-       fi \
-    && if [ -x /tmp/builder-elf/ffmpeg-ac4 ]; then \
-         echo "Installing ffmpeg-ac4 (pliu6 fork) at /usr/local/bin/ffmpeg-ac4"; \
-         install -m 755 /tmp/builder-elf/ffmpeg-ac4  /usr/local/bin/ffmpeg-ac4; \
-         install -m 755 /tmp/builder-elf/ffprobe-ac4 /usr/local/bin/ffprobe-ac4; \
-       else \
-         echo "WARN: ffmpeg-ac4 not built - AC-4/ATSC 3.0 path will be unavailable"; \
        fi \
     && cp /opt/sagetv/server/comskip_profiles/comskip_base.ini /opt/sagetv/comskip/comskip.ini 2>/dev/null || true \
     # Drop comskip.ini in every location comskip auto-discovers so Sage can

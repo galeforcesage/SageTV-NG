@@ -997,19 +997,18 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
   }
 
   /**
-   * Probe an ATSC 3.0 capture (HEVC + AC-4 in MPEG-TS) using the dedicated
-   * ffprobe-ac4 binary and return a populated ContainerFormat. Stock ffmpeg
-   * shipped with Sage cannot decode AC-4 sample rate / channels and rejects
-   * the {@code -dumpmetadata} option used by FormatParser, so this path
-   * shells out to {@code /usr/local/bin/ffprobe-ac4} (pliu6 fork) directly
-   * and parses its JSON output.
+   * Probe an ATSC 3.0 capture (HEVC + AC-4 in MPEG-TS) using ffprobe and
+   * return a populated ContainerFormat. As of the FFmpeg unification work
+   * (see docs/FFMPEG_UNIFICATION_PLAN.md) the unified SageTV ffprobe at
+   * /opt/sagetv/server/ffprobe supports AC-4 decode, HEVC parse, and all
+   * SageTV custom output, so we use it directly.
    *
    * Returns null if the probe binary is missing or fails. Caller is expected
    * to fall back to the seeded codec identities in that case.
    */
   static sage.media.format.ContainerFormat probeAtsc3FileWithFFMPEG(String filePath)
   {
-    String probeBin = sage.Sage.get("hdhr/atsc3_ffprobe_path", "/usr/local/bin/ffprobe-ac4");
+    String probeBin = sage.Sage.get("hdhr/atsc3_ffprobe_path", "/opt/sagetv/server/ffprobe");
     if (!new java.io.File(probeBin).canExecute())
     {
       if (sage.Sage.DBG) System.out.println("ATSC3 probe: " + probeBin + " not executable");
