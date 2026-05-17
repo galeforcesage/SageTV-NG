@@ -866,7 +866,32 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
     if (sid <= 0) return channel;
 
     java.util.List<ChannelVariant> vars = ChannelVariants.forStation(sid);
-    if (vars.isEmpty()) return channel;
+    if (vars.isEmpty())
+    {
+      // Variants get attached lazily on the first lineup cache hit. If the
+      // table is empty at the moment of the first tune we'd silently fall
+      // through to ATSC1 forever — force one synchronous refresh + attach.
+      String host = resolveLineupHost();
+      if (host != null)
+      {
+        try
+        {
+          HDHomeRunLineup lu = HDHomeRunLineup.forHost(host);
+          if (lu != null)
+          {
+            lu.refresh();
+            String hex = parseHexDeviceId(captureDeviceName);
+            sage.hdhr.ChannelVariantAttacher.attach(lu, hex == null ? "" : hex);
+            vars = ChannelVariants.forStation(sid);
+          }
+        }
+        catch (Throwable t)
+        {
+          if (Sage.DBG) System.out.println("ATSC3: lazy lineup refresh failed: " + t);
+        }
+      }
+      if (vars.isEmpty()) return channel;
+    }
 
     boolean wantAtsc3 = !"prefer_atsc1".equalsIgnoreCase(policy);
     ChannelVariant chosen = null;
@@ -910,6 +935,35 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
     return (loc == null || loc.length() == 0) ? channel : loc;
   }
 
+  /**
+   * Extract just the major.minor portion from an HDHR tune string. Accepts:
+   * <ul>
+   *   <li>{@code "35-66-1"} (RF-major-minor) -> {@code "66.1"}</li>
+   *   <li>{@code "66.1"}   -> {@code "66.1"}</li>
+   *   <li>{@code "66"}     -> {@code "66"}</li>
+   * </ul>
+   */
+  static String stripRfPrefix(String channel)
+  {
+    if (channel == null) return null;
+    // RF-major-minor: "<rf>-<major>-<minor>"
+    int firstDash = channel.indexOf('-');
+    int lastDash  = channel.lastIndexOf('-');
+    if (firstDash > 0 && lastDash > firstDash)
+    {
+      try
+      {
+        // First segment must be a numeric RF channel for us to strip it.
+        Integer.parseInt(channel.substring(0, firstDash));
+        String major = channel.substring(firstDash + 1, lastDash);
+        String minor = channel.substring(lastDash + 1);
+        return major + "." + minor;
+      }
+      catch (NumberFormatException nfe) { /* not RF-prefixed */ }
+    }
+    return channel;
+  }
+
   private int resolveStationID(String channel)
   {
     try
@@ -918,7 +972,21 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
       if (epg == null || activeSource == null) return 0;
       long provID = activeSource.getProviderID();
       if (provID == 0) return 0;
-      return epg.guessStationID(provID, channel);
+      // Tune strings may arrive as "35-66-1" (RF-major-minor from .frq lookup)
+      // OR "66.1" depending on where in the pipeline we're invoked. EPG only
+      // recognizes "66" or "66.1", never the RF-prefixed form, so normalize.
+      String normalized = stripRfPrefix(channel);
+      int sid = epg.guessStationID(provID, normalized);
+      if (sid > 0) return sid;
+      // Fall back to major-only ("66.1" -> "66") for stations registered only
+      // by the base virtual channel number.
+      int dot = normalized.indexOf('.');
+      if (dot > 0)
+      {
+        sid = epg.guessStationID(provID, normalized.substring(0, dot));
+        if (sid > 0) return sid;
+      }
+      return 0;
     }
     catch (Throwable t)
     {

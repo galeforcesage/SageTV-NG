@@ -5980,6 +5980,41 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
           return true;
         }
       }
+      // Fallback: prefer a multilingual/mixed track when the configured
+      // language isn't present. Many bilingual SAP broadcasts tag the
+      // mixed stream "mul" (ISO 639-2 multiple-languages) or "qaa"
+      // ("undetermined"); choosing it is more useful than silently
+      // landing on track 0 (which on Spanish-primary streams produces
+      // the wrong audio with no video sniff hint).
+      if (Sage.getBoolean("mp/audio_lang_fallback_mul", true)
+          && playerControlCode == DVD_CONTROL_AUDIO_CHANGE)
+      {
+        String[] mulCodes = { "mul", "mis", "und", "zxx", "qaa" };
+        for (int i = 0; i < mulCodes.length; i++)
+        {
+          int matchIdx = getMatchingLangIndex(availLangs, mulCodes[i]);
+          if (matchIdx >= 0)
+          {
+            if (Sage.DBG) System.out.println("Default audio language " + defaultLang
+                + " not found; falling back to multilingual/mixed track '"
+                + mulCodes[i] + "' at index " + matchIdx);
+            playbackControl(playerControlCode, matchIdx, -1);
+            return true;
+          }
+        }
+        // Last-resort fallback: explicitly select the MAIN/primary track
+        // (index 0). The caller doesn't re-select on a false return, so we
+        // need to do it here to guarantee a track is chosen — otherwise
+        // whatever the decoder picked on init (often the first SAP track
+        // on bilingual broadcasts) sticks.
+        if (Sage.getBoolean("mp/audio_lang_fallback_main", true))
+        {
+          if (Sage.DBG) System.out.println("Default audio language " + defaultLang
+              + " not found and no multilingual track; falling back to MAIN track at index 0");
+          playbackControl(playerControlCode, 0, -1);
+          return true;
+        }
+      }
       return false; // no match
     }
   }

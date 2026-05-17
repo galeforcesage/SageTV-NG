@@ -86,11 +86,15 @@ public final class ChannelVariantAttacher
       HDHomeRunLineup.Entry atsc1 = pickByCodec(group, false);
 
       // Find the SageTV Channel: prefer pairing against the ATSC1 twin;
-      // fall back to the ATSC3 entry's metadata if ATSC1 is absent.
+      // fall back to the ATSC3 entry's metadata if ATSC1 is absent. We collect
+      // ALL matching channels (not just the first) because users sometimes
+      // hand-create a placeholder NG channel alongside the Schedules-Direct
+      // entry; both must receive the variant attachment or recordings booked
+      // against the SD station won't see the variant and won't get remapped.
       HDHomeRunLineup.Entry probe = (atsc1 != null) ? atsc1 : atsc3;
-      Channel chan = findChannel(allChannels, probe, major);
+      java.util.List<Channel> chans = findChannels(allChannels, probe, major);
 
-      if (chan == null)
+      if (chans.isEmpty())
       {
         if (atsc3 != null)
         {
@@ -103,36 +107,38 @@ public final class ChannelVariantAttacher
       }
 
       paired++;
-      int sid = chan.getStationID();
-
-      if (atsc1 != null)
+      for (Channel chan : chans)
       {
-        ChannelVariant v = new ChannelVariant(
-            ChannelVariant.TYPE_ATSC1,
-            normCodec(atsc1.videoCodec, ChannelVariant.VCODEC_MPEG2),
-            normCodec(atsc1.audioCodec, ChannelVariant.ACODEC_AC3),
-            atsc1.guideNumber,
-            hdhrDeviceHexId);
-        ChannelVariants.add(sid, v);
-        attached++;
-      }
-      if (atsc3 != null)
-      {
-        ChannelVariant v = new ChannelVariant(
-            ChannelVariant.TYPE_ATSC3,
-            normCodec(atsc3.videoCodec, ChannelVariant.VCODEC_HEVC),
-            normCodec(atsc3.audioCodec, ChannelVariant.ACODEC_AC4),
-            atsc3.guideNumber,
-            hdhrDeviceHexId,
-            atsc3.drm);
-        ChannelVariants.add(sid, v);
-        attached++;
-        if (Sage.DBG) System.out.println("ATSC3: paired GuideNumber="
-            + atsc3.guideNumber + " callsign=" + atsc3.guideName
-            + (atsc3.drm ? " [DRM]" : "")
-            + " -> stationID=" + sid + " name=" + chan.getName()
-            + " (twin=" + (atsc1 != null ? atsc1.guideNumber : "<none>")
-            + " method=" + matchMethodHint(chan, probe, major) + ")");
+        int sid = chan.getStationID();
+        if (atsc1 != null)
+        {
+          ChannelVariant v = new ChannelVariant(
+              ChannelVariant.TYPE_ATSC1,
+              normCodec(atsc1.videoCodec, ChannelVariant.VCODEC_MPEG2),
+              normCodec(atsc1.audioCodec, ChannelVariant.ACODEC_AC3),
+              atsc1.guideNumber,
+              hdhrDeviceHexId);
+          ChannelVariants.add(sid, v);
+          attached++;
+        }
+        if (atsc3 != null)
+        {
+          ChannelVariant v = new ChannelVariant(
+              ChannelVariant.TYPE_ATSC3,
+              normCodec(atsc3.videoCodec, ChannelVariant.VCODEC_HEVC),
+              normCodec(atsc3.audioCodec, ChannelVariant.ACODEC_AC4),
+              atsc3.guideNumber,
+              hdhrDeviceHexId,
+              atsc3.drm);
+          ChannelVariants.add(sid, v);
+          attached++;
+          if (Sage.DBG) System.out.println("ATSC3: paired GuideNumber="
+              + atsc3.guideNumber + " callsign=" + atsc3.guideName
+              + (atsc3.drm ? " [DRM]" : "")
+              + " -> stationID=" + sid + " name=" + chan.getName()
+              + " (twin=" + (atsc1 != null ? atsc1.guideNumber : "<none>")
+              + " method=" + matchMethodHint(chan, probe, major) + ")");
+        }
       }
     }
 
@@ -201,20 +207,35 @@ public final class ChannelVariantAttacher
     return raw;
   }
 
-  /** Pairing order: callsign -> guidenumber -> major+100 -> null. */
-  private static Channel findChannel(Channel[] all, HDHomeRunLineup.Entry probe, String major)
+  /** Pairing order: callsign -> guidenumber -> major+100 -> null. Returns
+   * every matching channel so multi-station-id situations (a manual NG
+   * placeholder alongside the Schedules-Direct station) all get the variant. */
+  private static java.util.List<Channel> findChannels(Channel[] all, HDHomeRunLineup.Entry probe, String major)
   {
-    if (probe == null) return null;
+    java.util.List<Channel> rv = new java.util.ArrayList<>(2);
+    if (probe == null) return rv;
 
-    // 1) Callsign match
+    // 1) Callsign match (normalized to bare call letters, broadcast suffixes
+    //    stripped on BOTH sides). HDHR reports e.g. "WGBO-NG"; Schedules
+    //    Direct stores "WGBODT" or "WGBOTV". Normalize to "WGBO" both ways
+    //    so the natural pairing succeeds without any manual channel curation.
     if (probe.guideName != null && probe.guideName.length() > 0)
     {
-      String wanted = stripBroadcastSuffix(probe.guideName).toUpperCase();
-      for (Channel c : all)
+      String wanted = normalizeCallsign(probe.guideName);
+      if (wanted.length() >= 3)
       {
-        String cn = c.getName();
-        if (cn == null) continue;
-        if (stripBroadcastSuffix(cn).toUpperCase().equals(wanted)) return c;
+        java.util.List<Channel> exact = new java.util.ArrayList<>(2);
+        java.util.List<Channel> prefix = new java.util.ArrayList<>(2);
+        for (Channel c : all)
+        {
+          String have = normalizeCallsign(c.getName());
+          if (have.length() < 3) continue;
+          if (have.equals(wanted)) { exact.add(c); continue; }
+          if (have.startsWith(wanted) || wanted.startsWith(have))
+            prefix.add(c);
+        }
+        if (!exact.isEmpty()) { rv.addAll(exact); return rv; }
+        if (!prefix.isEmpty()) { rv.addAll(prefix); return rv; }
       }
     }
 
@@ -226,10 +247,11 @@ public final class ChannelVariantAttacher
         try
         {
           String n = c.getNumber();
-          if (n != null && n.equals(probe.guideNumber)) return c;
+          if (n != null && n.equals(probe.guideNumber)) rv.add(c);
         }
         catch (Throwable t) { /* getNumber may NPE before EPG ready */ }
       }
+      if (!rv.isEmpty()) return rv;
     }
 
     // 3) Major+100 fallback (ATSC3 = ATSC1 + 100 on some markets)
@@ -242,12 +264,12 @@ public final class ChannelVariantAttacher
         try
         {
           String n = c.getNumber();
-          if (n != null && majorOf(n).equals(twinMajor)) return c;
+          if (n != null && majorOf(n).equals(twinMajor)) rv.add(c);
         }
         catch (Throwable t) {}
       }
     }
-    return null;
+    return rv;
   }
 
   /** Strip "-DT", "-NG", "-HD" suffixes that HDHR appends but EPG often omits. */
@@ -260,14 +282,52 @@ public final class ChannelVariantAttacher
     return s;
   }
 
+  /**
+   * Reduce a callsign to its bare call letters for cross-source pairing.
+   * Handles every common broadcast suffix style:
+   * <ul>
+   *   <li>Hyphenated: {@code "WGBO-NG"}, {@code "WGBO-DT"}, {@code "WGBO-HD"}, {@code "WGBO-TV"}, {@code "WGBO-LD"}, {@code "WGBO-CD"}</li>
+   *   <li>Bare-suffix: {@code "WGBODT"}, {@code "WBBMTV"}, {@code "WMAQHD"}, {@code "WGNLD"} (typical Schedules Direct format)</li>
+   *   <li>Multi-suffix: {@code "WGBO-DT2"}, {@code "WGBODT2"} (sub-channel decorations)</li>
+   * </ul>
+   * All other characters are stripped to letters/digits only, uppercased.
+   */
+  static String normalizeCallsign(String raw)
+  {
+    if (raw == null) return "";
+    // First pass: keep alphanumerics, uppercased.
+    StringBuilder sb = new StringBuilder(raw.length());
+    for (int i = 0; i < raw.length(); i++)
+    {
+      char c = raw.charAt(i);
+      if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+        sb.append(Character.toUpperCase(c));
+    }
+    String s = sb.toString();
+    // Strip trailing single-digit sub-channel decoration (e.g. WGBODT2).
+    if (s.length() > 3 && Character.isDigit(s.charAt(s.length() - 1)))
+      s = s.substring(0, s.length() - 1);
+    // Strip 2-letter broadcast suffixes (DT, TV, HD, NG, LD, CD, LP, CA, SD).
+    if (s.length() > 4)
+    {
+      String tail = s.substring(s.length() - 2);
+      if ("DT".equals(tail) || "TV".equals(tail) || "HD".equals(tail)
+          || "NG".equals(tail) || "LD".equals(tail) || "CD".equals(tail)
+          || "LP".equals(tail) || "CA".equals(tail) || "SD".equals(tail))
+        s = s.substring(0, s.length() - 2);
+    }
+    return s;
+  }
+
+
   private static String matchMethodHint(Channel chan, HDHomeRunLineup.Entry probe, String major)
   {
     if (probe == null || chan == null) return "?";
-    String wanted = probe.guideName == null ? ""
-        : stripBroadcastSuffix(probe.guideName).toUpperCase();
-    String have = chan.getName() == null ? ""
-        : stripBroadcastSuffix(chan.getName()).toUpperCase();
+    String wanted = normalizeCallsign(probe.guideName);
+    String have = normalizeCallsign(chan.getName());
     if (wanted.length() > 0 && wanted.equals(have)) return "callsign";
+    if (wanted.length() > 0 && have.length() > 0
+        && (have.startsWith(wanted) || wanted.startsWith(have))) return "callsign~prefix";
     try
     {
       String n = chan.getNumber();
