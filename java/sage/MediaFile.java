@@ -5541,8 +5541,9 @@ public class MediaFile extends DBObject implements SegmentedFile
       args.add("-map");
       args.add("0:" + targetStream);
     }
-    args.add("-vsync");
-    args.add("0");
+    // FFmpeg 7.x: -vsync deprecated, replaced by -fps_mode (passthrough == old vsync 0)
+    args.add("-fps_mode");
+    args.add("passthrough");
     args.add(IOUtils.getLibAVFilenameString(imageThumbFile.toString()));
     String res = IOUtils.exec(args.toArray(Pooler.EMPTY_STRING_ARRAY), true, true, true);
     return res;
