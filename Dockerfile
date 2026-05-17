@@ -62,10 +62,10 @@ RUN chmod +x gradlew build/*.sh third_party/mplayer/configure \
 RUN git config --global user.email "build@docker" && git config --global user.name "Docker Build" && git init && git add -A && git commit -m "docker build" --quiet
 
 # ---- 1. Build Sage.jar (Java 21) ----
-RUN ./gradlew sageJar -x updateBuildNumber --no-daemon
+RUN ./gradlew sageJar -x updateBuildNumber -x test --no-daemon
 
 # ---- 2. Build MiniClient.jar ----
-RUN ./gradlew miniclientJar -x updateBuildNumber --no-daemon || true
+RUN ./gradlew miniclientJar -x updateBuildNumber -x test --no-daemon || true
 
 # ---- 3. Build native shared libraries ----
 # buildso.sh exits on first failure (e.g. FirewireCapture), which prevents
