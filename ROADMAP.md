@@ -79,6 +79,29 @@ Phases 0–3 cover real-world need without touching the broadcast stack.
 - **Native AC-4 TOC parser.** Same idea for sample rate / channel
   layout / language present in the AC-4 TOC.
 
+## FFmpeg track
+
+- **Unify on a single SageTV-patched, AC-4-capable FFmpeg binary.**
+  Replace the current 2010 SageTV-patched ffmpeg + missing-from-this-
+  container ffmpeg-ac4 + wrapper-script stack with one binary at
+  `/opt/sagetv/server/ffmpeg` that has all four SageTV custom flags
+  (`-stdinctrl`, `-activefile`, `-dumpmetadata`, `-brokendts`), AC-4
+  decode, NVENC, libx265, libfdk-aac. Full design in
+  [docs/FFMPEG_UNIFICATION_PLAN.md](docs/FFMPEG_UNIFICATION_PLAN.md).
+- **6.x → 7.x CLI audit.** Walk every ffmpeg invocation in
+  `FFMPEGTranscoder`, `MPlayerTranscoder`, `HwEncoder`,
+  `AC4TranscodeJob`, `HttpLiveStreamer`, and STV profiles. Replace
+  removed/renamed options (`-vol`, `-async`, `-vsync`, `-newaudio`,
+  legacy global `-ab/-ar/-ac`, etc.). See the cross-cutting section
+  in the plan doc above.
+- **Plugin-installed FFmpeg libraries audit.** Some plugins in
+  [OpenSageTV/sagetv-plugin-repo](https://github.com/OpenSageTV/sagetv-plugin-repo)
+  ship their own old FFmpeg .so/.jar (Phoenix media utilities, BMT
+  thumbnail extraction, etc.). Inventory which plugins do this, what
+  versions they bundle, and whether they can share the unified server
+  binary or need their own modernization. Not blocking the server-side
+  unification.
+
 ## Playback track
 
 - **Per-airing audio language UI selector.** Server-side language-aware
