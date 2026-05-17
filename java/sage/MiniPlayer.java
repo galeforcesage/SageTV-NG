@@ -1501,7 +1501,44 @@ public class MiniPlayer implements DVDMediaPlayer
             cf = sage.media.format.FormatParser.getFileFormat(file);
           if (usingRemuxer)
             cf = ((RemuxTranscodeEngine)mpegSrc.getTranscoder()).getTargetFormat();
-          else if (serverSideTranscoding && mediaExtender && (prefTranscodeMode == null || !prefTranscodeMode.equals("mpeg2psremux")))
+          else if (serverSideTranscoding && "mpeg2psremux".equals(prefTranscodeMode))
+          {
+            // REMUX path: FFMPEGTranscoder runs `-f dvd -vcodec copy -acodec copy`
+            // (see MediaServer.XCODE_QUALITIES_PROPERTY_ROOT + "mpeg2psremux").
+            // Wire bytes = MPEG2-PS with the SOURCE video+audio codecs preserved.
+            // NG miniclients (ExoPlayer) need the format hint to match the wire
+            // container or the Extractor mis-sniffs. The legacy fallthrough used
+            // cf.getFullPropertyString() which advertised the source container
+            // (MPEG2-TS) — wrong for the remuxed PS bytes. Build a corrected
+            // hint here that keeps source codec metadata but switches container
+            // to MPEG2-PS and drops PID/stream-id fields that don't apply to PS.
+            sage.media.format.ContainerFormat srcCf = cf;
+            cf = null;
+            StringBuilder fb = new StringBuilder();
+            fb.append("f=").append(sage.media.format.MediaFormat.MPEG2_PS).append(";");
+            sage.media.format.VideoFormat srcVf = (srcCf != null) ? srcCf.getVideoFormat() : null;
+            if (srcVf != null && srcVf.getFormatName() != null)
+            {
+              fb.append("[bf=vid;f=").append(srcVf.getFormatName());
+              if (srcVf.getWidth() > 0)  fb.append(";w=").append(srcVf.getWidth());
+              if (srcVf.getHeight() > 0) fb.append(";h=").append(srcVf.getHeight());
+              if (srcVf.getFps() > 0)    fb.append(";fps=").append(srcVf.getFps());
+              if (srcVf.getAspectRatio() > 0) fb.append(";ar=").append(srcVf.getAspectRatio());
+              fb.append(";]");
+            }
+            sage.media.format.AudioFormat srcAf = (srcCf != null) ? srcCf.getAudioFormat() : null;
+            if (srcAf != null && srcAf.getFormatName() != null)
+            {
+              fb.append("[bf=aud;f=").append(srcAf.getFormatName());
+              if (srcAf.getChannels() > 0)      fb.append(";ch=").append(srcAf.getChannels());
+              if (srcAf.getSamplingRate() > 0)  fb.append(";sr=").append(srcAf.getSamplingRate());
+              if (srcAf.getBitsPerSample() > 0) fb.append(";bps=").append(srcAf.getBitsPerSample());
+              fb.append(";]");
+            }
+            formatString = fb.toString();
+            if (Sage.DBG) System.out.println("MiniPlayer: mpeg2psremux push format hint -> " + formatString);
+          }
+          else if (serverSideTranscoding && mediaExtender)
           {
             cf = null; // don't set the format since it'll be a base MPEG2 format
             // But if we're doing placeshifting then we need the format string
@@ -1578,6 +1615,103 @@ public class MiniPlayer implements DVDMediaPlayer
               // NOTE: FIX ME FIX ME!!!!
               formatString = formatString.replaceAll("\\;sr\\=[0-9]*\\;", ";sr=48000;");
             }
+          }
+          else if (formatString.length() == 0 && serverSideTranscoding && prefTranscodeMode != null
+              && prefTranscodeMode.length() > 0)
+          {
+            // The mediaExtender branch above nulled cf because the legacy code
+            // pre-baked hints only for a fixed set of modes (dynamic/dynamicts/
+            // music*/audioonly/mpeg2psremux). User-configurable xcode_qualities
+            // entries (DVD, DVD6Ch, SVCD, custom) fell through with formatString
+            // empty → NG miniclients (ExoPlayer) get `push:` with no hint and
+            // must sniff. Sniffing of MPEG2-PS streams often produces audio-only
+            // (first AC3 track) with no video. Parse the active xcode_qualities
+            // property and synthesize a matching hint.
+            String xcodeArgs = Sage.get(MediaServer.XCODE_QUALITIES_PROPERTY_ROOT + prefTranscodeMode, null);
+            if (xcodeArgs != null && xcodeArgs.length() > 0)
+            {
+              String wireContainer = sage.media.format.MediaFormat.MPEG2_PS;
+              String wireVCodec = sage.media.format.MediaFormat.MPEG2_VIDEO;
+              String wireACodec = sage.media.format.MediaFormat.MP2;
+              boolean videoOnlyDropped = xcodeArgs.contains(" -vn ");
+              java.util.StringTokenizer toker = new java.util.StringTokenizer(xcodeArgs, " ");
+              while (toker.hasMoreTokens())
+              {
+                String tok = toker.nextToken();
+                if ("-f".equals(tok) && toker.hasMoreTokens())
+                {
+                  String f = toker.nextToken();
+                  if ("mpegts".equalsIgnoreCase(f) || "ts".equalsIgnoreCase(f))
+                    wireContainer = sage.media.format.MediaFormat.MPEG2_TS;
+                  else if ("dvd".equalsIgnoreCase(f) || "vob".equalsIgnoreCase(f) || "mpeg".equalsIgnoreCase(f) || "vcd".equalsIgnoreCase(f) || "svcd".equalsIgnoreCase(f))
+                    wireContainer = sage.media.format.MediaFormat.MPEG2_PS;
+                  else if ("mp4".equalsIgnoreCase(f) || "ismv".equalsIgnoreCase(f))
+                    wireContainer = sage.media.format.MediaFormat.QUICKTIME;
+                  else if ("matroska".equalsIgnoreCase(f) || "mkv".equalsIgnoreCase(f) || "webm".equalsIgnoreCase(f))
+                    wireContainer = sage.media.format.MediaFormat.MATROSKA;
+                }
+                else if (("-acodec".equals(tok) || "-c:a".equals(tok)) && toker.hasMoreTokens())
+                {
+                  String a = toker.nextToken();
+                  if ("ac3".equalsIgnoreCase(a)) wireACodec = sage.media.format.MediaFormat.AC3;
+                  else if ("eac3".equalsIgnoreCase(a) || "ac3_fixed".equalsIgnoreCase(a)) wireACodec = sage.media.format.MediaFormat.EAC3;
+                  else if ("aac".equalsIgnoreCase(a) || "libfdk_aac".equalsIgnoreCase(a)) wireACodec = sage.media.format.MediaFormat.AAC;
+                  else if ("mp2".equalsIgnoreCase(a)) wireACodec = sage.media.format.MediaFormat.MP2;
+                  else if ("libmp3lame".equalsIgnoreCase(a) || "mp3".equalsIgnoreCase(a)) wireACodec = sage.media.format.MediaFormat.MP3;
+                  else if ("copy".equalsIgnoreCase(a))
+                  {
+                    sage.media.format.ContainerFormat srcCf2 = currMF.getFileFormat();
+                    sage.media.format.AudioFormat srcAf2 = (srcCf2 != null) ? srcCf2.getAudioFormat() : null;
+                    if (srcAf2 != null && srcAf2.getFormatName() != null) wireACodec = srcAf2.getFormatName();
+                  }
+                }
+                else if (("-vcodec".equals(tok) || "-c:v".equals(tok)) && toker.hasMoreTokens())
+                {
+                  String v = toker.nextToken();
+                  if ("mpeg2video".equalsIgnoreCase(v) || "mpeg2".equalsIgnoreCase(v)) wireVCodec = sage.media.format.MediaFormat.MPEG2_VIDEO;
+                  else if ("mpeg4".equalsIgnoreCase(v) || "libxvid".equalsIgnoreCase(v)) wireVCodec = sage.media.format.MediaFormat.MPEG4_VIDEO;
+                  else if ("libx264".equalsIgnoreCase(v) || "h264".equalsIgnoreCase(v) || "h264_nvenc".equalsIgnoreCase(v) || "h264_qsv".equalsIgnoreCase(v) || "h264_vaapi".equalsIgnoreCase(v)) wireVCodec = sage.media.format.MediaFormat.H264;
+                  else if ("libx265".equalsIgnoreCase(v) || "hevc".equalsIgnoreCase(v) || "hevc_nvenc".equalsIgnoreCase(v) || "hevc_qsv".equalsIgnoreCase(v) || "hevc_vaapi".equalsIgnoreCase(v)) wireVCodec = sage.media.format.MediaFormat.HEVC;
+                  else if ("copy".equalsIgnoreCase(v))
+                  {
+                    sage.media.format.ContainerFormat srcCf2 = currMF.getFileFormat();
+                    sage.media.format.VideoFormat srcVf2 = (srcCf2 != null) ? srcCf2.getVideoFormat() : null;
+                    if (srcVf2 != null && srcVf2.getFormatName() != null) wireVCodec = srcVf2.getFormatName();
+                  }
+                }
+              }
+              StringBuilder fb = new StringBuilder();
+              fb.append("f=").append(wireContainer).append(";");
+              if (!videoOnlyDropped)
+                fb.append("[bf=vid;f=").append(wireVCodec).append(";]");
+              fb.append("[bf=aud;f=").append(wireACodec).append(";]");
+              formatString = fb.toString();
+              if (Sage.DBG) System.out.println("MiniPlayer: fallback push format hint for prefTranscodeMode='"
+                  + prefTranscodeMode + "' (parsed from xcode_qualities) -> " + formatString);
+            }
+          }
+          else if (formatString.length() == 0 && !serverSideTranscoding && !usingRemuxer
+              && mcsr != null && mcsr.getResolvedProfile() != null
+              && majorTypeHint == MediaFile.MEDIATYPE_VIDEO)
+          {
+            // DIRECT_PLAY with no parsed source format (newly-imported file
+            // whose async format parse hasn't completed yet). Without a hint
+            // NG miniclients (ExoPlayer) must sniff; for HLS-of-TS or raw TS
+            // that often fails. Synthesize a minimal profile-derived hint so
+            // the client at least picks the right Extractor. Default to
+            // MPEG2-TS since that's what every SageTV recording is on the wire.
+            String containerHint = sage.media.format.MediaFormat.MPEG2_TS;
+            sage.client.ClientProfile prof = mcsr.getResolvedProfile();
+            java.util.Set<String> profConts = prof.getContainers();
+            if (profConts != null && !profConts.isEmpty()
+                && !profConts.contains(sage.media.format.MediaFormat.MPEG2_TS))
+            {
+              // Pick the first profile-allowed container as the floor.
+              containerHint = profConts.iterator().next();
+            }
+            formatString = "f=" + containerHint + ";";
+            if (Sage.DBG) System.out.println("MiniPlayer: DIRECT_PLAY with null source format — "
+                + "synthesized profile-derived push hint -> " + formatString);
           }
         }
         if (!openURL0("push:" + formatString))
