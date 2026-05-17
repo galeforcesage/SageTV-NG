@@ -61,7 +61,7 @@ import java.util.List;
 public class AC4TranscodeJob implements Runnable
 {
   public static final String FFMPEG_BIN_PROP = "hdhr/ac4_transcode_ffmpeg";
-  public static final String DEFAULT_FFMPEG  = "/usr/local/bin/ffmpeg-ac4";
+  public static final String DEFAULT_FFMPEG  = "/opt/sagetv/server/ffmpeg";
   public static final String ENABLED_PROP    = "hdhr/ac4_transcode_enabled";
 
   // Cached result of the one-time isEnabled() decision (logged once).

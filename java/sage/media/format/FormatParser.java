@@ -825,7 +825,13 @@ public class FormatParser
   private static java.util.regex.Pattern ffmpegStartTimePat = java.util.regex.Pattern.compile("start\\: ([0-9\\.]*)");
   private static java.util.regex.Pattern ffmpegContainerPat = java.util.regex.Pattern.compile("Input \\#0\\, (.*), from");
   private static java.util.regex.Pattern ffmpegContainerBitratePat = java.util.regex.Pattern.compile("Duration\\: .* bitrate\\: ([0-9]*) kb\\/s");
-  private static java.util.regex.Pattern ffmpegStreamPat = java.util.regex.Pattern.compile("Stream \\#0\\.(\\d*).*");
+  // ffmpeg stream-info regex. Old SageTV-patched ffmpeg (~2010) emitted
+  //   "Stream #0.0[0x1e0]: Video: ..."
+  // Modern ffmpeg (>=4.x) emits
+  //   "Stream #0:0[0x1e0]: Video: ..."
+  // We accept both. Group 1 = stream index. The [0xPID] (if present) is
+  // parsed separately by extractStreamPESIDFromFFMPEGStreamInfo().
+  private static java.util.regex.Pattern ffmpegStreamPat = java.util.regex.Pattern.compile("Stream \\#0[\\.:](\\d+).*");
   private static java.util.regex.Pattern ffmpegFrameRatePat = java.util.regex.Pattern.compile("\\, (\\d*\\.?\\d*) fps");
   private static java.util.regex.Pattern ffmpegFrameRatePat2 = java.util.regex.Pattern.compile("\\, (\\d*\\.?\\d*) tbr");
   private static java.util.regex.Pattern ffmpegDRMPat = java.util.regex.Pattern.compile("META\\:ENCRYPTED\\[(.*?)\\]"); // old style: "META:ENCRYPTED[MS-DRM]"

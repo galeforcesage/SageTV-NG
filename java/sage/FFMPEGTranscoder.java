@@ -768,30 +768,18 @@ public class FFMPEGTranscoder implements TranscodeEngine
   }
 
   /**
-   * Select the ffmpeg binary, swapping in the AC-4 capable build for source
-   * media that contains HEVC video or AC-4 audio. The stock SageTV-patched
-   * ffmpeg and most distro builds cannot decode Dolby AC-4 (ATSC A/342 Part 2);
-   * the AC-4 build (default /usr/local/bin/ffmpeg-ac4) is used as a drop-in
-   * substitute for those sources only.
+   * Path to the FFmpeg binary. As of the FFmpeg unification work (see
+   * docs/FFMPEG_UNIFICATION_PLAN.md) there is a single unified binary at
+   * /opt/sagetv/server/ffmpeg with all four SageTV custom flags AND the
+   * AC-4 decoder AND NVENC, so there is no longer any need to swap binaries
+   * based on source codec.
    *
-   * Honors {@code miniplayer/transcode_ffmpeg_ac4} (default
-   * {@code /usr/local/bin/ffmpeg-ac4}). Set to empty to disable the override.
+   * The {@code src} parameter is preserved for API compatibility with
+   * pre-unification callers but is no longer consulted for binary
+   * selection.
    */
   public static String getTranscoderPath(sage.media.format.ContainerFormat src)
   {
-    if (needsAc4Ffmpeg(src))
-    {
-      String ac4 = Sage.get("miniplayer/transcode_ffmpeg_ac4", "/usr/local/bin/ffmpeg-ac4");
-      if (ac4 != null && ac4.length() > 0 && new java.io.File(ac4).isFile())
-      {
-        if (Sage.DBG) System.out.println("FFMPEGTranscoder: using AC-4 capable ffmpeg at " + ac4
-            + " (source has HEVC/AC-4)");
-        return ac4;
-      }
-      if (Sage.DBG) System.out.println("FFMPEGTranscoder: WARNING source has HEVC/AC-4 but "
-          + "miniplayer/transcode_ffmpeg_ac4 (" + ac4 + ") is missing; falling back to default ffmpeg "
-          + "(AC-4 decode will fail).");
-    }
     if (new java.io.File(Sage.getToolPath("SageTVTranscoder")).isFile())
       return Sage.getToolPath("SageTVTranscoder");
     else if (new java.io.File(Sage.getToolPath("ffmpeg")).isFile())
@@ -962,13 +950,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (activeFile)
       xcodeParamsVec.add("-activefile");
 
-    // -stdinctrl is a SageTV-specific patch on the bundled ffmpeg. Upstream ffmpeg
-    // (e.g. our /usr/local/bin/ffmpeg-ac4 build for HEVC/AC-4 sources) does not
-    // recognize it and exits printing usage — producing zero output bytes and
-    // silent black playback on the client. Suppress it for non-Sage builds.
-    if (!needsAc4Ffmpeg(sourceFormat))
-      xcodeParamsVec.add("-stdinctrl");
-    else if (Sage.DBG) System.out.println("FFMPEGTranscoder: skipping -stdinctrl (upstream ffmpeg-ac4 has no SageTV patch)");
+    // -stdinctrl is a SageTV custom flag re-implemented in the unified
+    // FFmpeg build (see docs/FFMPEG_UNIFICATION_PLAN.md). Always pass it;
+    // it lets us send 'inactivefile' / 'videorateadapt' over stdin during
+    // an in-flight transcode for slow-link bandwidth adaptation.
+    xcodeParamsVec.add("-stdinctrl");
 
     // Having this on puts us in too much danger of underflow since it doesn't give us enough control
     //if (Sage.getBoolean("media_server/dont_transcode_faster_than_realtime", true))

@@ -78,7 +78,7 @@ public final class HwEncoder
   private static final String PROP_VAAPI_DEVICE   = "multimedia/hwaccel/vaapi_device";
   private static final String DEFAULT_VAAPI_DEV   = "/dev/dri/renderD128";
   private static final String PROP_PROBE_FFMPEG   = "multimedia/hwaccel/probe_ffmpeg";
-  private static final String DEFAULT_PROBE_FF    = "/usr/local/bin/ffmpeg-ac4";
+  private static final String DEFAULT_PROBE_FF    = "/opt/sagetv/server/ffmpeg";
 
   /** Cache: ffmpeg binary path -> Set of available encoder kinds (excluding NONE). */
   private static final Map<String, Set<Kind>> probeCache = new ConcurrentHashMap<String, Set<Kind>>();
