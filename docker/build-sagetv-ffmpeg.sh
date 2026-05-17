@@ -116,19 +116,19 @@ new  = r'''\1
                 char *eol;
                 int cmd_len;
                 sagetv_cmd_buf[FFMIN(SAGETV_CMD_BUF_SIZE - 1, sagetv_cmd_buf_pos)] = 0;
-                eol = strchr(sagetv_cmd_buf, '\n');
-                if (!eol) eol = strchr(sagetv_cmd_buf, '\r');
+                eol = strchr(sagetv_cmd_buf, '\\n');
+                if (!eol) eol = strchr(sagetv_cmd_buf, '\\r');
                 if (!eol) return -1;
                 if (strstr(sagetv_cmd_buf, "inactivefile") == sagetv_cmd_buf) {
                     if (sagetv_active_file) {
                         sagetv_active_file = 0;
                         av_log(NULL, AV_LOG_INFO,
-                               "SageTV: inactivefile received - exiting follow mode\n");
+                               "SageTV: inactivefile received - exiting follow mode\\n");
                     }
                 } else if (strstr(sagetv_cmd_buf, "videorateadapt") == sagetv_cmd_buf) {
                     int rate_adjust = atoi(sagetv_cmd_buf + 15) * 1000;
                     av_log(NULL, AV_LOG_INFO,
-                           "SageTV: videorateadapt request: %d bps\n", rate_adjust);
+                           "SageTV: videorateadapt request: %d bps\\n", rate_adjust);
                     /* Best-effort runtime bitrate change is non-trivial on
                        modern fftools (per-output OutputStream lookup needed).
                        Logging the request preserves the SageTV protocol; the
