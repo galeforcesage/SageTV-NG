@@ -164,16 +164,48 @@ public class ClientProfileManager
 
   private ClientProfile parseOneProfile(String profileId, String json)
   {
-    String description = extractString(json, "description");
-    boolean managed = extractBoolean(json, "managed", true);
-    List<String> containers = extractStringArray(json, "containers");
-    List<String> videoCodecs = extractStringArray(json, "video_codecs");
-    List<String> audioCodecs = extractStringArray(json, "audio_codecs");
-    boolean allowHevc = extractBoolean(json, "allow_hevc", false);
-    String autoRemux = extractString(json, "auto_remux");
-    int maxW = extractInt(json, "max_video_width", 0);
-    int maxH = extractInt(json, "max_video_height", 0);
-    boolean allowOverrides = extractBoolean(json, "allow_client_overrides", true);
+    // Optional inheritance: "extends": "<parent_profile_id>". The parent
+    // must already be present in the profiles map (i.e. listed earlier in
+    // profiles.json). Child fields override parent fields; fields the
+    // child does NOT specify are inherited.
+    String parentId = extractString(json, "extends");
+    ClientProfile parent = (parentId != null) ? profiles.get(parentId) : null;
+    if (parentId != null && parent == null)
+    {
+      if (sage.Sage.DBG) System.out.println("ClientProfileManager: profile '" + profileId
+          + "' extends unknown parent '" + parentId + "' (list parent before child) — ignoring extends");
+    }
+
+    String description = hasKey(json, "description")
+        ? extractString(json, "description")
+        : (parent != null ? parent.getDescription() : null);
+    boolean managed = hasKey(json, "managed")
+        ? extractBoolean(json, "managed", true)
+        : (parent != null ? parent.isManaged() : true);
+    List<String> containers = hasKey(json, "containers")
+        ? extractStringArray(json, "containers")
+        : (parent != null ? new ArrayList<>(parent.getContainers()) : new ArrayList<String>());
+    List<String> videoCodecs = hasKey(json, "video_codecs")
+        ? extractStringArray(json, "video_codecs")
+        : (parent != null ? new ArrayList<>(parent.getVideoCodecs()) : new ArrayList<String>());
+    List<String> audioCodecs = hasKey(json, "audio_codecs")
+        ? extractStringArray(json, "audio_codecs")
+        : (parent != null ? new ArrayList<>(parent.getAudioCodecs()) : new ArrayList<String>());
+    boolean allowHevc = hasKey(json, "allow_hevc")
+        ? extractBoolean(json, "allow_hevc", false)
+        : (parent != null ? parent.isAllowHevc() : false);
+    String autoRemux = hasKey(json, "auto_remux")
+        ? extractString(json, "auto_remux")
+        : (parent != null ? parent.getAutoRemux() : null);
+    int maxW = hasKey(json, "max_video_width")
+        ? extractInt(json, "max_video_width", 0)
+        : (parent != null ? parent.getMaxVideoWidth() : 0);
+    int maxH = hasKey(json, "max_video_height")
+        ? extractInt(json, "max_video_height", 0)
+        : (parent != null ? parent.getMaxVideoHeight() : 0);
+    boolean allowOverrides = hasKey(json, "allow_client_overrides")
+        ? extractBoolean(json, "allow_client_overrides", true)
+        : (parent != null ? parent.isAllowClientOverrides() : true);
 
     if (containers.isEmpty())
       return null;
@@ -184,24 +216,47 @@ public class ClientProfileManager
     {
       // Prefer the generic key "hwenc_preset" but fall back to the legacy
       // "nvenc_preset" for older profiles.json files. Same for "hw_accel".
+      // Per-field inheritance: any field the child omits falls back to the
+      // parent's live_transcode block (or the documented default).
+      LiveTranscodeProfile pl = (parent != null) ? parent.getLiveTranscode() : null;
       String preset = extractString(ltBlock, "hwenc_preset");
       if (preset == null) preset = extractString(ltBlock, "nvenc_preset");
+      if (preset == null && pl != null) preset = pl.getHwencPreset();
       String hw = extractString(ltBlock, "hw_accel");
-      lt = new LiveTranscodeProfile(
-          extractBoolean(ltBlock, "prefer_atsc3", false),
-          extractString(ltBlock, "video_codec"),
-          extractString(ltBlock, "audio_codec"),
-          extractInt(ltBlock, "max_bitrate_kbps", 8000),
-          extractInt(ltBlock, "video_bitrate_kbps", 7616),
-          extractInt(ltBlock, "audio_bitrate_kbps", 384),
-          preset, hw,
-          extractInt(ltBlock, "scale_width", 0),
-          extractInt(ltBlock, "scale_height", 0));
+      if (hw == null && pl != null) hw = pl.getHwAccel();
+      String vc = hasKey(ltBlock, "video_codec") ? extractString(ltBlock, "video_codec")
+          : (pl != null ? pl.getVideoCodec() : null);
+      String ac = hasKey(ltBlock, "audio_codec") ? extractString(ltBlock, "audio_codec")
+          : (pl != null ? pl.getAudioCodec() : null);
+      boolean atsc3 = hasKey(ltBlock, "prefer_atsc3") ? extractBoolean(ltBlock, "prefer_atsc3", false)
+          : (pl != null ? pl.isPreferAtsc3() : false);
+      int maxKbps = hasKey(ltBlock, "max_bitrate_kbps") ? extractInt(ltBlock, "max_bitrate_kbps", 8000)
+          : (pl != null ? pl.getMaxBitrateKbps() : 8000);
+      int vKbps = hasKey(ltBlock, "video_bitrate_kbps") ? extractInt(ltBlock, "video_bitrate_kbps", 7616)
+          : (pl != null ? pl.getVideoBitrateKbps() : 7616);
+      int aKbps = hasKey(ltBlock, "audio_bitrate_kbps") ? extractInt(ltBlock, "audio_bitrate_kbps", 384)
+          : (pl != null ? pl.getAudioBitrateKbps() : 384);
+      int sW = hasKey(ltBlock, "scale_width") ? extractInt(ltBlock, "scale_width", 0)
+          : (pl != null ? pl.getScaleWidth() : 0);
+      int sH = hasKey(ltBlock, "scale_height") ? extractInt(ltBlock, "scale_height", 0)
+          : (pl != null ? pl.getScaleHeight() : 0);
+      lt = new LiveTranscodeProfile(atsc3, vc, ac, maxKbps, vKbps, aKbps, preset, hw, sW, sH);
+    }
+    else if (parent != null)
+    {
+      // No live_transcode block at all → inherit parent's wholesale
+      lt = parent.getLiveTranscode();
     }
 
     return new ClientProfile(profileId, description, managed,
         containers, videoCodecs, audioCodecs, allowHevc, autoRemux,
         maxW, maxH, allowOverrides, lt);
+  }
+
+  /** Returns true if {@code "key":} appears anywhere in {@code json}. */
+  private boolean hasKey(String json, String key)
+  {
+    return json.indexOf("\"" + key + "\"") >= 0;
   }
 
   /**
@@ -339,16 +394,17 @@ public class ClientProfileManager
         Arrays.asList("AAC", "AC3", "EAC3", "EC-3", "MP3", "MP2", "MPG1L2", "MPG1L3", "DTS", "DCA", "FLAC", "VORBIS", "PCM", "PCM_S16LE", "AC4", "AC-4"),
         true, ClientProfile.AUTO_REMUX_ON_FAILURE, 0, 0, true));
 
-    // Android MiniClient (ExoPlayer / IJKPlayer): mirrors the apk's actual
-    // advertised codec list. AC4/AC-4 included — ExoPlayer >= 2.19.1 (shipped
-    // in MiniClient apk versions AFTER v1.14.0) decodes Dolby AC-4 natively.
-    // Older clients are routed to android_legacy by autoDetectProfile() based
-    // on the FIRMWARE_VERSION string the apk reports.
+    // Android MiniClient (ExoPlayer / IJKPlayer): HEVC video raw OK.
+    // AC-4 deliberately EXCLUDED from the audio set even though ExoPlayer >= 2.19.1
+    // (apk >= 1.15) advertises support — real-world AC-4 decode is fragile across
+    // Android decoders (Shield, Onn, Galaxy Tab v1.14.0 all observed silent or
+    // socket-drop). Server transcodes AC-4 -> EAC3 via the audio-only path; cheap
+    // single-core encode, big reliability win.
     profiles.put("android_modern", new ClientProfile(
         "android_modern", "Android MiniClient", true,
         Arrays.asList("MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS", "MPEG", "MPEG1-PS", "QUICKTIME", "FLASHVIDEO", "OGG", "MP3", "AAC", "WAV"),
         Arrays.asList("H.263", "MPEG4-VIDEO", "MSMPEG4-VIDEO", "H.264", "VC1", "WMV7", "WMV8", "WMV9", "HEVC", "VP8", "VP9"),
-        Arrays.asList("MPEG1", "MP2", "MPG1L2", "MP3", "MPG1L3", "VORBIS", "AAC", "AAC-HE", "FLAC", "ALAC", "PCM", "PCM_S16LE", "DTS", "DCA", "DTS-HD", "DTS-MA", "AC3", "AC4", "AC-4", "EAC3", "EC-3", "DOLBYTRUEHD", "OPUS"),
+        Arrays.asList("MPEG1", "MP2", "MPG1L2", "MP3", "MPG1L3", "VORBIS", "AAC", "AAC-HE", "FLAC", "ALAC", "PCM", "PCM_S16LE", "DTS", "DCA", "DTS-HD", "DTS-MA", "AC3", "EAC3", "EC-3", "DOLBYTRUEHD", "OPUS"),
         true, ClientProfile.AUTO_REMUX_ON_FAILURE, 0, 0, true));
 
     // Legacy Android MiniClient (v1.14.0 and earlier): HEVC video OK, but no AC-4 audio.
