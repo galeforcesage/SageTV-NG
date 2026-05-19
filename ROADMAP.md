@@ -224,6 +224,27 @@ Per-item compatibility plan is called out inline below.
   plugin that calls `sage.Sage.println(...)` keeps working.
 
 ### Modern dependencies
+- **Investigate moving `third_party/` flat jars to Maven Central.**
+  Today Javolution, JCIFS, GSON, Bouncy Castle, JmDNS, Apache Commons
+  bits, etc. are vendored as pre-built jars under `third_party/` and
+  merged into the fat `Sage.jar` at build time; upgrades and CVE
+  tracking are manual. Investigation scope: per-jar audit (which have
+  Maven coordinates at the pinned version; which carry local patches
+  that would have to be reapplied or upstreamed; which are paired
+  with native bits or JCE policy files); proof-of-concept Gradle
+  `implementation` declarations for the safe ones (start with GSON,
+  JmDNS, Commons); confirm Sage.jar fat-jar output stays byte-stable
+  enough that OpenSageTV plugins reflecting on classpath contents
+  don't break. Wins: CVE scanning via Gradle dependency-check,
+  reproducible hashed artifacts, smaller repo, one-line version
+  bumps, surfaced transitive-dep conflicts. Risks: classpath order
+  shifts (mitigate by keeping fat-jar deploy artifact), version drift
+  vs plugins compiled against exact vendored quirks (mitigate by
+  pinning to current versions first, upgrading separately), offline
+  build story (mitigate with a populated `gradle/offline-cache/`).
+  *Plugin compat:* keep emitting the same fat `Sage.jar` so plugin
+  classpath assumptions hold; thin-jar + `libs/` layout is a dev-only
+  variant.
 - **SBBI UPnP → JUPnP.** SBBI is 2005-era and has known IPv6 /
   multi-NIC bugs. JUPnP is maintained, OpenHAB-backed. Fixes DLNA on
   multi-homed servers (relevant to dual-subnet host setups).
@@ -257,6 +278,28 @@ Per-item compatibility plan is called out inline below.
   Chromecast / AirPlay without an app; ABR adapts to network.
   *Plugin compat:* new endpoint paths (`/hls/...`, `/dash/...`);
   `HTTPLSServer` legacy URLs remain.
+
+### Capture devices
+- **HDHomeRun: pure-Java HTTP capture path (optional).** Today
+  HDHomeRun tuning + capture goes through `libHDHomeRunCapture.so`
+  (JNI → bundled `libhdhomerun` → RTP/UDP stream receive). The ATSC3
+  path already proves an HTTP-pull alternative works end-to-end
+  (`HttpPullCaptureJob` against `/auto/v<vchannel>` on port 5004),
+  and the device's lineup is fetched as JSON over HTTP today. A
+  pure-Java HTTP capture mode would let the same flow handle ATSC1
+  too, retiring `libHDHomeRunCapture.so` / `HDHRDevice.cpp` and the
+  `third_party/SiliconDust/libhdhomerun/` C tree. Wins: one fewer
+  native build target (no more g++-13 / make wrangling inside the
+  container — see `scripts/build-hdhr-lib.sh`), no more RTP packet-
+  size firmware fragility (the FLEX 4K firmware 20260326 RTP issue
+  fixed in `bce87984` would not have existed), trivial cross-platform
+  story for any future non-Linux server, and HTTP semantics that play
+  nicely with reverse proxies / VPNs. Opt-in via
+  `hdhr/capture_transport=jni|http` (default `jni`) so the JNI path
+  stays the verified default until the HTTP path has parity on tuner
+  locking, signal-strength reporting, and Channels DVR style fallback.
+  *Plugin compat:* `CaptureDevice` API unchanged; only the internal
+  byte-source swaps.
 
 ### Integration
 - **REST/gRPC API layer alongside socket protocol 7818.** Additive
@@ -377,6 +420,30 @@ useful):
 
 ## Done
 
+- **Client capability spec + per-client settings docs** — `0adcd3bc`.
+  New [docs/NGClientCapabilities.md](docs/NGClientCapabilities.md)
+  defines the SageTV-NG client capability handshake; new
+  [docs/ClientSettings.md](docs/ClientSettings.md) documents the
+  per-client transcode profile property surface. ROADMAP gains the
+  "Offline transcode preset modernization (Ministry)" subsection in
+  the FFmpeg track.
+- **HEVC+AC-4 push playback fix (Android miniclient)** — `42cba626`.
+  `MiniPlayer` now skips the legacy `DVDStream(0, 0xbd80)` private-PES
+  primer on non-PS wire containers (Matroska / fMP4), which was the
+  source of the "spinning" hang on the Galaxy Tab S9 FE. Push hint
+  synthesis from `prefTranscodeMode` strings; `ClientProfileManager`
+  drops AC4/AC-4 entries from `android_modern` audio set so the server
+  never offers AC-4 to push clients; `FFMPEGTranscoder` adds an AC-4
+  source-audio override path and migrates `-ab` → `-b:a`.
+- **FFmpeg CLI modernization in standalone subprocess callers** —
+  `1515b199`. `FormatParser.getFFMPEGFormatInfo` switched from
+  libav-numeric `-v 2` (= panic-level, suppressed banner) to `-v info`,
+  restoring Input/Duration/Stream output that the parser needs.
+  `Ministry` iPhone / AppleTV presets scrubbed: `-async 50` →
+  `-af aresample=async=50`, removed `-directpred 3` (FFmpeg-7-incompat).
+  `CaptionExtractionJob` default `caption_extraction/ffmpeg_path` now
+  resolves via `FFMPEGTranscoder.getTranscoderPath()` (bundled binary)
+  instead of relying on `PATH`.
 - **ATSC3 ↔ ATSC1 mirror manager (dry-run by default)** — `b6182006`.
   New `sage.epg.atsc3.Atsc3MirrorManager` pairs ATSC3 stub channels
   (1xx.y) with their ATSC1 sibling (xx.y) via
