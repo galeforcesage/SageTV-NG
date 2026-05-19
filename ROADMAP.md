@@ -88,12 +88,15 @@ Phases 0–3 cover real-world need without touching the broadcast stack.
   (`-stdinctrl`, `-activefile`, `-dumpmetadata`, `-brokendts`), AC-4
   decode, NVENC, libx265, libfdk-aac. Full design in
   [docs/FFMPEG_UNIFICATION_PLAN.md](docs/FFMPEG_UNIFICATION_PLAN.md).
-- **6.x → 7.x CLI audit.** Walk every ffmpeg invocation in
-  `FFMPEGTranscoder`, `MPlayerTranscoder`, `HwEncoder`,
-  `AC4TranscodeJob`, `HttpLiveStreamer`, and STV profiles. Replace
-  removed/renamed options (`-vol`, `-async`, `-vsync`, `-newaudio`,
-  legacy global `-ab/-ar/-ac`, etc.). See the cross-cutting section
-  in the plan doc above.
+- ~~**6.x → 7.x CLI audit.**~~ ✅ done — see `Done` section. Full
+  inventory of every direct ffmpeg invocation in `FFMPEGTranscoder`,
+  `HwEncoder`, `AC4TranscodeJob`, `HTTPLSServer`, `MediaFile`,
+  `Ministry`, `FormatParser`, `CaptionExtractionJob`. Final
+  remaining legacy-x264 option soup inside the `MPEG4*-H.264 MKV`
+  preset strings (`-coder`, `-flags +loop`, `-partitions`,
+  `-me_method`, `-subq`, `-flags2`, `-wpredp`, etc.) is intentionally
+  left for the larger *Offline transcode preset modernization
+  (Ministry)* rewrite below.
 - **Plugin-installed FFmpeg libraries audit.** Some plugins in
   [OpenSageTV/sagetv-plugin-repo](https://github.com/OpenSageTV/sagetv-plugin-repo)
   ship their own old FFmpeg .so/.jar (Phoenix media utilities, BMT
@@ -420,6 +423,35 @@ useful):
 
 ## Done
 
+- **FFmpeg 6.x → 7.x CLI audit completed** — `4fa26838` (final
+  cleanup) on top of `1515b199`, `3e13d648`, `d0451217`. Full sweep
+  of every direct ffmpeg invocation in the Java tree:
+  - `FFMPEGTranscoder`: `-ab` → `-b:a` migration in mode-string
+    converter (`1515b199`); auto-deinterlace guards recognise both
+    legacy `-deinterlace` and modern `yadif` filter (`3e13d648`);
+    `-deinterlace` emission replaced with `-vf yadif` (`d0451217`).
+  - `MediaFile.extractThumbnail`: `-vsync 0` → `-fps_mode passthrough`
+    (`3e13d648`); `-deinterlace` → `-vf yadif` (`d0451217`).
+  - `FormatParser.getFFMPEGFormatInfo`: libav-numeric `-v 2` → `-v
+    info` so Input/Duration/Stream banner reaches the parser
+    (`1515b199`).
+  - `CaptionExtractionJob`: default `caption_extraction/ffmpeg_path`
+    resolves via bundled `FFMPEGTranscoder.getTranscoderPath()` rather
+    than relying on `PATH` (`1515b199`).
+  - `Ministry` offline presets: iPhone/AppleTV `-async 50` →
+    `-af aresample=async=50` and `-directpred 3` dropped (`1515b199`);
+    HDTV/NTSC/PAL `MPEG4*-H.264 MKV` presets `-directpred 1` dropped
+    (`4fa26838`).
+  - `HwEncoder`, `AC4TranscodeJob`: already ffmpeg-7-clean (modern
+    `-c:v`/`-c:a`/`-b:v`/`-b:a`/`-vf`/`-map`/`-preset`/
+    `-compression_level`/`-vaapi_device`).
+  - `HTTPLSServer`: orchestration only, delegates flag emission to
+    `FFMPEGTranscoder`.
+  - The remaining legacy x264 option soup inside the six
+    `MPEG4*-H.264 MKV` mode strings (`-coder`, `-flags +loop`,
+    `-partitions`, `-me_method`, `-subq`, `-flags2`, `-wpredp`, etc.)
+    is intentionally left for the **Offline transcode preset
+    modernization (Ministry)** rewrite tracked separately above.
 - **Client capability spec + per-client settings docs** — `0adcd3bc`.
   New [docs/NGClientCapabilities.md](docs/NGClientCapabilities.md)
   defines the SageTV-NG client capability handshake; new
