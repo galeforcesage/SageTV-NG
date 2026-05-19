@@ -1022,7 +1022,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
       targetHeight = size[1];
       currAudioBitrateKbps = 32;
       currVideoBitrateKbps = (int)Math.max(64000, (estimatedBandwidth - 32000))/1000;
-      xcodeParamsVec.add("-b");
+      // FFmpeg 7.x: bare -b is ambiguous; must use -b:v
+      xcodeParamsVec.add("-b:v");
       xcodeParamsVec.add(currVideoBitrateKbps*1000 + "");
       xcodeParamsVec.add("-s");
       xcodeParamsVec.add(targetWidth + "x" + targetHeight);
@@ -1033,7 +1034,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add("libfdk_aac");
       xcodeParamsVec.add("-profile:a");
       xcodeParamsVec.add("aac_he_v2"); // HE-AAC v2 is optimal at 32kbps for HTTPLS streaming
-      xcodeParamsVec.add("-ab");
+      // FFmpeg 7.x: -ab is deprecated; use -b:a
+      xcodeParamsVec.add("-b:a");
       xcodeParamsVec.add(Integer.toString(currAudioBitrateKbps * 1000)); // FFMPEG takes audio in bits/sec now
       xcodeParamsVec.add("-ac");
       xcodeParamsVec.add("2");
@@ -1203,11 +1205,12 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
       xcodeParamsVec.add("-r");
       xcodeParamsVec.add(Integer.toString(currFps));
-      xcodeParamsVec.add("-b");
+      // FFmpeg 7.x: -b is ambiguous, must use -b:v ; -ab is replaced by -b:a
+      xcodeParamsVec.add("-b:v");
       xcodeParamsVec.add(Integer.toString(currVideoBitrateKbps * 1000)); // FFMPEG takes video in bits/sec now
       xcodeParamsVec.add("-ar");
       xcodeParamsVec.add(Integer.toString(currAudioSampling));
-      xcodeParamsVec.add("-ab");
+      xcodeParamsVec.add("-b:a");
       xcodeParamsVec.add(Integer.toString(currAudioBitrateKbps * 1000)); // FFMPEG takes audio in bits/sec now
       xcodeParamsVec.add("-packetsize");
       xcodeParamsVec.add(Integer.toString(currPacketSize));
@@ -1233,8 +1236,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
       while (toker.hasMoreTokens())
       {
         String currToke = toker.nextToken();
+        // FFmpeg 7.x: rewrite legacy -b/-ab to unambiguous -b:v/-b:a as we copy through
+        if (currToke.equals("-b")) { currToke = "-b:v"; }
+        else if (currToke.equals("-ab")) { currToke = "-b:a"; }
         xcodeParamsVec.add(currToke);
-        if (currToke.equals("-b") && toker.hasMoreTokens())
+        if ((currToke.equals("-b:v")) && toker.hasMoreTokens())
         {
           currToke = toker.nextToken();
           try
@@ -1250,7 +1256,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
             xcodeParamsVec.add(currToke);
           }
         }
-        else if (currToke.equals("-ab") && toker.hasMoreTokens())
+        else if (currToke.equals("-b:a") && toker.hasMoreTokens())
         {
           currToke = toker.nextToken();
           try
@@ -1498,7 +1504,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // NARFLEX: 4/2/09 - using 'vsync 1' fixes a new bug where we have an error if we try to start transcoding in the middle
       // of an MKV file; so we're adding that to this case
       // NARFLEX: 10/29/10 - For frame decimation, we need to do -vsync 1 or we won't be able to drop frames for the h264 encoder properly
-      if (httplsMode || (transcodeStartSeekTime != 0 && sourceFormat != null && (sage.media.format.MediaFormat.AVI.equals(sourceFormat.getFormatName()) ||
+      // FFmpeg 7.x: -fps_mode passthrough is incompatible with an explicit -r, so when a frame
+      // rate was specified (always true for the mpeg4 placeshifter path) we must use cfr.
+      boolean hasExplicitFps = xcodeParamsVec.contains("-r");
+      if (hasExplicitFps || httplsMode || (transcodeStartSeekTime != 0 && sourceFormat != null && (sage.media.format.MediaFormat.AVI.equals(sourceFormat.getFormatName()) ||
           sage.media.format.MediaFormat.MATROSKA.equals(sourceFormat.getFormatName()))))
         xcodeParamsVec.add("cfr");
       else

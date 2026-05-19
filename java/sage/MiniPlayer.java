@@ -1110,6 +1110,22 @@ public class MiniPlayer implements DVDMediaPlayer
                     ((mcsr != null && mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS)) ? "dynamic" : "dynamicts");
                   else
                     prefTranscodeMode = fixedPushFormat;
+            // Even when a FIXED_PUSH_MEDIA_FORMAT is locked in by the
+            // client (legacy clients configured per docs/ClientSettings.md),
+            // we still want the bitrate adjuster to clamp the transcode
+            // DOWN when the measured link can't carry the profile's target
+            // bitrate. The UP branch in the adjuster gates on
+            // currentVideoBitrate < 1500 kbps, so a fixed profile above
+            // that floor cannot be ratcheted upward — we only ever clamp
+            // downward toward the link's capacity.
+            //
+            // Toggle: transcoder/adapt_fixed_to_bw (default true).
+            if (!dynamicRateAdjust && Sage.getBoolean("transcoder/adapt_fixed_to_bw", true))
+            {
+              dynamicRateAdjust = true;
+              if (Sage.DBG) System.out.println("MiniPlayer: enabling BW-adaptive bitrate clamp for FIXED_PUSH_MEDIA_FORMAT="
+                  + fixedPushFormat + " (transcoder/adapt_fixed_to_bw=true)");
+            }
           }
         }
         else
@@ -1253,8 +1269,7 @@ public class MiniPlayer implements DVDMediaPlayer
 
         if (!transcoded
             && pushMode && mcsr != null
-            && majorTypeHint == MediaFile.MEDIATYPE_VIDEO
-            && (fixedPushFormat == null || fixedPushFormat.length() == 0))
+            && majorTypeHint == MediaFile.MEDIATYPE_VIDEO)
         {
           if (profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.REMUX)
           {
@@ -1270,15 +1285,90 @@ public class MiniPlayer implements DVDMediaPlayer
           }
           else if (profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.TRANSCODE)
           {
-            // Last-resort full transcode. Pick MPEG2-PS dynamic if the client
-            // supports PS push, otherwise MPEG2-TS dynamic.
+            // Last-resort full transcode. When the legacy client supplied a
+            // FIXED_PUSH_MEDIA_FORMAT (per docs/ClientSettings.md), honor it
+            // as the transcode target — it already names a valid FFmpeg-side
+            // output spec the client knows how to decode. Otherwise pick
+            // MPEG2-PS dynamic when the client supports PS push, else
+            // MPEG2-TS dynamic. NOTE: we no longer gate this override on
+            // fixedPushFormat being empty — TRANSCODE means "client cannot
+            // decode this source", and shipping it raw just kills MCSR.
+            //
+            // Preferred path: when PlaybackDecisionEngine says the only thing
+            // wrong is the audio (targetVideoCodec equals source video codec,
+            // i.e. "remux video, transcode audio") build a custom mode string
+            // with videocodec=COPY + the target audio codec. FFMPEGTranscoder
+            // parses this format string and emits `-vcodec copy -acodec <x>`.
+            // This is the right thing for the WGN-NG HEVC+AC-4 case on a LAN
+            // client that already decodes HEVC — full re-encode (mpeg4 at
+            // 1080p59.94) is far too slow to fill the push pipe inside the
+            // client's start-up window and the socket times out.
+            //
+            // Fall-backs:
+            //   (a) target video codec != source -> respect client's
+            //       fixedPushFormat (legacy templates) provided source isn't
+            //       HEVC (the SOURCE-resolved template breaks on HEVC dims).
+            //   (b) otherwise pick dynamic/dynamicts (full re-encode).
+            sage.media.format.ContainerFormat _cfOv = (currMF != null) ? currMF.getFileFormat() : null;
+            sage.media.format.VideoFormat _vfOv = (_cfOv != null) ? _cfOv.getVideoFormat() : null;
+            String _srcVCodec = (_vfOv != null) ? _vfOv.getFormatName() : null;
+            boolean hevcSrcOv = (_srcVCodec != null
+                && (sage.media.format.MediaFormat.HEVC.equalsIgnoreCase(_srcVCodec)
+                    || "H.265".equalsIgnoreCase(_srcVCodec)));
+            boolean videoCopyOk = (_srcVCodec != null
+                && profileDecision.targetVideoCodec != null
+                && (_srcVCodec.equalsIgnoreCase(profileDecision.targetVideoCodec)
+                    || "COPY".equalsIgnoreCase(profileDecision.targetVideoCodec)
+                    || (hevcSrcOv && "HEVC".equalsIgnoreCase(profileDecision.targetVideoCodec))));
+            String pathTaken;
             transcoded = true;
             useOriginalAudioTrack = false;
-            prefTranscodeMode = mcsr.isSupportedPushContainerFormat(
-                sage.media.format.MediaFormat.MPEG2_PS) ? "dynamic" : "dynamicts";
-            dynamicRateAdjust = true;
-            if (Sage.DBG) System.out.println("MiniPlayer: profile-authoritative override forces TRANSCODE (legacy missed it) mode="
-                + prefTranscodeMode + " reason=" + profileDecision.reason);
+            if (videoCopyOk)
+            {
+              // ffmpeg-side container name: prefer MKV (matroska) — supports
+              // HEVC video + EAC3 audio + arbitrary stream maps, and the
+              // android client treats it as a generic push container.
+              String _tgtAudio = (profileDecision.targetAudioCodec != null)
+                  ? profileDecision.targetAudioCodec.toLowerCase() : "eac3";
+              // Map Sage audio codec names to ffmpeg codec names.
+              if ("eac3".equals(_tgtAudio) || "ec-3".equals(_tgtAudio) || "ec3".equals(_tgtAudio))
+                _tgtAudio = "eac3";
+              else if ("ac3".equals(_tgtAudio) || "a_ac3".equals(_tgtAudio))
+                _tgtAudio = "ac3";
+              else if (_tgtAudio.startsWith("aac"))
+                _tgtAudio = "aac";
+              else if ("mp2".equals(_tgtAudio) || "mpg1l2".equals(_tgtAudio))
+                _tgtAudio = "mp2";
+              else if ("mp3".equals(_tgtAudio) || "mpg1l3".equals(_tgtAudio))
+                _tgtAudio = "mp3";
+              // 640 kbps fits 5.1 EAC3 comfortably; FFMPEGTranscoder divides by 1000.
+              int _abps = (profileDecision.targetAudioCodec != null
+                  && profileDecision.targetAudioCodec.toLowerCase().startsWith("aac")) ? 192000 : 640000;
+              prefTranscodeMode = "container=matroska;videocodec=COPY;audiocodec=" + _tgtAudio
+                  + ";audiobitrate=" + _abps + ";audiochannels=2";
+              // Video is passthrough → bitrate clamping does nothing useful and
+              // dynamicRateAdjust on a copy track confuses the ladder logic.
+              dynamicRateAdjust = false;
+              pathTaken = "video-copy+audio-transcode";
+            }
+            else if (!hevcSrcOv && fixedPushFormat != null && fixedPushFormat.length() > 0)
+            {
+              prefTranscodeMode = fixedPushFormat;
+              dynamicRateAdjust = Sage.getBoolean("transcoder/adapt_fixed_to_bw", true);
+              pathTaken = "fixedPushFormat";
+            }
+            else
+            {
+              prefTranscodeMode = mcsr.isSupportedPushContainerFormat(
+                  sage.media.format.MediaFormat.MPEG2_PS) ? "dynamic" : "dynamicts";
+              dynamicRateAdjust = true;
+              pathTaken = "dynamic-fallback";
+            }
+            if (Sage.DBG) System.out.println("MiniPlayer: profile-authoritative override forces TRANSCODE (legacy missed it) path="
+                + pathTaken + " mode=" + prefTranscodeMode + " srcVCodec=" + _srcVCodec
+                + " hevcSrc=" + hevcSrcOv + " videoCopyOk=" + videoCopyOk
+                + " targetV=" + profileDecision.targetVideoCodec + " targetA=" + profileDecision.targetAudioCodec
+                + " dynamicRateAdjust=" + dynamicRateAdjust + " reason=" + profileDecision.reason);
           }
         }
       }
@@ -1628,7 +1718,97 @@ public class MiniPlayer implements DVDMediaPlayer
             // (first AC3 track) with no video. Parse the active xcode_qualities
             // property and synthesize a matching hint.
             String xcodeArgs = Sage.get(MediaServer.XCODE_QUALITIES_PROPERTY_ROOT + prefTranscodeMode, null);
-            if (xcodeArgs != null && xcodeArgs.length() > 0)
+            // When prefTranscodeMode is itself a property-string spec
+            // (e.g. "container=matroska;videocodec=COPY;audiocodec=eac3;...")
+            // — as produced by the profile-authoritative override for
+            // HEVC video-copy + audio-transcode — there is no xcode_qualities
+            // entry. Parse the tokens FFMPEGTranscoder also parses and
+            // synthesize the wire format hint directly. Without this the
+            // openURL0(push:) goes out with an EMPTY descriptor and the
+            // client sits ~30s waiting for a format declaration that never
+            // arrives, then drops the socket.
+            if ((xcodeArgs == null || xcodeArgs.length() == 0)
+                && prefTranscodeMode != null && prefTranscodeMode.indexOf('=') >= 0)
+            {
+              String _modeContainer = null;
+              String _modeVCodec = null;
+              String _modeACodec = null;
+              java.util.StringTokenizer mt = new java.util.StringTokenizer(prefTranscodeMode, ";");
+              while (mt.hasMoreTokens())
+              {
+                String t = mt.nextToken();
+                int eq = t.indexOf('=');
+                if (eq < 0) continue;
+                String k = t.substring(0, eq).trim();
+                String v = t.substring(eq + 1).trim();
+                if ("container".equalsIgnoreCase(k)) _modeContainer = v;
+                else if ("videocodec".equalsIgnoreCase(k)) _modeVCodec = v;
+                else if ("audiocodec".equalsIgnoreCase(k)) _modeACodec = v;
+              }
+              String wireContainer = sage.media.format.MediaFormat.MPEG2_PS;
+              if (_modeContainer != null)
+              {
+                String mc = _modeContainer.toLowerCase();
+                if ("matroska".equals(mc) || "mkv".equals(mc) || "webm".equals(mc))
+                  wireContainer = sage.media.format.MediaFormat.MATROSKA;
+                else if ("mp4".equals(mc) || "ismv".equals(mc))
+                  wireContainer = sage.media.format.MediaFormat.QUICKTIME;
+                else if ("mpegts".equals(mc) || "ts".equals(mc))
+                  wireContainer = sage.media.format.MediaFormat.MPEG2_TS;
+                else if ("dvd".equals(mc) || "vob".equals(mc) || "mpeg".equals(mc))
+                  wireContainer = sage.media.format.MediaFormat.MPEG2_PS;
+              }
+              String wireVCodec = sage.media.format.MediaFormat.MPEG2_VIDEO;
+              if ("COPY".equalsIgnoreCase(_modeVCodec))
+              {
+                sage.media.format.ContainerFormat _sc = currMF.getFileFormat();
+                sage.media.format.VideoFormat _sv = (_sc != null) ? _sc.getVideoFormat() : null;
+                if (_sv != null && _sv.getFormatName() != null)
+                  wireVCodec = _sv.getFormatName();
+              }
+              else if (_modeVCodec != null)
+              {
+                String vc = _modeVCodec.toLowerCase();
+                if (vc.startsWith("libx265") || "hevc".equals(vc) || "h265".equals(vc))
+                  wireVCodec = sage.media.format.MediaFormat.HEVC;
+                else if (vc.startsWith("libx264") || "h264".equals(vc) || vc.startsWith("h264_"))
+                  wireVCodec = sage.media.format.MediaFormat.H264;
+                else if ("mpeg4".equals(vc) || "libxvid".equals(vc))
+                  wireVCodec = sage.media.format.MediaFormat.MPEG4_VIDEO;
+                else if ("mpeg2video".equals(vc) || "mpeg2".equals(vc))
+                  wireVCodec = sage.media.format.MediaFormat.MPEG2_VIDEO;
+              }
+              String wireACodec = sage.media.format.MediaFormat.MP2;
+              if ("COPY".equalsIgnoreCase(_modeACodec))
+              {
+                sage.media.format.ContainerFormat _sc = currMF.getFileFormat();
+                sage.media.format.AudioFormat _sa = (_sc != null) ? _sc.getAudioFormat() : null;
+                if (_sa != null && _sa.getFormatName() != null)
+                  wireACodec = _sa.getFormatName();
+              }
+              else if (_modeACodec != null)
+              {
+                String ac = _modeACodec.toLowerCase();
+                if ("eac3".equals(ac) || "ec-3".equals(ac) || "ec3".equals(ac))
+                  wireACodec = sage.media.format.MediaFormat.EAC3;
+                else if ("ac3".equals(ac))
+                  wireACodec = sage.media.format.MediaFormat.AC3;
+                else if (ac.startsWith("aac") || "libfdk_aac".equals(ac))
+                  wireACodec = sage.media.format.MediaFormat.AAC;
+                else if ("mp2".equals(ac))
+                  wireACodec = sage.media.format.MediaFormat.MP2;
+                else if ("mp3".equals(ac) || "libmp3lame".equals(ac))
+                  wireACodec = sage.media.format.MediaFormat.MP3;
+              }
+              StringBuilder fb = new StringBuilder();
+              fb.append("f=").append(wireContainer).append(";");
+              fb.append("[bf=vid;f=").append(wireVCodec).append(";]");
+              fb.append("[bf=aud;f=").append(wireACodec).append(";]");
+              formatString = fb.toString();
+              if (Sage.DBG) System.out.println("MiniPlayer: property-string transcode mode — synthesized push hint -> "
+                  + formatString + " from mode=" + prefTranscodeMode);
+            }
+            else if (xcodeArgs != null && xcodeArgs.length() > 0)
             {
               String wireContainer = sage.media.format.MediaFormat.MPEG2_PS;
               String wireVCodec = sage.media.format.MediaFormat.MPEG2_VIDEO;
@@ -1848,9 +2028,40 @@ public class MiniPlayer implements DVDMediaPlayer
           }
           if (pushMode)
           {
-            if (Sage.DBG) System.out.println("Setting audio stream for playback to be ID=0x" + Integer.toString(audioStreamType, 16));
-            DVDStream(0, audioStreamType);
-            matchBDSubpictureToAudio();
+            // DVDStream(0, audioStreamType) sends MEDIACMD_DVD_STREAM with an
+            // MPEG-2 PS substream ID (0xbd80 for AC-3, 0xc000 for MPEG audio).
+            // This is only meaningful when the wire container is MPEG2-PS — for
+            // Matroska / MP4 / MPEG2-TS outputs the legacy Android miniclient
+            // never replies, blocking the load() thread on clientInStream.readInt()
+            // for ~30s until the push socket idle-times-out. Skip the call when
+            // we know the wire container is not PS. Detected from the
+            // property-string transcode mode produced by the profile-authoritative
+            // override (e.g. "container=matroska;videocodec=COPY;...").
+            boolean _skipDVDStreamAudio = false;
+            if (prefTranscodeMode != null && prefTranscodeMode.indexOf("container=") >= 0)
+            {
+              String _pmLow = prefTranscodeMode.toLowerCase();
+              if (_pmLow.contains("container=matroska") || _pmLow.contains("container=mkv")
+                  || _pmLow.contains("container=webm") || _pmLow.contains("container=mp4")
+                  || _pmLow.contains("container=ismv") || _pmLow.contains("container=mpegts")
+                  || _pmLow.contains("container=ts") || _pmLow.contains("container=mpeg2-ts"))
+              {
+                _skipDVDStreamAudio = true;
+              }
+            }
+            if (_skipDVDStreamAudio)
+            {
+              if (Sage.DBG) System.out.println("MiniPlayer: skipping DVDStream(0,0x"
+                  + Integer.toString(audioStreamType, 16)
+                  + ") — wire container is non-PS (mode=" + prefTranscodeMode
+                  + "); legacy command would hang the client 30s on Matroska/MP4/TS push");
+            }
+            else
+            {
+              if (Sage.DBG) System.out.println("Setting audio stream for playback to be ID=0x" + Integer.toString(audioStreamType, 16));
+              DVDStream(0, audioStreamType);
+              matchBDSubpictureToAudio();
+            }
           }
         }
         if (isMpeg2PS)
