@@ -37,7 +37,9 @@ import java.util.concurrent.Executors;
  *   caption_extraction/enabled               - master switch (default true)
  *   caption_extraction/run_on_recording_stop - auto-extract at recording end (default true)
  *   caption_extraction/max_concurrent_jobs   - thread pool size (default 1)
- *   caption_extraction/ffmpeg_path           - ffmpeg binary (default "ffmpeg")
+ *   caption_extraction/ffmpeg_path           - ffmpeg binary (default: bundled
+ *                                              FFMPEGTranscoder.getTranscoderPath(),
+ *                                              i.e. /opt/sagetv/server/ffmpeg)
  *   caption_extraction/post_recording_delay_ms - pause after stop before run (default 5000)
  *   caption_extraction/extract_seconds       - cap extraction at N seconds (0 = whole file)
  */
