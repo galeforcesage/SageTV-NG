@@ -801,18 +801,41 @@ public class FormatParser
 
   public static String getFFMPEGFormatInfo(String f)
   {
-    // Use FFMPEG to try to get the duration of the file
+    // Run ffmpeg with no output file so it prints the standard
+    //   Input #0, <container>, from '<file>':
+    //     Duration: HH:MM:SS.ss, start: ..., bitrate: ...
+    //     Stream #0:N ...
+    // banner that the regexes below parse.
+    //
+    // Args:
+    //   -hide_banner        suppress version/config block (keeps output focused)
+    //   -dumpmetadata       SageTV-patched flag: emit per-stream METADATA: lines
+    //                       (the SageTV ffmpeg fork honors it; vanilla ignores)
+    //   -v info             standard libav verbosity. (The old code passed
+    //                       "-v 2" which in libav numeric scale is ~panic and
+    //                       suppressed every Input/Duration/Stream line, so
+    //                       this method returned "" and every imported file
+    //                       ended up stored as "Quicktime 0:00:00 0 kbps []".)
+    //   -i <file>           input
+    // No output URL is given on purpose; ffmpeg exits non-zero with
+    // "At least one output file must be specified", which is fine -- we only
+    // care about the demux/probe output captured from stderr.
     try
     {
+      String ff = sage.FFMPEGTranscoder.getTranscoderPath();
+      String in = sage.IOUtils.getLibAVFilenameString(f);
       if (sage.Sage.WINDOWS_OS)
       {
-        return sage.IOUtils.exec(new String[] { sage.FFMPEGTranscoder.getTranscoderPath(), "-priority", "idle",
-            "-dumpmetadata", "-v", "2", "-i",
-            sage.IOUtils.getLibAVFilenameString(f) }, true, true, true);
+        return sage.IOUtils.exec(new String[] { ff, "-priority", "idle",
+            "-hide_banner", "-dumpmetadata", "-v", "info", "-i", in },
+            true, true, true);
       }
       else
-        return sage.IOUtils.exec(new String[] { "nice", sage.FFMPEGTranscoder.getTranscoderPath(), "-dumpmetadata", "-v", "2", "-i",
-            sage.IOUtils.getLibAVFilenameString(f) }, true, true, true);
+      {
+        return sage.IOUtils.exec(new String[] { "nice", ff,
+            "-hide_banner", "-dumpmetadata", "-v", "info", "-i", in },
+            true, true, true);
+      }
     }
     catch (Exception e)
     {

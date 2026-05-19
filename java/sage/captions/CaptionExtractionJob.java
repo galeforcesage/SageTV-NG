@@ -62,7 +62,15 @@ class CaptionExtractionJob implements Runnable
     {
       if (tmp.exists()) tmp.delete();
 
-      String ffmpeg = Sage.get("caption_extraction/ffmpeg_path", "ffmpeg");
+      // Default to the bundled SageTV-patched ffmpeg (the same binary the
+      // transcoder, format parser, thumbnail extractor, etc. resolve through
+      // FFMPEGTranscoder.getTranscoderPath()). Users can still override with
+      // caption_extraction/ffmpeg_path. The args we send here are all standard
+      // libav flags, so any modern ffmpeg works -- but defaulting to the
+      // bundled binary keeps every native subprocess in SageTV using the
+      // same, known-good build instead of whatever happens to be on PATH.
+      String ffmpeg = Sage.get("caption_extraction/ffmpeg_path",
+          sage.FFMPEGTranscoder.getTranscoderPath());
       int extractSec = Sage.getInt("caption_extraction/extract_seconds", 0);
 
       // The lavfi `movie=PATH[out0+subcc]` filter exposes a captions subtitle
