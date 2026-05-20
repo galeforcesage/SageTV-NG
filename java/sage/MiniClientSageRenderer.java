@@ -4648,6 +4648,13 @@ public class MiniClientSageRenderer extends SageRenderer
         if (Sage.DBG) System.out.println("MiniClient sending RECONNECT_SUPPORTED=TRUE");
         sendSetProperty("RECONNECT_SUPPORTED", "TRUE");
 
+        // Self-declare this server as the SageTV-NG fork. Unconditional, every
+        // client, every connection. NG-aware clients use this to gate features
+        // that depend on NG-only server behavior; stock-server clients (and any
+        // miniclient that doesn't recognize the property) simply ignore it.
+        if (Sage.DBG) System.out.println("MiniClient sending SAGETV_NG_SERVER=1");
+        sendSetProperty("SAGETV_NG_SERVER", "1");
+
         if (zipSocks && textureBatchLimit == 0)
         {
           // All data we send AFTER this property set will need to be ZLIB compressed
