@@ -173,6 +173,36 @@ iOS/Apple-player compatibility.
   to `libx264` / `libx265` software encoders when the host has no
   NVENC. (RTX 2060 = Turing: H.264 + HEVC; no AV1 encode.)
 
+### Vendor-agnostic preset coverage  *(follow-up to Ministry mod.)*
+
+The modernized catalogue currently ships one preset per format that
+assumes an NVIDIA host (`-hwaccel cuda` + `hevc_nvenc`/`h264_nvenc`).
+**Option A — explicit `_NV` / `_SW` suffix per format.** Add a parallel
+CPU-only variant of each screen-tier preset (`<NAME>_SW`,
+`libx264`/`libx265`, no `-hwaccel`) so users on AMD / Intel / no-GPU
+hosts get a working path without recompiling ffmpeg. DVD_LEGACY_MPEG2
+stays single (no NVENC mpeg2). Adds 10 preset files; `Ministry`
+sort-order migration bumps to a v2 fingerprint. No code/UI changes
+beyond `PRESET_SORT_ORDER`.
+
+**Option C — true two-axis Format × Quality menu**  *(deferred)*. Split
+the single "Transcode To..." dropdown into two: **Format** (what you
+get: TV_1080_COMPAT, UPSCALE_1440, etc.) × **Quality** (how it's done:
+Nvidia / AMD-VAAPI / Intel-QSV / Agnostic-CPU). Requires real STV menu
+work plus a Ministry resolver that builds the cartesian product from
+a preset spec like `args_nv=` / `args_sw=` / `args_vaapi=`. Cleaner
+mental model than Option A once we have >1 GPU vendor in the mix.
+
+### FFmpeg build with `--enable-libnpp` / `--enable-cuda-nvcc`
+
+The bundled SageTV ffmpeg is currently built with `--enable-nvenc
+--enable-ffnvcodec` only \(see `ffmpeg -buildconf`\), so `scale_npp`
+and `scale_cuda` filters are missing and all `_NV` presets must run
+"decode-GPU → scale-CPU → encode-GPU". Rebuild with `--enable-libnpp`
+and `--enable-cuda-nvcc` to enable true full-GPU pipelines; then swap
+`scale=W:H:flags=lanczos` → `scale_npp=W:H:interp_algo=lanczos` (and
+restore `-hwaccel_output_format cuda`) in the `_NV` presets.
+
 ## Playback track
 
 - **Per-airing audio language UI selector.** Server-side language-aware
