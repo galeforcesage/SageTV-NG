@@ -1376,7 +1376,16 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add("-muxrate");
       xcodeParamsVec.add("2000000"); // really high to prevent underflow errors TESTING
       xcodeParamsVec.add("-rc_init_cplx");
-      int complexity = (currVideoBitrateKbps * 8000/currFps) / (((targetWidth + 15)/16) * ((targetHeight + 15)/16));
+      // Guard against bad/missing source format (currFps==0 or targetW/H==0 from
+      // unparsed dimensions) — fall back to sane defaults so we don't crash with
+      // ArithmeticException: / by zero. Seen on imported MP4 files whose stored
+      // fileFormat lacks dimensions (e.g. older legacy parser output).
+      int cplxFps = currFps > 0 ? currFps : 30;
+      int cplxW = targetWidth > 0 ? targetWidth : 720;
+      int cplxH = targetHeight > 0 ? targetHeight : 480;
+      int cplxMacroX = Math.max(1, (cplxW + 15) / 16);
+      int cplxMacroY = Math.max(1, (cplxH + 15) / 16);
+      int complexity = (currVideoBitrateKbps * 8000 / cplxFps) / (cplxMacroX * cplxMacroY);
       xcodeParamsVec.add(Integer.toString(complexity));
       xcodeParamsVec.add("-maxrate"); // FFMPEG takes video in bits/sec now
       xcodeParamsVec.add(Integer.toString(currVideoBitrateKbps * 1000));
