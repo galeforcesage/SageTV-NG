@@ -985,7 +985,12 @@ public class MiniPlayer implements DVDMediaPlayer
           mediaW = cf.getVideoFormat().getWidth();
           mediaH = cf.getVideoFormat().getHeight();
         }
-        int sourceBitrateKbps = (cf != null) ? cf.getBitrate() : 0;
+        // ContainerFormat.bitrate is stored in bits/sec (see toString which
+        // divides by 1000 for its "kbps" display). Convert to Kbps here for
+        // the decision engine. Without this, a 2 Mbps source was reported as
+        // "2129000 kbps" and always lost the bandwidth check, forcing transcode
+        // on every otherwise-direct-playable file.
+        int sourceBitrateKbps = (cf != null && cf.getBitrate() > 0) ? (cf.getBitrate() / 1000) : 0;
         // uiBandwidthEstimate is bits/sec; engine expects Kbps. The 50 Mbps
         // sentinel value (line ~931) means "not a low-bandwidth extender";
         // treat that as unmetered (0 = skip the BW check).
