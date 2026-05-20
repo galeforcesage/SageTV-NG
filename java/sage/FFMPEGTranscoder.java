@@ -409,6 +409,26 @@ public class FFMPEGTranscoder implements TranscodeEngine
     sourceFormat = inSourceFormat;
     if (Sage.DBG) System.out.println("Set Transcode format source=" + sourceFormat + " dest=" + newFormat);
     xcodeParams = "";
+    rawCmdlineMode = false;
+    rawCmdlineGlobal = null;
+
+    // Raw-cmdline preset short-circuit: if the destination format carries
+    // MRawCmdline=, skip the legacy stream-walk / token translation entirely
+    // and stash the verbatim ffmpeg argv for startTranscode() to splice in.
+    // The legacy bf=/f=/br= translator below would otherwise mangle modern
+    // NVENC presets (cq, hwaccel, scale_npp filter graphs, movflags, ...).
+    String rawCl = newFormat.getMetadataProperty(sage.media.format.MediaFormat.META_RAW_FFMPEG_CMDLINE);
+    if (rawCl != null && rawCl.length() > 0)
+    {
+      rawCmdlineMode = true;
+      xcodeParams = rawCl.trim();
+      String g = newFormat.getMetadataProperty(sage.media.format.MediaFormat.META_RAW_FFMPEG_GLOBAL);
+      rawCmdlineGlobal = (g != null && g.length() > 0) ? g.trim() : null;
+      if (Sage.DBG) System.out.println("Set Transcode raw-cmdline mode; global=[" + rawCmdlineGlobal
+          + "] args=[" + xcodeParams + "]");
+      return;
+    }
+
     // Set the file format
     String newFormatName = substituteName(newFormat.getFormatName());
     // NOTE: Special case for Zune. It wants a .wmv file extension; but it's an ASF file type so
@@ -1229,6 +1249,16 @@ public class FFMPEGTranscoder implements TranscodeEngine
         }
       }
     }
+    else if (rawCmdlineMode)
+    {
+      // Raw-cmdline preset mode (item 6): defer all post-"-i" arg emission
+      // to the splice step at the end of this method. We deliberately skip
+      // the legacy tokenizer below (it would try to parse our verbatim
+      // "-b:v 10000k" / "-vf scale_npp=..." tokens and either log warnings
+      // or no-op rewrite them). The subsequent -fps_mode/-af/-vstats/
+      // -priority blocks that the legacy path appends are also discarded by
+      // the splice — the raw cmdline owns those decisions.
+    }
     else
     {
       int flagsIndex = -1;
@@ -1551,6 +1581,47 @@ public class FFMPEGTranscoder implements TranscodeEngine
     }
     else
       xcodeParamsVec.add("-");
+    // Raw-cmdline mode: rebuild the argv to splice in the verbatim preset
+    // ffmpeg arguments. We keep everything UP TO AND INCLUDING the "-i INPUT"
+    // pair (so -y / -threads / -ss / activefile / stdinctrl / brokendts still
+    // apply), then drop the legacy stream-walk output args entirely, then
+    // append rawCmdlineGlobal (before -i) + the raw output args (after -i) +
+    // the output filename. This is the "Item 6" raw cmdline plumbing —
+    // see setTranscodeFormat()/MediaFormat.META_RAW_FFMPEG_CMDLINE.
+    if (rawCmdlineMode)
+    {
+      java.util.ArrayList<String> rebuilt = new java.util.ArrayList<String>();
+      int iIdx = -1;
+      for (int k = 0; k < xcodeParamsVec.size(); k++)
+      {
+        Object o = xcodeParamsVec.get(k);
+        String s = (o == null) ? "" : o.toString();
+        rebuilt.add(s);
+        if (iIdx == -1 && "-i".equals(s))
+        {
+          if (k + 1 < xcodeParamsVec.size())
+            rebuilt.add(xcodeParamsVec.get(k + 1).toString());
+          iIdx = rebuilt.size() - 2; // index of the "-i" token within rebuilt
+          break;
+        }
+      }
+      // Splice global pre-"-i" args (e.g. -hwaccel cuda -hwaccel_output_format cuda).
+      if (rawCmdlineGlobal != null && rawCmdlineGlobal.length() > 0 && iIdx >= 0)
+      {
+        java.util.ArrayList<String> globals = new java.util.ArrayList<String>();
+        java.util.StringTokenizer gt = new java.util.StringTokenizer(rawCmdlineGlobal);
+        while (gt.hasMoreTokens()) globals.add(gt.nextToken());
+        rebuilt.addAll(iIdx, globals);
+      }
+      // Append the raw post-"-i" args verbatim, no -b/-ab rewriting.
+      java.util.StringTokenizer rt = new java.util.StringTokenizer(xcodeParams);
+      while (rt.hasMoreTokens()) rebuilt.add(rt.nextToken());
+      // Output filename (or stdout sentinel for streaming — raw mode is
+      // intended for offline though, where outputFile is always set).
+      rebuilt.add(outputFile != null
+          ? IOUtils.getLibAVFilenameString(outputFile.toString()) : "-");
+      xcodeParamsVec = rebuilt;
+    }
     // AC-4 source audio override: when the source is AC-4 and the consuming
     // client has declared its preference (eac3 vs ac3 etc.), rewrite the audio
     // codec the profile picked. Keeps the rest of the profile (mux, video,
@@ -2158,6 +2229,16 @@ public class FFMPEGTranscoder implements TranscodeEngine
   protected String xcodeParams = "";
   protected boolean xcodeDone;
   protected Process xcodeProcess;
+  // Raw-cmdline mode: bypass the legacy bf=/f=/br= token grammar + stream-walk
+  // codec/bitrate translation in setTranscodeFormat() and startTranscode().
+  // When true, xcodeParams holds the verbatim post-"-i" ffmpeg argv (space
+  // separated) and rawCmdlineGlobal holds the verbatim pre-"-i" argv (typically
+  // "-hwaccel cuda -hwaccel_output_format cuda"). Both come from the preset's
+  // MRawCmdline= / MRawCmdlineGlobal= metadata keys. Used by the modern NVENC
+  // offline preset catalogue ("Offline transcode preset modernization
+  // (Ministry)" — see ROADMAP.md and java/sage/Ministry.java).
+  protected boolean rawCmdlineMode = false;
+  protected String rawCmdlineGlobal = null;
   protected boolean activeFile;
   protected java.io.OutputStream xcodeStdin;
   // This is a set of buffers used to read from the transcode stream and to also send out the data. We keep
