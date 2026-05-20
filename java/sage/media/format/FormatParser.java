@@ -75,6 +75,25 @@ public class FormatParser
     for (int i = 0; i < FORMAT_SUBSTITUTIONS.length; i++)
       if (FORMAT_SUBSTITUTIONS[i][0].equalsIgnoreCase(s))
         return FORMAT_SUBSTITUTIONS[i][1];
+    // Modern ffmpeg decorates the codec token in stream info lines with
+    // profile and fourcc suffixes, e.g.:
+    //   "h264 (High) (avc1 / 0x31637661)"
+    //   "aac (LC) (mp4a / 0x6134706d)"
+    //   "hevc (Main) (hev1 / 0x31766568)"
+    // Without stripping, no entry matches and we fall through to uppercasing
+    // the whole decorated string -- which then fails ClientProfile codec
+    // clamp comparisons (profiles list canonical "H.264", "AAC", "HEVC").
+    // Strip the first " (...)" onward and retry against the substitution
+    // table; if still no match, uppercase the bare codec token.
+    int parenIdx = s.indexOf(" (");
+    if (parenIdx > 0)
+    {
+      String stripped = s.substring(0, parenIdx).trim();
+      for (int i = 0; i < FORMAT_SUBSTITUTIONS.length; i++)
+        if (FORMAT_SUBSTITUTIONS[i][0].equalsIgnoreCase(stripped))
+          return FORMAT_SUBSTITUTIONS[i][1];
+      return stripped.toUpperCase();
+    }
     return s.toUpperCase();
   }
   public static ContainerFormat getFileFormat(java.io.File f)
