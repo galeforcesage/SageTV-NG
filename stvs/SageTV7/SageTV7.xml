@@ -108618,7 +108618,7 @@
                                                    </Branch>
                                                    <Branch Name="else" Sym="BASE-51009">
                                                     <Action Name="&quot;REM Sort format list by preset list, then sort any extra formats &amp; add them to the end of the list.&quot;" Sym="BASE-51010">
-                                                     <Action Name="ForcedSortOrder = GetServerProperty( &quot;transcoder/sorting_order2&quot;, &quot;iPod;iPhone;DVD;MPEG4;MPEG4 HDTV;AppleTV;PSP&quot; )" Sym="BASE-51011">
+                                                     <Action Name="ForcedSortOrder = GetServerProperty( &quot;transcoder/sorting_order2&quot;, &quot;PHONE_LOW;PHONE_STD;PHONE_HIGH_1080;TABLET_10_1080;TABLET_12_1440;TV_1080_COMPAT;TV_4K_HEVC;ARCHIVE_HEVC_MKV;DVD_LEGACY_MPEG2;UPSCALE_1440_FROM_1080;UPSCALE_2160_FROM_1080&quot; )" Sym="BASE-51011">
                                                       <Action Name="ForcedSortOrder = java_lang_String_split(ForcedSortOrder,&quot;;&quot;)" Sym="BASE-51012"/>
                                                      </Action>
                                                      <Action Name="FormatNameList = new_java_util_Vector(java_util_Map_keySet(FormatNameGroup))" Sym="BASE-51013"/>

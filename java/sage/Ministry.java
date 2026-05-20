@@ -136,6 +136,37 @@ public class Ministry implements Runnable
   private static final String BASELINE_PRESETS_SUBDIR = "presets/transcoder";
   private static final String STATE_PRESETS_SUBDIR = "transcoder/presets";
 
+  // STV "Transcode To..." menu sort-order property. The STV reads this via
+  // GetServerProperty("transcoder/sorting_order2", <stv-default>) and uses it
+  // as the authoritative display order for the format menu (any preset not in
+  // this list is appended at the end, sorted lexically). The historical
+  // default ("iPod;iPhone;DVD;MPEG4;MPEG4 HDTV;AppleTV;PSP") references only
+  // names that no longer exist; sweep it to the modernized ordering at boot
+  // so the menu reflects the new screen-tier preset catalogue.
+  private static final String XCODE_SORT_ORDER_PROP = "transcoder/sorting_order2";
+  private static final String LEGACY_XCODE_SORT_ORDER = "iPod;iPhone;DVD;MPEG4;MPEG4 HDTV;AppleTV;PSP";
+  private static final String[] PRESET_SORT_ORDER = {
+    "PHONE_LOW", "PHONE_STD", "PHONE_HIGH_1080",
+    "TABLET_10_1080", "TABLET_12_1440",
+    "TV_1080_COMPAT", "TV_4K_HEVC",
+    "ARCHIVE_HEVC_MKV", "DVD_LEGACY_MPEG2",
+    "UPSCALE_1440_FROM_1080", "UPSCALE_2160_FROM_1080",
+  };
+
+  private static void migrateSortOrder()
+  {
+    String cur = Sage.get(XCODE_SORT_ORDER_PROP, null);
+    if (cur != null && cur.length() > 0 && !LEGACY_XCODE_SORT_ORDER.equals(cur))
+      return; // user-customized or already migrated; leave alone
+    StringBuilder sb = new StringBuilder();
+    for (int i = 0; i < PRESET_SORT_ORDER.length; i++)
+    {
+      if (i > 0) sb.append(';');
+      sb.append(PRESET_SORT_ORDER[i]);
+    }
+    Sage.put(XCODE_SORT_ORDER_PROP, sb.toString());
+  }
+
   private static void loadPresets()
   {
     java.util.List<java.io.File> dirs = new java.util.ArrayList<java.io.File>();
@@ -238,6 +269,11 @@ public class Ministry implements Runnable
 
     // Load the modernized NVENC/upscale preset catalogue from disk.
     loadPresets();
+
+    // Replace the stale legacy STV menu sort order (which only references
+    // dead names) with the modernized preset ordering. No-op if the user has
+    // already customized this property.
+    migrateSortOrder();
   }
 
   public void notifyOfID(int x)
