@@ -411,6 +411,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
     xcodeParams = "";
     rawCmdlineMode = false;
     rawCmdlineGlobal = null;
+    rawCmdlineContainer = null;
 
     // Raw-cmdline preset short-circuit: if the destination format carries
     // MRawCmdline=, skip the legacy stream-walk / token translation entirely
@@ -424,7 +425,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParams = rawCl.trim();
       String g = newFormat.getMetadataProperty(sage.media.format.MediaFormat.META_RAW_FFMPEG_GLOBAL);
       rawCmdlineGlobal = (g != null && g.length() > 0) ? g.trim() : null;
-      if (Sage.DBG) System.out.println("Set Transcode raw-cmdline mode; global=[" + rawCmdlineGlobal
+      String fmt = newFormat.getFormatName();
+      rawCmdlineContainer = (fmt != null && fmt.length() > 0) ? fmt.trim() : null;
+      if (Sage.DBG) System.out.println("Set Transcode raw-cmdline mode; container=[" + rawCmdlineContainer
+          + "] global=[" + rawCmdlineGlobal
           + "] args=[" + xcodeParams + "]");
       return;
     }
@@ -1616,6 +1620,16 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // Append the raw post-"-i" args verbatim, no -b/-ab rewriting.
       java.util.StringTokenizer rt = new java.util.StringTokenizer(xcodeParams);
       while (rt.hasMoreTokens()) rebuilt.add(rt.nextToken());
+      // Force the output muxer. SageTV writes the transcode to a .tmp file and
+      // renames it on completion; ffmpeg cannot autodetect a muxer from .tmp,
+      // so we always pass -f <container> from the preset's f= field. Skipped
+      // only when no container was set (defensive — buildPresetSpec always
+      // emits one).
+      if (rawCmdlineContainer != null && rawCmdlineContainer.length() > 0)
+      {
+        rebuilt.add("-f");
+        rebuilt.add(rawCmdlineContainer);
+      }
       // Output filename (or stdout sentinel for streaming — raw mode is
       // intended for offline though, where outputFile is always set).
       rebuilt.add(outputFile != null
@@ -2239,6 +2253,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
   // (Ministry)" — see ROADMAP.md and java/sage/Ministry.java).
   protected boolean rawCmdlineMode = false;
   protected String rawCmdlineGlobal = null;
+  // Container muxer name (the f= value from the preset spec). Used in raw-
+  // cmdline mode to emit "-f <container>" before the output filename, since
+  // SageTV writes the in-progress file with a .tmp extension that ffmpeg
+  // cannot autodetect a muxer from.
+  protected String rawCmdlineContainer = null;
   protected boolean activeFile;
   protected java.io.OutputStream xcodeStdin;
   // This is a set of buffers used to read from the transcode stream and to also send out the data. We keep
