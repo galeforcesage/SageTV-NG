@@ -43,11 +43,15 @@ import sage.Wizard;
  *       subchannels are all fully covered by Schedules Direct for the next
  *       {@code min_lookahead_ms}. Used to fill gaps for NextGen-only or
  *       SD-blacklisted channels.</li>
- *   <li><b>Sports refresh</b> (every {@code sports_interval_ms}): hit only
- *       RFs that are currently airing an SD-categorized Sports event,
- *       since broadcasters update PSIP within ~10 minutes of overrun. Used
- *       so the merge layer can extend live recordings and shift follow-on
- *       starts.</li>
+ *   <li><b>Sports refresh</b> (every {@code sports_interval_ms}): only fires
+ *       when a sports overrun could affect a scheduled recording on this RF.
+ *       Two cases (see {@code findSportsTriggerForRf}):
+ *       <b>1a</b> sports airing is itself the scheduled recording and we're
+ *       within {@code pre_end_lead} of its scheduled end;
+ *       <b>1b</b> a scheduled recording is preceded on the same station by a
+ *       sports airing within {@code followon_window} (default 3h), and we're
+ *       within {@code pre_end_lead} of that sports airing's scheduled end.
+ *       Anchored on scheduled end \u2014 broadcasters update PSIP near that point.</li>
  * </ul>
  */
 public final class Atsc1EITScanner
@@ -58,9 +62,25 @@ public final class Atsc1EITScanner
   private static final String PROP_TUNER              = "epg/ota_scan_tuner";
   private static final String PROP_TUNERS_CSV         = "epg/ota_scan_tuners";
   private static final String PROP_ALLOW_DUAL         = "epg/ota_scan_allow_dual_tuner";
+  /** True when {@link #PROP_DEVICE_ID} points at an HDHomeRun that is NOT
+   *  configured as a SageTV capture source (MMC video source). When set,
+   *  the safety gate trusts that no recording/live-TV ever touches this
+   *  device, so it skips the dual-tuner opt-in, the both-idle requirement,
+   *  and the upcoming-recording lineup-overlap check. Still requires at
+   *  least one tuner reporting idle (sanity).
+   *  Default false (production: scan device is also an MMC source). */
+  private static final String PROP_DEDICATED          = "epg/ota_scan_device_dedicated";
   private static final String PROP_REC_LOOKAHEAD_MS   = "epg/ota_scan_recording_lookahead_ms";
   private static final String PROP_INTERVAL_MS        = "epg/ota_scan_interval_ms";
   private static final String PROP_SPORTS_INTERVAL_MS = "epg/ota_scan_sports_interval_ms";
+  /** How far before a sports event's scheduled end the sports refresh trigger
+   *  becomes active. Overrun decisions show up in PSIP near scheduled end, so
+   *  scanning earlier is wasted tuner time. Default 5 min. */
+  private static final String PROP_SPORTS_PRE_END_LEAD_MS = "epg/ota_scan_sports_pre_end_lead_ms";
+  /** Maximum scheduled gap between a sports event's end and a downstream
+   *  scheduled recording's start for the cascade trigger (case 1b) to fire.
+   *  Default 3 h — broadcasters rarely cascade overruns further. */
+  private static final String PROP_SPORTS_FOLLOWON_WINDOW_MS = "epg/ota_scan_sports_followon_window_ms";
   private static final String PROP_PER_RF_MS          = "epg/ota_scan_per_rf_duration_ms";
   private static final String PROP_MIN_LOOKAHEAD_MS   = "epg/ota_scan_min_lookahead_ms";
   private static final String PROP_GLOBAL_BUDGET_MS   = "epg/ota_scan_global_budget_ms_per_hour";
@@ -68,10 +88,12 @@ public final class Atsc1EITScanner
   /** CSV of RF major-channel numbers to dump per-subchannel mapping/coverage details for. */
   private static final String PROP_DEBUG_RFS          = "epg/ota_scan_debug_rfs";
 
-  private static final long DEFAULT_INTERVAL_MS        = 3L * 60L * 60L * 1000L;  // 3h
-  private static final long DEFAULT_SPORTS_INTERVAL_MS = 10L * 60L * 1000L;       // 10min
-  private static final long DEFAULT_PER_RF_MS          = 60_000L;                 // 60s: catches more of the EIT-1/2/3 carousel for sparse senders
-  private static final long DEFAULT_MIN_LOOKAHEAD_MS   = 4L * 60L * 60L * 1000L;  // 4h
+  private static final long DEFAULT_INTERVAL_MS              = 4L * 60L * 60L * 1000L;  // 4h
+  private static final long DEFAULT_SPORTS_INTERVAL_MS       = 10L * 60L * 1000L;       // 10min
+  private static final long DEFAULT_SPORTS_PRE_END_LEAD_MS   = 5L * 60L * 1000L;        // 5min before sports.scheduledEnd
+  private static final long DEFAULT_SPORTS_FOLLOWON_WINDOW_MS = 3L * 60L * 60L * 1000L; // 3h cascade window
+  private static final long DEFAULT_PER_RF_MS                = 60_000L;                 // 60s: catches more of the EIT-1/2/3 carousel for sparse senders
+  private static final long DEFAULT_MIN_LOOKAHEAD_MS         = 6L * 60L * 60L * 1000L;  // 6h (must be >= INTERVAL_MS so SD-covered RFs stay skipped between coverage cycles)
   private static final long DEFAULT_GLOBAL_BUDGET_MS   = 10L * 60L * 1000L;       // 10min/hr (scales with 60s per_rf)
   private static final long DEFAULT_REC_LOOKAHEAD_MS   = 5L * 60L * 1000L;        // 5min
 
@@ -195,9 +217,10 @@ public final class Atsc1EITScanner
     for (Map.Entry<Integer, List<HdhrControl.LineupEntry>> e : byRf.entrySet())
     {
       if (!running.get()) return;
-      if (!hasLiveSportsNow(e.getValue(), now)) continue;
+      String trigReason = findSportsTriggerForRf(e.getValue(), now);
+      if (trigReason == null) continue;
       if (!safetyGateOpen(deviceIp, "sports")) return;
-      scanRf(e.getKey(), e.getValue(), "sports");
+      scanRf(e.getKey(), e.getValue(), "sports:" + trigReason);
     }
   }
 
@@ -338,26 +361,95 @@ public final class Atsc1EITScanner
     return covered >= (end - start) * 95L / 100L;
   }
 
-  /** True if any subchannel on this RF currently airs an SD-tagged Sports event. */
-  private boolean hasLiveSportsNow(List<HdhrControl.LineupEntry> subs, long now)
+  /**
+   * Decide whether the sports refresh trigger should fire for this RF right now.
+   * Returns a short reason string (for logging) or null to skip.
+   *
+   * <p>Two cases (both anchored on a sports airing's <i>scheduled end</i> —
+   * overrun decisions only become visible in PSIP near that point):
+   * <ul>
+   *   <li><b>1a</b> — a sports airing on a subchannel of this RF is itself
+   *       a scheduled recording and we are within
+   *       <code>[sports.scheduledEnd - pre_end_lead, sports.scheduledEnd + followon_window]</code>.
+   *       Scanning surfaces the new end-time so the in-flight recording extends.</li>
+   *   <li><b>1b</b> — a scheduled recording R on a subchannel of this RF is
+   *       preceded on the same station by a sports airing S with
+   *       <code>S.scheduledEnd ≤ R.scheduledStart</code> and
+   *       <code>R.scheduledStart - S.scheduledEnd ≤ followon_window</code>,
+   *       and we are within <code>[S.scheduledEnd - pre_end_lead, R.scheduledStart]</code>.
+   *       Scanning surfaces the overrun cascade so R's start shifts.</li>
+   * </ul>
+   * Cadence is provided by the outer 10-min sports loop; this method only
+   * answers "is the window currently open for at least one (S,R) pair?".
+   */
+  private String findSportsTriggerForRf(List<HdhrControl.LineupEntry> subs, long now)
   {
     Wizard wiz = Wizard.getInstance();
+    Seeker seeker = Seeker.getInstance();
+    if (seeker == null) return null;
+    long leadMs   = Sage.getLong(PROP_SPORTS_PRE_END_LEAD_MS, DEFAULT_SPORTS_PRE_END_LEAD_MS);
+    long cascadeMs = Sage.getLong(PROP_SPORTS_FOLLOWON_WINDOW_MS, DEFAULT_SPORTS_FOLLOWON_WINDOW_MS);
+
+    // Pull all scheduled recordings whose schedule window overlaps
+    // [now - leadMs, now + cascadeMs]. The lower bound catches 1a where
+    // the sports recording itself is about to end / running over.
+    Airing[] scheduled = seeker.getInterleavedScheduledAirings(now - leadMs, now + cascadeMs);
+    if (scheduled == null || scheduled.length == 0) return null;
+
+    // Build set of station IDs on this RF (for fast membership test).
+    java.util.Set<Integer> rfStations = new java.util.HashSet<>();
     for (HdhrControl.LineupEntry le : subs)
     {
       Channel ch = findChannelByGuideNumber(wiz, le.guideNumber);
-      if (ch == null) continue;
-      Airing[] airs = wiz.getAirings(ch.getStationID(), now, now + 1, false);
-      if (airs == null) continue;
-      for (Airing a : airs)
+      if (ch != null) rfStations.add(ch.getStationID());
+    }
+    if (rfStations.isEmpty()) return null;
+
+    for (Airing r : scheduled)
+    {
+      if (r == null) continue;
+      if (!rfStations.contains(r.getStationID())) continue;
+
+      long rStart = r.getStartTime();
+      long rEnd   = r.getEndTime();
+
+      // Case 1a: the scheduled recording itself is sports, and we are within
+      // [rEnd - leadMs, ...] (still recording or just past scheduled end).
+      if (isSportsAiring(r) && now >= rEnd - leadMs)
       {
-        if (a.getShow() == null) continue;
-        String cat = a.getShow().getCategory();
-        if (cat == null) continue;
-        String lc = cat.toLowerCase();
-        if (lc.contains("sport")) return true;
+        return "1a rf-rec sportsEndsAt=" + Sage.df(rEnd);
+      }
+
+      // Case 1b: look at airings on R's station that scheduled-end at or before
+      // R's scheduled start and within the cascade window. If any such airing
+      // is sports and we are within [S.scheduledEnd - leadMs, R.scheduledStart],
+      // trigger.
+      long windowStart = rStart - cascadeMs;
+      Airing[] preds = wiz.getAirings(r.getStationID(), windowStart, rStart, false);
+      if (preds == null) continue;
+      for (Airing s : preds)
+      {
+        if (s == null || s == r) continue;
+        long sEnd = s.getEndTime();
+        if (sEnd > rStart) continue;                      // overlaps R, not a predecessor
+        if (rStart - sEnd > cascadeMs) continue;          // beyond cascade window
+        if (now < sEnd - leadMs) continue;                // too early to scan
+        if (now > rStart) continue;                       // R has already started (cascade settled)
+        if (!isSportsAiring(s)) continue;
+        return "1b precedingSportsEndsAt=" + Sage.df(sEnd) + " recStartsAt=" + Sage.df(rStart);
       }
     }
-    return false;
+    return null;
+  }
+
+  private static boolean isSportsAiring(Airing a)
+  {
+    if (a == null) return false;
+    Show sh = a.getShow();
+    if (sh == null) return false;
+    String cat = sh.getCategory();
+    if (cat == null) return false;
+    return cat.toLowerCase().contains("sport");
   }
 
   private Channel findChannelByGuideNumber(Wizard wiz, String guideNumber)
@@ -614,16 +706,31 @@ public final class Atsc1EITScanner
   /**
    * Master safety check before any scan attempt. Enforces:
    * <ul>
-   *   <li>1-tuner device → never scan (would block recording).</li>
-   *   <li>2-tuner device → only scan if {@code epg/ota_scan_allow_dual_tuner=true}
-   *       (default false) AND at least one tuner remains idle AFTER we
-   *       grab one (i.e. both currently idle).</li>
+   *   <li>1-tuner device → never scan (would block recording), unless
+   *       {@code epg/ota_scan_device_dedicated=true}.</li>
+   *   <li>2-tuner device → requires {@code epg/ota_scan_allow_dual_tuner=true}
+   *       (default false) opt-in. Then identical to 3+ tuner rule:
+   *       ≥ N-1 tuners currently idle, i.e. at most one busy.</li>
    *   <li>3+ tuner device → scan if at least N-1 tuners remain idle after
    *       we grab one (i.e. at most one currently busy).</li>
    *   <li>Defer if SageTV has a recording scheduled within the next
    *       {@code epg/ota_scan_recording_lookahead_ms} (default 5 min) on
-   *       any channel this device's lineup contains.</li>
+   *       any channel this device's lineup contains — so the per-RF
+   *       30 s dwell never collides with an upcoming scheduled tune.</li>
+   *   <li>If {@code epg/ota_scan_device_dedicated=true}, ALL MMC-overlap
+   *       rules are bypassed (dual-tuner opt-in, upcoming-recording
+   *       lineup check, 1-tuner refusal). Only remaining gate is
+   *       "≥1 tuner reports idle" as a sanity check. Use this when the
+   *       scan device is an HDHomeRun that is NOT a SageTV capture
+   *       source.</li>
    * </ul>
+   *
+   * <p>Note: live TV started on the spare tuner DURING an in-flight scan
+   * is the one edge case not covered by the schedule check. The scanner
+   * holds the tuner for ≤ {@code epg/ota_scan_per_rf_duration_ms}
+   * (default 30 s), so the live client may briefly fail/retry; this is
+   * accepted in exchange for the much larger benefit of getting EIT
+   * updates during normal recording activity.
    */
   private boolean safetyGateOpen(String deviceIp, String reason)
   {
@@ -637,13 +744,14 @@ public final class Atsc1EITScanner
 
     int tunerCount = disc.tunerCount;
     if (tunerCount <= 0) tunerCount = 1; // fail-safe
+    final boolean dedicated = Sage.getBoolean(PROP_DEDICATED, false);
 
-    if (tunerCount == 1)
+    if (tunerCount == 1 && !dedicated)
     {
       if (Sage.DBG) System.out.println("Atsc1EITScanner: device " + disc.deviceId + " has 1 tuner; refusing to scan");
       return false;
     }
-    if (tunerCount == 2 && !Sage.getBoolean(PROP_ALLOW_DUAL, false))
+    if (!dedicated && tunerCount == 2 && !Sage.getBoolean(PROP_ALLOW_DUAL, false))
     {
       if (Sage.DBG) System.out.println("Atsc1EITScanner: device " + disc.deviceId + " has 2 tuners; set " + PROP_ALLOW_DUAL + "=true to opt in");
       return false;
@@ -651,6 +759,7 @@ public final class Atsc1EITScanner
 
     // Count idle tuners (lock=none AND bps=0). Need at least N-1 idle so
     // we leave behind the same headroom Sage expects for recording.
+    // When dedicated, we only require ≥1 idle (this device is fully ours).
     String deviceId = Sage.get(PROP_DEVICE_ID, "");
     if (deviceId.isEmpty()) return false;
     HdhrControl ctrl = new HdhrControl(deviceId);
@@ -664,25 +773,24 @@ public final class Atsc1EITScanner
       }
       catch (IOException e) { /* count as busy */ }
     }
-    if (idle < tunerCount - 1 || idle < 1)
+    int idleNeeded = dedicated ? 1 : Math.max(1, tunerCount - 1);
+    if (idle < idleNeeded)
     {
-      if (Sage.DBG) System.out.println("Atsc1EITScanner: only " + idle + "/" + tunerCount + " tuners idle on " + disc.deviceId + ", defer (" + reason + ")");
-      return false;
-    }
-    if (tunerCount == 2 && idle < 2)
-    {
-      // Dual-tuner rule: BOTH must be idle (we never use the last tuner)
-      if (Sage.DBG) System.out.println("Atsc1EITScanner: 2-tuner device requires both idle; defer (" + reason + ")");
+      if (Sage.DBG) System.out.println("Atsc1EITScanner: only " + idle + "/" + tunerCount + " tuners idle on " + disc.deviceId + " (need " + idleNeeded + "), defer (" + reason + ")");
       return false;
     }
 
     // Upcoming-recording check: don't scan if Sage plans to record soon
-    // on a channel this device's lineup contains.
-    long lookahead = Sage.getLong(PROP_REC_LOOKAHEAD_MS, DEFAULT_REC_LOOKAHEAD_MS);
-    if (hasUpcomingRecordingOnDevice(deviceIp, lookahead))
+    // on a channel this device's lineup contains. Skipped for dedicated
+    // devices since the scan device does not record anything itself.
+    if (!dedicated)
     {
-      if (Sage.DBG) System.out.println("Atsc1EITScanner: recording scheduled within " + lookahead + "ms on this device; defer (" + reason + ")");
-      return false;
+      long lookahead = Sage.getLong(PROP_REC_LOOKAHEAD_MS, DEFAULT_REC_LOOKAHEAD_MS);
+      if (hasUpcomingRecordingOnDevice(deviceIp, lookahead))
+      {
+        if (Sage.DBG) System.out.println("Atsc1EITScanner: recording scheduled within " + lookahead + "ms on this device; defer (" + reason + ")");
+        return false;
+      }
     }
     return true;
   }
