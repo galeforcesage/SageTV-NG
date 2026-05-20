@@ -21,7 +21,13 @@ public class Ministry implements Runnable
   private static final String NEXT_JOB_ID = "transcoder/next_job_id";
   protected static final String TRANSCODE_JOB_PROPS = "transcoder/jobs";
 
+  // Legacy preset names — swept out of Sage.properties at startup so the
+  // modernized NVENC preset catalogue (loaded from disk via loadPresets())
+  // can replace them cleanly. Everything in this list pre-dates the offline
+  // transcode preset rewrite (see ROADMAP "Offline transcode preset
+  // modernization (Ministry)") and should NOT be re-seeded.
   private static final String[] DEAD_FORMAT_NAMES = {
+    // ── Original 2008-era "Compatible" series ──
     "Razr Compatible-Fair Quality",
     "Razr Compatible-Good Quality",
     "Razr Compatible-High Quality",
@@ -56,8 +62,39 @@ public class Ministry implements Runnable
     "MPEG4 HDTV-Good Quality Deinterlaced AVI",
     "MPEG4-High Quality Deinterlaced AVI",
     "MPEG4-Good Quality Deinterlaced AVI",
+    // ── Previously-shipped PREDEFINED_TRANSCODER_FORMATS (now obsolete) ──
+    "MPEG4 HDTV-High Quality AVI",
+    "MPEG4 HDTV-Good Quality AVI",
+    "MPEG4 HDTV-High Quality H.264 MKV",
+    "MPEG4 HDTV-Good Quality H.264 MKV",
+    "PSP-Good Quality",
+    "PSP-High Quality",
+    "PSP-Widescreen Good Quality",
+    "PSP-Widescreen High Quality",
+    "iPod-Fair Quality",
+    "iPod-Good Quality",
+    "iPod-High Quality",
+    "iPhone-Standard",
+    "iPhone-Widescreen",
+    "AppleTV-High Quality",
+    "AppleTV-High Quality Widescreen",
+    // ── Previously-shipped PREDEFINED_TRANSCODER_FORMATS_{NTSC,PAL} ──
+    "MPEG4-High Quality AVI",
+    "MPEG4-Good Quality AVI",
+    "MPEG4-High Quality H.264 MKV",
+    "MPEG4-Good Quality H.264 MKV",
+    "DVD-Standard Play",
+    "DVD-Standard Play with AC3",
+    "DVD-Long Play",
+    "DVD-Long Play with AC3",
+    "DVD-Extra Long Play",
+    "DVD-Extra Long Play with AC3",
   };
 
+  // Retained for legacy callers of getPredefinedTargetFormat() that may still
+  // reference the deinterlaced-AVI names; remapping is harmless (the target
+  // may simply be absent now, in which case the lookup returns null and the
+  // UI re-prompts).
   private static final String[][] SUBSTITUTE_FORMAT_NAMES = {
     { "MPEG4 HDTV-High Quality Deinterlaced AVI", "MPEG4 HDTV-High Quality AVI" },
     { "MPEG4 HDTV-Good Quality Deinterlaced AVI", "MPEG4 HDTV-Good Quality AVI" },
@@ -65,72 +102,119 @@ public class Ministry implements Runnable
     { "MPEG4-Good Quality Deinterlaced AVI", "MPEG4-Good Quality AVI" },
   };
 
-  // We got rid of the deinterlace options here since that's done automatically in FFMPEGTranscoder.java now (it'll add the -deinterlace flag if the input is
-  // interlaced and it's not scaling it down vertically by more than half)
-  public static final String[][] PREDEFINED_TRANSCODER_FORMATS = {
-    /*		{ "Razr-Fair Quality", "f=3gp;[bf=vid;f=mpeg4;br=80000;fps=29.97;w=176;h=144;][bf=aud;f=amr_nb;sr=8000;ch=1;bsmp=8;br=7950;]" },
-		{ "Razr-Good Quality", "f=3gp;[bf=vid;f=mpeg4;br=120000;fps=29.97;w=176;h=144;][bf=aud;f=amr_nb;sr=8000;ch=1;bsmp=8;br=7950;]" },
-		{ "Razr-High Quality", "f=3gp;[bf=vid;f=mpeg4;br=172000;fps=29.97;w=176;h=144;][bf=aud;f=amr_nb;sr=8000;ch=1;bsmp=8;br=7950;]" },
-     *///		{ "MPEG4 HDTV-High Quality Deinterlaced AVI", "f=avi;MCompressionDetails=-vtag xvid -deinterlace;[bf=vid;f=mpeg4;br=8000000;][bf=aud;]" },
-    { "MPEG4 HDTV-High Quality AVI", "f=avi;MCompressionDetails=-vtag xvid;[bf=vid;f=mpeg4;br=8000000;][bf=aud;]" },
-    //	{ "MPEG4 HDTV-Good Quality Deinterlaced AVI", "f=avi;MCompressionDetails=-vtag xvid -deinterlace;[bf=vid;f=mpeg4;br=6000000;][bf=aud;]" },
-    { "MPEG4 HDTV-Good Quality AVI", "f=avi;MCompressionDetails=-vtag xvid;[bf=vid;f=mpeg4;br=6000000;][bf=aud;]" },
-    // -directpred dropped from libx264 ~2010 (now always auto); rest of the
-    // legacy x264 option soup here will be wholly replaced by the offline
-    // transcode preset rewrite (see ROADMAP "Offline transcode preset
-    // modernization (Ministry)").
-    { "MPEG4 HDTV-High Quality H.264 MKV", "f=matroska;MCompressionDetails=-coder 1 -flags +loop -cmp +chroma -partitions +parti8x8+parti4x4+partp8x8+partb8x8 -me_method hex -subq 2 -me_range 16 -g 250 -keyint_min 25 -sc_threshold 40 -i_qfactor 0.71 -b_strategy 1 -qcomp 0.6 -qmin 10 -qmax 51 -qdiff 4 -bf 3 -refs 1 -trellis 0 -flags2 +bpyramid-mixed_refs+wpred+dct8x8+fastpskip -wpredp 0 -rc_lookahead 10;[bf=vid;f=h264;br=7500000;][bf=aud;]" },
-    { "MPEG4 HDTV-Good Quality H.264 MKV", "f=matroska;MCompressionDetails=-coder 1 -flags +loop -cmp +chroma -partitions +parti8x8+parti4x4-partp8x8-partb8x8 -me_method dia -subq 1 -me_range 16 -g 250 -keyint_min 25 -sc_threshold 40 -i_qfactor 0.71 -b_strategy 1 -qcomp 0.6 -qmin 10 -qmax 51 -qdiff 4 -bf 3 -refs 1 -trellis 0 -flags2 +bpyramid-mixed_refs+wpred+dct8x8+fastpskip-mbtree -wpredp 0 -rc_lookahead 0;[bf=vid;f=h264;br=4500000;][bf=aud;]" },
-    { "PSP-Good Quality", "f=psp;MCompressionDetails=-bitexact 1[bf=vid;f=xvid;br=216000;fps=29.97;w=320;h=240;][bf=aud;f=aac;sr=24000;ch=1;br=48000;]" },
-    { "PSP-High Quality", "f=psp;MCompressionDetails=-bitexact 1[bf=vid;f=xvid;br=768000;fps=29.97;w=320;h=240;][bf=aud;f=aac;sr=24000;ch=2;br=128000;]" },
-    { "PSP-Widescreen Good Quality", "f=psp;MCompressionDetails=-bitexact 1[bf=vid;f=xvid;br=216000;fps=29.97;w=368;h=208;][bf=aud;f=aac;sr=24000;ch=1;br=48000;]" },
-    { "PSP-Widescreen High Quality", "f=psp;MCompressionDetails=-bitexact 1[bf=vid;f=xvid;br=768000;fps=29.97;w=368;h=208;][bf=aud;f=aac;sr=24000;ch=2;br=128000;]" },
-    /* TODO: ffmpeg now has ipod format handler */
-    { "iPod-Fair Quality", "f=mp4;MCompressionDetails=-bufsize 33554432 -g 300;[bf=vid;f=mpeg4;br=500000;fps=29.97;w=512;h=384;arn=4;ard=3;][bf=aud;f=aac;sr=44100;ch=2;br=64000;]" },
-    { "iPod-Good Quality", "f=mp4;MCompressionDetails=-maxrate 1250000 -bufsize 33554432 -g 300;[bf=vid;f=mpeg4;br=1000000;fps=29.97;w=512;h=384;arn=4;ard=3;][bf=aud;f=aac;sr=44100;ch=2;br=96000;]" },
-    { "iPod-High Quality", "f=mp4;MCompressionDetails=-maxrate 2500000 -qmin 3 -qmax 5 -bufsize 33554432 -g 300;[bf=vid;f=mpeg4;br=1800000;fps=29.97;w=512;h=384;arn=4;ard=3;][bf=aud;f=aac;sr=44100;ch=2;br=128000;]" },
-    /* TODO: Someone recommended better settings for iPhone (investigate)
-	-r 29.97 -vcodec libx264 -s 480x272 -flags +loop -cmp +chroma -deblockalpha 0 -deblockbeta 0 -crf 24 -bt 256k -refs 1 -coder 0 -me umh -me_range 16 -subq 5 -partitions +parti4x4+parti8x8+partp8x8 -g 250 -keyint_min 25 -level 30 -qmin 10 -qmax 51 -trellis 2 -sc_threshold 40 -i_qfactor 0.71 -acodec libfaac -ab 128k -ar 48000 -ac 2
-     */
-    // iPhone-* offline transcode presets (original iPhone / iPhone 3G era).
-    // FFMPEG 5+ removed the global -async N audio-resync option in favor of
-    // the lavfi aresample filter, so we use "-af aresample=async=50" here.
-    // x264 also dropped -directpred (always-auto) around 2010, so it's gone.
-    // FFMPEGTranscoder forwards MCompressionDetails verbatim, so this is the
-    // form modern ffmpeg actually accepts.
-    { "iPhone-Standard", "f=mp4;MCompressionDetails=-coder 0 -flags +loop -cmp +chroma -partitions +parti8x8+parti4x4+partp8x8+partb8x8 -me_method umh -subq 8 -me_range 16 -g 250 -keyint_min 25 -sc_threshold 40 -i_qfactor 0.71 -b_strategy 2 -qcomp 0.6 -qmin 10 -qmax 51 -qdiff 4 -bf 0 -refs 5 -trellis 1 -flags2 -wpred-dct8x8 -wpredp 0 -rc_lookahead 50 -level 13 -maxrate 768000 -bufsize 3000000 -af aresample=async=50;[bf=vid;f=h264;br=640000;fps=29.97;w=480;h=368;arn=4;ard=3;][bf=aud;f=aac;sr=48000;ch=2;br=128000;]" },
-    { "iPhone-Widescreen", "f=mp4;MCompressionDetails=-coder 0 -flags +loop -cmp +chroma -partitions +parti8x8+parti4x4+partp8x8+partb8x8 -me_method umh -subq 8 -me_range 16 -g 250 -keyint_min 25 -sc_threshold 40 -i_qfactor 0.71 -b_strategy 2 -qcomp 0.6 -qmin 10 -qmax 51 -qdiff 4 -bf 0 -refs 5 -trellis 1 -flags2 -wpred-dct8x8 -wpredp 0 -rc_lookahead 50 -level 13 -maxrate 768000 -bufsize 3000000 -af aresample=async=50;[bf=vid;f=h264;br=640000;fps=29.97;w=480;h=272;arn=16;ard=9;][bf=aud;f=aac;sr=48000;ch=2;br=128000;]" },
-    { "AppleTV-High Quality", "f=mp4;MCompressionDetails=-coder 0 -flags +loop -cmp +chroma -partitions +parti8x8+parti4x4+partp8x8+partb8x8 -me_method umh -subq 8 -me_range 16 -g 250 -keyint_min 25 -sc_threshold 40 -i_qfactor 0.71 -b_strategy 2 -qcomp 0.6 -qmin 10 -qmax 51 -qdiff 4 -bf 0 -refs 1 -trellis 1 -flags2 -wpred-dct8x8 -wpredp 0 -rc_lookahead 50 -level 30 -maxrate 10000000 -bufsize 10000000;[bf=vid;f=h264;br=2500000;fps=29.97;w=720;h=480;arn=4;ard=3;][bf=aud;f=aac;sr=48000;ch=2;br=128000;]" },
-    { "AppleTV-High Quality Widescreen", "f=mp4;MCompressionDetails=-coder 0 -flags +loop -cmp +chroma -partitions +parti8x8+parti4x4+partp8x8+partb8x8 -me_method umh -subq 8 -me_range 16 -g 250 -keyint_min 25 -sc_threshold 40 -i_qfactor 0.71 -b_strategy 2 -qcomp 0.6 -qmin 10 -qmax 51 -qdiff 4 -bf 0 -refs 1 -trellis 1 -flags2 -wpred-dct8x8 -wpredp 0 -rc_lookahead 50 -level 30 -maxrate 10000000 -bufsize 10000000;[bf=vid;f=h264;br=2500000;fps=29.97;w=960;h=540;arn=16;ard=9;][bf=aud;f=aac;sr=48000;ch=2;br=128000;]" },
-  };
-  public static final String[][] PREDEFINED_TRANSCODER_FORMATS_NTSC = {
-    //		{ "MPEG4-High Quality Deinterlaced AVI", "f=avi;MCompressionDetails=-vtag xvid -deinterlace;[bf=vid;f=mpeg4;br=2000000;w=720;h=480;fps=29.97;][bf=aud;]" },
-    { "MPEG4-High Quality AVI", "f=avi;MCompressionDetails=-vtag xvid;[bf=vid;f=mpeg4;br=2000000;w=720;h=480;fps=29.97;][bf=aud;]" },
-    //		{ "MPEG4-Good Quality Deinterlaced AVI", "f=avi;MCompressionDetails=-vtag xvid -deinterlace;[bf=vid;f=mpeg4;br=1500000;w=720;h=480;fps=29.97;][bf=aud;]" },
-    { "MPEG4-Good Quality AVI", "f=avi;MCompressionDetails=-vtag xvid;[bf=vid;f=mpeg4;br=1500000;w=720;h=480;fps=29.97;][bf=aud;]" },
-    { "MPEG4-High Quality H.264 MKV", "f=matroska;MCompressionDetails=-coder 1 -flags +loop -cmp +chroma -partitions +parti8x8+parti4x4+partp8x8+partb8x8 -me_method hex -subq 6 -me_range 16 -g 250 -keyint_min 25 -sc_threshold 40 -i_qfactor 0.71 -b_strategy 1 -qcomp 0.6 -qmin 10 -qmax 51 -qdiff 4 -bf 3 -refs 2 -trellis 1 -flags2 +bpyramid+mixed_refs+wpred+dct8x8+fastpskip -wpredp 2 -rc_lookahead 30;[bf=vid;f=h264;br=2000000;w=720;h=480;fps=29.97;][bf=aud;]" },
-    { "MPEG4-Good Quality H.264 MKV", "f=matroska;MCompressionDetails=-coder 1 -flags +loop -cmp +chroma -partitions +parti8x8+parti4x4-partp8x8-partb8x8 -me_method dia -subq 1 -me_range 16 -g 250 -keyint_min 25 -sc_threshold 40 -i_qfactor 0.71 -b_strategy 1 -qcomp 0.6 -qmin 10 -qmax 51 -qdiff 4 -bf 3 -refs 1 -trellis 0 -flags2 +bpyramid-mixed_refs+wpred+dct8x8+fastpskip-mbtree -wpredp 0 -rc_lookahead 0;[bf=vid;f=h264;br=1500000;w=720;h=480;fps=29.97;][bf=aud;]" },
-    { "DVD-Standard Play", "f=dvd;[bf=vid;f=mpeg2video;br=6400000;fps=29.97;w=720;h=480;vbr=1;][bf=aud;f=mp2;sr=48000;ch=2;bsmp=16;br=384000;]" },
-    { "DVD-Standard Play with AC3", "f=dvd;[bf=vid;f=mpeg2video;br=6400000;fps=29.97;w=720;h=480;vbr=1;][bf=aud;f=ac3;sr=48000;bsmp=16;br=384000;]" },
-    { "DVD-Long Play", "f=dvd;[bf=vid;f=mpeg2video;br=4800000;fps=29.97;w=720;h=480;vbr=1;][bf=aud;f=mp2;sr=48000;ch=2;bsmp=16;br=384000;]" },
-    { "DVD-Long Play with AC3", "f=dvd;[bf=vid;f=mpeg2video;br=4800000;fps=29.97;w=720;h=480;vbr=1;][bf=aud;f=ac3;sr=48000;bsmp=16;br=384000;]" },
-    { "DVD-Extra Long Play", "f=dvd;[bf=vid;f=mpeg2video;br=3000000;fps=29.97;w=720;h=480;vbr=1;][bf=aud;f=mp2;sr=48000;ch=2;bsmp=16;br=384000;]" },
-    { "DVD-Extra Long Play with AC3", "f=dvd;[bf=vid;f=mpeg2video;br=3000000;fps=29.97;w=720;h=480;vbr=1;][bf=aud;f=ac3;sr=48000;bsmp=16;br=384000;]" },
-  };
-  public static final String[][] PREDEFINED_TRANSCODER_FORMATS_PAL = {
-    //		{ "MPEG4-High Quality Deinterlaced AVI", "f=avi;MCompressionDetails=-vtag xvid -deinterlace;[bf=vid;f=mpeg4;br=2000000;w=720;h=576;fps=25;][bf=aud;]" },
-    { "MPEG4-High Quality AVI", "f=avi;MCompressionDetails=-vtag xvid;[bf=vid;f=mpeg4;br=2000000;w=720;h=576;fps=25;][bf=aud;]" },
-    //		{ "MPEG4-Good Quality Deinterlaced AVI", "f=avi;MCompressionDetails=-vtag xvid -deinterlace;[bf=vid;f=mpeg4;br=1500000;w=720;h=576;fps=25;][bf=aud;]" },
-    { "MPEG4-Good Quality AVI", "f=avi;MCompressionDetails=-vtag xvid;[bf=vid;f=mpeg4;br=1500000;w=720;h=576;fps=25;][bf=aud;]" },
-    { "MPEG4-High Quality H.264 MKV", "f=matroska;MCompressionDetails=-coder 1 -flags +loop -cmp +chroma -partitions +parti8x8+parti4x4+partp8x8+partb8x8 -me_method hex -subq 6 -me_range 16 -g 250 -keyint_min 25 -sc_threshold 40 -i_qfactor 0.71 -b_strategy 1 -qcomp 0.6 -qmin 10 -qmax 51 -qdiff 4 -bf 3 -refs 2 -trellis 1 -flags2 +bpyramid+mixed_refs+wpred+dct8x8+fastpskip -wpredp 2 -rc_lookahead 30;[bf=vid;f=h264;br=2000000;w=720;h=576;fps=25;][bf=aud;]" },
-    { "MPEG4-Good Quality H.264 MKV", "f=matroska;MCompressionDetails=-coder 1 -flags +loop -cmp +chroma -partitions +parti8x8+parti4x4-partp8x8-partb8x8 -me_method dia -subq 1 -me_range 16 -g 250 -keyint_min 25 -sc_threshold 40 -i_qfactor 0.71 -b_strategy 1 -qcomp 0.6 -qmin 10 -qmax 51 -qdiff 4 -bf 3 -refs 1 -trellis 0 -flags2 +bpyramid-mixed_refs+wpred+dct8x8+fastpskip-mbtree -wpredp 0 -rc_lookahead 0;[bf=vid;f=h264;br=1500000;w=720;h=576;fps=25;][bf=aud;]" },
-    { "DVD-Standard Play", "f=dvd;[bf=vid;f=mpeg2video;br=6400000;fps=25;w=720;h=576;vbr=1;][bf=aud;f=mp2;sr=48000;ch=2;bsmp=16;br=384000;]" },
-    { "DVD-Standard Play with AC3", "f=dvd;[bf=vid;f=mpeg2video;br=6400000;fps=25;w=720;h=576;vbr=1;][bf=aud;f=ac3;sr=48000;bsmp=16;br=384000;]" },
-    { "DVD-Long Play", "f=dvd;[bf=vid;f=mpeg2video;br=4800000;fps=25;w=720;h=576;vbr=1;][bf=aud;f=mp2;sr=48000;ch=2;bsmp=16;br=384000;]" },
-    { "DVD-Long Play with AC3", "f=dvd;[bf=vid;f=mpeg2video;br=4800000;fps=25;w=720;h=576;vbr=1;][bf=aud;f=ac3;sr=48000;bsmp=16;br=384000;]" },
-    { "DVD-Extra Long Play", "f=dvd;[bf=vid;f=mpeg2video;br=3000000;fps=25;w=720;h=576;vbr=1;][bf=aud;f=mp2;sr=48000;ch=2;bsmp=16;br=384000;]" },
-    { "DVD-Extra Long Play with AC3", "f=dvd;[bf=vid;f=mpeg2video;br=3000000;fps=25;w=720;h=576;vbr=1;][bf=aud;f=ac3;sr=48000;bsmp=16;br=384000;]" },
-  };
+  // ──────────────────────────────────────────────────────────────────────
+  // Modernized preset catalogue — loaded from disk at startup. Replaces the
+  // 2008-era PREDEFINED_TRANSCODER_FORMATS{,_NTSC,_PAL} arrays. Search path
+  // (highest precedence first):
+  //
+  //   1. ${STATE_DIR}/transcoder/presets/*.properties   (deploy/user overrides)
+  //   2. <Sage.installPath>/presets/transcoder/*.properties  (shipped baseline)
+  //
+  // STATE_DIR is the per-install state directory used by the state-managed
+  // container layout (see sagetv-deploy entrypoint-state.sh, e.g.
+  // "/opt/sagetv/state/mine"). If unset, only the baseline path is consulted.
+  //
+  // Each .properties file describes one preset:
+  //   name=PHONE_STD                            ← display name (becomes the
+  //                                                Sage.properties key under
+  //                                                transcoder/formats/)
+  //   container=mp4                             ← muxer name (mp4|matroska|...)
+  //   global=-hwaccel cuda -hwaccel_output_format cuda
+  //   args=-vf scale_npp=1280:720 -c:v %V264% -preset p5 -cq:v 23 ...
+  //
+  // Tokens substituted at load time:
+  //   %V264%  →  HwEncoder.encoderName(HwEncoder.pick("h264"), "h264")
+  //              (e.g. "h264_nvenc" on Turing, falls back to "libx264")
+  //   %V265%  →  HwEncoder.encoderName(HwEncoder.pick("hevc"), "hevc")
+  //
+  // The generated Sage.properties value is the raw-cmdline metadata form
+  // consumed by FFMPEGTranscoder.setTranscodeFormat() / startTranscode():
+  //   f=<container>;MRawCmdlineGlobal=<global>;MRawCmdline=<args>;
+  // (values are escaped via MediaFormat.escapeString so embedded '=' and ';'
+  // round-trip through ContainerFormat.buildFormatFromString cleanly.)
+  // ──────────────────────────────────────────────────────────────────────
+  private static final String BASELINE_PRESETS_SUBDIR = "presets/transcoder";
+  private static final String STATE_PRESETS_SUBDIR = "transcoder/presets";
+
+  private static void loadPresets()
+  {
+    java.util.List<java.io.File> dirs = new java.util.ArrayList<java.io.File>();
+    String stateDir = System.getenv("STATE_DIR");
+    if (stateDir != null && stateDir.length() > 0)
+    {
+      java.io.File f = new java.io.File(stateDir, STATE_PRESETS_SUBDIR);
+      if (f.isDirectory()) dirs.add(f);
+    }
+    // Baseline shipped with the install (Dockerfile / install layout puts
+    // these under <installRoot>/presets/transcoder/). Resolved relative to
+    // the JVM working dir, which for SageTV is the install root.
+    java.io.File baseline = new java.io.File(BASELINE_PRESETS_SUBDIR);
+    if (baseline.isDirectory()) dirs.add(baseline);
+
+    java.util.Set<String> seen = new java.util.HashSet<String>();
+    for (java.io.File dir : dirs)
+    {
+      java.io.File[] files = dir.listFiles(new java.io.FilenameFilter()
+      {
+        public boolean accept(java.io.File d, String n) { return n.endsWith(".properties"); }
+      });
+      if (files == null) continue;
+      java.util.Arrays.sort(files);
+      for (java.io.File f : files)
+      {
+        try
+        {
+          java.util.Properties p = new java.util.Properties();
+          java.io.InputStream is = new java.io.FileInputStream(f);
+          try { p.load(is); } finally { is.close(); }
+          String name = p.getProperty("name", "").trim();
+          if (name.length() == 0)
+          {
+            if (Sage.DBG) System.out.println("Ministry: preset " + f + " has no 'name' property; skipping");
+            continue;
+          }
+          if (!seen.add(name)) continue; // higher-precedence dir already won
+          String spec = buildPresetSpec(p);
+          if (spec != null)
+            Sage.put("transcoder/formats/" + name, spec);
+        }
+        catch (Exception e)
+        {
+          if (Sage.DBG) System.out.println("Ministry: failed loading preset " + f + ": " + e);
+        }
+      }
+    }
+  }
+
+  private static String buildPresetSpec(java.util.Properties p)
+  {
+    String container = p.getProperty("container", "mp4").trim();
+    String global = expandEncoderTokens(p.getProperty("global", "").trim());
+    String args = expandEncoderTokens(p.getProperty("args", "").trim());
+    if (args.length() == 0) return null;
+    StringBuilder sb = new StringBuilder();
+    sb.append("f=").append(sage.media.format.MediaFormat.escapeString(container)).append(';');
+    if (global.length() > 0)
+      sb.append("MRawCmdlineGlobal=").append(sage.media.format.MediaFormat.escapeString(global)).append(';');
+    sb.append("MRawCmdline=").append(sage.media.format.MediaFormat.escapeString(args)).append(';');
+    return sb.toString();
+  }
+
+  private static String expandEncoderTokens(String s)
+  {
+    if (s == null || s.length() == 0) return "";
+    if (s.indexOf("%V264%") != -1)
+    {
+      HwEncoder.Kind k = HwEncoder.pick("h264");
+      s = s.replace("%V264%", HwEncoder.encoderName(k, "h264"));
+    }
+    if (s.indexOf("%V265%") != -1)
+    {
+      HwEncoder.Kind k = HwEncoder.pick("hevc");
+      s = s.replace("%V265%", HwEncoder.encoderName(k, "hevc"));
+    }
+    return s;
+  }
 
   private static class MinistryHolder
   {
@@ -147,20 +231,13 @@ public class Ministry implements Runnable
   {
     jobCounter = Sage.getInt(NEXT_JOB_ID, 1);
 
+    // Sweep obsolete legacy preset names out of Sage.properties so the
+    // modernized catalogue below replaces them cleanly on first boot.
     for (int i = 0; i < DEAD_FORMAT_NAMES.length; i++)
       Sage.remove("transcoder/formats/" + DEAD_FORMAT_NAMES[i]);
-    for (int i = 0; i < PREDEFINED_TRANSCODER_FORMATS.length; i++)
-      Sage.put("transcoder/formats/" + PREDEFINED_TRANSCODER_FORMATS[i][0], PREDEFINED_TRANSCODER_FORMATS[i][1]);
-    if (MMC.getInstance().isNTSCVideoFormat())
-    {
-      for (int i = 0; i < PREDEFINED_TRANSCODER_FORMATS_NTSC.length; i++)
-        Sage.put("transcoder/formats/" + PREDEFINED_TRANSCODER_FORMATS_NTSC[i][0], PREDEFINED_TRANSCODER_FORMATS_NTSC[i][1]);
-    }
-    else
-    {
-      for (int i = 0; i < PREDEFINED_TRANSCODER_FORMATS_PAL.length; i++)
-        Sage.put("transcoder/formats/" + PREDEFINED_TRANSCODER_FORMATS_PAL[i][0], PREDEFINED_TRANSCODER_FORMATS_PAL[i][1]);
-    }
+
+    // Load the modernized NVENC/upscale preset catalogue from disk.
+    loadPresets();
   }
 
   public void notifyOfID(int x)

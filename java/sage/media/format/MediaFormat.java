@@ -143,6 +143,31 @@ public abstract class MediaFormat
 
   public static final String META_COMPRESSION_DETAILS = "CompressionDetails";
 
+  /**
+   * Verbatim ffmpeg argument string for the *after*-{@code -i} portion of the
+   * command line. When this metadata key is present on a destination
+   * {@link ContainerFormat}, {@link sage.FFMPEGTranscoder} skips the legacy
+   * stream-walk + {@code bf=}/{@code br=}/{@code f=} token translation and
+   * emits the value verbatim. Intended for modern NVENC / HEVC offline
+   * presets where the legacy translator would mangle {@code -cq}, {@code
+   * -hwaccel}, {@code -movflags}, {@code -vf scale_npp=...} etc.
+   *
+   * Stored in preset strings as {@code MRawCmdline=...;}. Token grammar:
+   * raw ffmpeg argv, space-separated, no quoting (filenames are added by the
+   * transcoder, not the preset). The {@code -i INPUT} pair is supplied
+   * automatically; the preset value starts with the first encoder/filter
+   * argument.
+   *
+   * Companion key {@link #META_RAW_FFMPEG_GLOBAL} carries the pre-{@code -i}
+   * args (typically {@code -hwaccel cuda -hwaccel_output_format cuda}).
+   */
+  public static final String META_RAW_FFMPEG_CMDLINE = "RawCmdline";
+
+  /** Verbatim ffmpeg argument string for the *before*-{@code -i} portion. See
+   *  {@link #META_RAW_FFMPEG_CMDLINE}. Stored in preset strings as
+   *  {@code MRawCmdlineGlobal=...;}. */
+  public static final String META_RAW_FFMPEG_GLOBAL = "RawCmdlineGlobal";
+
   public static final String[] ALL_META_PROPS = { META_WIDTH, META_HEIGHT, META_TITLE, META_ALBUM, META_ARTIST, META_ALBUM_ARTIST,
     META_COMPOSER, META_TRACK, META_TOTAL_TRACKS, META_YEAR, META_COMMENT, META_GENRE, META_GENRE_ID, META_LANGUAGE,
     META_THUMBNAIL_OFFSET, META_THUMBNAIL_SIZE, META_THUMBNAIL_DESC, META_DURATION, META_DESCRIPTION, META_COMPRESSION_DETAILS, META_RATED,
