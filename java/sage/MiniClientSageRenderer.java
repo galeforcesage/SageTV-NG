@@ -3875,6 +3875,20 @@ public class MiniClientSageRenderer extends SageRenderer
         // NG capability-protocol version. Empty on stock 9.x miniclients; non-empty
         // (e.g. "1.0.1") on NG-aware miniclients. Independent of FIRMWARE_VERSION.
         sendGetPropertyAsync("SAGETV_NG_VERSION");
+        // Per-player capability bias (Android NG miniclient). MINICLIENT_DEFAULT_PLAYER
+        // is "exoplayer" or "ijkplayer"; the EXO_*/IJK_* sets are the actual capability
+        // sets the corresponding player can decode. If the default-player set is
+        // non-empty we use it instead of the unioned VIDEO_CODECS/AUDIO_CODECS/etc.
+        // so transcode decisions match what the active player can actually play.
+        sendGetPropertyAsync("MINICLIENT_DEFAULT_PLAYER");
+        sendGetPropertyAsync("EXO_VIDEO_CODECS");
+        sendGetPropertyAsync("IJK_VIDEO_CODECS");
+        sendGetPropertyAsync("EXO_AUDIO_CODECS");
+        sendGetPropertyAsync("IJK_AUDIO_CODECS");
+        sendGetPropertyAsync("EXO_PUSH_AV_CONTAINERS");
+        sendGetPropertyAsync("IJK_PUSH_AV_CONTAINERS");
+        sendGetPropertyAsync("EXO_PULL_AV_CONTAINERS");
+        sendGetPropertyAsync("IJK_PULL_AV_CONTAINERS");
         sendBufferNow();
         // Now get capabilities properties for this specific miniclient
         // The default is to use image maps for text rendering
@@ -4505,6 +4519,96 @@ public class MiniClientSageRenderer extends SageRenderer
         if (ngVersion != null) ngVersion = ngVersion.trim();
         else ngVersion = "";
         if (Sage.DBG) System.out.println("MiniClient SAGETV_NG_VERSION=" + ngVersion);
+
+        // --- Per-player capability bias (Android NG miniclient) ---
+        // Read the 9 replies in the same order they were queued above. Each one is
+        // empty on stock 9.x clients that don't implement these GetProperty handlers.
+        String defaultPlayerProp = recvr.getStringReply();
+        String exoVideoCodecsProp = recvr.getStringReply();
+        String ijkVideoCodecsProp = recvr.getStringReply();
+        String exoAudioCodecsProp = recvr.getStringReply();
+        String ijkAudioCodecsProp = recvr.getStringReply();
+        String exoPushContainersProp = recvr.getStringReply();
+        String ijkPushContainersProp = recvr.getStringReply();
+        String exoPullContainersProp = recvr.getStringReply();
+        String ijkPullContainersProp = recvr.getStringReply();
+        if (Sage.DBG)
+        {
+          System.out.println("MiniClient MINICLIENT_DEFAULT_PLAYER=" + defaultPlayerProp);
+          System.out.println("MiniClient EXO_VIDEO_CODECS=" + exoVideoCodecsProp);
+          System.out.println("MiniClient IJK_VIDEO_CODECS=" + ijkVideoCodecsProp);
+          System.out.println("MiniClient EXO_AUDIO_CODECS=" + exoAudioCodecsProp);
+          System.out.println("MiniClient IJK_AUDIO_CODECS=" + ijkAudioCodecsProp);
+          System.out.println("MiniClient EXO_PUSH_AV_CONTAINERS=" + exoPushContainersProp);
+          System.out.println("MiniClient IJK_PUSH_AV_CONTAINERS=" + ijkPushContainersProp);
+          System.out.println("MiniClient EXO_PULL_AV_CONTAINERS=" + exoPullContainersProp);
+          System.out.println("MiniClient IJK_PULL_AV_CONTAINERS=" + ijkPullContainersProp);
+        }
+
+        // Pick the candidate sets that match the declared default player. Fall back
+        // to the existing union (VIDEO_CODECS / AUDIO_CODECS / PUSH_AV_CONTAINERS /
+        // PULL_AV_CONTAINERS) for any category where the per-player set is missing
+        // or empty, so this is purely additive: stock clients see no behavior change.
+        String defaultPlayer = (defaultPlayerProp == null) ? "" : defaultPlayerProp.trim().toLowerCase();
+        boolean usePerPlayer = "exoplayer".equals(defaultPlayer) || "ijkplayer".equals(defaultPlayer);
+        if (usePerPlayer)
+        {
+          String pickedVideo    = "exoplayer".equals(defaultPlayer) ? exoVideoCodecsProp     : ijkVideoCodecsProp;
+          String pickedAudio    = "exoplayer".equals(defaultPlayer) ? exoAudioCodecsProp     : ijkAudioCodecsProp;
+          String pickedPushCnt  = "exoplayer".equals(defaultPlayer) ? exoPushContainersProp  : ijkPushContainersProp;
+          String pickedPullCnt  = "exoplayer".equals(defaultPlayer) ? exoPullContainersProp  : ijkPullContainersProp;
+
+          if (pickedVideo != null && pickedVideo.trim().length() > 0)
+          {
+            java.util.Set<String> perPlayerVideo = createSetFromString(pickedVideo);
+            if (!perPlayerVideo.isEmpty())
+            {
+              if (Sage.DBG) System.out.println("MiniClient biasing VIDEO_CODECS to " + defaultPlayer + ": " + perPlayerVideo + " (was " + videoCodecs + ")");
+              videoCodecs = perPlayerVideo;
+            }
+          }
+          if (pickedAudio != null && pickedAudio.trim().length() > 0)
+          {
+            java.util.Set<String> perPlayerAudio = createSetFromString(pickedAudio);
+            if (!perPlayerAudio.isEmpty())
+            {
+              // Reapply AC-4 / EAC3 spelling normalization so the per-player set
+              // matches the canonical names used elsewhere in the server.
+              if (perPlayerAudio.contains("AC4") || perPlayerAudio.contains("AC-4"))
+              {
+                perPlayerAudio.add("AC4");
+                perPlayerAudio.add(sage.media.format.MediaFormat.AC4.toUpperCase());
+              }
+              if (perPlayerAudio.contains("EAC3") || perPlayerAudio.contains("EC-3") || perPlayerAudio.contains("E-AC3"))
+              {
+                perPlayerAudio.add("EAC3");
+                perPlayerAudio.add("EC-3");
+              }
+              if (Sage.DBG) System.out.println("MiniClient biasing AUDIO_CODECS to " + defaultPlayer + ": " + perPlayerAudio + " (was " + audioCodecs + ")");
+              audioCodecs = perPlayerAudio;
+            }
+          }
+          if (pickedPushCnt != null && pickedPushCnt.trim().length() > 0)
+          {
+            java.util.Set<String> perPlayerPush = createSetFromString(pickedPushCnt);
+            if (!perPlayerPush.isEmpty())
+            {
+              if (Sage.DBG) System.out.println("MiniClient biasing PUSH_AV_CONTAINERS to " + defaultPlayer + ": " + perPlayerPush + " (was " + pushContainers + ")");
+              pushContainers = perPlayerPush;
+            }
+          }
+          if (pickedPullCnt != null && pickedPullCnt.trim().length() > 0)
+          {
+            java.util.Set<String> perPlayerPull = createSetFromString(pickedPullCnt);
+            if (!perPlayerPull.isEmpty())
+            {
+              if (Sage.DBG) System.out.println("MiniClient biasing PULL_AV_CONTAINERS to " + defaultPlayer + ": " + perPlayerPull + " (was " + pullContainers + ")");
+              pullContainers = perPlayerPull;
+            }
+          }
+          // Echo back what we actually used so the client can confirm.
+          sendSetProperty("CAP_EFFECTIVE_PLAYER", defaultPlayer);
+        }
 
         // Resolve the effective client profile
         sage.client.ClientProfileManager profileMgr = sage.client.ClientProfileManager.getInstance();
