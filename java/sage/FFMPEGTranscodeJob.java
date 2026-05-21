@@ -114,6 +114,24 @@ public class FFMPEGTranscodeJob extends TranscodeJob
     }
   }
 
+  public boolean pauseTranscode()
+  {
+    FFMPEGTranscoder tempy = tranny;
+    return tempy != null && tempy.pauseForRecording();
+  }
+
+  public boolean resumeTranscode()
+  {
+    FFMPEGTranscoder tempy = tranny;
+    return tempy != null && tempy.resumeForRecording();
+  }
+
+  public boolean isPausedForRecording()
+  {
+    FFMPEGTranscoder tempy = tranny;
+    return tempy != null && tempy.isPausedForRecording();
+  }
+
   public float getPercentComplete()
   {
     FFMPEGTranscoder tempy = tranny;

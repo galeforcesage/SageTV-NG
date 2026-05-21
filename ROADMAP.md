@@ -203,6 +203,123 @@ and `--enable-cuda-nvcc` to enable true full-GPU pipelines; then swap
 `scale=W:H:flags=lanczos` → `scale_npp=W:H:interp_algo=lanczos` (and
 restore `-hwaccel_output_format cuda`) in the `_NV` presets.
 
+### AI upscale via pipeline presets  *(scope; deferred until SD/720p volume warrants)*
+
+**Motivation.** Current `UPSCALE_1440` / `UPSCALE_2160` use Lanczos.
+For 1080p→1440p of HD OTA recordings the perceptual delta vs AI is
+small. AI upscale shines for **480p SD** and **720p cable/streaming**
+sources where classical filters can't invent the missing detail.
+Defer until there is enough such content to justify the GPU-hours.
+
+**Backend choice.** **Real-ESRGAN-ncnn-vulkan** (Tencent ncnn + Vulkan):
+
+- Single static binary, no Python / TF / Torch runtime.
+- Vulkan path works inside the existing container; needs
+  `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility,graphics` (current
+  value lacks `graphics`; one-line `run_mine.sh` change).
+- Models worth shipping:
+  - `realesr-general-x4v3` — balanced, decompression-noise removal,
+    **best default for OTA TV**.
+  - `realesr-animevideov3` — fast, animation/cartoons.
+  - `realesrgan-x4plus` — slow, photo-realistic, max quality.
+- Expected throughput on RTX 2060, 1080→4K, default tile size:
+  ~1–3 fps (≈ 0.05× realtime for a 24fps source). A 60-min show
+  takes ~3–6 GPU-hours. Acceptable only as overnight batch.
+- Alternative if any content is anime: **Anime4K** as mpv GLSL shaders
+  on the MiniClient — real-time at playback, zero offline cost. That
+  is a separate (playback-track) item, not a Ministry preset.
+
+**Constraint that drives the change.** Ministry presets today are
+single-ffmpeg-invocation. AI upscale fundamentally needs a pipeline:
+
+```
+ffmpeg (decode + optional denoise, write raw frames to fifo/stdout)
+  │
+  ▼
+realesrgan-ncnn-vulkan (upscale frame-by-frame, stdin → stdout)
+  │
+  ▼
+ffmpeg (read raw frames from fifo/stdin, encode HEVC NVENC, mux audio
+        from the original via -i original.mpg -map 1:a -c:a aac)
+```
+
+That is two ffmpeg processes + the upscaler, glued by a fifo or a
+shell `|`. `FFMPEGTranscoder` cannot model this with its current
+`MRawCmdline` single-exec form.
+
+**Scope of the engine change** (compact; ~300–500 LOC):
+
+1. `presets/transcoder/*.properties` schema extension. New optional
+   keys; presence of `pipeline=` switches Ministry to pipeline mode:
+   ```
+   name=AI_UPSCALE_1440_GENERAL
+   displayName=TV \u2013 AI Enhanced HD (1440p)
+   pipeline=ai_upscale          # selector for which wrapper recipe
+   ai_model=realesr-general-x4v3
+   ai_scale=2
+   ai_tile=256                  # 0 = auto; smaller = less VRAM, slower
+   container=mp4
+   # decode-stage ffmpeg args (input → raw frames on stdout)
+   pipeline_decode=-hwaccel cuda -i ${INPUT} -map 0:v:0 \
+       -vf scale=1920:1080:flags=lanczos,format=rgb24 \
+       -f rawvideo -
+   # encode-stage ffmpeg args (raw frames on stdin → final file)
+   pipeline_encode=-f rawvideo -pix_fmt rgb24 -s 3840x2160 -r ${FPS} -i - \
+       -i ${INPUT} -map 0:v -map 1:a:0? -c:v %V265% -preset p6 \
+       -rc:v vbr -cq:v 22 -b:v 12000k -maxrate 18000k \
+       -c:a aac -b:a 192k -ac 2 -movflags +faststart ${OUTPUT}
+   ```
+2. `Ministry.buildPresetSpec()` — when `pipeline=` is present, emit a
+   new spec form (e.g. `MPipelineKind=ai_upscale;MPipelineSpec=…`)
+   instead of `MRawCmdline=…`. Carry the extra keys verbatim so the
+   transcoder can read them back.
+3. `FFMPEGTranscoder.startTranscode()` — branch on the new pipeline
+   marker. New helper `startPipelineTranscode()`:
+   - Probe source resolution + fps via `FFMPEGMediaInfo`
+   (already available) to fill `${FPS}` and pick `${OUTPUT_W}x${H}`.
+   - Build three ProcessBuilder commands.
+   - Wire them via `Pipe` / `ProcessBuilder.Redirect.PIPE`; or `bash
+     -c "ffmpeg … | realesrgan … | ffmpeg …"` to keep it simple
+     (acceptable since the executable path is sage-controlled).
+   - Track the **encode** process for exitValue / job completion
+     (it's the last stage; when it exits 0 the file is final).
+   - SIGTERM all three on cancel; `Process.destroyForcibly()` after
+     `xcode_pipeline_term_grace_ms` (default 5000).
+4. `TranscodeJob` — no schema change required (the spec string already
+   round-trips arbitrary contents). Progress parsing: the **encode**
+   stage's stderr drives the % gauge exactly like single-exec presets
+   once `xcode_ffmpeg_loglevel=info` is in effect.
+5. Resource gating — same as today (serial via Ministry's `converting`
+   list). Pipeline presets should additionally honor a new opt-in
+   `transcoder/pipeline_max_concurrent=1` (hardcoded ceiling at 1
+   until we add the recording/playback contention gate listed in the
+   "Stability / data" backlog below).
+6. Container fix — `run_mine.sh`: add `graphics` to
+   `NVIDIA_DRIVER_CAPABILITIES`; mount `realesrgan-ncnn-vulkan`
+   binary + `models/` dir into `/opt/sagetv/server/ai/`. Document the
+   one-line `Sage.properties` knob `transcoder/ai_upscaler_bin=`.
+
+**Out of scope for v1:**
+
+- Multi-pipeline parallelism (one AI job at a time).
+- Custom model upload UI (drop files in `/opt/sagetv/server/ai/models/`).
+- RIFE frame interpolation (separate roadmap item if ever wanted).
+- TensorRT-optimized models — Real-ESRGAN-TRT is faster but needs a
+  GPU-specific compiled engine; not worth the build complexity until
+  someone actually wants it.
+- NVIDIA RTX VSR (RTX 30/40 only; not available on the 2060).
+
+**Validation.** Convert one known 480p SD recording with
+`AI_UPSCALE_1080_GENERAL` and one known 1080p OTA with
+`AI_UPSCALE_1440_GENERAL`. Compare against the Lanczos baseline at
+identical bitrate. Decision gate: ship only if the SD→HD case is
+**unambiguously** better and the HD→QHD case is **at least equal**
+(no waxy faces, no ringing on text/scoreboards). If HD→QHD is
+controversial, keep AI presets SD-only.
+
+**Estimated effort.** 3–5 days end-to-end (engine + preset schema +
+two shipped presets + container/runtime plumbing + validation).
+
 ## Playback track
 
 - **Per-airing audio language UI selector.** Server-side language-aware

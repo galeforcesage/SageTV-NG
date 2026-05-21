@@ -38,6 +38,23 @@ public class TranscodeAPI
       public Object runSafely(Catbert.FastStack stack) throws Exception{
         return Sage.keys("transcoder/formats");
       }});
+    rft.put(new PredefinedJEPFunction("Transcode", "GetTranscodeFormatDisplayName", new String[] { "FormatName" }, true)
+    {
+      /**
+       * Gets the UI-friendly display label for the specified transcode format.
+       * Falls back to the raw format name if no displayName was registered
+       * (presets register theirs via the optional displayName= property file key).
+       * @param FormatName the internal transcode format name
+       * @return the friendly label to display in the UI, or the format name itself if no label is set
+       * @since 9.3
+       *
+       * @declaration public String GetTranscodeFormatDisplayName(String FormatName);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        String name = getString(stack);
+        if (name == null) return null;
+        return Sage.get("transcoder/format_labels/" + name, name);
+      }});
     rft.put(new PredefinedJEPFunction("Transcode", "GetTranscodeFormatDetails", new String[] { "FormatName" }, true)
     {
       /**
