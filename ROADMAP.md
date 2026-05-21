@@ -81,12 +81,12 @@ Phases 0–3 cover real-world need without touching the broadcast stack.
 
 ## FFmpeg track
 
-- **Unify on a single SageTV-patched, AC-4-capable FFmpeg binary.**
-  Replace the current 2010 SageTV-patched ffmpeg + missing-from-this-
-  container ffmpeg-ac4 + wrapper-script stack with one binary at
-  `/opt/sagetv/server/ffmpeg` that has all four SageTV custom flags
-  (`-stdinctrl`, `-activefile`, `-dumpmetadata`, `-brokendts`), AC-4
-  decode, NVENC, libx265, libfdk-aac. Full design in
+- ~~**Unify on a single SageTV-patched, AC-4-capable FFmpeg binary.**~~
+  ✅ done — see `Done` section. Unified binary deployed at
+  `/opt/sagetv/server/ffmpeg` with all four SageTV custom flags,
+  AC-4 decode, NVENC, libx265, libfdk-aac. Old scripts
+  (`build-modern-ffmpeg.sh`, `build-ac4-ffmpeg.sh`,
+  `ffmpeg-wrapper.sh`) deleted. Design doc:
   [docs/FFMPEG_UNIFICATION_PLAN.md](docs/FFMPEG_UNIFICATION_PLAN.md).
 - ~~**6.x → 7.x CLI audit.**~~ ✅ done — see `Done` section. Full
   inventory of every direct ffmpeg invocation in `FFMPEGTranscoder`,
@@ -453,6 +453,17 @@ useful):
 
 ## Done
 
+- **Unified SageTV-patched, AC-4-capable FFmpeg binary** —
+  `docker/build-sagetv-ffmpeg.sh` builds a single binary from the
+  [elliotclee/FFmpeg](https://github.com/elliotclee/FFmpeg) fork
+  (commit `1dc7ff583b`) with inline SageTV patches for `-stdinctrl`,
+  `-activefile`, `-dumpmetadata`, `-brokendts`, plus AC-4 decode,
+  NVENC (h264/hevc/av1), libx264, libx265, libfdk-aac, libxvid,
+  libfreetype. Dockerfile stage 1 runs the build script; stage 2
+  installs the output at `/opt/sagetv/server/{ffmpeg,ffprobe}`.
+  Obsolete scripts deleted: `build-modern-ffmpeg.sh`,
+  `build-ac4-ffmpeg.sh`, `ffmpeg-wrapper.sh`. Full design in
+  [docs/FFMPEG_UNIFICATION_PLAN.md](docs/FFMPEG_UNIFICATION_PLAN.md).
 - **FFmpeg 6.x → 7.x CLI audit completed** — `4fa26838` (final
   cleanup) on top of `1515b199`, `3e13d648`, `d0451217`. Full sweep
   of every direct ffmpeg invocation in the Java tree:
