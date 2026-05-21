@@ -329,6 +329,18 @@ two shipped presets + container/runtime plumbing + validation).
   the language per show without changing the global default.
 - **CTA-708 captions in HEVC SEI.** Accessibility win; needs SEI
   extraction or pass-through to client.
+- **Comskip end-to-end verification.** Suspected broken on this branch.
+  Audit the full pipeline: `comskip` invocation (job submission,
+  output `.edl`/`.txt` placement), `SkipMatrix` load
+  (`VideoFrame.commSkipMatrix` + `commSkipFileStart`), auto-skip
+  monitor enable/disable, and the REW-into-commercial preroll logic
+  (`VideoFrame.java` ~line 1840). Verify: (1) comskip jobs actually
+  run on new recordings, (2) `.edl` parses into segments, (3) auto-skip
+  jumps over commercials during playback, (4) REW landing inside a
+  commercial repositions to preroll-before-break instead of bouncing
+  forward. Likely regressions from recent VideoFrame.java churn —
+  add an integration test that loads a known `.edl` and asserts
+  segment count + auto-skip behavior.
 
 ---
 

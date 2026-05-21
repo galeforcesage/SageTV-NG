@@ -1272,6 +1272,28 @@ public class MiniPlayer implements DVDMediaPlayer
             " reason=" + profileDecision.reason +
             " (enforced via clamped codec/container sets, existing logic result: transcoded=" + transcoded + ")");
 
+        // ----- Case A: profile says DIRECT_PLAY but legacy decided to transcode.
+        // The legacy decision was driven by xcode_qualities / push-mode defaults
+        // (e.g. mode='DVD6Ch' or a container=matroska;videobitrate=4000000;...
+        // template) — NOT by a real client capability gap. Forcing a remux into
+        // Matroska when the client already decodes the source container/codecs
+        // natively is harmful: it breaks ExoPlayer (e.g. MPEG2-Video inside MKV
+        // on Galaxy Tab → ExoPlaybackException retry loop) and wastes CPU.
+        // Clear the transcode flag so the source pushes raw end-to-end.
+        if (profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.DIRECT_PLAY
+            && transcoded
+            && pushMode && mcsr != null
+            && majorTypeHint == MediaFile.MEDIATYPE_VIDEO)
+        {
+          if (Sage.DBG) System.out.println("MiniPlayer: profile-authoritative override forces DIRECT_PLAY"
+              + " (legacy had transcoded=true mode=" + prefTranscodeMode + ") — clearing transcode,"
+              + " pushing source as-is. reason=" + profileDecision.reason);
+          transcoded = false;
+          prefTranscodeMode = null;
+          dynamicRateAdjust = false;
+          useOriginalAudioTrack = true;
+        }
+
         if (!transcoded
             && pushMode && mcsr != null
             && majorTypeHint == MediaFile.MEDIATYPE_VIDEO)
