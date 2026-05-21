@@ -1075,3 +1075,6 @@ vf_debug.txt
 
 # Local diagnostic scripts with hardcoded host info (do not commit)
 tools/
+
+# Local deploy/diagnostic helpers (contain hardcoded host/credentials)
+build/*.sh

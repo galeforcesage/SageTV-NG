@@ -237,6 +237,13 @@ public abstract class TranscodeJob
 
   protected abstract void transcodeNow();
 
+  /** Suspend the underlying transcoder process (default: no-op). */
+  public boolean pauseTranscode() { return false; }
+  /** Resume a previously paused transcoder process (default: no-op). */
+  public boolean resumeTranscode() { return false; }
+  /** True if this job is currently paused for a recording. */
+  public boolean isPausedForRecording() { return false; }
+
   // subclasses should call this first before they do their cleanup
   public void cleanupCurrentTranscode()
   {

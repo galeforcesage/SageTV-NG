@@ -89,6 +89,9 @@ public class Ministry implements Runnable
     "DVD-Long Play with AC3",
     "DVD-Extra Long Play",
     "DVD-Extra Long Play with AC3",
+    // ── Renamed in 2026-05 preset rewrite (now UPSCALE_1440 / UPSCALE_2160) ──
+    "UPSCALE_1440_FROM_1080",
+    "UPSCALE_2160_FROM_1080",
   };
 
   // Retained for legacy callers of getPredefinedTargetFormat() that may still
@@ -150,14 +153,25 @@ public class Ministry implements Runnable
     "TABLET_10_1080", "TABLET_12_1440",
     "TV_1080_COMPAT", "TV_4K_HEVC",
     "ARCHIVE_HEVC_MKV", "DVD_LEGACY_MPEG2",
-    "UPSCALE_1440_FROM_1080", "UPSCALE_2160_FROM_1080",
+    "UPSCALE_1440", "UPSCALE_2160",
   };
+
+  // Bump when PRESET_SORT_ORDER changes shape (rename / reorder) so the new
+  // default replaces a stale auto-migrated value still sitting in Sage.properties.
+  private static final String PRESET_SORT_ORDER_VERSION = "2026-05-rename-upscale";
+  private static final String PRESET_SORT_ORDER_VERSION_PROP = "transcoder/sorting_order2_version";
 
   private static void migrateSortOrder()
   {
     String cur = Sage.get(XCODE_SORT_ORDER_PROP, null);
-    if (cur != null && cur.length() > 0 && !LEGACY_XCODE_SORT_ORDER.equals(cur))
-      return; // user-customized or already migrated; leave alone
+    String curVer = Sage.get(PRESET_SORT_ORDER_VERSION_PROP, null);
+    boolean migrated = (cur != null && cur.length() > 0 && !LEGACY_XCODE_SORT_ORDER.equals(cur));
+    boolean versionMatches = PRESET_SORT_ORDER_VERSION.equals(curVer);
+    // Leave a user-customized value alone (any value not matching either a previous
+    // auto-migration or the legacy default). Detect auto-migrated values by checking
+    // they consist entirely of names known to Ministry (current or DEAD).
+    if (migrated && !versionMatches && !isAutoMigratedSortOrder(cur))
+      return; // user-customized; do not clobber
     StringBuilder sb = new StringBuilder();
     for (int i = 0; i < PRESET_SORT_ORDER.length; i++)
     {
@@ -165,6 +179,21 @@ public class Ministry implements Runnable
       sb.append(PRESET_SORT_ORDER[i]);
     }
     Sage.put(XCODE_SORT_ORDER_PROP, sb.toString());
+    Sage.put(PRESET_SORT_ORDER_VERSION_PROP, PRESET_SORT_ORDER_VERSION);
+  }
+
+  private static boolean isAutoMigratedSortOrder(String val)
+  {
+    java.util.Set<String> known = new java.util.HashSet<String>();
+    for (String s : PRESET_SORT_ORDER) known.add(s);
+    for (String s : DEAD_FORMAT_NAMES) known.add(s);
+    for (String s : val.split(";"))
+    {
+      s = s.trim();
+      if (s.length() == 0) continue;
+      if (!known.contains(s)) return false;
+    }
+    return true;
   }
 
   private static void loadPresets()
@@ -207,7 +236,10 @@ public class Ministry implements Runnable
           if (!seen.add(name)) continue; // higher-precedence dir already won
           String spec = buildPresetSpec(p);
           if (spec != null)
+          {
             Sage.put("transcoder/formats/" + name, spec);
+            applyPresetDisplayName(p, name);
+          }
         }
         catch (Exception e)
         {
@@ -229,6 +261,20 @@ public class Ministry implements Runnable
       sb.append("MRawCmdlineGlobal=").append(sage.media.format.MediaFormat.escapeString(global)).append(';');
     sb.append("MRawCmdline=").append(sage.media.format.MediaFormat.escapeString(args)).append(';');
     return sb.toString();
+  }
+
+  // UI-friendly label for the preset. Persisted under transcoder/format_labels/<NAME>
+  // (NOT under transcoder/formats/ — that subtree is enumerated by
+  // TranscodeAPI.GetTranscodeFormats() and must contain only preset keys).
+  // STVs / clients fetch via TranscodeAPI.GetTranscodeFormatDisplayName(name),
+  // which falls back to the raw name if no label was provided.
+  private static final String FORMAT_LABEL_PREFIX = "transcoder/format_labels/";
+
+  private static void applyPresetDisplayName(java.util.Properties p, String name)
+  {
+    String label = p.getProperty("displayName", "").trim();
+    if (label.length() == 0) label = name;
+    Sage.put(FORMAT_LABEL_PREFIX + name, label);
   }
 
   private static String expandEncoderTokens(String s)
@@ -387,6 +433,30 @@ public class Ministry implements Runnable
       long waitTime = Sage.getLong("mstry_engine_update_frequency", 3*Sage.MILLIS_PER_MIN);
       try
       {
+        // Pre-compute recording state once per tick — used to gate parallel
+        // transcodes and to drive transcoder/pause_during_recording.
+        boolean anyDeviceRecording = false;
+        try
+        {
+          sage.CaptureDevice[] cds = MMC.getInstance().getCaptureDevices();
+          if (cds != null)
+          {
+            for (int ci = 0; ci < cds.length; ci++)
+            {
+              if (cds[ci] != null && cds[ci].isRecording())
+              {
+                anyDeviceRecording = true;
+                break;
+              }
+            }
+          }
+        }
+        catch (Throwable t) { /* defensive — never let recording probe break the tick */ }
+
+        int maxConcurrent = anyDeviceRecording ? 1
+            : Math.max(1, Sage.getInt("transcoder/max_concurrent_when_idle", 1));
+        boolean pauseDuringRec = Sage.getBoolean("transcoder/pause_during_recording", false);
+
         // Check if anything that's waiting to be converted is now ready for the conversion queue
         if (!waitingForConversion.isEmpty())
         {
@@ -395,6 +465,7 @@ public class Ministry implements Runnable
             TranscodeJob tj = (TranscodeJob) waitingForConversion.get(i);
             if (tj.isReadyForConversion())
             {
+              if (converting.size() >= maxConcurrent) break;
               waitingForConversion.removeElementAt(i);
               startConversion(tj);
             }
@@ -411,9 +482,19 @@ public class Ministry implements Runnable
 
         synchronized (converting)
         {
-          if (converting.size() > 0)
+          // Tick the state machine for every active job (was: only converting.get(0)).
+          // Iterate backwards because TRANSCODE_FAILED/DESTROYED/LIMBO branches mutate the list.
+          for (int ci = converting.size() - 1; ci >= 0; ci--)
           {
-            TranscodeJob mainConvert = (TranscodeJob) converting.get(0);
+            TranscodeJob mainConvert = (TranscodeJob) converting.get(ci);
+            // Honor pause_during_recording: SIGSTOP/SIGCONT the running ffmpeg.
+            if (pauseDuringRec && mainConvert.getJobState() == TranscodeJob.TRANSCODING)
+            {
+              if (anyDeviceRecording && !mainConvert.isPausedForRecording())
+                mainConvert.pauseTranscode();
+              else if (!anyDeviceRecording && mainConvert.isPausedForRecording())
+                mainConvert.resumeTranscode();
+            }
             switch (mainConvert.getJobState())
             {
               case TranscodeJob.WAITING:
@@ -423,14 +504,14 @@ public class Ministry implements Runnable
               case TranscodeJob.TRANSCODING:
                 break;
               case TranscodeJob.TRANSCODE_FAILED:
-                converting.remove(0);
+                converting.remove(ci);
                 waitingForAbsolution.add(mainConvert);
                 mainConvert.cleanupCurrentTranscode();
                 mainConvert.abandon();
                 dirty = true;
                 break;
               case TranscodeJob.DESTROYED:
-                converting.remove(0);
+                converting.remove(ci);
                 mainConvert.cleanupCurrentTranscode();
                 mainConvert.abandon();
                 dirty = true;
@@ -450,7 +531,7 @@ public class Ministry implements Runnable
                 else
                 {
                   mainConvert.setJobState(TranscodeJob.LIMBO);
-                  converting.remove(0);
+                  converting.remove(ci);
                   waitingForAbsolution.add(mainConvert);
                 }
                 dirty = true;

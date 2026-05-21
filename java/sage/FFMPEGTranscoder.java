@@ -85,9 +85,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
     return xcodeDone && lastExitCode == 0;
   }
 
-  public void pauseTranscode()
-  {
-  }
+  /** TranscodeEngine interface stub — not used; see pauseForRecording(). */
+  public void pauseTranscode() { }
 
   public void readFullyTranscodedData(byte[] buf, int inOffset, int inLength) throws java.io.IOException
   {
@@ -885,9 +884,28 @@ public class FFMPEGTranscoder implements TranscodeEngine
     lastExitCode = -1;
 
     java.util.ArrayList xcodeParamsVec = new java.util.ArrayList();
-    // Reduce process priority this way on non-windows platforms
+    // Reduce process priority this way on non-windows platforms.
+    // Optional ionice wrap (transcoder I/O priority class):
+    //   xcode_ionice_class= (empty = skip) | 1 (realtime) | 2 (besteffort) | 3 (idle)
+    // Optional explicit nice level:
+    //   xcode_nice_level=   (empty = system default +10) | 0..19
     if (!Sage.WINDOWS_OS && Sage.getBoolean("xcode_reduce_process_priority", true))
+    {
+      String ioniceClass = Sage.get("xcode_ionice_class", "");
+      if (ioniceClass.length() > 0)
+      {
+        xcodeParamsVec.add("ionice");
+        xcodeParamsVec.add("-c");
+        xcodeParamsVec.add(ioniceClass);
+      }
       xcodeParamsVec.add("nice");
+      String niceLevel = Sage.get("xcode_nice_level", "");
+      if (niceLevel.length() > 0)
+      {
+        xcodeParamsVec.add("-n");
+        xcodeParamsVec.add(niceLevel);
+      }
+    }
     // Find the transcoder engine — pass the source format so we can swap to the
     // AC-4 capable ffmpeg build when the source is HEVC/AC-4 (ATSC 3.0).
     xcodeParamsVec.add(getTranscoderPath(sourceFormat));
@@ -928,8 +946,15 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (httplsMode)
       segmentTargetCounter = (int)(transcodeStartSeekTime / segmentDur);
 
+    // ffmpeg log verbosity. Historically hard-coded to "3" (below AV_LOG_FATAL=8),
+    // which silenced ALL stderr — including "Permission denied" on the output file
+    // and the periodic "frame=... time=... speed=..." progress lines the progress
+    // parser relies on (UI gauge stayed at 0%). Default to "info" so the UI tracks
+    // progress and operational errors are visible. Override via Sage.properties:
+    //   xcode_ffmpeg_loglevel=quiet|panic|fatal|error|warning|info|verbose|debug
+    // or a numeric level (0-56). Set to "error" for quieter logs once stable.
     xcodeParamsVec.add("-v");
-    xcodeParamsVec.add("3");
+    xcodeParamsVec.add(Sage.get("xcode_ffmpeg_loglevel", "info"));
 
     xcodeParamsVec.add("-y");
 
@@ -2066,6 +2091,64 @@ public class FFMPEGTranscoder implements TranscodeEngine
         segmentData[i].file.delete();
     }
   }
+
+  /**
+   * Signal the running ffmpeg child process (and any descendants) with SIGSTOP
+   * so the OS suspends it without losing state. Used by Ministry when a tuner
+   * starts recording and {@code transcoder/pause_during_recording} is enabled.
+   * No-op on Windows or when no process is running. Returns true on success.
+   */
+  public boolean pauseForRecording()
+  {
+    if (Sage.WINDOWS_OS) return false;
+    Process p = xcodeProcess;
+    if (p == null || !p.isAlive()) return false;
+    boolean ok = sendSignalToProcessTree(p, "STOP");
+    if (ok) pausedForRecording = true;
+    return ok;
+  }
+
+  /** Resume a previously paused transcode (SIGCONT). */
+  public boolean resumeForRecording()
+  {
+    if (Sage.WINDOWS_OS) return false;
+    Process p = xcodeProcess;
+    if (p == null || !p.isAlive())
+    {
+      pausedForRecording = false;
+      return false;
+    }
+    boolean ok = sendSignalToProcessTree(p, "CONT");
+    if (ok) pausedForRecording = false;
+    return ok;
+  }
+
+  public boolean isPausedForRecording() { return pausedForRecording; }
+
+  private boolean sendSignalToProcessTree(Process p, String sig)
+  {
+    boolean any = false;
+    try
+    {
+      long pid = p.pid();
+      Runtime.getRuntime().exec(new String[]{"kill", "-" + sig, Long.toString(pid)});
+      any = true;
+    }
+    catch (Throwable t) { if (XCODE_DEBUG) System.out.println("kill -" + sig + " on parent failed: " + t); }
+    // The parent may be the `nice` wrapper or even `ionice` — also signal descendants
+    // so the real ffmpeg process is reliably paused/resumed.
+    try
+    {
+      p.descendants().forEach(ph -> {
+        try { Runtime.getRuntime().exec(new String[]{"kill", "-" + sig, Long.toString(ph.pid())}); }
+        catch (Throwable t) { if (XCODE_DEBUG) System.out.println("kill -" + sig + " on desc failed: " + t); }
+      });
+    }
+    catch (Throwable t) { if (XCODE_DEBUG) System.out.println("descendants() failed: " + t); }
+    return any;
+  }
+
+  private volatile boolean pausedForRecording;
 
   public void setEnableOutputBuffering(boolean x)
   {
