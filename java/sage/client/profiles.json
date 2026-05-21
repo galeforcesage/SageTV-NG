@@ -73,8 +73,8 @@
     "android_modern": {
       "description": "Android MiniClient - HEVC capable; per-client audio caps drive transcode decisions",
       "managed": true,
-      "containers": ["MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS"],
-      "video_codecs": ["H.264", "HEVC"],
+      "containers": ["MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS", "MPEG", "MPEG1-PS", "QUICKTIME", "FLASHVIDEO", "OGG", "MP3", "AAC", "WAV"],
+      "video_codecs": ["H.263", "MPEG1-VIDEO", "MPEG2-VIDEO", "MPEG4-VIDEO", "MSMPEG4-VIDEO", "H.264", "VC1", "WMV7", "WMV8", "WMV9", "HEVC", "VP8", "VP9", "AV1"],
       "audio_codecs": ["AAC", "AC3", "EAC3", "EC-3", "AC4", "AC-4", "DTS", "DCA", "MP3", "MP2"],
       "allow_hevc": true,
       "auto_remux": "on_failure",

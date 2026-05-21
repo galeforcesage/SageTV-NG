@@ -403,7 +403,11 @@ public class ClientProfileManager
     profiles.put("android_modern", new ClientProfile(
         "android_modern", "Android MiniClient", true,
         Arrays.asList("MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS", "MPEG", "MPEG1-PS", "QUICKTIME", "FLASHVIDEO", "OGG", "MP3", "AAC", "WAV"),
-        Arrays.asList("H.263", "MPEG4-VIDEO", "MSMPEG4-VIDEO", "H.264", "VC1", "WMV7", "WMV8", "WMV9", "HEVC", "VP8", "VP9"),
+        // AndroidTV / ExoPlayer hardware decode set. MPEG2-VIDEO is required
+        // for ATSC 1.0 / OTA recordings (DIRECT_PLAY > REMUX > TRANSCODE rule:
+        // highest quality at lowest CPU/bandwidth cost). MPEG1-VIDEO too —
+        // covers VCD-source and a few cable channels.
+        Arrays.asList("H.263", "MPEG1-VIDEO", "MPEG2-VIDEO", "MPEG4-VIDEO", "MSMPEG4-VIDEO", "H.264", "VC1", "WMV7", "WMV8", "WMV9", "HEVC", "VP8", "VP9", "AV1"),
         Arrays.asList("MPEG1", "MP2", "MPG1L2", "MP3", "MPG1L3", "VORBIS", "AAC", "AAC-HE", "FLAC", "ALAC", "PCM", "PCM_S16LE", "DTS", "DCA", "DTS-HD", "DTS-MA", "AC3", "EAC3", "EC-3", "DOLBYTRUEHD", "OPUS"),
         true, ClientProfile.AUTO_REMUX_ON_FAILURE, 0, 0, true));
 
@@ -412,7 +416,10 @@ public class ClientProfileManager
     profiles.put("android_legacy", new ClientProfile(
         "android_legacy", "Legacy Android MiniClient (pre-AC4)", true,
         Arrays.asList("MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS", "MPEG", "MPEG1-PS", "QUICKTIME", "FLASHVIDEO", "OGG", "MP3", "AAC", "WAV"),
-        Arrays.asList("H.263", "MPEG4-VIDEO", "MSMPEG4-VIDEO", "H.264", "VC1", "WMV7", "WMV8", "WMV9", "HEVC", "VP8", "VP9"),
+        // Mirrors android_modern video set (same HW decoders); only AC-4 audio
+        // is removed for pre-AC4 firmware. MPEG2-VIDEO required for ATSC 1.0
+        // DIRECT_PLAY of OTA recordings.
+        Arrays.asList("H.263", "MPEG1-VIDEO", "MPEG2-VIDEO", "MPEG4-VIDEO", "MSMPEG4-VIDEO", "H.264", "VC1", "WMV7", "WMV8", "WMV9", "HEVC", "VP8", "VP9", "AV1"),
         Arrays.asList("MPEG1", "MP2", "MPG1L2", "MP3", "MPG1L3", "VORBIS", "AAC", "AAC-HE", "FLAC", "ALAC", "PCM", "PCM_S16LE", "DTS", "DCA", "DTS-HD", "DTS-MA", "AC3", "EAC3", "EC-3", "DOLBYTRUEHD", "OPUS"),
         true, ClientProfile.AUTO_REMUX_ON_FAILURE, 0, 0, true));
 
