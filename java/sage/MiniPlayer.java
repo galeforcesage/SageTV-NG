@@ -1431,10 +1431,36 @@ public class MiniPlayer implements DVDMediaPlayer
             boolean _hevcSrcFP = (_vfFP != null
                 && (sage.media.format.MediaFormat.HEVC.equalsIgnoreCase(_vfFP.getFormatName())
                     || "H.265".equalsIgnoreCase(_vfFP.getFormatName())));
+            // Profile-authoritative guard: if PlaybackDecisionEngine concluded
+            // REMUX or TRANSCODE (because a source codec is unsupported by the
+            // active profile / effective player), the profile-aware override
+            // block above ALREADY set the right prefTranscodeMode (mpeg2psremux,
+            // a video-copy+audio-transcode custom string, or dynamic[ts]).
+            // The legacy fixedPushFormat / fixedPushRemuxFormat override below
+            // is based on `videoCodecSupported && audioCodecSupported` flags
+            // that come from the WARN-ONLY unclamped codec sets — they can lie
+            // when the profile rejects a codec the client still advertises in
+            // its union. Letting the legacy override run in that case
+            // re-emits `-vcodec copy` / `-acodec copy` for a codec the player
+            // actually cannot decode, producing silent or black playback
+            // (observed: MPEG2-Video copy pushed to android_modern Shield/Fold,
+            // openURL bf=vid=MPEG2-Video contradicting the TRANSCODE decision).
+            // Skip the legacy override whenever the profile is authoritative.
+            boolean _profileAuthOverride = (profileDecision != null
+                && (profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.REMUX
+                    || profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.TRANSCODE));
+            // Defense in depth: a custom mode string ("container=...;videocodec=...;...")
+            // is always produced by the profile-aware path and must not be replaced
+            // by a legacy template either.
+            boolean _customModeAlready = (prefTranscodeMode != null
+                && prefTranscodeMode.indexOf('=') >= 0
+                && prefTranscodeMode.indexOf(';') >= 0);
             if(fixedPushFormat != null && fixedPushFormat.length() > 0
                     && currFileFormat != null && currFileFormat.getVideoFormats().length > 0
                     && !"audioonly".equalsIgnoreCase(prefTranscodeMode)
-                    && !_hevcSrcFP)
+                    && !_hevcSrcFP
+                    && !_profileAuthOverride
+                    && !_customModeAlready)
             {
                 if(fixedPushRemuxFormat != null && fixedPushRemuxFormat.length() > 0 
                         && videoCodecSupported && audioCodecSupported && !containerSupported)
@@ -1448,6 +1474,19 @@ public class MiniPlayer implements DVDMediaPlayer
                   prefTranscodeMode = fixedPushFormat;
                 }
                 
+            }
+            else if (Sage.DBG && _profileAuthOverride
+                     && fixedPushFormat != null && fixedPushFormat.length() > 0)
+            {
+              System.out.println("MiniPlayer: keeping profile-authoritative transcode mode=" + prefTranscodeMode
+                  + " decision=" + profileDecision.decision
+                  + " (skipping legacy fixedPushFormat/fixedPushRemuxFormat override) reason=" + profileDecision.reason);
+            }
+            else if (Sage.DBG && _customModeAlready
+                     && fixedPushFormat != null && fixedPushFormat.length() > 0)
+            {
+              System.out.println("MiniPlayer: keeping custom transcode mode=" + prefTranscodeMode
+                  + " (skipping legacy fixedPushFormat override)");
             }
             else if (Sage.DBG && "audioonly".equalsIgnoreCase(prefTranscodeMode)
                      && fixedPushFormat != null && fixedPushFormat.length() > 0)
@@ -1897,6 +1936,42 @@ public class MiniPlayer implements DVDMediaPlayer
             formatString = "f=" + containerHint + ";";
             if (Sage.DBG) System.out.println("MiniPlayer: DIRECT_PLAY with null source format — "
                 + "synthesized profile-derived push hint -> " + formatString);
+          }
+        }
+        // INVARIANT GUARD: if PlaybackDecisionEngine said TRANSCODE because a source
+        // codec is unsupported, the emitted descriptor MUST NOT advertise that source
+        // codec back as-is (which would mean we're about to `-vcodec copy`/`-acodec copy`
+        // a stream the client cannot decode). Log loudly so regressions are obvious in
+        // the server log; do not silently emit a broken openURL.
+        if (profileDecision != null
+            && profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.TRANSCODE
+            && currMF != null && currMF.getFileFormat() != null
+            && formatString != null && formatString.length() > 0)
+        {
+          sage.media.format.ContainerFormat _srcCf = currMF.getFileFormat();
+          sage.media.format.VideoFormat _srcVf = _srcCf.getVideoFormat();
+          sage.media.format.AudioFormat _srcAf = _srcCf.getAudioFormat();
+          sage.client.ClientProfile _prof = (mcsr != null) ? mcsr.getResolvedProfile() : null;
+          if (_prof != null)
+          {
+            if (_srcVf != null && _srcVf.getFormatName() != null
+                && !_prof.isVideoCodecAllowed(_srcVf.getFormatName())
+                && formatString.indexOf("bf=vid;f=" + _srcVf.getFormatName() + ";") >= 0)
+            {
+              System.out.println("MiniPlayer: WARNING INVARIANT VIOLATION — TRANSCODE decision but openURL"
+                  + " descriptor still advertises unsupported source video codec '" + _srcVf.getFormatName()
+                  + "' (profile=" + _prof.getProfileId() + " reason=" + profileDecision.reason
+                  + " formatString=" + formatString + " prefTranscodeMode=" + prefTranscodeMode + ")");
+            }
+            if (_srcAf != null && _srcAf.getFormatName() != null
+                && !_prof.isAudioCodecAllowed(_srcAf.getFormatName())
+                && formatString.indexOf("bf=aud;f=" + _srcAf.getFormatName() + ";") >= 0)
+            {
+              System.out.println("MiniPlayer: WARNING INVARIANT VIOLATION — TRANSCODE decision but openURL"
+                  + " descriptor still advertises unsupported source audio codec '" + _srcAf.getFormatName()
+                  + "' (profile=" + _prof.getProfileId() + " reason=" + profileDecision.reason
+                  + " formatString=" + formatString + " prefTranscodeMode=" + prefTranscodeMode + ")");
+            }
           }
         }
         if (!openURL0("push:" + formatString))
