@@ -998,10 +998,85 @@ public class MiniPlayer implements DVDMediaPlayer
         if (uiBandwidthEstimate > 0 && uiBandwidthEstimate < 49000000L)
           availableBwKbps = (int) (uiBandwidthEstimate / 1000L);
         boolean isHDx00 = effectiveProfile.getProfileId().equals("hd_legacy_strict");
-        profileDecision = sage.client.PlaybackDecisionEngine.evaluate(
+        // Schema v2: pass the client's capability constraints + the source's
+        // interlaced flag + the transport mode so the engine can apply
+        // per-client gates (e.g. ExoPlayer + MPEG-2 + interlaced -> reject
+        // DIRECT_PLAY because the decoder can't deinterlace). The constraints
+        // object is null for legacy clients; the engine falls back to legacy
+        // codec/container set policy in that case.
+        sage.client.ClientConstraints constraints =
+            (mcsr != null) ? mcsr.getClientConstraints() : null;
+        // Per-player constraints for the player-switch path: if the default
+        // player can't direct-play but the alternate player can, the engine
+        // will recommend a switch via PlaybackDecision.preferredPlayer.
+        sage.client.ClientConstraints exoConstraints =
+            (mcsr != null) ? mcsr.getClientConstraintsExo() : null;
+        sage.client.ClientConstraints ijkConstraints =
+            (mcsr != null) ? mcsr.getClientConstraintsIjk() : null;
+        String defaultPlayerTag = (mcsr != null) ? mcsr.getClientDefaultPlayer() : "";
+        boolean srcInterlaced = (cf != null && cf.getVideoFormat() != null
+            && cf.getVideoFormat().isInterlaced());
+        // clientDoesPull is computed below; here we use its inverse via the
+        // existing renderer state. For the decision the relevant question is
+        // "will we be in push mode?" — for miniclients that's the default
+        // unless the explicit pull path below is taken. The container row's
+        // push/pull check is only consulted when the chosen transport differs
+        // from what the row allows; using push as the default matches the
+        // legacy push-first behavior of the miniclient pipeline.
+        boolean isPushTransport = !clientDoesPull;
+        // Resolve which set is "primary" (default player) and which is "alt".
+        sage.client.ClientConstraints primaryC;
+        sage.client.ClientConstraints altC;
+        String altPlayerTag;
+        if ("ijkplayer".equals(defaultPlayerTag))
+        {
+          primaryC = ijkConstraints; altC = exoConstraints; altPlayerTag = "exoplayer";
+        }
+        else
+        {
+          primaryC = exoConstraints; altC = ijkConstraints; altPlayerTag = "ijkplayer";
+        }
+        profileDecision = sage.client.PlaybackDecisionEngine.evaluateWithPlayerSwitch(
             effectiveProfile, mediaContainer, mediaVideo, mediaAudio,
-            mediaW, mediaH, isHDx00, sourceBitrateKbps, availableBwKbps);
+            mediaW, mediaH, isHDx00, sourceBitrateKbps, availableBwKbps,
+            defaultPlayerTag, altPlayerTag,
+            primaryC, altC, srcInterlaced, isPushTransport);
         if (Sage.DBG) System.out.println("MiniPlayer profile decision: " + profileDecision);
+
+        // --- Session stickiness contract (per OPENURL) ---
+        // The stream plan and target player are selected HERE and HERE ONLY.
+        // Trickplay (pause/ff/rew/seek/jump) intentionally never reaches this
+        // block, so the player selection stays frozen for the active stream.
+        //
+        // We emit CAP_EFFECTIVE_PLAYER exactly once at OPENURL with the
+        // chosen player tag — whether that's the client's default or the
+        // alternate selected by the engine. The client treats it as an
+        // advisory selection for THIS stream only.
+        String chosenPlayer = (profileDecision != null && profileDecision.preferredPlayer != null)
+            ? profileDecision.preferredPlayer
+            : defaultPlayerTag;
+        if (mcsr != null && chosenPlayer != null && chosenPlayer.length() > 0)
+        {
+          if (Sage.DBG)
+          {
+            String switchTag = (profileDecision != null && profileDecision.preferredPlayer != null
+                && !profileDecision.preferredPlayer.equalsIgnoreCase(defaultPlayerTag))
+                ? " (SWITCHED from default=" + defaultPlayerTag + ")"
+                : " (kept default)";
+            System.out.println("MiniPlayer OPENURL stream-plan locked: player=" + chosenPlayer
+                + switchTag
+                + " decision=" + (profileDecision != null ? profileDecision.decision : "n/a")
+                + " reason=" + (profileDecision != null ? profileDecision.reason : "n/a"));
+          }
+          try
+          {
+            mcsr.sendSetProperty("CAP_EFFECTIVE_PLAYER", chosenPlayer);
+          }
+          catch (java.io.IOException ioe)
+          {
+            if (Sage.DBG) System.out.println("MiniPlayer failed to send CAP_EFFECTIVE_PLAYER=" + chosenPlayer + ": " + ioe);
+          }
+        }
       }
       // --- End profile decision ---
 

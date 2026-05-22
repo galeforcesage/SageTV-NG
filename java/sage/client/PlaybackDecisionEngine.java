@@ -47,16 +47,32 @@ public class PlaybackDecisionEngine
      * adjustment / profile defaults).
      */
     public final int targetBitrateKbps;
+    /**
+     * When non-null, indicates the caller should ask the client to switch
+     * to this player BEFORE starting this stream (via
+     * {@code sendSetProperty("CAP_EFFECTIVE_PLAYER", preferredPlayer)}).
+     * Set by {@link #evaluateWithPlayerSwitch} when the client's default
+     * player cannot handle the source but the alternate player can.
+     * Always {@code null} on results from the plain {@code evaluate} methods.
+     */
+    public final String preferredPlayer;
 
     public PlaybackDecision(Decision decision, String reason,
         String targetContainer, String targetVideoCodec, String targetAudioCodec)
     {
-      this(decision, reason, targetContainer, targetVideoCodec, targetAudioCodec, 0);
+      this(decision, reason, targetContainer, targetVideoCodec, targetAudioCodec, 0, null);
     }
 
     public PlaybackDecision(Decision decision, String reason,
         String targetContainer, String targetVideoCodec, String targetAudioCodec,
         int targetBitrateKbps)
+    {
+      this(decision, reason, targetContainer, targetVideoCodec, targetAudioCodec, targetBitrateKbps, null);
+    }
+
+    public PlaybackDecision(Decision decision, String reason,
+        String targetContainer, String targetVideoCodec, String targetAudioCodec,
+        int targetBitrateKbps, String preferredPlayer)
     {
       this.decision = decision;
       this.reason = reason;
@@ -64,6 +80,14 @@ public class PlaybackDecisionEngine
       this.targetVideoCodec = targetVideoCodec;
       this.targetAudioCodec = targetAudioCodec;
       this.targetBitrateKbps = targetBitrateKbps;
+      this.preferredPlayer = preferredPlayer;
+    }
+
+    /** Copy this decision but attach a {@code preferredPlayer} hint. */
+    public PlaybackDecision withPreferredPlayer(String player)
+    {
+      return new PlaybackDecision(decision, reason, targetContainer,
+          targetVideoCodec, targetAudioCodec, targetBitrateKbps, player);
     }
 
     @Override
@@ -73,6 +97,7 @@ public class PlaybackDecisionEngine
           " container=" + targetContainer + " video=" + targetVideoCodec +
           " audio=" + targetAudioCodec
           + (targetBitrateKbps > 0 ? " targetBitrateKbps=" + targetBitrateKbps : "")
+          + (preferredPlayer != null ? " preferredPlayer=" + preferredPlayer : "")
           + "]";
     }
   }
@@ -131,12 +156,143 @@ public class PlaybackDecisionEngine
       int mediaWidth, int mediaHeight, boolean isHDx00Extender,
       int sourceBitrateKbps, int availableBandwidthKbps)
   {
+    return evaluate(profile, mediaContainer, mediaVideoCodec, mediaAudioCodec,
+        mediaWidth, mediaHeight, isHDx00Extender,
+        sourceBitrateKbps, availableBandwidthKbps,
+        null, false, true);
+  }
+
+  /**
+   * Schema v2 capability-constraints-aware overload.
+   *
+   * <p>Adds per-client constraint enforcement on top of the codec/container set
+   * policy:
+   * <ul>
+   *   <li><b>Video interlaced gate.</b> If the source is interlaced and the
+   *       client's row for the source video codec has {@code interlaced=false}
+   *       (i.e. the client cannot decode interlaced content for this codec, as
+   *       is the case for ExoPlayer MPEG-2 on Galaxy phones/tablets/Fold), the
+   *       video is treated as unsupported and the decision is downgraded to
+   *       {@link Decision#TRANSCODE} (deinterlace + re-encode).</li>
+   *   <li><b>Container transport gate.</b> If the chosen transport is push and
+   *       the row for the source container has {@code push=false} (or pull and
+   *       {@code pull=false}), the container is treated as unsupported, which
+   *       forces {@link Decision#REMUX} (or {@link Decision#TRANSCODE} when
+   *       remux is disabled).</li>
+   *   <li><b>Audio decode gate.</b> If the row for the source audio codec has
+   *       {@code decode=false}, audio is treated as unsupported and the
+   *       transcoder picks a fallback audio target.</li>
+   * </ul>
+   *
+   * <p>All gates are <b>skipped</b> when:
+   * <ul>
+   *   <li>{@code constraints} is null (client did not negotiate schema v2), OR</li>
+   *   <li>{@code constraints} has no row for the relevant codec/container
+   *       (treated as {@link ClientConstraints.Tri#UNKNOWN} per the spec —
+   *       preserves legacy behavior).</li>
+   * </ul>
+   *
+   * @param constraints per-client schema-v2 capability set, or {@code null} for legacy clients
+   * @param sourceInterlaced whether the source video stream is interlaced
+   *                         (from {@code VideoFormat.isInterlaced()}); ignored when {@code constraints} is null
+   * @param isPushTransport true when the renderer is using push mode (the common case for miniclients);
+   *                        false for pull/HLS-style fetching
+   */
+  public static PlaybackDecision evaluate(ClientProfile profile,
+      String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
+      int mediaWidth, int mediaHeight, boolean isHDx00Extender,
+      int sourceBitrateKbps, int availableBandwidthKbps,
+      ClientConstraints constraints, boolean sourceInterlaced, boolean isPushTransport)
+  {
     if (profile == null)
       return new PlaybackDecision(Decision.DIRECT_PLAY, "No profile (legacy path)", null, null, null);
 
     boolean containerOK = profile.isContainerAllowed(mediaContainer);
     boolean videoOK = profile.isVideoCodecAllowed(mediaVideoCodec);
     boolean audioOK = profile.isAudioCodecAllowed(mediaAudioCodec);
+
+    // --- Schema v2 capability-constraints gates ---
+    // Applied only when the client negotiated schema v2.
+    //
+    // Semantics: a populated *_CONSTRAINTS set is the player's COMPLETE
+    // declaration of supported codecs/containers. Any codec/container not in
+    // the set is treated as unsupported by that player. (ExoPlayer, for
+    // example, omits MPEG2-VIDEO from EXO_VIDEO_CONSTRAINTS because it cannot
+    // decode MPEG-2 at all; the legacy profile codec list happens to allow
+    // it, but the player physically can't play it.)
+    //
+    // An empty/missing constraint set (e.g. audio set null while video set
+    // populated, or both null for a legacy client) is treated as UNKNOWN
+    // and preserves the legacy profile-based behavior for that dimension.
+    String constraintRejectReason = null;
+    if (constraints != null && !constraints.isEmpty())
+    {
+      // Video gate: codec must have a row, AND if the row says interlaced=false
+      // but the source is interlaced, reject.
+      ClientConstraints.VideoConstraint vrow = constraints.getVideo(mediaVideoCodec);
+      if (constraints.hasAnyVideo() && videoOK)
+      {
+        if (vrow == null)
+        {
+          videoOK = false;
+          constraintRejectReason = "video " + mediaVideoCodec
+              + " not in client " + constraints.getPlayer() + " supported codecs";
+        }
+        else if (sourceInterlaced && vrow.interlaced == ClientConstraints.Tri.FALSE)
+        {
+          videoOK = false;
+          constraintRejectReason = "interlaced source + client " + mediaVideoCodec
+              + " row interlaced=false (player=" + constraints.getPlayer() + ")";
+        }
+      }
+
+      // Container transport gate (push vs pull).
+      ClientConstraints.ContainerConstraint crow = constraints.getContainer(mediaContainer);
+      if (constraints.hasAnyContainer() && containerOK)
+      {
+        if (crow == null)
+        {
+          containerOK = false;
+          String add = "container " + mediaContainer
+              + " not in client " + constraints.getPlayer() + " supported containers";
+          constraintRejectReason = (constraintRejectReason == null)
+              ? add : constraintRejectReason + "; " + add;
+        }
+        else
+        {
+          ClientConstraints.Tri transportOK = isPushTransport ? crow.push : crow.pull;
+          if (transportOK == ClientConstraints.Tri.FALSE)
+          {
+            containerOK = false;
+            String t = isPushTransport ? "push" : "pull";
+            String add = "container " + mediaContainer + " row " + t + "=false";
+            constraintRejectReason = (constraintRejectReason == null)
+                ? add : constraintRejectReason + "; " + add;
+          }
+        }
+      }
+
+      // Audio gate.
+      ClientConstraints.AudioConstraint arow = constraints.getAudio(mediaAudioCodec);
+      if (constraints.hasAnyAudio() && audioOK)
+      {
+        if (arow == null)
+        {
+          audioOK = false;
+          String add = "audio " + mediaAudioCodec
+              + " not in client " + constraints.getPlayer() + " supported codecs";
+          constraintRejectReason = (constraintRejectReason == null)
+              ? add : constraintRejectReason + "; " + add;
+        }
+        else if (arow.decode == ClientConstraints.Tri.FALSE)
+        {
+          audioOK = false;
+          String add = "audio " + mediaAudioCodec + " row decode=false";
+          constraintRejectReason = (constraintRejectReason == null)
+              ? add : constraintRejectReason + "; " + add;
+        }
+      }
+    }
 
     // Check resolution limits
     boolean resolutionOK = true;
@@ -151,7 +307,13 @@ public class PlaybackDecisionEngine
           " audio=" + mediaAudioCodec + "(" + audioOK + ")" +
           " resolution=" + mediaWidth + "x" + mediaHeight + "(" + resolutionOK + ")" +
           " sourceKbps=" + sourceBitrateKbps + " availableKbps=" + availableBandwidthKbps +
-          " profile=" + profile.getProfileId());
+          " profile=" + profile.getProfileId()
+          + (constraints != null && !constraints.isEmpty()
+              ? " constraintsPlayer=" + constraints.getPlayer()
+                + " scan=" + (sourceInterlaced ? "interlaced" : "progressive")
+                + " transport=" + (isPushTransport ? "push" : "pull")
+                + (constraintRejectReason != null ? " constraintReject=[" + constraintRejectReason + "]" : "")
+              : ""));
 
     // Bandwidth budget check: if source bitrate is known and exceeds the
     // measured client bandwidth (with safety factor), we MUST transcode down
@@ -324,5 +486,65 @@ public class PlaybackDecisionEngine
     int ceiling = profileCeiling(profile);
     if (ceiling > 0 && budgetKbps > ceiling) return ceiling;
     return budgetKbps;
+  }
+
+  /**
+   * Evaluate playback against the client's default player first; if that
+   * would require transcode/remux for a schema-v2 capability-constraints
+   * reason, retry against the alternate player. If the alternate would
+   * direct-play the source, return the alternate's decision tagged with
+   * {@code preferredPlayer = altPlayer} so the caller can send
+   * {@code CAP_EFFECTIVE_PLAYER=altPlayer} to the client before starting
+   * the stream.
+   *
+   * If the alternate cannot direct-play either, the primary's decision is
+   * returned unchanged (no player switch).
+   *
+   * Falls back to a plain {@link #evaluate} call when either constraints
+   * argument is {@code null}/empty, so the wrapper is safe for legacy
+   * clients and for clients that only declared one player.
+   *
+   * @param defaultPlayer the client's current default player tag (e.g.
+   *                      {@code "exoplayer"}); used only to label log output
+   *                      and short-circuit when no switch is possible
+   * @param altPlayer     the alternate player tag (e.g. {@code "ijkplayer"});
+   *                      the value sent in {@code CAP_EFFECTIVE_PLAYER} if a
+   *                      switch is recommended
+   * @param primary       constraints for {@code defaultPlayer}
+   * @param alternate     constraints for {@code altPlayer}
+   */
+  public static PlaybackDecision evaluateWithPlayerSwitch(ClientProfile profile,
+      String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
+      int mediaWidth, int mediaHeight, boolean isHDx00Extender,
+      int sourceBitrateKbps, int availableBandwidthKbps,
+      String defaultPlayer, String altPlayer,
+      ClientConstraints primary, ClientConstraints alternate,
+      boolean sourceInterlaced, boolean isPushTransport)
+  {
+    PlaybackDecision primaryResult = evaluate(profile, mediaContainer, mediaVideoCodec,
+        mediaAudioCodec, mediaWidth, mediaHeight, isHDx00Extender,
+        sourceBitrateKbps, availableBandwidthKbps,
+        primary, sourceInterlaced, isPushTransport);
+
+    // No switch possible / needed.
+    if (primaryResult.decision == Decision.DIRECT_PLAY) return primaryResult;
+    if (alternate == null || alternate.isEmpty()) return primaryResult;
+    if (altPlayer == null || altPlayer.length() == 0) return primaryResult;
+    if (altPlayer.equalsIgnoreCase(defaultPlayer)) return primaryResult;
+
+    PlaybackDecision altResult = evaluate(profile, mediaContainer, mediaVideoCodec,
+        mediaAudioCodec, mediaWidth, mediaHeight, isHDx00Extender,
+        sourceBitrateKbps, availableBandwidthKbps,
+        alternate, sourceInterlaced, isPushTransport);
+
+    if (altResult.decision == Decision.DIRECT_PLAY)
+    {
+      if (sage.Sage.DBG) System.out.println("PlaybackDecisionEngine: switching player from "
+          + defaultPlayer + " to " + altPlayer + " (primary=" + primaryResult.decision
+          + " reason=" + primaryResult.reason + ")");
+      return altResult.withPreferredPlayer(altPlayer);
+    }
+
+    return primaryResult;
   }
 }
