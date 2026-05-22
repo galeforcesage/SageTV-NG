@@ -3889,6 +3889,17 @@ public class MiniClientSageRenderer extends SageRenderer
         sendGetPropertyAsync("IJK_PUSH_AV_CONTAINERS");
         sendGetPropertyAsync("EXO_PULL_AV_CONTAINERS");
         sendGetPropertyAsync("IJK_PULL_AV_CONTAINERS");
+        // Schema v2 capability-constraints rows. Enabled only when the client
+        // also reports CAP_SCHEMA_VERSION >= 2; otherwise these strings are
+        // empty and the constraints object stays null (legacy behavior).
+        // Format per row: TOKEN;key=value;key=value  rows separated by commas.
+        // See sage.client.ClientConstraints for the parser + attribute dictionary.
+        sendGetPropertyAsync("EXO_VIDEO_CONSTRAINTS");
+        sendGetPropertyAsync("IJK_VIDEO_CONSTRAINTS");
+        sendGetPropertyAsync("EXO_AUDIO_CONSTRAINTS");
+        sendGetPropertyAsync("IJK_AUDIO_CONSTRAINTS");
+        sendGetPropertyAsync("EXO_CONTAINER_CONSTRAINTS");
+        sendGetPropertyAsync("IJK_CONTAINER_CONSTRAINTS");
         sendBufferNow();
         // Now get capabilities properties for this specific miniclient
         // The default is to use image maps for text rendering
@@ -4532,6 +4543,15 @@ public class MiniClientSageRenderer extends SageRenderer
         String ijkPushContainersProp = recvr.getStringReply();
         String exoPullContainersProp = recvr.getStringReply();
         String ijkPullContainersProp = recvr.getStringReply();
+        // Schema v2 constraint rows (parallel to the codec/container sets above).
+        // Read in the same order they were queued so the protocol stays aligned
+        // even if the client returns empty for some of them.
+        String exoVideoConstraintsProp = recvr.getStringReply();
+        String ijkVideoConstraintsProp = recvr.getStringReply();
+        String exoAudioConstraintsProp = recvr.getStringReply();
+        String ijkAudioConstraintsProp = recvr.getStringReply();
+        String exoContainerConstraintsProp = recvr.getStringReply();
+        String ijkContainerConstraintsProp = recvr.getStringReply();
         if (Sage.DBG)
         {
           System.out.println("MiniClient MINICLIENT_DEFAULT_PLAYER=" + defaultPlayerProp);
@@ -4543,6 +4563,53 @@ public class MiniClientSageRenderer extends SageRenderer
           System.out.println("MiniClient IJK_PUSH_AV_CONTAINERS=" + ijkPushContainersProp);
           System.out.println("MiniClient EXO_PULL_AV_CONTAINERS=" + exoPullContainersProp);
           System.out.println("MiniClient IJK_PULL_AV_CONTAINERS=" + ijkPullContainersProp);
+          System.out.println("MiniClient EXO_VIDEO_CONSTRAINTS=" + exoVideoConstraintsProp);
+          System.out.println("MiniClient IJK_VIDEO_CONSTRAINTS=" + ijkVideoConstraintsProp);
+          System.out.println("MiniClient EXO_AUDIO_CONSTRAINTS=" + exoAudioConstraintsProp);
+          System.out.println("MiniClient IJK_AUDIO_CONSTRAINTS=" + ijkAudioConstraintsProp);
+          System.out.println("MiniClient EXO_CONTAINER_CONSTRAINTS=" + exoContainerConstraintsProp);
+          System.out.println("MiniClient IJK_CONTAINER_CONSTRAINTS=" + ijkContainerConstraintsProp);
+        }
+
+        // Build the schema-v2 capability-constraints object. Only populated
+        // when CAP_SCHEMA_VERSION >= 2 AND the active player advertised at
+        // least one non-empty constraints row. Otherwise stays null and the
+        // PlaybackDecisionEngine falls back to legacy codec-set policy.
+        clientConstraints = null;
+        clientConstraintsExo = null;
+        clientConstraintsIjk = null;
+        clientDefaultPlayer = (defaultPlayerProp == null) ? "" : defaultPlayerProp.trim().toLowerCase();
+        if (capSchemaVersion >= 2)
+        {
+          // Parse BOTH player sets regardless of which one is default — the
+          // PlaybackDecisionEngine consults both to decide whether a per-stream
+          // player switch (CAP_EFFECTIVE_PLAYER) can avoid a transcode.
+          sage.client.ClientConstraints exoParsed = sage.client.ClientConstraints.parse(
+              "exoplayer", exoVideoConstraintsProp, exoAudioConstraintsProp, exoContainerConstraintsProp);
+          sage.client.ClientConstraints ijkParsed = sage.client.ClientConstraints.parse(
+              "ijkplayer", ijkVideoConstraintsProp, ijkAudioConstraintsProp, ijkContainerConstraintsProp);
+          if (!exoParsed.isEmpty()) clientConstraintsExo = exoParsed;
+          if (!ijkParsed.isEmpty()) clientConstraintsIjk = ijkParsed;
+
+          // Back-compat: legacy callers of getClientConstraints() get the
+          // default player's set (or null if it was empty).
+          boolean useIjk = "ijkplayer".equals(clientDefaultPlayer);
+          sage.client.ClientConstraints active = useIjk ? clientConstraintsIjk : clientConstraintsExo;
+          if (active != null)
+          {
+            clientConstraints = active;
+            if (Sage.DBG) System.out.println("MiniClient resolved " + clientConstraints);
+          }
+          else if (Sage.DBG)
+          {
+            System.out.println("MiniClient CAP_SCHEMA_VERSION=" + capSchemaVersion
+                + " but no constraint rows for player=" + clientDefaultPlayer + " (legacy policy applies)");
+          }
+          if (Sage.DBG)
+          {
+            if (clientConstraintsExo != null) System.out.println("MiniClient exo " + clientConstraintsExo);
+            if (clientConstraintsIjk != null) System.out.println("MiniClient ijk " + clientConstraintsIjk);
+          }
         }
 
         // Pick the candidate sets that match the declared default player. Fall back
@@ -4606,7 +4673,12 @@ public class MiniClientSageRenderer extends SageRenderer
               pullContainers = perPlayerPull;
             }
           }
-          // Echo back what we actually used so the client can confirm.
+          // Echo back the connect-time DEFAULT player so the client can
+          // confirm capability negotiation. This is NOT the per-stream
+          // selection — that is computed and emitted by MiniPlayer.load()
+          // at OPENURL (see "OPENURL stream-plan locked" log), where the
+          // engine may select an alternate player for THIS stream only.
+          if (Sage.DBG) System.out.println("MiniClient CONNECT default CAP_EFFECTIVE_PLAYER=" + defaultPlayer);
           sendSetProperty("CAP_EFFECTIVE_PLAYER", defaultPlayer);
         }
 
@@ -6775,6 +6847,39 @@ public class MiniClientSageRenderer extends SageRenderer
   }
 
   /**
+   * Returns the schema-v2 capability constraints (interlaced gate, container
+   * push/pull gate, audio decode gate) for this client, or {@code null} when
+   * the client did not negotiate schema v2 or did not provide any constraint
+   * rows for the active player. When null, callers should fall back to the
+   * legacy codec/container set policy.
+   */
+  public sage.client.ClientConstraints getClientConstraints()
+  {
+    return clientConstraints;
+  }
+
+  /** ExoPlayer schema-v2 constraints, or {@code null} if not declared / empty. */
+  public sage.client.ClientConstraints getClientConstraintsExo()
+  {
+    return clientConstraintsExo;
+  }
+
+  /** IJK player schema-v2 constraints, or {@code null} if not declared / empty. */
+  public sage.client.ClientConstraints getClientConstraintsIjk()
+  {
+    return clientConstraintsIjk;
+  }
+
+  /**
+   * Client's declared default player tag (e.g. {@code "exoplayer"} or
+   * {@code "ijkplayer"}), lowercased. Empty string when not declared.
+   */
+  public String getClientDefaultPlayer()
+  {
+    return clientDefaultPlayer == null ? "" : clientDefaultPlayer;
+  }
+
+  /**
    * Returns the client's reported capability schema version.
    * 0 means legacy (not sent).
    */
@@ -7812,6 +7917,14 @@ public class MiniClientSageRenderer extends SageRenderer
   private int capSchemaVersion;
   private String capProfileId;
   private sage.client.ClientProfile resolvedProfile;
+  private sage.client.ClientConstraints clientConstraints;
+  // Per-player capability constraints (schema v2). Parsed for both players
+  // regardless of which one the client declared as default, so the
+  // PlaybackDecisionEngine can ask each set "can you handle this?" and
+  // request a per-stream player switch via CAP_EFFECTIVE_PLAYER.
+  private sage.client.ClientConstraints clientConstraintsExo;
+  private sage.client.ClientConstraints clientConstraintsIjk;
+  private String clientDefaultPlayer;
   private boolean detailedPushBufferStats;
   private boolean pushBufferSeeking;
 
