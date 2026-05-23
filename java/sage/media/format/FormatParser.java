@@ -1609,17 +1609,24 @@ public class FormatParser
     if (idx != -1)
       fileprefix = fileprefix.substring(0, idx + 1);
 
-    // First check for a single SRT file in parallel
+    // First check for a single SRT file in parallel. We add it as the
+    // unnamed/primary track, then continue down to the directory-scan branch
+    // so language-coded siblings (e.g. <base>.spa.srt) get picked up too.
+    // SageTV's CaptionExtractionJob writes both <base>.srt (primary track,
+    // CEA-708 svc1 or 608 CC1) and <base>.spa.srt (608 CC2 SAP) — they need
+    // to appear as separate language streams so VideoFrame.setCCState can map
+    // CC1→slot0 and CC2→slot1.
     java.io.File testFile = new java.io.File(fileprefix + "srt");
     if (testFile.isFile())
     {
-      if (cf.formatHasSubtitlePath(testFile.toString()))
-        return rv;
-      SubpictureFormat subpic = new SubpictureFormat();
-      subpic.setFormatName(MediaFormat.SRT);
-      subpic.setPath(testFile.toString());
-      cf.addStream(subpic);
-      return true;
+      if (!cf.formatHasSubtitlePath(testFile.toString()))
+      {
+        SubpictureFormat subpic = new SubpictureFormat();
+        subpic.setFormatName(MediaFormat.SRT);
+        subpic.setPath(testFile.toString());
+        cf.addStream(subpic);
+        rv = true;
+      }
     }
     // Next check for a single IDX/SUB file in parallel
     testFile = new java.io.File(fileprefix + "idx");

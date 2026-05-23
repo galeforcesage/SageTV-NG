@@ -3789,6 +3789,9 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
           new Object[] { sage.plugin.PluginEventManager.VAR_MEDIAFILE, currFile, sage.plugin.PluginEventManager.VAR_UICONTEXT, uiMgr.getLocalUIClientName(),
           sage.plugin.PluginEventManager.VAR_DURATION, new Long(theDur), sage.plugin.PluginEventManager.VAR_MEDIATIME, new Long(theTime),
           sage.plugin.PluginEventManager.VAR_CHAPTERNUM, new Integer(chapNum), sage.plugin.PluginEventManager.VAR_TITLENUM, new Integer(titleNum) });
+      // Queue deferred full caption extraction if on-demand partial extraction ran during playback.
+      try { sage.captions.CaptionExtractionManager.getInstance().onPlaybackStopped(currFile); }
+      catch (Throwable ignore) {}
     }
     subHandler = null;
     chapterPoints = null;
@@ -4223,12 +4226,108 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     // CC slots map to ordered language tracks (CC1 -> 1st, CC2 -> 2nd, ...).
     if (applyCCStateToExternalSubs(ccState))
       rv = true;
+    // If the user is enabling CC and we still have nothing wired up (no
+    // in-player CC, no sidecar handler), kick off on-demand caption
+    // extraction. For a completed recording this is a one-shot ffmpeg job;
+    // for an in-progress (live/timeshift) recording it starts a tail-extract
+    // loop that re-runs every ~10s. The job's completion callback reloads
+    // our SubtitleHandler and re-applies the CC state so the captions
+    // appear automatically once the sidecar lands on disk.
+    if (!rv && ccState != MediaPlayer.CC_DISABLED && ccHandler == null)
+    {
+      maybeTriggerOnDemandCCExtraction(ccState);
+    }
     if (rv)
     {
       Catbert.processUISpecificHook("MediaPlayerPlayStateChanged", null, uiMgr, true);
       kick();
     }
     return rv;
+  }
+
+  /**
+   * If the current file has no external subtitle handler bound yet, kick the
+   * CaptionExtractionManager to (re)build a sidecar for it. Returns
+   * immediately; when the sidecar is ready the registered callback reloads
+   * our SubtitleHandler off the worker thread and re-applies the requested
+   * CC state. Safe to call multiple times — the manager dedupes per
+   * MediaFile id.
+   */
+  private void maybeTriggerOnDemandCCExtraction(final int ccState)
+  {
+    final MediaFile mf = currFile;
+    if (mf == null) return;
+    try
+    {
+      java.io.File rec = mf.getFile(0);
+      if (rec == null) return;
+      java.io.File sidecar = sage.captions.CaptionExtractionManager.sidecarFor(rec);
+      // If the sidecar already exists on disk but the handler hasn't picked
+      // it up yet (e.g. it was written after playback started), reload now.
+      if (sidecar != null && sidecar.isFile() && sidecar.length() > 0)
+      {
+        reloadExternalSubHandlerAndApplyCC(ccState);
+        return;
+      }
+      if (Sage.DBG) System.out.println("VideoFrame: requesting on-demand CC extraction for " + mf + " (live=" + mf.isRecording() + ")");
+      sage.captions.CaptionExtractionManager.getInstance().ensureExtractionRunning(mf, () -> {
+        reloadExternalSubHandlerAndApplyCC(ccState);
+      });
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("VideoFrame: on-demand CC extraction trigger failed: " + t);
+    }
+  }
+
+  /**
+   * Recreate the external SubtitleHandler from the current MediaFile (after a
+   * sidecar SRT has been written by CaptionExtractionManager) and re-apply
+   * the user's CC slot selection. Runs on the caller's thread (typically a
+   * CaptionExtract worker) — SubtitleHandler creation is thread-safe with
+   * respect to the playback loop, which only reads subHandler.
+   */
+  private void reloadExternalSubHandlerAndApplyCC(int ccState)
+  {
+    MediaFile mf = currFile;
+    if (mf == null) return;
+    try
+    {
+      mf.checkForSubtitles();
+      sage.media.format.ContainerFormat cf = mf.getFileFormat();
+      if (cf == null || !cf.hasExternalSubtitles()) return;
+      sage.media.sub.SubtitleHandler old = subHandler;
+      sage.media.sub.SubtitleHandler fresh = null;
+      if (cf.areExternalSubsBitmaps())
+      {
+        if ((uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer) &&
+            ((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine()).hasSubtitleSupport())
+        {
+          fresh = sage.media.sub.SubtitleHandler.createSubtitleHandler(this, mf);
+        }
+      }
+      else
+      {
+        fresh = sage.media.sub.SubtitleHandler.createSubtitleHandler(this, mf);
+      }
+      if (fresh != null)
+      {
+        fresh.setDelay(subtitleDelay);
+        subHandler = fresh;
+        if (old != null && old != fresh)
+        {
+          try { old.cleanup(); } catch (Throwable ignore) {}
+        }
+        if (Sage.DBG) System.out.println("VideoFrame: reloaded external SubtitleHandler post-extraction for " + mf);
+        applyCCStateToExternalSubs(ccState);
+        Catbert.processUISpecificHook("MediaPlayerPlayStateChanged", null, uiMgr, true);
+        kick();
+      }
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("VideoFrame: reloadExternalSubHandlerAndApplyCC failed: " + t);
+    }
   }
 
   /**

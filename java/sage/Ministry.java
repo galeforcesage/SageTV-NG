@@ -1028,7 +1028,181 @@ public class Ministry implements Runnable
     	return (converting.size() > 0 || waitingForConversion.size() > 0);
     }
   }
-  
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Automatic AI upscale (Real-ESRGAN ncnn-vulkan) — chained-job helpers.
+  //
+  // Rule: if the source video height is <= ai_upscale_max_source_height
+  // (default 720) AND the target preset's video height is
+  // >= ai_upscale_min_target_height (default 1080), the transcode is split
+  // into two phases:
+  //
+  //   Phase 1: bin/sage-ai-upscale.sh source → lossless H.264 intermediate
+  //            at the target WxH.
+  //   Phase 2: the user's chosen preset, but run against the intermediate
+  //            and with any -vf scale=... filter token stripped (the upscale
+  //            already happened in phase 1).
+  //
+  // Config knobs (Sage.properties):
+  //   transcoder/ai_upscale_enabled              default true
+  //   transcoder/ai_upscale_max_source_height    default 720
+  //   transcoder/ai_upscale_min_target_height    default 1080
+  //   transcoder/ai_upscale_wrapper              default ${install}/bin/sage-ai-upscale.sh
+  //   transcoder/ai_upscale_binary               default /usr/local/bin/realesrgan-ncnn-vulkan
+  //   transcoder/ai_upscale_model                default realesr-general-x4v3
+  //   transcoder/ai_upscale_chunk_frames         default 500
+  //   transcoder/ai_upscale_intermediate_dir     default ${STATE_DIR}/transcoder/intermediates
+  //                                              (falls back to java.io.tmpdir)
+  // ──────────────────────────────────────────────────────────────────────
+
+  private static final java.util.regex.Pattern SCALE_FILTER_PATTERN =
+      java.util.regex.Pattern.compile("scale(?:_npp)?=(\\d+):(\\d+)(?::[^,\\s]*)?");
+
+  /**
+   * Parse the target output height from a raw ffmpeg preset args string by
+   * looking for the first `-vf scale=W:H...` (or `scale_npp=W:H...`) token.
+   * Returns -1 if no scale filter is present (e.g. a copy/transmux preset).
+   */
+  public static int parseTargetHeightFromPresetArgs(String args)
+  {
+    if (args == null || args.length() == 0) return -1;
+    java.util.regex.Matcher m = SCALE_FILTER_PATTERN.matcher(args);
+    if (!m.find()) return -1;
+    try { return Integer.parseInt(m.group(2)); } catch (NumberFormatException e) { return -1; }
+  }
+
+  /** Parse target width too (for the wrapper invocation). Returns -1 if absent. */
+  public static int parseTargetWidthFromPresetArgs(String args)
+  {
+    if (args == null || args.length() == 0) return -1;
+    java.util.regex.Matcher m = SCALE_FILTER_PATTERN.matcher(args);
+    if (!m.find()) return -1;
+    try { return Integer.parseInt(m.group(1)); } catch (NumberFormatException e) { return -1; }
+  }
+
+  /**
+   * Decide whether to activate the AI upscale chained-job path for a
+   * particular source/target pair. Honors the master enable flag and the
+   * source/target height thresholds.
+   */
+  public static boolean shouldAutoAiUpscale(int sourceHeight, int targetHeight)
+  {
+    if (!Sage.getBoolean("transcoder/ai_upscale_enabled", true)) return false;
+    int maxSrc = Sage.getInt("transcoder/ai_upscale_max_source_height", 720);
+    int minTgt = Sage.getInt("transcoder/ai_upscale_min_target_height", 1080);
+    if (sourceHeight <= 0 || targetHeight <= 0) return false;
+    return sourceHeight <= maxSrc && targetHeight >= minTgt;
+  }
+
+  /**
+   * Build the intermediate file path for a given job id. Directory is
+   * created on demand.
+   */
+  public static java.io.File makeAiUpscaleIntermediate(int jobID, int segment)
+  {
+    String dir = Sage.get("transcoder/ai_upscale_intermediate_dir", "");
+    if (dir.length() == 0)
+    {
+      String stateDir = System.getenv("STATE_DIR");
+      if (stateDir != null && stateDir.length() > 0)
+        dir = stateDir + "/transcoder/intermediates";
+      else
+        dir = System.getProperty("java.io.tmpdir", "/tmp") + "/sage-ai-intermediates";
+    }
+    java.io.File d = new java.io.File(dir);
+    if (!d.isDirectory()) d.mkdirs();
+    return new java.io.File(d, "ai_" + jobID + "_seg" + segment + ".mkv");
+  }
+
+  /**
+   * Spawn the phase-1 AI upscale wrapper. Returns the live Process; caller
+   * monitors waitFor() / exitValue() and chains phase 2 on success.
+   */
+  public static Process spawnAiUpscaleProcess(java.io.File input,
+      java.io.File intermediate, int targetWidth, int targetHeight) throws java.io.IOException
+  {
+    String wrapper = Sage.get("transcoder/ai_upscale_wrapper", "bin/sage-ai-upscale.sh");
+    String model = Sage.get("transcoder/ai_upscale_model", "realesr-general-x4v3");
+    String binary = Sage.get("transcoder/ai_upscale_binary", "/usr/local/bin/realesrgan-ncnn-vulkan");
+    int chunk = Sage.getInt("transcoder/ai_upscale_chunk_frames", 500);
+    java.util.ArrayList<String> argv = new java.util.ArrayList<String>();
+    argv.add("/bin/bash");
+    argv.add(wrapper);
+    argv.add("--input"); argv.add(input.getAbsolutePath());
+    argv.add("--output"); argv.add(intermediate.getAbsolutePath());
+    argv.add("--width"); argv.add(Integer.toString(targetWidth));
+    argv.add("--height"); argv.add(Integer.toString(targetHeight));
+    argv.add("--model"); argv.add(model);
+    argv.add("--chunk-frames"); argv.add(Integer.toString(chunk));
+    argv.add("--realesrgan"); argv.add(binary);
+    if (Sage.DBG) System.out.println("Ministry: spawning AI upscale: " + argv);
+    return Runtime.getRuntime().exec(argv.toArray(new String[0]));
+  }
+
+  /**
+   * Produce a copy of {@code targetFormat} suitable for phase 2 of a chained
+   * AI upscale job: any `-vf scale=W:H[:flags=...]` (or scale_npp) filter
+   * token is removed from the raw cmdline metadata since the upscale already
+   * happened in phase 1. If nothing else remains in the -vf chain, the whole
+   * `-vf <expr>` pair is dropped.
+   */
+  public static sage.media.format.ContainerFormat stripScaleFilterForPhase2(
+      sage.media.format.ContainerFormat targetFormat)
+  {
+    if (targetFormat == null) return targetFormat;
+    String raw = targetFormat.getMetadataProperty(sage.media.format.MediaFormat.META_RAW_FFMPEG_CMDLINE);
+    if (raw == null || raw.length() == 0) return targetFormat;
+    String rewritten = stripScaleFilterFromArgs(raw);
+    if (rewritten.equals(raw)) return targetFormat;
+    // Clone the format and overwrite the raw cmdline.
+    sage.media.format.ContainerFormat copy = (sage.media.format.ContainerFormat)
+        sage.media.format.ContainerFormat.buildFormatFromString(targetFormat.getFullPropertyString(true));
+    copy.addMetadata(sage.media.format.MediaFormat.META_RAW_FFMPEG_CMDLINE, rewritten, true);
+    if (Sage.DBG) System.out.println("Ministry: phase-2 args (scale stripped): " + rewritten);
+    return copy;
+  }
+
+  /** Strip any scale=/scale_npp= token from a -vf chain, dropping -vf entirely if the chain becomes empty. */
+  static String stripScaleFilterFromArgs(String args)
+  {
+    String[] toks = args.split("\\s+");
+    java.util.ArrayList<String> out = new java.util.ArrayList<String>(toks.length);
+    for (int i = 0; i < toks.length; i++)
+    {
+      if ("-vf".equals(toks[i]) && i + 1 < toks.length)
+      {
+        String chain = toks[i + 1];
+        // Split chain on ',' (filter separator), drop scale=/scale_npp= entries.
+        String[] parts = chain.split(",");
+        java.util.ArrayList<String> keep = new java.util.ArrayList<String>(parts.length);
+        for (String p : parts)
+        {
+          String pt = p.trim();
+          if (pt.startsWith("scale=") || pt.startsWith("scale_npp=")) continue;
+          if (pt.length() > 0) keep.add(pt);
+        }
+        if (keep.isEmpty())
+        {
+          // drop both -vf and its arg
+          i++;
+          continue;
+        }
+        out.add("-vf");
+        StringBuilder sb = new StringBuilder();
+        for (int j = 0; j < keep.size(); j++) { if (j > 0) sb.append(','); sb.append(keep.get(j)); }
+        out.add(sb.toString());
+        i++;
+      }
+      else
+      {
+        out.add(toks[i]);
+      }
+    }
+    StringBuilder sb = new StringBuilder();
+    for (int i = 0; i < out.size(); i++) { if (i > 0) sb.append(' '); sb.append(out.get(i)); }
+    return sb.toString();
+  }
+
   private Object lock = new Object();
   private java.util.Vector waitingForConversion = new java.util.Vector();
   private java.util.Vector converting = new java.util.Vector();
