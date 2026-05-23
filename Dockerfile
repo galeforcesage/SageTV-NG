@@ -172,6 +172,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libx265-199 \
     libmp3lame0 \
     comskip \
+    ccextractor \
+    nocache \
     hdhomerun-config \
     && rm -rf /var/lib/apt/lists/*
 

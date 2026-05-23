@@ -26,6 +26,15 @@ public abstract class TranscodeJob
   protected static final String TRANSCODE_STATUS = "status";
   protected static final String TRANSCODE_CLIP_START = "clip_start";
   protected static final String TRANSCODE_CLIP_DURATION = "clip_duration";
+  // Auto AI upscale chained-job state (see Ministry.shouldAutoAiUpscale +
+  // FFMPEGTranscodeJob.transcodeNow).
+  //   ai_upscale_phase: 0=disabled / not an upscale job, 1=running phase 1
+  //                     (realesrgan-ncnn-vulkan wrapper), 2=running phase 2
+  //                     (normal ffmpeg encode of the upscaled intermediate).
+  //   ai_upscale_intermediate: absolute path to the lossless intermediate
+  //                     file produced by phase 1 and consumed by phase 2.
+  protected static final String AI_UPSCALE_PHASE = "ai_upscale_phase";
+  protected static final String AI_UPSCALE_INTERMEDIATE = "ai_upscale_intermediate";
   public static final int WAITING = 1;
   public static final int TRANSCODING = 2;
   public static final int TRANSCODING_SEGMENT_COMPLETE = 3;
@@ -76,6 +85,10 @@ public abstract class TranscodeJob
     jobState = Sage.getInt(Ministry.TRANSCODE_JOB_PROPS + '/' + jobID + '/' + TRANSCODE_STATUS, 0);
     clipStartTime = Sage.getLong(Ministry.TRANSCODE_JOB_PROPS + '/' + jobID + '/' + TRANSCODE_CLIP_START, 0);
     clipDuration = Sage.getLong(Ministry.TRANSCODE_JOB_PROPS + '/' + jobID + '/' + TRANSCODE_CLIP_DURATION, 0);
+    aiUpscalePhase = Sage.getInt(Ministry.TRANSCODE_JOB_PROPS + '/' + jobID + '/' + AI_UPSCALE_PHASE, 0);
+    String aiInter = Sage.get(Ministry.TRANSCODE_JOB_PROPS + '/' + jobID + '/' + AI_UPSCALE_INTERMEDIATE, null);
+    if (aiInter != null && aiInter.length() > 0)
+      intermediateFile = new java.io.File(aiInter);
   }
   public void saveToProps()
   {
@@ -87,7 +100,17 @@ public abstract class TranscodeJob
         (jobState == COMPLETED || jobState < 0) ? jobState : 0);
     Sage.putLong(Ministry.TRANSCODE_JOB_PROPS + '/' + jobID + '/' + TRANSCODE_CLIP_START, clipStartTime);
     Sage.putLong(Ministry.TRANSCODE_JOB_PROPS + '/' + jobID + '/' + TRANSCODE_CLIP_DURATION, clipDuration);
+    Sage.putInt(Ministry.TRANSCODE_JOB_PROPS + '/' + jobID + '/' + AI_UPSCALE_PHASE, aiUpscalePhase);
+    Sage.put(Ministry.TRANSCODE_JOB_PROPS + '/' + jobID + '/' + AI_UPSCALE_INTERMEDIATE,
+        (intermediateFile == null) ? "" : intermediateFile.toString());
   }
+
+  /** Current AI upscale chained-job phase (0=none, 1=upscaling, 2=encoding). */
+  public int getAiUpscalePhase() { return aiUpscalePhase; }
+  public void setAiUpscalePhase(int phase) { this.aiUpscalePhase = phase; }
+  /** Path to the lossless intermediate file produced by AI upscale phase 1. */
+  public java.io.File getIntermediateFile() { return intermediateFile; }
+  public void setIntermediateFile(java.io.File f) { this.intermediateFile = f; }
 
   public long getWaitTime()
   {
@@ -304,6 +327,8 @@ public abstract class TranscodeJob
   private java.io.File[] targetFiles;
   private java.io.File[] tempFiles;
   private java.io.File destFile;
+  protected int aiUpscalePhase;
+  protected java.io.File intermediateFile;
   private boolean replaceOriginal;
   protected int jobID;
   protected long clipStartTime;

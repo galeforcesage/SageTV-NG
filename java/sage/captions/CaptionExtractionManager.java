@@ -15,6 +15,7 @@ import sage.Sage;
 import sage.Wizard;
 import java.io.File;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -42,6 +43,10 @@ import java.util.concurrent.Executors;
  *                                              i.e. /opt/sagetv/server/ffmpeg)
  *   caption_extraction/post_recording_delay_ms - pause after stop before run (default 5000)
  *   caption_extraction/extract_seconds       - cap extraction at N seconds (0 = whole file)
+ *   caption_extraction/live_interval_ms      - tail re-extract period while recording is in
+ *                                              progress (default 10000)
+ *   caption_extraction/live_min_file_bytes   - skip live extract until source has at least N
+ *                                              bytes on disk (default 524288)
  */
 public class CaptionExtractionManager
 {
@@ -49,6 +54,11 @@ public class CaptionExtractionManager
 
   private final ExecutorService threadPool;
   private final Map<Integer, CaptionExtractionJob> activeJobs = new ConcurrentHashMap<>();
+  // MediaFile id -> live tail-extract loop for an in-progress recording.
+  private final Map<Integer, LiveExtractor> liveExtractors = new ConcurrentHashMap<>();
+  // MediaFile ids that had on-demand (partial) extraction during playback
+  // and need a full extraction once playback stops.
+  private final Set<Integer> pendingFullExtraction = ConcurrentHashMap.newKeySet();
 
   private CaptionExtractionManager()
   {
@@ -173,9 +183,106 @@ public class CaptionExtractionManager
     return queued;
   }
 
+  /**
+   * Called from playback paths (e.g. VideoFrame.setCCState) when the user
+   * enables CC on a recording that has no sidecar yet. Behaviour:
+   *   - completed recording: one-shot job that overwrites any stale sidecar.
+   *   - in-progress recording: starts (or attaches to) a tail-extract loop
+   *     that re-runs ffmpeg every caption_extraction/live_interval_ms (default
+   *     10s) until the recording stops, then does a final full pass.
+   * The supplied onSidecarReady callback fires on the worker thread every
+   * time a fresh sidecar is written (initial creation for one-shot, after
+   * each successful tail pass for live), letting the caller reload its
+   * SubtitleHandler. Returns false if extraction can't run (disabled,
+   * missing file, etc.).
+   */
+  public boolean ensureExtractionRunning(MediaFile mf, Runnable onSidecarReady)
+  {
+    if (!isEnabled()) return false;
+    if (mf == null) return false;
+    File recFile = mf.getFile(0);
+    if (recFile == null || !recFile.exists()) return false;
+
+    if (mf.isRecording())
+    {
+      final int id = mf.getID();
+      LiveExtractor existing = liveExtractors.get(id);
+      if (existing != null)
+      {
+        existing.addListener(onSidecarReady);
+        if (Sage.DBG) System.out.println("CaptionExtractionManager: attached listener to live extractor for MF " + id);
+        return true;
+      }
+      LiveExtractor le = new LiveExtractor(mf, recFile);
+      le.addListener(onSidecarReady);
+      LiveExtractor prev = liveExtractors.putIfAbsent(id, le);
+      if (prev != null)
+      {
+        // Race: someone else beat us. Attach to the winner.
+        prev.addListener(onSidecarReady);
+        return true;
+      }
+      Thread t = new Thread(le, "CaptionExtract-Live-" + id);
+      t.setDaemon(true);
+      t.setPriority(Thread.MIN_PRIORITY);
+      t.start();
+      if (Sage.DBG) System.out.println("CaptionExtractionManager: started live extractor for MF " + id + " (" + recFile.getName() + ")");
+      return true;
+    }
+
+    // Completed recording: one-shot, force=true, onDemand=true to limit I/O during playback.
+    // Mark for deferred full extraction when playback stops.
+    pendingFullExtraction.add(mf.getID());
+    submitJob(mf, recFile, true, onSidecarReady, true);
+    return true;
+  }
+
+  /** Stop any live extractor for this MediaFile (no-op if not running). */
+  public void stopLiveExtraction(MediaFile mf)
+  {
+    if (mf == null) return;
+    LiveExtractor le = liveExtractors.remove(mf.getID());
+    if (le != null) le.stop();
+  }
+
+  /**
+   * Called when playback stops. If this file had an on-demand (partial)
+   * extraction during playback, queue a full extraction now that the disk
+   * is free. The full extraction overwrites the partial sidecar with
+   * complete captions (all tracks, full duration).
+   */
+  public void onPlaybackStopped(MediaFile mf)
+  {
+    if (mf == null) return;
+    final int id = mf.getID();
+    if (!pendingFullExtraction.remove(id)) return;
+    if (!isEnabled()) return;
+
+    File recFile = mf.getFile(0);
+    if (recFile == null || !recFile.exists()) return;
+
+    int delayMs = Sage.getInt("caption_extraction/post_playback_delay_ms", 10000);
+    if (Sage.DBG) System.out.println("CaptionExtractionManager: scheduling full extraction for MF " + id + " in " + delayMs + "ms (playback stopped)");
+    Pooler.execute(() -> {
+      try { Thread.sleep(delayMs); } catch (InterruptedException e) { return; }
+      // force=true to overwrite the partial sidecar, onDemand=false for full extraction
+      submitJob(mf, recFile, true, null, false);
+    });
+  }
+
   // ── Internal ──
 
   private void submitJob(MediaFile mf, File recFile, boolean force)
+  {
+    submitJob(mf, recFile, force, null, false);
+  }
+
+  private void submitJob(MediaFile mf, File recFile, boolean force, Runnable extraCallback)
+  {
+    submitJob(mf, recFile, force, extraCallback, false);
+  }
+
+  private void submitJob(MediaFile mf, File recFile, boolean force, Runnable extraCallback, boolean onDemand)
   {
     if (mf == null || recFile == null) return;
     final int id = mf.getID();
@@ -188,6 +295,10 @@ public class CaptionExtractionManager
     if (!force && sidecar.isFile() && sidecar.length() > 0)
     {
       if (Sage.DBG) System.out.println("CaptionExtractionManager: sidecar exists, skipping (use force=true to re-extract): " + sidecar);
+      if (extraCallback != null)
+      {
+        try { extraCallback.run(); } catch (Throwable ignore) {}
+      }
       return;
     }
     CaptionExtractionJob job = new CaptionExtractionJob(mf, recFile, sidecar, () -> {
@@ -202,7 +313,11 @@ public class CaptionExtractionManager
       {
         if (Sage.DBG) System.out.println("CaptionExtractionManager: post-extraction sub re-scan failed: " + t);
       }
-    });
+      if (extraCallback != null)
+      {
+        try { extraCallback.run(); } catch (Throwable ignore) {}
+      }
+    }, onDemand);
     activeJobs.put(id, job);
     threadPool.submit(job);
   }
@@ -215,5 +330,96 @@ public class CaptionExtractionManager
     int dot = p.lastIndexOf('.');
     String base = (dot > 0) ? p.substring(0, dot) : p;
     return new File(base + ".srt");
+  }
+
+  /**
+   * Tail-extract loop for an in-progress recording: wakes every
+   * caption_extraction/live_interval_ms (default 10s), runs a forced one-shot
+   * extract on the growing source file, fires listeners after each successful
+   * pass so VideoFrame can reload its SubtitleHandler. Exits and does one
+   * final full pass once the MediaFile reports !isRecording().
+   */
+  private class LiveExtractor implements Runnable
+  {
+    private final MediaFile mf;
+    private final File recFile;
+    private final java.util.List<Runnable> listeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private volatile boolean stopped;
+
+    LiveExtractor(MediaFile mf, File recFile)
+    {
+      this.mf = mf;
+      this.recFile = recFile;
+    }
+
+    void addListener(Runnable r)
+    {
+      if (r != null) listeners.add(r);
+    }
+
+    void stop()
+    {
+      stopped = true;
+    }
+
+    private void fireListeners()
+    {
+      for (Runnable r : listeners)
+      {
+        try { r.run(); } catch (Throwable ignore) {}
+      }
+    }
+
+    @Override
+    public void run()
+    {
+      long intervalMs = Math.max(2000L, Sage.getLong("caption_extraction/live_interval_ms", 10000L));
+      long minBytes = Math.max(0L, Sage.getLong("caption_extraction/live_min_file_bytes", 524288L));
+      final int id = mf.getID();
+      try
+      {
+        while (!stopped && mf.isRecording())
+        {
+          try { Thread.sleep(intervalMs); } catch (InterruptedException e) { return; }
+          if (stopped) return;
+          if (!recFile.exists() || recFile.length() < minBytes) continue;
+          runOnce();
+        }
+        // Recording finished while we were running: do one final clean pass.
+        if (!stopped && recFile.exists())
+        {
+          // Brief delay to let the writer flush.
+          long finalDelay = Math.max(0L, Sage.getLong("caption_extraction/post_recording_delay_ms", 5000L));
+          try { Thread.sleep(finalDelay); } catch (InterruptedException ignore) {}
+          runOnce();
+        }
+      }
+      finally
+      {
+        liveExtractors.remove(id, this);
+        if (Sage.DBG) System.out.println("CaptionExtractionManager: live extractor finished for MF " + id);
+      }
+    }
+
+    /** Run a synchronous extract pass on the current file state and fire listeners on success. */
+    private void runOnce()
+    {
+      File sidecar = sidecarFor(recFile);
+      File tmpScratch = new File(sidecar.getAbsolutePath() + ".live.tmp");
+      // Use a one-off job that writes directly to the real sidecar path (force=true).
+      // We deliberately do NOT route through submitJob() to avoid contending with
+      // the activeJobs map (which a recording-stop hook might also touch).
+      final boolean[] ok = { false };
+      CaptionExtractionJob job = new CaptionExtractionJob(mf, recFile, sidecar, () -> {
+        if (sidecar.isFile() && sidecar.length() > 8) ok[0] = true;
+      });
+      job.run();
+      if (tmpScratch.exists()) tmpScratch.delete();
+      if (ok[0])
+      {
+        try { mf.checkForSubtitles(); } catch (Throwable ignore) {}
+        fireListeners();
+      }
+    }
   }
 }

@@ -23,11 +23,27 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Single caption-extraction job. Spawns ffmpeg with the lavfi `subcc` filter to
- * pull EIA-608/CEA-708 captions out of the recording's video stream and writes
- * a `.srt` sidecar next to the source file. Writes to a `.tmp` first then
- * atomically renames so a half-written sidecar never confuses the subtitle
- * loader.
+ * Single caption-extraction job. Pulls EIA-608 / CEA-708 captions from the
+ * recording's video stream and writes language-tagged sidecars next to the
+ * source file:
+ * <ul>
+ *   <li>{@code <base>.srt} + {@code <base>.vtt} — primary track (CEA-708
+ *       service 1 if present, else 608 CC1). This is the file SageTV's
+ *       legacy {@code FormatParser.updateExternalSubs} short-circuits on so
+ *       it always shows up as the default subtitle stream.</li>
+ *   <li>{@code <base>.spa.srt} + {@code <base>.spa.vtt} — 608 CC2 (Spanish
+ *       SAP track on most US broadcasters). Skipped when empty.</li>
+ * </ul>
+ *
+ * <h3>Extractor selection</h3>
+ * Prefers {@code ccextractor} (much faster than ffmpeg's lavfi {@code subcc}
+ * filter, decodes CEA-708 DTVCC services directly, handles H.265 SEI). Falls
+ * back to {@code ffmpeg -f lavfi -i movie=...[out0+subcc]} when ccextractor
+ * is not on {@code PATH} (CC1 only in that mode, no VTT, no Spanish).
+ *
+ * <h3>Atomic writes</h3>
+ * Each output is written to {@code <name>.tmp} first then atomically renamed
+ * so a half-written sidecar never confuses the subtitle loader.
  */
 class CaptionExtractionJob implements Runnable
 {
@@ -35,16 +51,23 @@ class CaptionExtractionJob implements Runnable
   private final File recFile;
   private final File sidecar;
   private final Runnable onComplete;
+  private final boolean onDemand;
 
   private volatile Process proc;
   private volatile boolean cancelled;
 
   CaptionExtractionJob(MediaFile mf, File recFile, File sidecar, Runnable onComplete)
   {
+    this(mf, recFile, sidecar, onComplete, false);
+  }
+
+  CaptionExtractionJob(MediaFile mf, File recFile, File sidecar, Runnable onComplete, boolean onDemand)
+  {
     this.mf = mf;
     this.recFile = recFile;
     this.sidecar = sidecar;
     this.onComplete = onComplete;
+    this.onDemand = onDemand;
   }
 
   void cancel()
@@ -57,18 +80,328 @@ class CaptionExtractionJob implements Runnable
   @Override
   public void run()
   {
+    try
+    {
+      String ccextractor = Sage.get("caption_extraction/ccextractor_path", "ccextractor");
+      boolean useCce = Sage.getBoolean("caption_extraction/use_ccextractor", true) && which(ccextractor);
+      if (useCce)
+      {
+        runCcextractor(ccextractor);
+      }
+      else
+      {
+        runFfmpegFallback();
+      }
+    }
+    finally
+    {
+      try { if (onComplete != null) onComplete.run(); } catch (Throwable ignore) {}
+    }
+  }
+
+  // ── ccextractor path (preferred) ───────────────────────────────────────
+
+  private void runCcextractor(String ccextractor)
+  {
+    String basePath = stripExt(sidecar.getAbsolutePath());
+    File srtPrimary = new File(basePath + ".srt");
+    File vttPrimary = new File(basePath + ".vtt");
+    File srtSpa    = new File(basePath + ".spa.srt");
+    File vttSpa    = new File(basePath + ".spa.vtt");
+
+    String inFmt = ccextractorInputFlag(recFile.getName());
+    int extractSec = Sage.getInt("caption_extraction/extract_seconds", 0);
+    // On-demand (during playback): single CC1 pass, limited to 5 minutes
+    // to avoid disk I/O contention that causes video freezes.
+    if (onDemand)
+    {
+      int onDemandSec = Sage.getInt("caption_extraction/ondemand_seconds", 300);
+      if (extractSec <= 0 || extractSec > onDemandSec) extractSec = onDemandSec;
+      if (Sage.DBG) System.out.println("CaptionExtractionJob: on-demand mode, CC1 only, limit=" + extractSec + "s");
+    }
+
+    // ── Pass 1: 608 CC1 (always attempted) ─────────────────────────────
+    File cc1Tmp = new File(basePath + ".cc1.srt");
+    boolean cc1Ok = runCce(ccextractor, cc1Tmp.getAbsolutePath(), "srt", inFmt, null, extractSec);
+
+    File svcOut = null;
+    boolean svcOk = false;
+    if (!onDemand)
+    {
+      // Brief pause between passes so playback I/O can breathe.
+      if (!cancelled) throttlePause();
+
+      // ── Pass 2: 708 service 1 (preferred when present) ─────────────────
+      // ccextractor with -svc N renames the -o argument by inserting
+      // ".pN.svcNN" before the extension. The N varies by input format
+      // (.p0 for .mpg, .p1 for .ts), so we search for it dynamically.
+      File svcArg = new File(basePath + ".svc01.srt");
+      svcOk = runCce(ccextractor, svcArg.getAbsolutePath(), "srt", inFmt, "svc1", extractSec);
+      svcOut = findPhantom(basePath, "svc01", "srt");
+    }
+
+    // Pick best primary
+    File winner = null;
+    String winnerKind = null;
+    if (svcOk && svcOut != null && svcOut.length() > 8) { winner = svcOut; winnerKind = "708svc1"; }
+    else if (cc1Ok && cc1Tmp.isFile() && cc1Tmp.length() > 8) { winner = cc1Tmp; winnerKind = "608cc1"; }
+
+    if (winner != null)
+    {
+      try
+      {
+        cleanSrtFile(winner);
+        if (winner.length() > 8)
+        {
+          Files.move(winner.toPath(), srtPrimary.toPath(),
+              StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+          // Sibling VTT — skip in on-demand mode to minimize I/O
+          if (!onDemand)
+          {
+            File vttArg = new File(basePath + ".vtt-tmp.vtt");
+            runCce(ccextractor, vttArg.getAbsolutePath(), "webvtt", inFmt,
+                "708svc1".equals(winnerKind) ? "svc1" : null, extractSec);
+            // ccextractor may produce .vtt-tmp.pN.svcNN.vtt or plain .vtt-tmp.vtt
+            File vttResult = findPhantom(basePath, "vtt-tmp", "vtt");
+            if (vttResult == null && vttArg.isFile()) vttResult = vttArg;
+            if (vttResult != null && vttResult.length() > 8)
+            {
+              Files.move(vttResult.toPath(), vttPrimary.toPath(),
+                  StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            }
+          }
+          if (Sage.DBG) System.out.println("CaptionExtractionJob: wrote " + srtPrimary +
+              " (" + srtPrimary.length() + " bytes, source=" + winnerKind + ")");
+        }
+      }
+      catch (IOException e)
+      {
+        if (Sage.DBG) System.out.println("CaptionExtractionJob: primary rename failed: " + e);
+      }
+    }
+    // cleanup intermediates (incl. phantom .pN.svcNN.srt that ccextractor
+    // 0.94 produces as a side-effect when 708 captions are present in the
+    // source, regardless of -svc flag. Pattern varies: .p0.svc01 or .p1.svc01).
+    cc1Tmp.delete();
+    if (!onDemand)
+    {
+      new File(basePath + ".svc01.srt").delete();
+      if (svcOut != null) svcOut.delete();
+    }
+    deletePhantoms(basePath, "cc1");
+    deletePhantoms(basePath, "svc01");
+    deletePhantoms(basePath, "vtt-tmp");
+    new File(basePath + ".vtt-tmp.vtt").delete();
+
+    if (!onDemand && !cancelled)
+    {
+      throttlePause();
+
+      // ── Pass 3: 608 CC2 (Spanish SAP) — skip silently when empty ──────────
+      File cc2Tmp = new File(basePath + ".cc2-tmp.srt");
+      boolean cc2Ok = runCce(ccextractor, cc2Tmp.getAbsolutePath(), "srt", inFmt, "cc2", extractSec);
+      if (cc2Ok && cc2Tmp.isFile() && cc2Tmp.length() > 8)
+      {
+        try
+        {
+          cleanSrtFile(cc2Tmp);
+          if (cc2Tmp.length() > 8)
+          {
+            Files.move(cc2Tmp.toPath(), srtSpa.toPath(),
+                StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            File cc2vTmp = new File(basePath + ".cc2-vtt.vtt");
+            runCce(ccextractor, cc2vTmp.getAbsolutePath(), "webvtt", inFmt, "cc2", extractSec);
+            if (cc2vTmp.isFile() && cc2vTmp.length() > 8)
+            {
+              Files.move(cc2vTmp.toPath(), vttSpa.toPath(),
+                  StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            }
+            if (Sage.DBG) System.out.println("CaptionExtractionJob: wrote CC2 sidecar " + srtSpa +
+                " (" + srtSpa.length() + " bytes)");
+          }
+        }
+        catch (IOException e)
+        {
+          if (Sage.DBG) System.out.println("CaptionExtractionJob: cc2 rename failed: " + e);
+        }
+      }
+      cc2Tmp.delete();
+      deletePhantoms(basePath, "cc2-tmp");
+      new File(basePath + ".cc2-vtt.vtt").delete();
+      deletePhantoms(basePath, "cc2-vtt");
+    }
+  }
+
+  /**
+   * Run one ccextractor invocation. Output file is exactly {@code outPath}.
+   * For -svc passes ccextractor appends {@code .p0.svc01} before the extension
+   * (so caller should pre-account for that when inspecting outputs).
+   * Returns true on exit code 0.
+   */
+  private boolean runCce(String ccextractor, String outPath, String outFmt,
+      String inFmt, String channel, int seconds)
+  {
+    List<String> cmd = new ArrayList<>();
+    // Wrap in nocache so ccextractor's sequential reads don't evict page cache
+    // pages that the player and recorder are actively using. Then ionice (idle
+    // class) + nice (lowest CPU priority) so extraction never starves playback.
+    if (which("nocache"))
+    {
+      cmd.add("nocache");
+    }
+    if (which("ionice"))
+    {
+      cmd.add("ionice");
+      cmd.add("-c");
+      cmd.add("3");
+      cmd.add("--");
+      cmd.add("nice");
+      cmd.add("-n");
+      cmd.add("19");
+    }
+    cmd.add(ccextractor);
+    if (inFmt != null) cmd.add(inFmt);
+    cmd.add("-out=" + outFmt);
+    if ("cc2".equals(channel)) cmd.add("-cc2");
+    else if ("svc1".equals(channel)) { cmd.add("-svc"); cmd.add("1"); }
+    if (seconds > 0)
+    {
+      cmd.add("-endat");
+      cmd.add(secondsToHms(seconds));
+    }
+    cmd.add(recFile.getAbsolutePath());
+    cmd.add("-o");
+    cmd.add(outPath);
+
+    if (Sage.DBG) System.out.println("CaptionExtractionJob: " + String.join(" ", cmd));
+    StringBuilder err = new StringBuilder();
+    try
+    {
+      ProcessBuilder pb = new ProcessBuilder(cmd);
+      pb.redirectErrorStream(true);
+      proc = pb.start();
+      try (BufferedReader r = new BufferedReader(new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8)))
+      {
+        String line;
+        while ((line = r.readLine()) != null)
+          if (err.length() < 4096) err.append(line).append('\n');
+      }
+      int rc = proc.waitFor();
+      if (cancelled) return false;
+      // rc=2 means "user-defined limits reached" (we passed -endat) — the
+      // file is fully written, just truncated to the requested duration.
+      if (rc != 0 && rc != 2)
+      {
+        if (Sage.DBG) System.out.println("CaptionExtractionJob: ccextractor exit=" + rc + " for channel=" + channel + "\n" + err);
+        return false;
+      }
+      return true;
+    }
+    catch (IOException | InterruptedException e)
+    {
+      if (Sage.DBG) System.out.println("CaptionExtractionJob: ccextractor error: " + e);
+      return false;
+    }
+  }
+
+  private static String secondsToHms(int s)
+  {
+    int h = s / 3600, m = (s % 3600) / 60, sec = s % 60;
+    return String.format("%02d:%02d:%02d", h, m, sec);
+  }
+
+  /**
+   * Brief sleep between ccextractor passes to give the disk I/O scheduler
+   * breathing room when a playback transcoder is running concurrently.
+   * Default 3 seconds, tunable via caption_extraction/inter_pass_delay_ms.
+   */
+  private void throttlePause()
+  {
+    int ms = Sage.getInt("caption_extraction/inter_pass_delay_ms", 3000);
+    if (ms <= 0) return;
+    try { Thread.sleep(ms); } catch (InterruptedException e) { cancelled = true; }
+  }
+
+  /**
+   * Delete phantom files produced by ccextractor when it auto-detects a 708
+   * service. The phantom pattern is {@code <basePath>.<prefix>.pN.svcNN.<ext>}
+   * where N varies. We scan the parent directory for matches.
+   */
+  private static void deletePhantoms(String basePath, String prefix)
+  {
+    File base = new File(basePath);
+    File dir = base.getParentFile();
+    if (dir == null || !dir.isDirectory()) return;
+    String namePrefix = base.getName() + "." + prefix + ".";
+    File[] phantoms = dir.listFiles((d, name) ->
+        name.startsWith(namePrefix) && (name.endsWith(".srt") || name.endsWith(".vtt")));
+    if (phantoms != null)
+    {
+      for (File f : phantoms) f.delete();
+    }
+  }
+
+  /**
+   * Find the phantom file produced by ccextractor for a given prefix and
+   * extension. Returns the first matching {@code <basePath>.<prefix>.pN.svcNN.<ext>}
+   * or null if none found.
+   */
+  private static File findPhantom(String basePath, String prefix, String ext)
+  {
+    File base = new File(basePath);
+    File dir = base.getParentFile();
+    if (dir == null || !dir.isDirectory()) return null;
+    String namePrefix = base.getName() + "." + prefix + ".";
+    String suffix = "." + ext;
+    File[] matches = dir.listFiles((d, name) ->
+        name.startsWith(namePrefix) && name.endsWith(suffix));
+    if (matches != null && matches.length > 0) return matches[0];
+    return null;
+  }
+
+  private static String ccextractorInputFlag(String fname)
+  {
+    String n = fname.toLowerCase();
+    if (n.endsWith(".ts") || n.endsWith(".m2ts")) return "-ts";
+    if (n.endsWith(".mpg") || n.endsWith(".mpeg") || n.endsWith(".vob")) return "-ps";
+    if (n.endsWith(".mp4") || n.endsWith(".m4v") || n.endsWith(".mov")) return "-mp4";
+    if (n.endsWith(".mkv") || n.endsWith(".webm")) return "-mkv";
+    if (n.endsWith(".wtv")) return "-wtv";
+    return null; // let ccextractor autodetect
+  }
+
+  private static String stripExt(String path)
+  {
+    int dot = path.lastIndexOf('.');
+    return (dot > 0) ? path.substring(0, dot) : path;
+  }
+
+  private static boolean which(String binary)
+  {
+    if (binary == null || binary.isEmpty()) return false;
+    // absolute path → check directly
+    File f = new File(binary);
+    if (f.isAbsolute()) return f.canExecute();
+    // PATH lookup
+    String path = System.getenv("PATH");
+    if (path == null) return false;
+    for (String dir : path.split(File.pathSeparator))
+    {
+      File c = new File(dir, binary);
+      if (c.canExecute()) return true;
+    }
+    return false;
+  }
+
+  // ── ffmpeg fallback (CC1 only, no VTT, kept for environments without ccextractor) ──
+
+  private void runFfmpegFallback()
+  {
     File tmp = new File(sidecar.getAbsolutePath() + ".tmp");
     try
     {
       if (tmp.exists()) tmp.delete();
 
-      // Default to the bundled SageTV-patched ffmpeg (the same binary the
-      // transcoder, format parser, thumbnail extractor, etc. resolve through
-      // FFMPEGTranscoder.getTranscoderPath()). Users can still override with
-      // caption_extraction/ffmpeg_path. The args we send here are all standard
-      // libav flags, so any modern ffmpeg works -- but defaulting to the
-      // bundled binary keeps every native subprocess in SageTV using the
-      // same, known-good build instead of whatever happens to be on PATH.
       String ffmpeg = Sage.get("caption_extraction/ffmpeg_path",
           sage.FFMPEGTranscoder.getTranscoderPath());
       int extractSec = Sage.getInt("caption_extraction/extract_seconds", 0);
@@ -83,6 +416,18 @@ class CaptionExtractionJob implements Runnable
       String filterInput = "movie=" + escapedPath + "[out0+subcc]";
 
       List<String> cmd = new ArrayList<>();
+      // Wrap in ionice (idle class) + nice (lowest CPU priority) so extraction
+      // never starves an active playback transcoder for disk or CPU time.
+      if (which("ionice"))
+      {
+        cmd.add("ionice");
+        cmd.add("-c");
+        cmd.add("3");
+        cmd.add("--");
+        cmd.add("nice");
+        cmd.add("-n");
+        cmd.add("19");
+      }
       cmd.add(ffmpeg);
       cmd.add("-hide_banner");
       cmd.add("-loglevel");
@@ -166,10 +511,6 @@ class CaptionExtractionJob implements Runnable
       if (Sage.DBG) System.out.println("CaptionExtractionJob: error processing " + recFile + ": " + e);
       try { tmp.delete(); } catch (Throwable ignore) {}
     }
-    finally
-    {
-      try { if (onComplete != null) onComplete.run(); } catch (Throwable ignore) {}
-    }
   }
 
   /**
@@ -199,7 +540,11 @@ class CaptionExtractionJob implements Runnable
    */
   static void cleanSrtFile(File f) throws IOException
   {
-    java.util.List<String> lines = Files.readAllLines(f.toPath(), StandardCharsets.UTF_8);
+    // Use ISO_8859_1 to avoid MalformedInputException from ccextractor's
+    // occasional non-UTF-8 bytes (e.g. raw CEA-708 data leaking through).
+    // ISO_8859_1 is lossless for all byte values; the regex-based cleanSrtLine
+    // strips any stray high-byte sequences anyway.
+    java.util.List<String> lines = Files.readAllLines(f.toPath(), java.nio.charset.StandardCharsets.ISO_8859_1);
     StringBuilder out = new StringBuilder((int) Math.min(f.length() + 64, Integer.MAX_VALUE));
     for (String line : lines)
     {
@@ -220,6 +565,14 @@ class CaptionExtractionJob implements Runnable
     s = s.replace("\\h", " ");
     // Collapse runs of spaces created by stripping.
     s = s.replaceAll("  +", " ");
-    return s;
+    // Trim trailing whitespace — ccextractor pads cue lines out to ~32 cols.
+    return rtrim(s);
+  }
+
+  private static String rtrim(String s)
+  {
+    int n = s.length();
+    while (n > 0 && Character.isWhitespace(s.charAt(n - 1))) n--;
+    return (n == s.length()) ? s : s.substring(0, n);
   }
 }

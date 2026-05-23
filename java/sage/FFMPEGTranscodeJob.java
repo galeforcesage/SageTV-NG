@@ -41,10 +41,82 @@ public class FFMPEGTranscodeJob extends TranscodeJob
 
   protected void transcodeNow()
   {
+    // ── Automatic AI upscale gate (Real-ESRGAN ncnn-vulkan, chained-job) ──
+    // On the FIRST invocation for a brand-new job, decide whether to wrap
+    // the encode in a 2-phase chain: phase 1 upscales source → lossless
+    // intermediate; phase 2 runs the user's preset against that intermediate
+    // with -vf scale=... stripped. Once aiUpscalePhase has been set (1 or
+    // 2), subsequent invocations are inside the chain itself and skip the
+    // detection.
+    if (aiUpscalePhase == 0)
+    {
+      int srcH = 0;
+      try
+      {
+        sage.media.format.ContainerFormat sf = mf.getFileFormat();
+        if (sf != null && sf.getVideoFormat() != null)
+          srcH = sf.getVideoFormat().getHeight();
+      }
+      catch (Throwable t) { /* leave srcH=0 -> rule won't fire */ }
+      String rawArgs = (targetFormat == null) ? null
+          : targetFormat.getMetadataProperty(sage.media.format.MediaFormat.META_RAW_FFMPEG_CMDLINE);
+      int tgtH = Ministry.parseTargetHeightFromPresetArgs(rawArgs);
+      int tgtW = Ministry.parseTargetWidthFromPresetArgs(rawArgs);
+      if (Ministry.shouldAutoAiUpscale(srcH, tgtH))
+      {
+        aiUpscalePhase = 1;
+        aiTargetWidth = tgtW;
+        aiTargetHeight = tgtH;
+        intermediateFile = Ministry.makeAiUpscaleIntermediate(jobID, transcodeSegment);
+        if (Sage.DBG) System.out.println("FFMPEGTranscodeJob: auto AI upscale ENGAGED jobID=" + jobID
+            + " srcH=" + srcH + " tgtH=" + tgtH + " intermediate=" + intermediateFile);
+        saveToProps();
+      }
+    }
+
+    // Phase 1 — spawn the wrapper script directly (not ffmpeg). On
+    // success the AiUpscaleMonitor advances aiUpscalePhase=2 and re-enters
+    // transcodeNow() to run the normal ffmpeg encode against the
+    // intermediate.
+    if (aiUpscalePhase == 1)
+    {
+      try
+      {
+        // Recover target W/H from preset if we restarted into a persisted phase-1 job.
+        if (aiTargetWidth <= 0 || aiTargetHeight <= 0)
+        {
+          String rawArgs = (targetFormat == null) ? null
+              : targetFormat.getMetadataProperty(sage.media.format.MediaFormat.META_RAW_FFMPEG_CMDLINE);
+          aiTargetWidth = Ministry.parseTargetWidthFromPresetArgs(rawArgs);
+          aiTargetHeight = Ministry.parseTargetHeightFromPresetArgs(rawArgs);
+        }
+        aiUpscaleProcess = Ministry.spawnAiUpscaleProcess(
+            mf.getFile(transcodeSegment), intermediateFile, aiTargetWidth, aiTargetHeight);
+      }
+      catch (java.io.IOException ex)
+      {
+        System.out.println("AI UPSCALE PHASE 1 FAILED TO SPAWN: " + ex);
+        jobState = TRANSCODE_FAILED;
+        saveToProps();
+        return;
+      }
+      monitorThread = new AiUpscaleMonitor();
+      monitorThread.setDaemon(true);
+      monitorThread.setPriority(Thread.MIN_PRIORITY);
+      monitorThread.start();
+      return;
+    }
+
     tranny = new FFMPEGTranscoder();
-    tranny.setSourceFile(null, mf.getFile(transcodeSegment));
+    // Phase 2: source is the lossless intermediate produced by phase 1, and
+    // the target preset has its -vf scale=... stripped (upscale already done).
+    java.io.File phaseInputFile = (aiUpscalePhase == 2 && intermediateFile != null && intermediateFile.isFile())
+        ? intermediateFile : mf.getFile(transcodeSegment);
+    sage.media.format.ContainerFormat phaseTarget = (aiUpscalePhase == 2)
+        ? Ministry.stripScaleFilterForPhase2(targetFormat) : targetFormat;
+    tranny.setSourceFile(null, phaseInputFile);
     tranny.setOutputFile(getTempFile(transcodeSegment));
-    tranny.setTranscodeFormat(mf.getFileFormat(), targetFormat);
+    tranny.setTranscodeFormat(mf.getFileFormat(), phaseTarget);
     if (segmentForLastPass != transcodeSegment)
     {
       currPass = 0;
@@ -112,24 +184,54 @@ public class FFMPEGTranscodeJob extends TranscodeJob
       tranny.stopTranscode();
       tranny = null;
     }
+    Process p = aiUpscaleProcess;
+    if (p != null)
+    {
+      try { p.destroy(); } catch (Throwable t) { /* best effort */ }
+      aiUpscaleProcess = null;
+    }
+    // If we're abandoning before phase 2 ran, the intermediate is orphaned —
+    // remove it. If phase 2 ran successfully, the monitor below already
+    // cleaned it up.
+    if (intermediateFile != null && intermediateFile.isFile() && jobState != COMPLETED)
+    {
+      try { intermediateFile.delete(); } catch (Throwable t) { /* best effort */ }
+    }
   }
 
   public boolean pauseTranscode()
   {
     FFMPEGTranscoder tempy = tranny;
-    return tempy != null && tempy.pauseForRecording();
+    if (tempy != null) return tempy.pauseForRecording();
+    // Phase 1: best-effort SIGSTOP on the wrapper PID (children may not
+    // honor it without process-group propagation; documented limitation).
+    return signalAiUpscale("STOP");
   }
 
   public boolean resumeTranscode()
   {
     FFMPEGTranscoder tempy = tranny;
-    return tempy != null && tempy.resumeForRecording();
+    if (tempy != null) return tempy.resumeForRecording();
+    return signalAiUpscale("CONT");
   }
 
   public boolean isPausedForRecording()
   {
     FFMPEGTranscoder tempy = tranny;
     return tempy != null && tempy.isPausedForRecording();
+  }
+
+  private boolean signalAiUpscale(String sig)
+  {
+    Process p = aiUpscaleProcess;
+    if (p == null || Sage.WINDOWS_OS) return false;
+    try
+    {
+      long pid = p.pid();
+      Runtime.getRuntime().exec(new String[]{"kill", "-" + sig, Long.toString(pid)});
+      return true;
+    }
+    catch (Throwable t) { return false; }
   }
 
   public float getPercentComplete()
@@ -152,6 +254,10 @@ public class FFMPEGTranscodeJob extends TranscodeJob
   private boolean enableMultipass;
   private int currPass;
   private int segmentForLastPass = -1;
+  // AI upscale chained-job state — see Ministry.shouldAutoAiUpscale.
+  private volatile Process aiUpscaleProcess;
+  private int aiTargetWidth;
+  private int aiTargetHeight;
   private class TranscodeMonitor extends Thread
   {
     public void run()
@@ -168,6 +274,12 @@ public class FFMPEGTranscodeJob extends TranscodeJob
               transcodeNow();
               return;
             }
+            // Successful phase-2 completion of an AI upscale chained job —
+            // intermediate file is no longer needed.
+            if (aiUpscalePhase == 2 && intermediateFile != null && intermediateFile.isFile())
+            {
+              try { intermediateFile.delete(); } catch (Throwable t) { /* best effort */ }
+            }
             jobState = TRANSCODING_SEGMENT_COMPLETE;
           }
           else
@@ -177,6 +289,62 @@ public class FFMPEGTranscodeJob extends TranscodeJob
           return;
         }
         try{Thread.sleep(1000);}catch(Exception e){}
+      }
+    }
+  }
+
+  /**
+   * Monitor for the phase-1 AI upscale wrapper process. On clean exit
+   * (code 0) the job advances to phase 2 and re-enters transcodeNow() so
+   * the regular ffmpeg encode pipeline takes over against the produced
+   * intermediate file. On non-zero exit the job is marked failed.
+   */
+  private class AiUpscaleMonitor extends Thread
+  {
+    AiUpscaleMonitor() { super("AiUpscaleMonitor-" + jobID); }
+    public void run()
+    {
+      Process p = aiUpscaleProcess;
+      if (p == null) return;
+      // Drain stderr in a side thread so the wrapper's ffmpeg-style progress
+      // shows up in sage.stderr; without this the pipe could block.
+      Thread drain = new Thread("AiUpscaleStderr-" + jobID)
+      {
+        public void run()
+        {
+          try
+          {
+            java.io.BufferedReader br = new java.io.BufferedReader(
+                new java.io.InputStreamReader(aiUpscaleProcess.getErrorStream()));
+            String line;
+            while ((line = br.readLine()) != null)
+            {
+              if (Sage.DBG) System.out.println("sage-ai-upscale: " + line);
+            }
+          } catch (Throwable t) { /* process ended */ }
+        }
+      };
+      drain.setDaemon(true);
+      drain.start();
+      int code = -1;
+      try { code = p.waitFor(); }
+      catch (InterruptedException ie) { /* killed */ }
+      aiUpscaleProcess = null;
+      if (jobState != TRANSCODING) return;
+      if (code == 0 && intermediateFile != null && intermediateFile.isFile())
+      {
+        if (Sage.DBG) System.out.println("AI upscale phase 1 complete jobID=" + jobID
+            + "; advancing to phase 2");
+        aiUpscalePhase = 2;
+        saveToProps();
+        transcodeNow();
+      }
+      else
+      {
+        System.out.println("AI UPSCALE PHASE 1 FAILED jobID=" + jobID + " exit=" + code);
+        jobState = TRANSCODE_FAILED;
+        Ministry.getInstance().kick();
+        saveToProps();
       }
     }
   }

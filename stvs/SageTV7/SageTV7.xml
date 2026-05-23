@@ -16301,6 +16301,154 @@
                 </Panel>
                </Panel>
               </Panel>
+              <Panel Name="Caption Horizontal Alignment" Sym="OPUS4A-200001">
+               <FixedWidth>1.0</FixedWidth>
+               <PadX>.02</PadX>
+               <PadY>.02</PadY>
+               <Insets>.02</Insets>
+               <WrapHNav>false</WrapHNav>
+               <WrapVNav>false</WrapVNav>
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <Text Name="Caption Horizontal Alignment:" Sym="OPUS4A-200002">
+                <AnchorX>0.0</AnchorX>
+                <FixedWidth>0.7</FixedWidth>
+                <AutosizeText>false</AutosizeText>
+                <WrapText>true</WrapText>
+                <TextShadow>true</TextShadow>
+                <DisableFontScaling>false</DisableFontScaling>
+                <IgnoreThemeProps>false</IgnoreThemeProps>
+               </Text>
+               <Item Name="CC Horiz Align" Sym="OPUS4A-200003">
+                <IgnoreThemeProps>false</IgnoreThemeProps>
+                <BackgroundComponent>false</BackgroundComponent>
+                <Attribute Name="Setting" Sym="OPUS4A-200004">
+                 <Value>GetProperty("subtitle/halign", 0.5)</Value>
+                </Attribute>
+                <Action Name="&quot;REM Show current setting.&quot;" Sym="OPUS4A-200005">
+                 <Conditional Name="Setting" Sym="OPUS4A-200006">
+                  <Branch Name="0.0" Sym="OPUS4A-200007">
+                   <Action Name="&quot;Left&quot;" Sym="OPUS4A-200008">
+                    <Text Ref="5436" Name=""/>
+                   </Action>
+                  </Branch>
+                  <Branch Name="0.5" Sym="OPUS4A-200009">
+                   <Action Name="&quot;Center&quot;" Sym="OPUS4A-200010">
+                    <Text Ref="5436" Name=""/>
+                   </Action>
+                  </Branch>
+                  <Branch Name="1.0" Sym="OPUS4A-200011">
+                   <Action Name="&quot;Right&quot;" Sym="OPUS4A-200012">
+                    <Text Ref="5436" Name=""/>
+                   </Action>
+                  </Branch>
+                  <Branch Name="else" Sym="OPUS4A-200013">
+                   <Action Name="Setting" Sym="OPUS4A-200014">
+                    <Text Ref="5436" Name=""/>
+                   </Action>
+                  </Branch>
+                 </Conditional>
+                </Action>
+                <Action Name="&quot;REM Toggle setting.&quot;" Sym="OPUS4A-200015">
+                 <Conditional Name="Setting" Sym="OPUS4A-200016">
+                  <Branch Name="0.0" Sym="OPUS4A-200017">
+                   <Action Name="Setting = 0.5" Sym="OPUS4A-200018">
+                    <Action Ref="5447" Name="SetProperty(&quot;subtitle/halign&quot;, Setting)"/>
+                   </Action>
+                  </Branch>
+                  <Branch Name="0.5" Sym="OPUS4A-200019">
+                   <Action Name="Setting = 1.0" Sym="OPUS4A-200020">
+                    <Action Ref="5447" Name="SetProperty(&quot;subtitle/halign&quot;, Setting)"/>
+                   </Action>
+                  </Branch>
+                  <Branch Name="1.0" Sym="OPUS4A-200021">
+                   <Action Name="Setting = 0.0" Sym="OPUS4A-200022">
+                    <Action Ref="5447" Name="SetProperty(&quot;subtitle/halign&quot;, Setting)"/>
+                   </Action>
+                  </Branch>
+                  <Branch Name="else" Sym="OPUS4A-200023">
+                   <Action Name="Setting = 0.5" Sym="OPUS4A-200024">
+                    <Action Ref="5447" Name="SetProperty(&quot;subtitle/halign&quot;, Setting)"/>
+                   </Action>
+                  </Branch>
+                 </Conditional>
+                </Action>
+               </Item>
+               <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+              </Panel>
+              <Panel Name="Caption Vertical Position" Sym="OPUS4A-200025">
+               <FixedWidth>1.0</FixedWidth>
+               <PadX>.02</PadX>
+               <PadY>.02</PadY>
+               <Insets>.02</Insets>
+               <WrapHNav>false</WrapHNav>
+               <WrapVNav>false</WrapVNav>
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <Text Name="Caption Vertical Position:" Sym="OPUS4A-200026">
+                <AnchorX>0.0</AnchorX>
+                <FixedWidth>0.7</FixedWidth>
+                <AutosizeText>false</AutosizeText>
+                <WrapText>true</WrapText>
+                <TextShadow>true</TextShadow>
+                <DisableFontScaling>false</DisableFontScaling>
+                <IgnoreThemeProps>false</IgnoreThemeProps>
+               </Text>
+               <Item Name="CC Vertical Pos" Sym="OPUS4A-200027">
+                <IgnoreThemeProps>false</IgnoreThemeProps>
+                <BackgroundComponent>false</BackgroundComponent>
+                <Attribute Name="Setting" Sym="OPUS4A-200028">
+                 <Value>GetProperty("subtitle/vpos", 0.95)</Value>
+                </Attribute>
+                <Action Name="&quot;REM Show current setting.&quot;" Sym="OPUS4A-200029">
+                 <Conditional Name="Setting" Sym="OPUS4A-200030">
+                  <Branch Name="0.05" Sym="OPUS4A-200031">
+                   <Action Name="&quot;Top&quot;" Sym="OPUS4A-200032">
+                    <Text Ref="5463" Name=""/>
+                   </Action>
+                  </Branch>
+                  <Branch Name="0.5" Sym="OPUS4A-200033">
+                   <Action Name="&quot;Middle&quot;" Sym="OPUS4A-200034">
+                    <Text Ref="5463" Name=""/>
+                   </Action>
+                  </Branch>
+                  <Branch Name="0.95" Sym="OPUS4A-200035">
+                   <Action Name="&quot;Bottom&quot;" Sym="OPUS4A-200036">
+                    <Text Ref="5463" Name=""/>
+                   </Action>
+                  </Branch>
+                  <Branch Name="else" Sym="OPUS4A-200037">
+                   <Action Name="Setting" Sym="OPUS4A-200038">
+                    <Text Ref="5463" Name=""/>
+                   </Action>
+                  </Branch>
+                 </Conditional>
+                </Action>
+                <Action Name="&quot;REM Toggle setting.&quot;" Sym="OPUS4A-200039">
+                 <Conditional Name="Setting" Sym="OPUS4A-200040">
+                  <Branch Name="0.05" Sym="OPUS4A-200041">
+                   <Action Name="Setting = 0.5" Sym="OPUS4A-200042">
+                    <Action Ref="5474" Name="SetProperty(&quot;subtitle/vpos&quot;, Setting)"/>
+                   </Action>
+                  </Branch>
+                  <Branch Name="0.5" Sym="OPUS4A-200043">
+                   <Action Name="Setting = 0.95" Sym="OPUS4A-200044">
+                    <Action Ref="5474" Name="SetProperty(&quot;subtitle/vpos&quot;, Setting)"/>
+                   </Action>
+                  </Branch>
+                  <Branch Name="0.95" Sym="OPUS4A-200045">
+                   <Action Name="Setting = 0.05" Sym="OPUS4A-200046">
+                    <Action Ref="5474" Name="SetProperty(&quot;subtitle/vpos&quot;, Setting)"/>
+                   </Action>
+                  </Branch>
+                  <Branch Name="else" Sym="OPUS4A-200047">
+                   <Action Name="Setting = 0.5" Sym="OPUS4A-200048">
+                    <Action Ref="5474" Name="SetProperty(&quot;subtitle/vpos&quot;, Setting)"/>
+                   </Action>
+                  </Branch>
+                 </Conditional>
+                </Action>
+               </Item>
+               <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+              </Panel>
              </Conditional>
             </Action>
             <Action Name="&quot;REM Subtitle options&quot;" Sym="OPUS4-113011">
