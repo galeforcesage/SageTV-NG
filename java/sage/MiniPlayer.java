@@ -293,6 +293,7 @@ public class MiniPlayer implements DVDMediaPlayer
 
   public synchronized void free()
   {
+    persistSessionBandwidthFromTranscoder();
     if (uiMgr != null)
       uiMgr.putFloat("miniplayer/last_volume", curVolume);
     synchronized (decoderLock)
@@ -3074,6 +3075,7 @@ public class MiniPlayer implements DVDMediaPlayer
   {
     if (currState == PLAY_STATE || currState == PAUSE_STATE || currState == LOADED_STATE)
     {
+      maybeCheckpointSessionBandwidthOnSeek(seekTimeMillis);
       synchronized (this)
       {
         timeGuessMillis = seekTimeMillis;
@@ -3190,6 +3192,19 @@ public class MiniPlayer implements DVDMediaPlayer
     return 0;
   }
 
+  private void maybeCheckpointSessionBandwidthOnSeek(long seekTimeMillis)
+  {
+    // Treat large seeks as natural session boundaries and persist the latest
+    // learned transcode bandwidth so the next play starts from fresher data.
+    long majorSeekDeltaMs = Sage.getLong("miniplayer/session_bw_checkpoint_seek_ms", 30000L);
+    if (majorSeekDeltaMs <= 0)
+      return;
+    long currentMs = getMediaTimeMillis();
+    if (Math.abs(seekTimeMillis - currentMs) < majorSeekDeltaMs)
+      return;
+    persistSessionBandwidthFromTranscoder();
+  }
+
   public boolean setClosedCaptioningState(int ccState)
   {
     return false;
@@ -3304,6 +3319,7 @@ public class MiniPlayer implements DVDMediaPlayer
 
   public void stop()
   {
+    persistSessionBandwidthFromTranscoder();
     if (currState == PLAY_STATE || currState == PAUSE_STATE)
     {
       synchronized (this)
@@ -3540,6 +3556,29 @@ public class MiniPlayer implements DVDMediaPlayer
       }
     }
     return false;
+  }
+
+  private void persistSessionBandwidthFromTranscoder()
+  {
+    if (mcsr == null || mpegSrc == null || !serverSideTranscoding)
+      return;
+    TranscodeEngine te = mpegSrc.getTranscoder();
+    if (!(te instanceof FFMPEGTranscoder))
+      return;
+    long bps = ((FFMPEGTranscoder) te).getEstimatedBandwidth();
+    if (bps <= 0)
+      return;
+    long now = Sage.eventTime();
+    if (lastSessionBandwidthPersistBps == bps && (now - lastSessionBandwidthPersistTime) < 5000)
+      return;
+
+    // Normalize to a 1s sample and feed the renderer's existing estimator so
+    // the next playback decision starts from the latest in-session adaptation.
+    mcsr.addDataToBandwidthCalc(Math.max(1L, bps / 8L), 1000L);
+    lastSessionBandwidthPersistBps = bps;
+    lastSessionBandwidthPersistTime = now;
+    if (Sage.DBG)
+      System.out.println("MiniPlayer persisted session bandwidth sample=" + (bps / 1000L) + "Kbps");
   }
 
   private boolean matchBDSubpictureToAudio()
@@ -5043,6 +5082,8 @@ public class MiniPlayer implements DVDMediaPlayer
   private int clientReportedMediaTime;
   private int clientReportedPlayState;
   private long lastDetailedBufferUpdate;
+  private long lastSessionBandwidthPersistTime;
+  private long lastSessionBandwidthPersistBps;
 
   private long lastParserTimestamp;
   private long lastParserTimestampBytePos;

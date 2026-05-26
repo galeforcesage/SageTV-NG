@@ -3875,6 +3875,9 @@ public class MiniClientSageRenderer extends SageRenderer
         // NG capability-protocol version. Empty on stock 9.x miniclients; non-empty
         // (e.g. "1.0.1") on NG-aware miniclients. Independent of FIRMWARE_VERSION.
         sendGetPropertyAsync("SAGETV_NG_VERSION");
+        // Optional NG identity/capability tokens. Legacy clients return empty values.
+        sendGetPropertyAsync("SAGETV_NG_CLIENT_ID");
+        sendGetPropertyAsync("SAGETV_NG_CAPABILITIES");
         // Per-player capability bias (Android NG miniclient). MINICLIENT_DEFAULT_PLAYER
         // is "exoplayer" or "ijkplayer"; the EXO_*/IJK_* sets are the actual capability
         // sets the corresponding player can decode. If the default-player set is
@@ -4531,6 +4534,18 @@ public class MiniClientSageRenderer extends SageRenderer
         else ngVersion = "";
         if (Sage.DBG) System.out.println("MiniClient SAGETV_NG_VERSION=" + ngVersion);
 
+        ngClientId = recvr.getStringReply();
+        if (ngClientId != null) ngClientId = ngClientId.trim();
+        else ngClientId = "";
+        if (Sage.DBG) System.out.println("MiniClient SAGETV_NG_CLIENT_ID=" + ngClientId);
+
+        String ngCapsProp = recvr.getStringReply();
+        ngCapabilities.clear();
+        if (ngVersion.length() > 0)
+          ngCapabilities.add("NG");
+        ngCapabilities.addAll(parseNgCapabilities(ngCapsProp));
+        if (Sage.DBG) System.out.println("MiniClient SAGETV_NG_CAPABILITIES=" + ngCapsProp + " parsed=" + ngCapabilities);
+
         // --- Per-player capability bias (Android NG miniclient) ---
         // Read the 9 replies in the same order they were queued above. Each one is
         // empty on stock 9.x clients that don't implement these GetProperty handlers.
@@ -4706,6 +4721,24 @@ public class MiniClientSageRenderer extends SageRenderer
               streamingProtocols);
           if (Sage.DBG && resolvedProfile != null)
             System.out.println("MiniClient auto-detected profile: " + resolvedProfile);
+        }
+
+        // NG sessions must resolve from the negotiated client capabilities so
+        // OPENURL can flow through PlaybackDecisionEngine instead of falling
+        // back to legacy MiniPlayer heuristics.
+        if (resolvedProfile == null && isNgCapableSession())
+        {
+          resolvedProfile = profileMgr.autoDetectProfile(
+              clientName,
+              isMediaExtender(),
+              iPhoneMode,
+              remoteVersion,
+              ngVersion,
+              videoCodecs,
+              audioCodecs,
+              streamingProtocols);
+          if (Sage.DBG && resolvedProfile != null)
+            System.out.println("MiniClient NG resolved profile from negotiated caps: " + resolvedProfile);
         }
 
         if (resolvedProfile != null)
@@ -7246,6 +7279,28 @@ public class MiniClientSageRenderer extends SageRenderer
     return rv;
   }
 
+  private static java.util.Set<String> parseNgCapabilities(String rawCaps)
+  {
+    java.util.LinkedHashSet<String> rv = new java.util.LinkedHashSet<String>();
+    if (rawCaps == null || rawCaps.length() == 0)
+      return rv;
+    java.util.StringTokenizer toker = new java.util.StringTokenizer(rawCaps, ",;| ");
+    while (toker.hasMoreTokens())
+    {
+      String tok = normalizeCapabilityToken(toker.nextToken());
+      if (tok.length() > 0)
+        rv.add(tok);
+    }
+    return rv;
+  }
+
+  private static String normalizeCapabilityToken(String in)
+  {
+    if (in == null)
+      return "";
+    return in.trim().replace('-', '_').replace(' ', '_').toUpperCase();
+  }
+
   public String[] getAudioOutputOptions()
   {
     return audioOutputOptions;
@@ -7420,6 +7475,107 @@ public class MiniClientSageRenderer extends SageRenderer
   public String getNgVersion()
   {
     return ngVersion;
+  }
+
+  public String getNgClientId()
+  {
+    return ngClientId == null ? "" : ngClientId;
+  }
+
+  public boolean isNgCapableSession()
+  {
+    return (ngVersion != null && ngVersion.length() > 0) ||
+        (ngCapabilities != null && !ngCapabilities.isEmpty());
+  }
+
+  public boolean hasClientCapability(String capability)
+  {
+    if (capability == null || capability.length() == 0)
+      return false;
+    if (ngCapabilities == null || ngCapabilities.isEmpty())
+      return false;
+    String normCap = normalizeCapabilityToken(capability);
+    if (normCap.length() == 0)
+      return false;
+    if (ngCapabilities.contains(normCap))
+      return true;
+
+    if ("DOWNLOAD".equals(normCap))
+      return ngCapabilities.contains("DOWNLOAD") || ngCapabilities.contains("OFFLINE_DOWNLOAD");
+    if ("OFFLINE_METADATA".equals(normCap))
+      return ngCapabilities.contains("OFFLINE_METADATA") || ngCapabilities.contains("OFFLINE_WIZ");
+    if ("OFFLINE_GUIDE".equals(normCap))
+      return ngCapabilities.contains("OFFLINE_GUIDE") || ngCapabilities.contains("GUIDE_SNAPSHOT");
+    if ("OFFLINE_SCHEDULED".equals(normCap))
+      return ngCapabilities.contains("OFFLINE_SCHEDULED") || ngCapabilities.contains("SCHEDULED_SNAPSHOT");
+    if ("SUBTITLE_SIDECAR".equals(normCap))
+      return ngCapabilities.contains("SUBTITLE_SIDECAR") || ngCapabilities.contains("SIDECAR_SUBTITLE");
+
+    return false;
+  }
+
+  public java.util.Set<String> getClientCapabilities()
+  {
+    return java.util.Collections.unmodifiableSet(ngCapabilities);
+  }
+
+  public boolean sendDownloadCommand(sage.MediaFile mf)
+  {
+    if (mf == null || !hasClientCapability("DOWNLOAD"))
+      return false;
+
+    try
+    {
+      java.util.Set<String> caps = getClientCapabilities();
+      sage.client.NgClientDownloadTokenManager.TokenIssue issued =
+          sage.client.NgClientDownloadTokenManager.getInstance().issueToken(
+              uiMgr != null ? uiMgr.getLocalUIClientName() : "",
+              mf.getID(),
+              mf.getFile(0));
+      String payload = sage.client.NgClientDownloadContractBuilder.buildContractJson(
+          mf,
+          issued,
+          getNgClientId(),
+          getNgVersion(),
+          caps,
+          getSessionClientIp());
+      int rv = sendSetProperty("CMD_DOWNLOAD_REQUEST", payload);
+      boolean ok = (rv == 0);
+      sage.client.NgClientDownloadTokenManager.getInstance().logDispatch(
+          uiMgr != null ? uiMgr.getLocalUIClientName() : "",
+          getSessionClientIp(),
+          mf,
+          issued,
+          ok,
+          "SET_PROPERTY rv=" + rv);
+      return ok;
+    }
+    catch (Throwable t)
+    {
+      sage.client.NgClientDownloadTokenManager.getInstance().logDispatch(
+          uiMgr != null ? uiMgr.getLocalUIClientName() : "",
+          getSessionClientIp(),
+          mf,
+          null,
+          false,
+          "exception=" + t);
+      if (Sage.DBG) System.out.println("MiniClient sendDownloadCommand failed: " + t);
+      return false;
+    }
+  }
+
+  private String getSessionClientIp()
+  {
+    try
+    {
+      if (clientSocket != null && clientSocket.socket() != null && clientSocket.socket().getInetAddress() != null)
+        return clientSocket.socket().getInetAddress().getHostAddress();
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("Error resolving session client IP: " + t);
+    }
+    return "";
   }
 
   public static String getBarPrefix(String s)
@@ -7957,6 +8113,8 @@ public class MiniClientSageRenderer extends SageRenderer
   private String hdmiAutodetectedConnector;
   private String remoteVersion = "";
   private String ngVersion = "";
+  private String ngClientId = "";
+  private java.util.Set<String> ngCapabilities = new java.util.LinkedHashSet<String>();
   private boolean remoteWindowedSystem;
   private boolean supportsForcedMediaReconnect;
 
