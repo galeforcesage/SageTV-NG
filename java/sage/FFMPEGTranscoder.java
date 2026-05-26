@@ -2213,6 +2213,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
     estimatedBandwidth = bps;
   }
 
+  public long getEstimatedBandwidth()
+  {
+    return estimatedBandwidth;
+  }
+
   // This'll convert from our internal format name back into what libav wants
   private static String substituteName(String s)
   {

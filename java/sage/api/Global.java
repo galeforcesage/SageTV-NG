@@ -1851,6 +1851,56 @@ public class Global {
         }
         return "";
       }});
+    rft.put(new PredefinedJEPFunction("Global", "HasClientCapability", new String[] { "Capability" })
+    {
+      /**
+       * Returns true when the current UI context belongs to a MiniClient that
+       * explicitly advertises the named capability token.
+       *
+       * @declaration public boolean HasClientCapability(String Capability);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        UIManager uiMgr = stack.getUIMgr();
+        if (uiMgr != null && uiMgr.getUIClientType() == UIClient.REMOTE_UI &&
+            uiMgr.getRootPanel() != null && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
+        {
+          return Boolean.valueOf(((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine()).hasClientCapability(getString(stack)));
+        }
+        return Boolean.FALSE;
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "IsNgClientSession")
+    {
+      /**
+       * Returns true when the active UI context is an NG-capable MiniClient session.
+       *
+       * @declaration public boolean IsNgClientSession();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        UIManager uiMgr = stack.getUIMgr();
+        if (uiMgr != null && uiMgr.getUIClientType() == UIClient.REMOTE_UI &&
+            uiMgr.getRootPanel() != null && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
+        {
+          return Boolean.valueOf(((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine()).isNgCapableSession());
+        }
+        return Boolean.FALSE;
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "SendDownloadCommandToClient", new String[] { "MediaFile" })
+    {
+      /**
+       * Sends a download command contract to the connected NG MiniClient session.
+       *
+       * @declaration public boolean SendDownloadCommandToClient(MediaFile MediaFile);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        MediaFile mf = getMediaFile(stack);
+        UIManager uiMgr = stack.getUIMgr();
+        if (mf != null && uiMgr != null && uiMgr.getUIClientType() == UIClient.REMOTE_UI &&
+            uiMgr.getRootPanel() != null && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
+        {
+          return Boolean.valueOf(((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine()).sendDownloadCommand(mf));
+        }
+        return Boolean.FALSE;
+      }});
     rft.put(new PredefinedJEPFunction("Global", "GetRemoteUIType")
     {
       /**
