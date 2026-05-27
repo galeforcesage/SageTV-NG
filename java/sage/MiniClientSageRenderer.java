@@ -71,6 +71,7 @@ public class MiniClientSageRenderer extends SageRenderer
   public static final int SUBTITLE_UPDATE_REPLY_TYPE = 225;
   public static final int IMAGE_UNLOAD_REPLY_TYPE = 226;
   public static final int OFFLINE_CACHE_CHANGE_REPLY_TYPE = 227;
+  public static final int DOWNLOAD_REFRESH_REQUEST_REPLY_TYPE = 228;
   public static final int ASYNC_DIRECT_LOAD_COMPLETE = 228;  // int-handle, int-result(0 success)
 
   public static final int GFXCMD_INIT = 1;
@@ -6644,6 +6645,26 @@ public class MiniClientSageRenderer extends SageRenderer
   {
     return sendSetProperty(propName.getBytes(Sage.BYTE_CHARSET), propVal.getBytes(Sage.BYTE_CHARSET));
   }
+  protected synchronized void sendSetPropertyAsync(String propName, String propVal) throws java.io.IOException
+  {
+    byte[] propNameBytes = propName.getBytes(Sage.BYTE_CHARSET);
+    byte[] propValBytes = propVal.getBytes(Sage.BYTE_CHARSET);
+    // Clean up any batched texture commands
+    if (textureBatchLimit > 0)
+      checkTextureBatchLimit(true);
+    int dataSize = 4 + propNameBytes.length + propValBytes.length;
+    ensureBufferCanHandle(dataSize + 4);
+    recvr.discardIntReply();
+    sockBuf.put((byte)SET_PROPERTY_CMD_TYPE);
+    sockBuf.put((byte)((dataSize >> 16) & 0xFF));
+    sockBuf.put((byte)((dataSize >> 8) & 0xFF));
+    sockBuf.put((byte)(dataSize & 0xFF));
+    sockBuf.putShort((short)propNameBytes.length);
+    sockBuf.putShort((short)propValBytes.length);
+    sockBuf.put(propNameBytes);
+    sockBuf.put(propValBytes);
+    sendBufferNow();
+  }
   protected synchronized int sendSetProperty(byte[] propName, byte[] propVal) throws java.io.IOException
   {
     // Clean up any batched texture commands
@@ -7519,49 +7540,299 @@ public class MiniClientSageRenderer extends SageRenderer
     return java.util.Collections.unmodifiableSet(ngCapabilities);
   }
 
-  public boolean sendDownloadCommand(sage.MediaFile mf)
+  public String getRecordingCopyTransferCapsAckJson()
   {
-    if (mf == null || !hasClientCapability("DOWNLOAD"))
-      return false;
+    return sage.client.NgClientRecordingCopyTransferManager.getInstance().buildCapsAckJson(getClientCapabilities());
+  }
 
+  public String createRecordingCopyTransferSession(sage.MediaFile mf)
+  {
+    return createRecordingCopyTransferSession(mf, "foreground", "balanced", 0L, 1, false, true);
+  }
+
+  public String createRecordingCopyTransferSession(sage.MediaFile mf, String mode,
+      String rateProfile, long maxRateKbps, int concurrency, boolean wifiOnly,
+      boolean allowMetered)
+  {
+    if (mf == null)
+      return sage.client.NgClientRecordingCopyTransferManager.getInstance().buildErrorJson(
+          "TRANSFER_SESSION_ERROR",
+          sage.client.NgClientRecordingCopyTransferManager.CODE_TOKEN_INVALID,
+          "MediaFile was null.");
+    boolean hasDownloadCapability = hasClientCapability("DOWNLOAD");
+    if (!hasDownloadCapability && Sage.DBG)
+      System.out.println("MiniClient transfer create continuing without DOWNLOAD capability;" +
+          " client=" + (uiMgr != null ? uiMgr.getLocalUIClientName() : "") +
+          " ngVersion=" + getNgVersion() +
+          " caps=" + getClientCapabilities());
+
+    sage.client.NgClientRecordingCopyTransferManager mgr =
+        sage.client.NgClientRecordingCopyTransferManager.getInstance();
+    sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy req =
+        new sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy(
+            mode,
+            rateProfile,
+            maxRateKbps,
+            concurrency,
+            wifiOnly,
+            allowMetered);
+    sage.client.NgClientRecordingCopyTransferManager.TransferSession session =
+        mgr.createSession(
+            uiMgr != null ? uiMgr.getLocalUIClientName() : "",
+            getSessionClientIp(),
+            getNgClientId(),
+            getNgVersion(),
+            getClientCapabilities(),
+            mf,
+            req,
+            getEstimatedBandwidth());
+    if (session == null)
+    {
+      return mgr.buildErrorJson("TRANSFER_SESSION_ERROR",
+          sage.client.NgClientRecordingCopyTransferManager.CODE_TOKEN_INVALID,
+          "Unable to create transfer session.");
+    }
+
+    String ackJson = mgr.buildSessionAckJson(session);
+    if (Sage.DBG)
+      System.out.println("MiniClient transfer session created queueItem=" + session.queueItemId +
+          " recordingId=" + session.recordingId + " state=" + session.sessionState +
+          " client=" + session.clientName + " downloadCap=" + hasDownloadCapability);
     try
     {
-      java.util.Set<String> caps = getClientCapabilities();
-      sage.client.NgClientDownloadTokenManager.TokenIssue issued =
-          sage.client.NgClientDownloadTokenManager.getInstance().issueToken(
-              uiMgr != null ? uiMgr.getLocalUIClientName() : "",
-              mf.getID(),
-              mf.getFile(0));
-      String payload = sage.client.NgClientDownloadContractBuilder.buildContractJson(
-          mf,
-          issued,
-          getNgClientId(),
-          getNgVersion(),
-          caps,
-          getSessionClientIp());
-      int rv = sendSetProperty("CMD_DOWNLOAD_REQUEST", payload);
-      boolean ok = (rv == 0);
-      sage.client.NgClientDownloadTokenManager.getInstance().logDispatch(
-          uiMgr != null ? uiMgr.getLocalUIClientName() : "",
-          getSessionClientIp(),
-          mf,
-          issued,
-          ok,
-          "SET_PROPERTY rv=" + rv);
-      return ok;
+      int rv = sendSetProperty("CMD_DOWNLOAD_REQUEST", ackJson);
+      if (rv != 0)
+      {
+        if (Sage.DBG)
+          System.out.println("MiniClient transfer dispatch failed rv=" + rv +
+              " queueItem=" + session.queueItemId + " recordingId=" + session.recordingId);
+        mgr.markDispatchFailure(session.sessionToken, "SET_PROPERTY rv=" + rv);
+        return mgr.buildErrorJson("TRANSFER_SESSION_ERROR",
+            sage.client.NgClientRecordingCopyTransferManager.CODE_DISPATCH_FAILED,
+            "Failed dispatching transfer session to client.");
+      }
+      if (Sage.DBG)
+        System.out.println("MiniClient transfer dispatch success queueItem=" + session.queueItemId +
+            " recordingId=" + session.recordingId + " state=" + session.sessionState);
+      return ackJson;
     }
     catch (Throwable t)
     {
-      sage.client.NgClientDownloadTokenManager.getInstance().logDispatch(
-          uiMgr != null ? uiMgr.getLocalUIClientName() : "",
-          getSessionClientIp(),
-          mf,
-          null,
-          false,
-          "exception=" + t);
-      if (Sage.DBG) System.out.println("MiniClient sendDownloadCommand failed: " + t);
-      return false;
+      mgr.markDispatchFailure(session.sessionToken, "exception=" + t);
+      if (Sage.DBG) System.out.println("MiniClient transfer create failed: " + t);
+      return mgr.buildErrorJson("TRANSFER_SESSION_ERROR",
+          sage.client.NgClientRecordingCopyTransferManager.CODE_DISPATCH_FAILED,
+          "Exception dispatching transfer session.");
     }
+  }
+
+  public String getRecordingCopyTransferStatus(String sessionToken)
+  {
+    sage.client.NgClientRecordingCopyTransferManager mgr =
+        sage.client.NgClientRecordingCopyTransferManager.getInstance();
+    sage.client.NgClientRecordingCopyTransferManager.TransferSession session =
+        mgr.getSession(sessionToken, uiMgr != null ? uiMgr.getLocalUIClientName() : "");
+    return mgr.buildStatusJson(session);
+  }
+
+  public String pauseRecordingCopyTransfer(String sessionToken)
+  {
+    sage.client.NgClientRecordingCopyTransferManager mgr =
+        sage.client.NgClientRecordingCopyTransferManager.getInstance();
+    sage.client.NgClientRecordingCopyTransferManager.TransferSession session =
+        mgr.pauseByClient(sessionToken, uiMgr != null ? uiMgr.getLocalUIClientName() : "");
+    String payload = mgr.buildControlAckJson("PAUSE_TRANSFER_ACK", session);
+    if (session != null)
+    {
+      try
+      {
+        sendSetProperty("CMD_TRANSFER_PAUSE", payload);
+      }
+      catch (Throwable t)
+      {
+        if (Sage.DBG) System.out.println("MiniClient transfer pause notify failed: " + t);
+      }
+    }
+    return payload;
+  }
+
+  public String resumeRecordingCopyTransfer(String sessionToken, long offset,
+      String mode, String rateProfile, long maxRateKbps, int concurrency,
+      boolean wifiOnly, boolean allowMetered)
+  {
+    sage.client.NgClientRecordingCopyTransferManager mgr =
+        sage.client.NgClientRecordingCopyTransferManager.getInstance();
+    sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy req =
+        new sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy(
+            mode,
+            rateProfile,
+            maxRateKbps,
+            concurrency,
+            wifiOnly,
+            allowMetered);
+    sage.client.NgClientRecordingCopyTransferManager.TransferSession session =
+        mgr.resume(sessionToken,
+            uiMgr != null ? uiMgr.getLocalUIClientName() : "",
+            offset,
+            req,
+            getEstimatedBandwidth());
+    String payload = mgr.buildControlAckJson("RESUME_TRANSFER_ACK", session);
+    if (session != null)
+    {
+      try
+      {
+        sendSetProperty("CMD_TRANSFER_RESUME", payload);
+      }
+      catch (Throwable t)
+      {
+        if (Sage.DBG) System.out.println("MiniClient transfer resume notify failed: " + t);
+      }
+    }
+    return payload;
+  }
+
+  public String cancelRecordingCopyTransfer(String sessionToken)
+  {
+    sage.client.NgClientRecordingCopyTransferManager mgr =
+        sage.client.NgClientRecordingCopyTransferManager.getInstance();
+    sage.client.NgClientRecordingCopyTransferManager.TransferSession session =
+        mgr.cancel(sessionToken, uiMgr != null ? uiMgr.getLocalUIClientName() : "");
+    String payload = mgr.buildControlAckJson("CANCEL_TRANSFER_ACK", session);
+    if (session != null)
+    {
+      try
+      {
+        sendSetProperty("CMD_TRANSFER_CANCEL", payload);
+      }
+      catch (Throwable t)
+      {
+        if (Sage.DBG) System.out.println("MiniClient transfer cancel notify failed: " + t);
+      }
+    }
+    return payload;
+  }
+
+  public String getLatestRecordingCopyTransferStatus(sage.MediaFile mf)
+  {
+    sage.client.NgClientRecordingCopyTransferManager mgr =
+        sage.client.NgClientRecordingCopyTransferManager.getInstance();
+    if (mf == null)
+      return mgr.buildErrorJson("TRANSFER_STATUS_ERROR",
+          sage.client.NgClientRecordingCopyTransferManager.CODE_TOKEN_INVALID,
+          "MediaFile was null.");
+    sage.client.NgClientRecordingCopyTransferManager.TransferSession session =
+        mgr.getLatestSessionForRecording(mf.getID(),
+            uiMgr != null ? uiMgr.getLocalUIClientName() : "");
+    return mgr.buildStatusJson(session);
+  }
+
+  public String pauseLatestRecordingCopyTransfer(sage.MediaFile mf)
+  {
+    sage.client.NgClientRecordingCopyTransferManager mgr =
+        sage.client.NgClientRecordingCopyTransferManager.getInstance();
+    if (mf == null)
+      return mgr.buildErrorJson("PAUSE_TRANSFER_ACK_ERROR",
+          sage.client.NgClientRecordingCopyTransferManager.CODE_TOKEN_INVALID,
+          "MediaFile was null.");
+    sage.client.NgClientRecordingCopyTransferManager.TransferSession session =
+        mgr.pauseLatestByClientForRecording(mf.getID(),
+            uiMgr != null ? uiMgr.getLocalUIClientName() : "");
+    String payload = mgr.buildControlAckJson("PAUSE_TRANSFER_ACK", session);
+    if (session != null)
+    {
+      try
+      {
+        sendSetProperty("CMD_TRANSFER_PAUSE", payload);
+      }
+      catch (Throwable t)
+      {
+        if (Sage.DBG) System.out.println("MiniClient transfer pause notify failed: " + t);
+      }
+    }
+    return payload;
+  }
+
+  public String resumeLatestRecordingCopyTransfer(sage.MediaFile mf)
+  {
+    sage.client.NgClientRecordingCopyTransferManager mgr =
+        sage.client.NgClientRecordingCopyTransferManager.getInstance();
+    if (mf == null)
+      return mgr.buildErrorJson("RESUME_TRANSFER_ACK_ERROR",
+          sage.client.NgClientRecordingCopyTransferManager.CODE_TOKEN_INVALID,
+          "MediaFile was null.");
+
+    sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy req =
+        new sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy(
+            "background", "balanced", 0L, 1, false, true);
+    sage.client.NgClientRecordingCopyTransferManager.TransferSession session =
+        mgr.resumeLatestForRecording(mf.getID(),
+            uiMgr != null ? uiMgr.getLocalUIClientName() : "",
+            req,
+            getEstimatedBandwidth());
+    String payload = mgr.buildControlAckJson("RESUME_TRANSFER_ACK", session);
+    if (session != null)
+    {
+      try
+      {
+        sendSetProperty("CMD_TRANSFER_RESUME", payload);
+      }
+      catch (Throwable t)
+      {
+        if (Sage.DBG) System.out.println("MiniClient transfer resume notify failed: " + t);
+      }
+    }
+    return payload;
+  }
+
+  public String cancelLatestRecordingCopyTransfer(sage.MediaFile mf)
+  {
+    sage.client.NgClientRecordingCopyTransferManager mgr =
+        sage.client.NgClientRecordingCopyTransferManager.getInstance();
+    if (mf == null)
+      return mgr.buildErrorJson("CANCEL_TRANSFER_ACK_ERROR",
+          sage.client.NgClientRecordingCopyTransferManager.CODE_TOKEN_INVALID,
+          "MediaFile was null.");
+    sage.client.NgClientRecordingCopyTransferManager.TransferSession session =
+        mgr.cancelLatestByClientForRecording(mf.getID(),
+            uiMgr != null ? uiMgr.getLocalUIClientName() : "");
+    String payload = mgr.buildControlAckJson("CANCEL_TRANSFER_ACK", session);
+    if (session != null)
+    {
+      try
+      {
+        sendSetProperty("CMD_TRANSFER_CANCEL", payload);
+      }
+      catch (Throwable t)
+      {
+        if (Sage.DBG) System.out.println("MiniClient transfer cancel notify failed: " + t);
+      }
+    }
+    return payload;
+  }
+
+  public boolean sendDownloadCommand(sage.MediaFile mf)
+  {
+    return sendDownloadCommand(mf, "foreground");
+  }
+
+  public boolean sendDownloadCommand(sage.MediaFile mf, String mode)
+  {
+    String transferCreateJson = createRecordingCopyTransferSession(mf,
+        mode,
+        "balanced",
+        0L,
+        1,
+        false,
+        true);
+    return transferCreateJson != null && transferCreateJson.indexOf("\"type\":\"TRANSFER_SESSION_ACK\"") != -1;
+  }
+
+  private static String normalizeDownloadMode(String mode)
+  {
+    if (mode == null)
+      return "foreground";
+    String rv = mode.trim().toLowerCase();
+    return "background".equals(rv) ? rv : "foreground";
   }
 
   private String getSessionClientIp()
@@ -7576,6 +7847,409 @@ public class MiniClientSageRenderer extends SageRenderer
       if (Sage.DBG) System.out.println("Error resolving session client IP: " + t);
     }
     return "";
+  }
+
+  private boolean handleInboundClientSetProperty(byte[] payload)
+  {
+    if (payload == null || payload.length < 4)
+      return false;
+
+    int propNameLen = ((payload[0] & 0xFF) << 8) | (payload[1] & 0xFF);
+    int propValLen = ((payload[2] & 0xFF) << 8) | (payload[3] & 0xFF);
+    if (propNameLen < 0 || propValLen < 0 || (4 + propNameLen + propValLen) > payload.length)
+      return false;
+
+    String propName;
+    String propValue;
+    try
+    {
+      propName = new String(payload, 4, propNameLen, Sage.BYTE_CHARSET);
+      propValue = new String(payload, 4 + propNameLen, propValLen, Sage.BYTE_CHARSET);
+    }
+    catch (java.io.UnsupportedEncodingException uee)
+    {
+      propName = new String(payload, 4, propNameLen);
+      propValue = new String(payload, 4 + propNameLen, propValLen);
+    }
+
+    if (!"DOWNLOAD_REFRESH_REQUEST".equalsIgnoreCase(propName))
+      return false;
+
+    processDownloadRefreshRequest(propValue);
+    return true;
+  }
+
+  private void processDownloadRefreshRequest(String payload)
+  {
+    processDownloadRefreshRequestInternal(parseDownloadRefreshRequest(payload));
+  }
+
+  private void processDownloadRefreshRequestEvent(byte[] payloadBytes, int replyId)
+  {
+    String payload = "";
+    if (payloadBytes != null && payloadBytes.length > 0)
+    {
+      try
+      {
+        payload = new String(payloadBytes, Sage.BYTE_CHARSET);
+      }
+      catch (java.io.UnsupportedEncodingException uee)
+      {
+        payload = new String(payloadBytes);
+      }
+    }
+    DownloadRefreshRequest req = parseDownloadRefreshRequest(payload);
+    if (Sage.DBG)
+      System.out.println("MiniClient DOWNLOAD_REFRESH_REQUEST replyId=" + replyId +
+          " payloadBytes=" + (payloadBytes == null ? 0 : payloadBytes.length) +
+          " payload=" + payload +
+          " parsedMediaFileId=" + req.mediaFileId +
+          " parsedSessionToken=" + req.sessionToken +
+          " parsedBytesTransferred=" + req.bytesTransferred +
+          " parsedCorrelationId=" + req.correlationId +
+          " parsedClientId=" + req.clientId);
+
+    if (Sage.DBG && (req.mediaFileId == null || req.mediaFileId.length() == 0) &&
+        (req.sessionToken == null || req.sessionToken.length() == 0))
+    {
+      System.out.println("MiniClient DOWNLOAD_REFRESH_REQUEST payload shape not recognized; " +
+          "expected mediaFileId/sessionToken fields. replyId=" + replyId + " payload=" + payload);
+    }
+
+    processDownloadRefreshRequestInternal(req);
+  }
+
+  private void processDownloadRefreshRequestInternal(DownloadRefreshRequest req)
+  {
+    if (req == null)
+    {
+      if (Sage.DBG)
+        System.out.println("MiniClient DOWNLOAD_REFRESH_REQUEST ignored because parsed request was null");
+      return;
+    }
+
+    sage.client.NgClientRecordingCopyTransferManager mgr =
+        sage.client.NgClientRecordingCopyTransferManager.getInstance();
+
+    int mediaFileId = parseRefreshMediaFileId(req.mediaFileId);
+    String requesterClientId = req.clientId;
+    if (requesterClientId == null || requesterClientId.length() == 0)
+      requesterClientId = getNgClientId();
+
+    if (mediaFileId <= 0)
+    {
+      sendDownloadRefreshError("MEDIA_NOT_FOUND",
+          "MediaFile ID was missing or invalid.", false, req.correlationId);
+      return;
+    }
+
+    if (isDownloadRefreshRateLimited(mediaFileId, requesterClientId))
+    {
+      if (Sage.DBG)
+        System.out.println("MiniClient DOWNLOAD_REFRESH_REQUEST coalesced mediaFileID=" + mediaFileId +
+            " clientId=" + requesterClientId);
+      return;
+    }
+
+    MediaFile mf = Wizard.getInstance().getFileForID(mediaFileId);
+    if (mf == null)
+    {
+      sendDownloadRefreshError("MEDIA_NOT_FOUND",
+          "MediaFile not found for ID " + mediaFileId + ".", false, req.correlationId);
+      return;
+    }
+
+    sage.client.NgClientRecordingCopyTransferManager.TransferSession sessionByToken = null;
+    if (req.sessionToken != null && req.sessionToken.length() > 0)
+      sessionByToken = mgr.getSession(req.sessionToken, null);
+
+    if (sessionByToken != null && !isTransferRequesterBoundToSession(sessionByToken, requesterClientId))
+    {
+      sendDownloadRefreshError("TRANSFER_CLIENT_MISMATCH",
+          "Transfer session belongs to a different client.", false, req.correlationId);
+      return;
+    }
+
+    sage.client.NgClientRecordingCopyTransferManager.TransferSession latestForMedia =
+        mgr.getLatestSessionForRecording(mediaFileId, null);
+    if (sessionByToken == null && latestForMedia != null && !latestForMedia.isTerminal() &&
+        !isTransferRequesterBoundToSession(latestForMedia, requesterClientId))
+    {
+      sendDownloadRefreshError("TRANSFER_CLIENT_MISMATCH",
+          "Active transfer session belongs to a different client.", false, req.correlationId);
+      return;
+    }
+
+    sage.client.NgClientRecordingCopyTransferManager.TransferSession responseSession;
+    if (sessionByToken != null && !sessionByToken.isTerminal())
+    {
+      long resumeOffset = req.bytesTransferred >= 0 ? req.bytesTransferred : Math.max(0L, sessionByToken.bytesTransferred);
+      sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy reqPolicy =
+          sessionByToken.acceptedPolicy == null ? null :
+          new sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy(
+              sessionByToken.acceptedPolicy.downloadMode,
+              sessionByToken.acceptedPolicy.rateProfile,
+              sessionByToken.acceptedPolicy.maxRateKbps,
+              sessionByToken.acceptedPolicy.concurrency,
+              sessionByToken.acceptedPolicy.wifiOnly,
+              sessionByToken.acceptedPolicy.allowMetered);
+      responseSession = mgr.resume(sessionByToken.sessionToken,
+          sessionByToken.clientName,
+          resumeOffset,
+          reqPolicy,
+          getEstimatedBandwidth());
+    }
+    else
+    {
+      String clientName = uiMgr != null ? uiMgr.getLocalUIClientName() : "";
+      sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy defaultPolicy =
+          new sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy(
+              "foreground", "balanced", 0L, 1, false, true);
+      responseSession = mgr.createSession(
+          clientName,
+          getSessionClientIp(),
+          getNgClientId(),
+          getNgVersion(),
+          getClientCapabilities(),
+          mf,
+          defaultPolicy,
+          getEstimatedBandwidth());
+    }
+
+    if (responseSession == null)
+    {
+      sendDownloadRefreshError("TRANSFER_BUSY",
+          "Transfer refresh request could not be processed right now.", true, req.correlationId);
+      return;
+    }
+
+    String ackPayload = mgr.buildSessionAckJson(responseSession);
+    ackPayload = appendJsonStringField(ackPayload, "correlationId", req.correlationId);
+    sendDownloadRefreshResponse(ackPayload);
+  }
+
+  private void sendDownloadRefreshResponse(String payload)
+  {
+    try
+    {
+      sendSetPropertyAsync("CMD_DOWNLOAD_REQUEST", payload);
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("MiniClient download refresh notify failed: " + t);
+    }
+  }
+
+  private void sendDownloadRefreshError(String errorCode, String message,
+      boolean retriable, String correlationId)
+  {
+    String payload = buildDownloadRefreshErrorJson(errorCode, message, retriable, correlationId);
+    sendDownloadRefreshResponse(payload);
+  }
+
+  private String buildDownloadRefreshErrorJson(String errorCode, String message,
+      boolean retriable, String correlationId)
+  {
+    StringBuilder sb = new StringBuilder(320);
+    sb.append('{');
+    sb.append("\"type\":\"TRANSFER_SESSION_ERROR\"");
+    sb.append(',').append("\"error_code\":\"").append(escapeJsonString(errorCode == null ? "INTERNAL_ERROR" : errorCode)).append('\"');
+    sb.append(',').append("\"message\":\"").append(escapeJsonString(message == null ? "" : message)).append('\"');
+    sb.append(',').append("\"retriable\":").append(retriable ? "true" : "false");
+    if (correlationId != null && correlationId.length() > 0)
+      sb.append(',').append("\"correlationId\":\"").append(escapeJsonString(correlationId)).append('\"');
+    sb.append('}');
+    return sb.toString();
+  }
+
+  private boolean isTransferRequesterBoundToSession(
+      sage.client.NgClientRecordingCopyTransferManager.TransferSession session,
+      String requesterClientId)
+  {
+    if (session == null)
+      return false;
+
+    String normalizedRequesterClientId = requesterClientId == null ? "" : requesterClientId.trim();
+    if (normalizedRequesterClientId.length() == 0)
+      normalizedRequesterClientId = getNgClientId() == null ? "" : getNgClientId().trim();
+
+    String expectedClientId = session.ngClientId == null ? "" : session.ngClientId.trim();
+    if (expectedClientId.length() > 0)
+      return normalizedRequesterClientId.length() > 0 && expectedClientId.equals(normalizedRequesterClientId);
+
+    String expectedIp = session.clientIp == null ? "" : session.clientIp.trim();
+    if (expectedIp.length() == 0)
+      return true;
+
+    String requesterIp = getSessionClientIp();
+    if (requesterIp != null)
+      requesterIp = requesterIp.trim();
+    return expectedIp.equals(requesterIp == null ? "" : requesterIp);
+  }
+
+  private boolean isDownloadRefreshRateLimited(int mediaFileId, String requesterClientId)
+  {
+    String clientKey = requesterClientId == null ? "" : requesterClientId.trim();
+    if (clientKey.length() == 0)
+      clientKey = uiMgr != null ? uiMgr.getLocalUIClientName() : "";
+    String key = clientKey + "|" + mediaFileId;
+    long now = Sage.time();
+    synchronized (recentDownloadRefreshRequests)
+    {
+      Long last = (Long) recentDownloadRefreshRequests.get(key);
+      if (last != null && (now - last.longValue()) < 5000L)
+        return true;
+      recentDownloadRefreshRequests.put(key, new Long(now));
+
+      if (recentDownloadRefreshRequests.size() > 256)
+      {
+        java.util.Iterator<java.util.Map.Entry<String, Long>> walker = recentDownloadRefreshRequests.entrySet().iterator();
+        while (walker.hasNext())
+        {
+          java.util.Map.Entry<String, Long> ent = walker.next();
+          Long ts = ent.getValue();
+          if (ts == null || (now - ts.longValue()) > 120000L)
+            walker.remove();
+        }
+      }
+    }
+    return false;
+  }
+
+  private static DownloadRefreshRequest parseDownloadRefreshRequest(String payload)
+  {
+    DownloadRefreshRequest req = new DownloadRefreshRequest();
+    req.mediaFileId = firstNonEmpty(
+        extractRefreshStringValue(payload, "mediaFileID"),
+        extractRefreshStringValue(payload, "mediaFileId"),
+        extractRefreshStringValue(payload, "recording_id"),
+        extractRefreshStringValue(payload, "recordingId"));
+    req.sessionToken = firstNonEmpty(
+        extractRefreshStringValue(payload, "sessionToken"),
+        extractRefreshStringValue(payload, "session_token"),
+      extractRefreshStringValue(payload, "token"),
+      "");
+    req.reason = extractRefreshStringValue(payload, "reason");
+    req.correlationId = extractRefreshStringValue(payload, "correlationId");
+    req.clientId = firstNonEmpty(
+        extractRefreshStringValue(payload, "clientId"),
+      extractRefreshStringValue(payload, "x-ng-client-id"),
+      "",
+      "");
+    long parsedOffset = extractRefreshLongValue(payload, "bytesTransferred", -1L);
+    if (parsedOffset < 0)
+      parsedOffset = extractRefreshLongValue(payload, "bytes_transferred", -1L);
+    if (parsedOffset < 0)
+      parsedOffset = extractRefreshLongValue(payload, "offset", -1L);
+    req.bytesTransferred = parsedOffset;
+    return req;
+  }
+
+  private static int parseRefreshMediaFileId(String mediaFileId)
+  {
+    if (mediaFileId == null || mediaFileId.length() == 0)
+      return 0;
+    try
+    {
+      return Integer.parseInt(mediaFileId.trim());
+    }
+    catch (NumberFormatException nfe)
+    {
+      return 0;
+    }
+  }
+
+  private static String firstNonEmpty(String a, String b, String c, String d)
+  {
+    if (a != null && a.length() > 0) return a;
+    if (b != null && b.length() > 0) return b;
+    if (c != null && c.length() > 0) return c;
+    return d == null ? "" : d;
+  }
+
+  private static String appendJsonStringField(String json, String key, String value)
+  {
+    if (json == null || json.length() == 0 || key == null || key.length() == 0 || value == null || value.length() == 0)
+      return json;
+    int endBrace = json.lastIndexOf('}');
+    if (endBrace <= 0)
+      return json;
+    StringBuilder sb = new StringBuilder(json.length() + key.length() + value.length() + 16);
+    sb.append(json.substring(0, endBrace));
+    if (json.charAt(endBrace - 1) != '{')
+      sb.append(',');
+    sb.append('"').append(key).append('"').append(':').append('"').append(escapeJsonString(value)).append('"');
+    sb.append('}');
+    return sb.toString();
+  }
+
+  private static String escapeJsonString(String s)
+  {
+    if (s == null || s.length() == 0)
+      return "";
+    StringBuilder rv = new StringBuilder(s.length() + 8);
+    for (int i = 0; i < s.length(); i++)
+    {
+      char c = s.charAt(i);
+      switch (c)
+      {
+        case '\\': rv.append("\\\\"); break;
+        case '"': rv.append("\\\""); break;
+        case '\n': rv.append("\\n"); break;
+        case '\r': rv.append("\\r"); break;
+        case '\t': rv.append("\\t"); break;
+        default: rv.append(c); break;
+      }
+    }
+    return rv.toString();
+  }
+
+  private static String extractRefreshStringValue(String payload, String key)
+  {
+    if (payload == null || key == null || key.length() == 0)
+      return "";
+    java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\\"" + java.util.regex.Pattern.quote(key) + "\\\"\\s*:\\s*(?:null|\\\"([^\\\"]*)\\\")").matcher(payload);
+    if (m.find())
+      return m.group(1) == null ? "" : m.group(1);
+    m = java.util.regex.Pattern.compile("(?:^|[?&;,\\s])" + java.util.regex.Pattern.quote(key) + "=([^&;,\\s]+)").matcher(payload);
+    if (m.find())
+      return m.group(1);
+    return "";
+  }
+
+  private static long extractRefreshLongValue(String payload, String key, long defaultVal)
+  {
+    if (payload == null || key == null || key.length() == 0)
+      return defaultVal;
+    java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\\"" + java.util.regex.Pattern.quote(key) + "\\\"\\s*:\\s*([0-9]+)").matcher(payload);
+    if (m.find())
+    {
+      try
+      {
+        return Long.parseLong(m.group(1));
+      }
+      catch (NumberFormatException nfe){}
+    }
+    m = java.util.regex.Pattern.compile("(?:^|[?&;,\\s])" + java.util.regex.Pattern.quote(key) + "=([0-9]+)").matcher(payload);
+    if (m.find())
+    {
+      try
+      {
+        return Long.parseLong(m.group(1));
+      }
+      catch (NumberFormatException nfe){}
+    }
+    return defaultVal;
+  }
+
+  private static class DownloadRefreshRequest
+  {
+    String mediaFileId = "";
+    String sessionToken = "";
+    String reason = "";
+    String correlationId = "";
+    String clientId = "";
+    long bytesTransferred = -1L;
   }
 
   public static String getBarPrefix(String s)
@@ -8115,6 +8789,7 @@ public class MiniClientSageRenderer extends SageRenderer
   private String ngVersion = "";
   private String ngClientId = "";
   private java.util.Set<String> ngCapabilities = new java.util.LinkedHashSet<String>();
+  private final java.util.Map<String, Long> recentDownloadRefreshRequests = new java.util.HashMap<String, Long>();
   private boolean remoteWindowedSystem;
   private boolean supportsForcedMediaReconnect;
 
@@ -8471,6 +9146,10 @@ public class MiniClientSageRenderer extends SageRenderer
               recvBuf.flip();
               recvBuf.get(replyData);
             }
+
+            if (replyType == SET_PROPERTY_CMD_TYPE && handleInboundClientSetProperty(replyData))
+              continue;
+
             ReplyPacket newReply = new ReplyPacket(replyType, timestamp, id, replyData);
             if (replyType == FS_CMD_TYPE && dataLen == 2 && (replyData[0] & 0xFF) == 0xFF && (replyData[1] & 0xFF) == 0xFF)
             {
@@ -8684,12 +9363,37 @@ public class MiniClientSageRenderer extends SageRenderer
                 vf.postSubtitleInfo(ptsmsec, durmsec, subData, flags);
                 break;
               case ASYNC_DIRECT_LOAD_COMPLETE:
-                int handle = recvBuf.getInt();
-                int result = recvBuf.getInt();
-                asyncLoadConfirms.put(new Long(handle), new Integer(result));
-                synchronized (asyncLoadConfirms)
+                // Opcode 228 is used by both legacy async-load confirms and
+                // NG download refresh requests; discriminate by payload shape.
+                if (Sage.DBG)
+                  System.out.println("MiniClient opcode 228 received replyId=" + id +
+                      " dataLen=" + dataLen + " hasReplyData=" + (replyData != null));
+                if ((replyData != null && replyData.length == 8) || (replyData == null && dataLen == 8))
                 {
-                  asyncLoadConfirms.notifyAll();
+                  if (Sage.DBG)
+                    System.out.println("MiniClient opcode 228 classified as legacy async-load confirmation; replyId=" + id);
+                  int handle = recvBuf.getInt();
+                  int result = recvBuf.getInt();
+                  asyncLoadConfirms.put(new Long(handle), new Integer(result));
+                  synchronized (asyncLoadConfirms)
+                  {
+                    asyncLoadConfirms.notifyAll();
+                  }
+                }
+                else
+                {
+                  if (Sage.DBG)
+                    System.out.println("MiniClient opcode 228 classified as DOWNLOAD_REFRESH_REQUEST event; replyId=" + id +
+                        " dataLen=" + dataLen);
+                  byte[] refreshBody;
+                  if (replyData != null)
+                    refreshBody = replyData;
+                  else
+                  {
+                    refreshBody = new byte[dataLen];
+                    recvBuf.get(refreshBody);
+                  }
+                  processDownloadRefreshRequestEvent(refreshBody, id);
                 }
                 break;
               case REMOTE_FS_HOTPLUG_INSERT_EVENT_REPLY_TYPE:

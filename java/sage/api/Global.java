@@ -61,6 +61,83 @@ import sage.ZPseudoComp;
  */
 public class Global {
   private Global() {}
+
+  private static java.util.Vector coerceMediaFileVector(Object mediaObj)
+  {
+    java.util.Vector rv = new java.util.Vector();
+    if (mediaObj == null)
+      return rv;
+    if (mediaObj instanceof MediaFile)
+    {
+      rv.add(mediaObj);
+      return rv;
+    }
+    if (mediaObj instanceof java.util.Collection)
+    {
+      java.util.Iterator walker = ((java.util.Collection) mediaObj).iterator();
+      while (walker.hasNext())
+      {
+        Object curr = walker.next();
+        if (curr instanceof MediaFile)
+          rv.add(curr);
+      }
+      return rv;
+    }
+    if (mediaObj instanceof Object[])
+    {
+      Object[] oa = (Object[]) mediaObj;
+      for (int i = 0; i < oa.length; i++)
+      {
+        if (oa[i] instanceof MediaFile)
+          rv.add(oa[i]);
+      }
+    }
+    return rv;
+  }
+
+  private static boolean isTransferInProgressState(String state)
+  {
+    return sage.client.NgClientRecordingCopyTransferManager.STATE_REQUESTED.equals(state) ||
+        sage.client.NgClientRecordingCopyTransferManager.STATE_QUEUED.equals(state) ||
+        sage.client.NgClientRecordingCopyTransferManager.STATE_TRANSFERRING.equals(state) ||
+        sage.client.NgClientRecordingCopyTransferManager.STATE_PAUSED_BY_CLIENT.equals(state) ||
+        sage.client.NgClientRecordingCopyTransferManager.STATE_PAUSED_BY_SERVER.equals(state);
+  }
+
+  private static String getLatestTransferStateForMediaFile(UIManager uiMgr, MediaFile mf)
+  {
+    if (mf == null || uiMgr == null || uiMgr.getUIClientType() != UIClient.REMOTE_UI)
+      return "";
+    sage.client.NgClientRecordingCopyTransferManager mgr =
+        sage.client.NgClientRecordingCopyTransferManager.getInstance();
+    sage.client.NgClientRecordingCopyTransferManager.TransferSession session =
+        mgr.getLatestSessionForRecording(mf.getID(), uiMgr.getLocalUIClientName());
+    if (session == null)
+      session = mgr.getLatestSessionForRecording(mf.getID(), null);
+    return session == null || session.sessionState == null ? "" : session.sessionState;
+  }
+
+  private static boolean hasAnyInProgressTransferForMediaFiles(UIManager uiMgr, Object mediaObj)
+  {
+    if (uiMgr == null || uiMgr.getUIClientType() != UIClient.REMOTE_UI)
+      return false;
+    java.util.Vector files = coerceMediaFileVector(mediaObj);
+    String clientName = uiMgr.getLocalUIClientName();
+    sage.client.NgClientRecordingCopyTransferManager mgr =
+        sage.client.NgClientRecordingCopyTransferManager.getInstance();
+    for (int i = 0; i < files.size(); i++)
+    {
+      MediaFile mf = (MediaFile) files.elementAt(i);
+      sage.client.NgClientRecordingCopyTransferManager.TransferSession session =
+          mgr.getLatestSessionForRecording(mf.getID(), clientName);
+      if (session == null)
+        session = mgr.getLatestSessionForRecording(mf.getID(), null);
+      if (session != null && isTransferInProgressState(session.sessionState))
+        return true;
+    }
+    return false;
+  }
+
   public static void init(Catbert.ReflectionFunctionTable rft)
   {
     rft.put(new PredefinedJEPFunction("Global", "Refresh")
@@ -1900,6 +1977,482 @@ public class Global {
           return Boolean.valueOf(((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine()).sendDownloadCommand(mf));
         }
         return Boolean.FALSE;
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "SendDownloadCommandToClient", new String[] { "MediaFile", "Mode" })
+    {
+      /**
+       * Sends a download command contract to the connected NG MiniClient session
+       * using the requested mode (foreground|background).
+       *
+       * @declaration public boolean SendDownloadCommandToClient(MediaFile MediaFile, String Mode);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        String mode = getString(stack);
+        MediaFile mf = getMediaFile(stack);
+        UIManager uiMgr = stack.getUIMgr();
+        if (mf != null && uiMgr != null && uiMgr.getUIClientType() == UIClient.REMOTE_UI &&
+            uiMgr.getRootPanel() != null && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
+        {
+          return Boolean.valueOf(((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine()).sendDownloadCommand(mf, mode));
+        }
+        return Boolean.FALSE;
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "SendDownloadCommandsToClient", new String[] { "MediaFiles", "Mode" })
+    {
+      /**
+       * Sends download command contracts to the connected NG MiniClient session
+       * for each MediaFile in the passed collection/array using the requested mode.
+       * Returns the number of successfully queued commands.
+       *
+       * @declaration public int SendDownloadCommandsToClient(Object MediaFiles, String Mode);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        String mode = getString(stack);
+        Object mediaObj = stack.pop();
+        UIManager uiMgr = stack.getUIMgr();
+        if (uiMgr == null || uiMgr.getUIClientType() != UIClient.REMOTE_UI ||
+            uiMgr.getRootPanel() == null || !(uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer))
+          return new Integer(0);
+
+        MiniClientSageRenderer renderer = (MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine();
+        java.util.Vector files = coerceMediaFileVector(mediaObj);
+        int successCount = 0;
+        for (int i = 0; i < files.size(); i++)
+        {
+          MediaFile mf = (MediaFile) files.elementAt(i);
+          if (renderer.sendDownloadCommand(mf, mode))
+            successCount++;
+        }
+        return new Integer(successCount);
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "GetRecordingCopyTransferCapsAck")
+    {
+      /**
+       * Returns the transfer capability acknowledgment contract for this NG client session.
+       *
+       * @declaration public String GetRecordingCopyTransferCapsAck();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        UIManager uiMgr = stack.getUIMgr();
+        if (uiMgr != null && uiMgr.getUIClientType() == UIClient.REMOTE_UI &&
+            uiMgr.getRootPanel() != null && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
+        {
+          return ((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine()).getRecordingCopyTransferCapsAckJson();
+        }
+        return "";
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "CreateRecordingCopyTransferSession",
+        new String[] { "MediaFile", "DownloadMode", "RateProfile", "MaxRateKbps", "Concurrency", "WifiOnly", "AllowMetered" })
+    {
+      /**
+       * Creates a transfer session contract for a recording copy download.
+       *
+       * @declaration public String CreateRecordingCopyTransferSession(MediaFile MediaFile, String DownloadMode, String RateProfile, long MaxRateKbps, int Concurrency, boolean WifiOnly, boolean AllowMetered);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        boolean allowMetered = Catbert.evalBool(stack.pop());
+        boolean wifiOnly = Catbert.evalBool(stack.pop());
+        int concurrency = getInt(stack);
+        long maxRateKbps = getLong(stack);
+        String rateProfile = getString(stack);
+        String mode = getString(stack);
+        MediaFile mf = getMediaFile(stack);
+        UIManager uiMgr = stack.getUIMgr();
+        if (mf != null && uiMgr != null && uiMgr.getUIClientType() == UIClient.REMOTE_UI &&
+            uiMgr.getRootPanel() != null && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
+        {
+          return ((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine())
+              .createRecordingCopyTransferSession(mf, mode, rateProfile, maxRateKbps, concurrency, wifiOnly, allowMetered);
+        }
+        return "";
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "GetRecordingCopyTransferStatus", new String[] { "SessionToken" })
+    {
+      /**
+       * Gets transfer session status contract for a recording copy download.
+       *
+       * @declaration public String GetRecordingCopyTransferStatus(String SessionToken);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        String sessionToken = getString(stack);
+        UIManager uiMgr = stack.getUIMgr();
+        if (uiMgr != null && uiMgr.getUIClientType() == UIClient.REMOTE_UI &&
+            uiMgr.getRootPanel() != null && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
+        {
+          return ((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine()).getRecordingCopyTransferStatus(sessionToken);
+        }
+        return "";
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "PauseRecordingCopyTransfer", new String[] { "SessionToken" })
+    {
+      /**
+       * Pauses an active recording copy transfer session.
+       *
+       * @declaration public String PauseRecordingCopyTransfer(String SessionToken);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        String sessionToken = getString(stack);
+        UIManager uiMgr = stack.getUIMgr();
+        if (uiMgr != null && uiMgr.getUIClientType() == UIClient.REMOTE_UI &&
+            uiMgr.getRootPanel() != null && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
+        {
+          return ((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine()).pauseRecordingCopyTransfer(sessionToken);
+        }
+        return "";
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "ResumeRecordingCopyTransfer",
+        new String[] { "SessionToken", "Offset", "DownloadMode", "RateProfile", "MaxRateKbps", "Concurrency", "WifiOnly", "AllowMetered" })
+    {
+      /**
+       * Resumes a recording copy transfer session from the provided byte offset.
+       *
+       * @declaration public String ResumeRecordingCopyTransfer(String SessionToken, long Offset, String DownloadMode, String RateProfile, long MaxRateKbps, int Concurrency, boolean WifiOnly, boolean AllowMetered);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        boolean allowMetered = Catbert.evalBool(stack.pop());
+        boolean wifiOnly = Catbert.evalBool(stack.pop());
+        int concurrency = getInt(stack);
+        long maxRateKbps = getLong(stack);
+        String rateProfile = getString(stack);
+        String mode = getString(stack);
+        long offset = getLong(stack);
+        String sessionToken = getString(stack);
+        UIManager uiMgr = stack.getUIMgr();
+        if (uiMgr != null && uiMgr.getUIClientType() == UIClient.REMOTE_UI &&
+            uiMgr.getRootPanel() != null && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
+        {
+          return ((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine())
+              .resumeRecordingCopyTransfer(sessionToken, offset, mode, rateProfile, maxRateKbps, concurrency, wifiOnly, allowMetered);
+        }
+        return "";
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "CancelRecordingCopyTransfer", new String[] { "SessionToken" })
+    {
+      /**
+       * Cancels a recording copy transfer session.
+       *
+       * @declaration public String CancelRecordingCopyTransfer(String SessionToken);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        String sessionToken = getString(stack);
+        UIManager uiMgr = stack.getUIMgr();
+        if (uiMgr != null && uiMgr.getUIClientType() == UIClient.REMOTE_UI &&
+            uiMgr.getRootPanel() != null && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
+        {
+          return ((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine()).cancelRecordingCopyTransfer(sessionToken);
+        }
+        return "";
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "GetLatestRecordingCopyTransferStatusForMediaFile", new String[] { "MediaFile" })
+    {
+      /**
+       * Gets transfer status for the latest recording copy session matching MediaFile.
+       *
+       * @declaration public String GetLatestRecordingCopyTransferStatusForMediaFile(MediaFile MediaFile);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        MediaFile mf = getMediaFile(stack);
+        UIManager uiMgr = stack.getUIMgr();
+        if (mf != null && uiMgr != null && uiMgr.getUIClientType() == UIClient.REMOTE_UI &&
+            uiMgr.getRootPanel() != null && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
+        {
+          return ((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine())
+              .getLatestRecordingCopyTransferStatus(mf);
+        }
+        return "";
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "PauseLatestRecordingCopyTransferForMediaFile", new String[] { "MediaFile" })
+    {
+      /**
+       * Pauses the latest recording copy session matching MediaFile.
+       *
+       * @declaration public String PauseLatestRecordingCopyTransferForMediaFile(MediaFile MediaFile);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        MediaFile mf = getMediaFile(stack);
+        UIManager uiMgr = stack.getUIMgr();
+        if (mf != null && uiMgr != null && uiMgr.getUIClientType() == UIClient.REMOTE_UI &&
+            uiMgr.getRootPanel() != null && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
+        {
+          return ((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine())
+              .pauseLatestRecordingCopyTransfer(mf);
+        }
+        return "";
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "ResumeLatestRecordingCopyTransferForMediaFile", new String[] { "MediaFile" })
+    {
+      /**
+       * Resumes the latest recording copy session matching MediaFile.
+       *
+       * @declaration public String ResumeLatestRecordingCopyTransferForMediaFile(MediaFile MediaFile);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        MediaFile mf = getMediaFile(stack);
+        UIManager uiMgr = stack.getUIMgr();
+        if (mf != null && uiMgr != null && uiMgr.getUIClientType() == UIClient.REMOTE_UI &&
+            uiMgr.getRootPanel() != null && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
+        {
+          return ((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine())
+              .resumeLatestRecordingCopyTransfer(mf);
+        }
+        return "";
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "CancelLatestRecordingCopyTransferForMediaFile", new String[] { "MediaFile" })
+    {
+      /**
+       * Cancels the latest recording copy session matching MediaFile.
+       *
+       * @declaration public String CancelLatestRecordingCopyTransferForMediaFile(MediaFile MediaFile);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        MediaFile mf = getMediaFile(stack);
+        UIManager uiMgr = stack.getUIMgr();
+        if (mf != null && uiMgr != null && uiMgr.getUIClientType() == UIClient.REMOTE_UI &&
+            uiMgr.getRootPanel() != null && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
+        {
+          return ((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine())
+              .cancelLatestRecordingCopyTransfer(mf);
+        }
+        return "";
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "GetLatestRecordingCopyTransferStateForMediaFile", new String[] { "MediaFile" })
+    {
+      /**
+       * Gets latest transfer state token for MediaFile (empty if none).
+       *
+       * @declaration public String GetLatestRecordingCopyTransferStateForMediaFile(MediaFile MediaFile);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        MediaFile mf = getMediaFile(stack);
+        return getLatestTransferStateForMediaFile(stack.getUIMgr(), mf);
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "GetRecordingCopyTransferUiModeForMediaFile", new String[] { "MediaFile" })
+    {
+      /**
+       * Returns "active" when MediaFile has queued/downloading/paused transfer, otherwise "idle".
+       *
+       * @declaration public String GetRecordingCopyTransferUiModeForMediaFile(MediaFile MediaFile);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        MediaFile mf = getMediaFile(stack);
+        String state = getLatestTransferStateForMediaFile(stack.getUIMgr(), mf);
+        return isTransferInProgressState(state) ? "active" : "idle";
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "GetRecordingCopyTransferUiModeForMediaFiles", new String[] { "MediaFiles" })
+    {
+      /**
+       * Returns "active" if any MediaFile has queued/downloading/paused transfer, otherwise "idle".
+       *
+       * @declaration public String GetRecordingCopyTransferUiModeForMediaFiles(Object MediaFiles);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        Object mediaObj = stack.pop();
+        return hasAnyInProgressTransferForMediaFiles(stack.getUIMgr(), mediaObj) ? "active" : "idle";
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "PauseRecordingCopyTransfersForMediaFiles", new String[] { "MediaFiles" })
+    {
+      /**
+       * Pauses latest transfer sessions for each MediaFile and returns changed count.
+       *
+       * @declaration public int PauseRecordingCopyTransfersForMediaFiles(Object MediaFiles);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        Object mediaObj = stack.pop();
+        UIManager uiMgr = stack.getUIMgr();
+        if (uiMgr == null || uiMgr.getUIClientType() != UIClient.REMOTE_UI)
+          return new Integer(0);
+        java.util.Vector files = coerceMediaFileVector(mediaObj);
+        String clientName = uiMgr.getLocalUIClientName();
+        sage.client.NgClientRecordingCopyTransferManager mgr =
+            sage.client.NgClientRecordingCopyTransferManager.getInstance();
+        int changed = 0;
+        for (int i = 0; i < files.size(); i++)
+        {
+          MediaFile mf = (MediaFile) files.elementAt(i);
+          sage.client.NgClientRecordingCopyTransferManager.TransferSession before =
+              mgr.getLatestSessionForRecording(mf.getID(), clientName);
+          if (before == null || !isTransferInProgressState(before.sessionState) ||
+              sage.client.NgClientRecordingCopyTransferManager.STATE_PAUSED_BY_CLIENT.equals(before.sessionState) ||
+              sage.client.NgClientRecordingCopyTransferManager.STATE_PAUSED_BY_SERVER.equals(before.sessionState))
+            continue;
+          sage.client.NgClientRecordingCopyTransferManager.TransferSession after =
+              mgr.pauseLatestByClientForRecording(mf.getID(), clientName);
+          if (after != null)
+            changed++;
+        }
+        return new Integer(changed);
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "ResumeRecordingCopyTransfersForMediaFiles", new String[] { "MediaFiles" })
+    {
+      /**
+       * Resumes paused latest transfer sessions for each MediaFile and returns changed count.
+       *
+       * @declaration public int ResumeRecordingCopyTransfersForMediaFiles(Object MediaFiles);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        Object mediaObj = stack.pop();
+        UIManager uiMgr = stack.getUIMgr();
+        if (uiMgr == null || uiMgr.getUIClientType() != UIClient.REMOTE_UI)
+          return new Integer(0);
+        java.util.Vector files = coerceMediaFileVector(mediaObj);
+        String clientName = uiMgr.getLocalUIClientName();
+        sage.client.NgClientRecordingCopyTransferManager mgr =
+            sage.client.NgClientRecordingCopyTransferManager.getInstance();
+        int changed = 0;
+        for (int i = 0; i < files.size(); i++)
+        {
+          MediaFile mf = (MediaFile) files.elementAt(i);
+          sage.client.NgClientRecordingCopyTransferManager.TransferSession before =
+              mgr.getLatestSessionForRecording(mf.getID(), clientName);
+          if (before == null)
+            continue;
+          if (!(sage.client.NgClientRecordingCopyTransferManager.STATE_PAUSED_BY_CLIENT.equals(before.sessionState) ||
+              sage.client.NgClientRecordingCopyTransferManager.STATE_PAUSED_BY_SERVER.equals(before.sessionState)))
+            continue;
+          sage.client.NgClientRecordingCopyTransferManager.TransferSession after =
+              mgr.resumeLatestForRecording(
+                  mf.getID(),
+                  clientName,
+                  new sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy("background", "balanced", 0L, 1, false, true),
+                  0L);
+          if (after != null)
+            changed++;
+        }
+        return new Integer(changed);
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "CancelRecordingCopyTransfersForMediaFiles", new String[] { "MediaFiles" })
+    {
+      /**
+       * Cancels latest transfer sessions for each MediaFile and returns changed count.
+       *
+       * @declaration public int CancelRecordingCopyTransfersForMediaFiles(Object MediaFiles);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        Object mediaObj = stack.pop();
+        UIManager uiMgr = stack.getUIMgr();
+        if (uiMgr == null || uiMgr.getUIClientType() != UIClient.REMOTE_UI)
+          return new Integer(0);
+        java.util.Vector files = coerceMediaFileVector(mediaObj);
+        String clientName = uiMgr.getLocalUIClientName();
+        sage.client.NgClientRecordingCopyTransferManager mgr =
+            sage.client.NgClientRecordingCopyTransferManager.getInstance();
+        int changed = 0;
+        for (int i = 0; i < files.size(); i++)
+        {
+          MediaFile mf = (MediaFile) files.elementAt(i);
+          sage.client.NgClientRecordingCopyTransferManager.TransferSession before =
+              mgr.getLatestSessionForRecording(mf.getID(), clientName);
+          if (before == null || !isTransferInProgressState(before.sessionState))
+            continue;
+          sage.client.NgClientRecordingCopyTransferManager.TransferSession after =
+              mgr.cancelLatestByClientForRecording(mf.getID(), clientName);
+          if (after != null)
+            changed++;
+        }
+        return new Integer(changed);
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "GetRecordingCopyTransferQueueSnapshot")
+    {
+      /**
+       * Gets a server-global snapshot of all recording copy transfer queue items.
+       *
+       * @declaration public String GetRecordingCopyTransferQueueSnapshot();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return sage.client.NgClientRecordingCopyTransferManager.getInstance().buildQueueSnapshotJson();
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "GetRecordingCopyTransferQueueSummaryText")
+    {
+      /**
+       * Gets a human-readable summary of server-global recording copy queue items.
+       *
+       * @declaration public String GetRecordingCopyTransferQueueSummaryText();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return sage.client.NgClientRecordingCopyTransferManager.getInstance().buildQueueSnapshotSummaryText();
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "GetRecordingCopyTransferQueueItemCount")
+    {
+      /**
+       * Gets the number of recording copy transfer queue items.
+       *
+       * @declaration public int GetRecordingCopyTransferQueueItemCount();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return new Integer(sage.client.NgClientRecordingCopyTransferManager.getInstance().getQueueItemCount());
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "GetRecordingCopyTransferQueueItemLabel", new String[] { "QueueIndex" })
+    {
+      /**
+       * Gets a display label for a queue item at the given 1-based index.
+       *
+       * @declaration public String GetRecordingCopyTransferQueueItemLabel(int QueueIndex);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return sage.client.NgClientRecordingCopyTransferManager.getInstance().getQueueItemLabel(getInt(stack));
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "GetRecordingCopyTransferQueueItemProgressText", new String[] { "QueueIndex" })
+    {
+      /**
+       * Gets progress text for a queue item at the given 1-based index.
+       *
+       * @declaration public String GetRecordingCopyTransferQueueItemProgressText(int QueueIndex);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return sage.client.NgClientRecordingCopyTransferManager.getInstance().getQueueItemProgressText(getInt(stack));
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "PauseRecordingCopyTransferQueueItem", new String[] { "QueueIndex" })
+    {
+      /**
+       * Pauses the queue item at the given 1-based index.
+       *
+       * @declaration public int PauseRecordingCopyTransferQueueItem(int QueueIndex);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return new Integer(sage.client.NgClientRecordingCopyTransferManager.getInstance().pauseQueueItem(getInt(stack)) == null ? 0 : 1);
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "CancelRecordingCopyTransferQueueItem", new String[] { "QueueIndex" })
+    {
+      /**
+       * Cancels the queue item at the given 1-based index.
+       *
+       * @declaration public int CancelRecordingCopyTransferQueueItem(int QueueIndex);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return new Integer(sage.client.NgClientRecordingCopyTransferManager.getInstance().cancelQueueItem(getInt(stack)) == null ? 0 : 1);
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "PauseAllRecordingCopyTransfers")
+    {
+      /**
+       * Pauses all active or queued recording copy transfer sessions at server scope.
+       *
+       * @declaration public int PauseAllRecordingCopyTransfers();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return new Integer(sage.client.NgClientRecordingCopyTransferManager.getInstance()
+            .pauseAllActiveTransfers("SERVER_PAUSE_ALL", "Paused by server queue control."));
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "ResumeAllRecordingCopyTransfers")
+    {
+      /**
+       * Resumes recording copy transfer sessions previously paused by server scope.
+       *
+       * @declaration public int ResumeAllRecordingCopyTransfers();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return new Integer(sage.client.NgClientRecordingCopyTransferManager.getInstance()
+            .resumeAllPausedByServer());
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "ClearCompletedRecordingCopyTransfers")
+    {
+      /**
+       * Removes completed recording copy transfer sessions from server queue state.
+       *
+       * @declaration public int ClearCompletedRecordingCopyTransfers();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return new Integer(sage.client.NgClientRecordingCopyTransferManager.getInstance()
+            .clearCompletedTransfers());
       }});
     rft.put(new PredefinedJEPFunction("Global", "GetRemoteUIType")
     {
