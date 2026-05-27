@@ -448,6 +448,7 @@ public final class NgClientRecordingCopyTransferManager
     appendArray(sb, "rate_profiles", new String[] {"auto", "low", "balanced", "max"});
     closeObject(sb);
     append(sb, "server_transfer_api_version", 1L);
+    appendArray(sb, "server_capabilities", NgClientOfflineCompanionBuilder.getServerCapabilities());
     appendArray(sb, "client_capabilities", clientCapabilities);
     closeObject(sb);
     return sb.toString();
@@ -475,6 +476,12 @@ public final class NgClientRecordingCopyTransferManager
     append(sb, "reconnect_grace_seconds", session.reconnectGraceSeconds);
     append(sb, "expires_in_seconds", Math.max(0L, (session.expiresAt - Sage.time()) / 1000L));
     appendArray(sb, "recent_reason_codes", session.recentReasonCodes);
+    String offlineJson = NgClientOfflineCompanionBuilder.buildOfflineBlockJson(session);
+    if (offlineJson != null && offlineJson.length() > 0)
+    {
+      if (sb.charAt(sb.length() - 1) != '{') sb.append(',');
+      sb.append('"').append("offline").append('"').append(':').append(offlineJson);
+    }
     closeObject(sb);
     return sb.toString();
   }

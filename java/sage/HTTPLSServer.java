@@ -16,6 +16,7 @@
 package sage;
 
 import sage.client.NgClientDownloadTokenManager;
+import sage.client.NgClientOfflineCompanionBuilder;
 import sage.client.NgClientRecordingCopyTransferManager;
 
 /**
@@ -318,18 +319,29 @@ public class HTTPLSServer implements Runnable
       cleanPath = cleanPath.substring(0, queryIdx);
 
     String prefix = "/api/transfers/";
-    if (!cleanPath.startsWith(prefix) || !cleanPath.endsWith("/content"))
+    if (!cleanPath.startsWith(prefix))
     {
       sendTransferErrorResponse(404, "Not Found", "TRANSFER_ENDPOINT_NOT_FOUND",
           "Unknown transfer endpoint.", false);
       return;
     }
 
-    String token = cleanPath.substring(prefix.length(), cleanPath.length() - "/content".length());
-    if (token.length() == 0)
+    String tokenAndSuffix = cleanPath.substring(prefix.length());
+    int slashIdx = tokenAndSuffix.indexOf('/');
+    if (slashIdx <= 0)
     {
       sendTransferErrorResponse(400, "Bad Request", "TRANSFER_TOKEN_MISSING",
           "Missing transfer token.", false);
+      return;
+    }
+
+    String token = tokenAndSuffix.substring(0, slashIdx);
+    String suffix = tokenAndSuffix.substring(slashIdx);
+
+    if (!isTransferTokenHintValid(token, pageRequest, paramMap))
+    {
+      sendTransferErrorResponse(401, "Unauthorized", "TRANSFER_TOKEN_INVALID",
+          "Transfer token hint did not match URL token.", false);
       return;
     }
 
@@ -354,6 +366,19 @@ public class HTTPLSServer implements Runnable
     {
       sendTransferErrorResponse(401, "Unauthorized", "TRANSFER_TOKEN_INVALID",
           "Transfer token is invalid or expired.", true);
+      return;
+    }
+
+    if (suffix.startsWith("/offline/"))
+    {
+      handleTransferOfflineRequest(token, suffix, session);
+      return;
+    }
+
+    if (!"/content".equals(suffix))
+    {
+      sendTransferErrorResponse(404, "Not Found", "TRANSFER_ENDPOINT_NOT_FOUND",
+          "Unknown transfer endpoint.", false);
       return;
     }
 
@@ -522,6 +547,256 @@ public class HTTPLSServer implements Runnable
     long kbps = Math.max(0L, ((bytesSent * 8L * 1000L) / elapsedMs) / 1024L);
     long progressedTo = Math.max(session.bytesTransferred, start + bytesSent);
     transferMgr.updateProgress(token, progressedTo, kbps, null);
+  }
+
+  private boolean isTransferTokenHintValid(String token, String pageRequest, java.util.Map paramMap)
+  {
+    if (token == null || token.length() == 0)
+      return false;
+
+    String headerToken = paramMap == null ? null : (String) paramMap.get("x-transfer-token");
+    if (headerToken != null)
+    {
+      headerToken = headerToken.trim();
+      if (headerToken.length() > 0 && !token.equals(headerToken))
+        return false;
+    }
+
+    int qIdx = pageRequest == null ? -1 : pageRequest.indexOf('?');
+    if (qIdx != -1 && qIdx < pageRequest.length() - 1)
+    {
+      String query = pageRequest.substring(qIdx + 1);
+      String queryToken = getQueryParam(query, "token");
+      if (queryToken != null && queryToken.length() > 0 && !token.equals(queryToken))
+        return false;
+    }
+    return true;
+  }
+
+  private String getQueryParam(String query, String key)
+  {
+    if (query == null || key == null || key.length() == 0)
+      return "";
+    java.util.StringTokenizer toker = new java.util.StringTokenizer(query, "&");
+    while (toker.hasMoreTokens())
+    {
+      String pair = toker.nextToken();
+      int eq = pair.indexOf('=');
+      if (eq <= 0)
+        continue;
+      String k = pair.substring(0, eq).trim();
+      if (!key.equalsIgnoreCase(k))
+        continue;
+      String v = pair.substring(eq + 1);
+      try
+      {
+        return java.net.URLDecoder.decode(v, "UTF-8");
+      }
+      catch (Throwable t)
+      {
+        return v;
+      }
+    }
+    return "";
+  }
+
+  private void handleTransferOfflineRequest(String token, String suffix,
+      NgClientRecordingCopyTransferManager.TransferSession session) throws java.io.IOException
+  {
+    if ("/offline/metadata".equals(suffix))
+    {
+      String offlineJson = NgClientOfflineCompanionBuilder.buildOfflineBlockJson(session);
+      if (offlineJson == null || offlineJson.length() == 0)
+      {
+        sendHTTPErrorResponse(404, "Not Found", "Offline metadata unavailable.");
+        return;
+      }
+      sendHTTPJsonResponse(200, "OK", offlineJson, "application/json");
+      return;
+    }
+
+    if (suffix.startsWith("/offline/artwork/"))
+    {
+      int index = parsePositiveIndex(suffix.substring("/offline/artwork/".length()));
+      NgClientOfflineCompanionBuilder.OfflineAsset asset =
+          NgClientOfflineCompanionBuilder.resolveArtworkAsset(session, index);
+      if (asset == null)
+      {
+        sendHTTPErrorResponse(404, "Not Found", "Offline artwork not available.");
+        return;
+      }
+      sendOfflineAsset(asset);
+      return;
+    }
+
+    if (suffix.startsWith("/offline/captions/"))
+    {
+      int index = parsePositiveIndex(suffix.substring("/offline/captions/".length()));
+      NgClientOfflineCompanionBuilder.OfflineAsset asset =
+          NgClientOfflineCompanionBuilder.resolveCaptionAsset(session, index);
+      if (asset == null)
+      {
+        sendHTTPErrorResponse(404, "Not Found", "Offline captions not available.");
+        return;
+      }
+      sendOfflineAsset(asset);
+      return;
+    }
+
+    if ("/offline/comskip".equals(suffix))
+    {
+      NgClientOfflineCompanionBuilder.OfflineAsset asset =
+          NgClientOfflineCompanionBuilder.resolveComskipAsset(session);
+      if (asset == null)
+      {
+        sendHTTPErrorResponse(404, "Not Found", "Offline comskip not available.");
+        return;
+      }
+      sendOfflineAsset(asset);
+      return;
+    }
+
+    if ("/offline/transcript".equals(suffix))
+    {
+      NgClientOfflineCompanionBuilder.OfflineAsset asset =
+          NgClientOfflineCompanionBuilder.resolveTranscriptAsset(session);
+      if (asset == null)
+      {
+        sendHTTPErrorResponse(404, "Not Found", "Offline transcript not available.");
+        return;
+      }
+      sendOfflineAsset(asset);
+      return;
+    }
+
+    sendHTTPErrorResponse(404, "Not Found", "Unknown offline endpoint.");
+  }
+
+  private int parsePositiveIndex(String tail)
+  {
+    if (tail == null || tail.length() == 0)
+      return -1;
+    int q = tail.indexOf('?');
+    if (q != -1)
+      tail = tail.substring(0, q);
+    try
+    {
+      int rv = Integer.parseInt(tail.trim());
+      return rv < 0 ? -1 : rv;
+    }
+    catch (NumberFormatException nfe)
+    {
+      return -1;
+    }
+  }
+
+  private void sendOfflineAsset(NgClientOfflineCompanionBuilder.OfflineAsset asset)
+      throws java.io.IOException
+  {
+    if (asset == null)
+    {
+      sendHTTPErrorResponse(404, "Not Found", "Offline asset unavailable.");
+      return;
+    }
+    if (asset.localFile != null)
+    {
+      sendHTTPFile(asset.localFile,
+          asset.contentType == null || asset.contentType.length() == 0 ? "application/octet-stream" : asset.contentType);
+      return;
+    }
+    if (asset.sourceUrl != null && asset.sourceUrl.length() > 0)
+    {
+      sendHTTPRemote(asset.sourceUrl,
+          asset.contentType == null || asset.contentType.length() == 0 ? "application/octet-stream" : asset.contentType);
+      return;
+    }
+    sendHTTPErrorResponse(404, "Not Found", "Offline asset unavailable.");
+  }
+
+  private void sendHTTPFile(java.io.File sourceFile, String contentType) throws java.io.IOException
+  {
+    if (sourceFile == null || !sourceFile.isFile())
+    {
+      sendHTTPErrorResponse(404, "Not Found", "File missing.");
+      return;
+    }
+
+    long len = Math.max(0L, sourceFile.length());
+    writeBuf.clear();
+    appendStringToWriteBuf("HTTP/1.1 200 OK\r\n");
+    appendStringToWriteBuf("Server: SageTV " + UIManager.SAGE + "\r\n");
+    appendStringToWriteBuf("Date: " + new java.util.Date().toString() + "\r\n");
+    appendStringToWriteBuf("Cache-Control: no-store\r\n");
+    appendStringToWriteBuf("Content-Type: " + contentType + "\r\n");
+    appendStringToWriteBuf("Content-Length: " + len + "\r\n\r\n");
+    writeBuf.flip();
+    sake.write(writeBuf);
+
+    java.nio.channels.FileChannel fc = new java.io.FileInputStream(sourceFile).getChannel();
+    try
+    {
+      long offset = 0;
+      while (offset < len)
+      {
+        long sent = fc.transferTo(offset, Math.min(32768L, len - offset), sake);
+        if (sent <= 0)
+          break;
+        offset += sent;
+      }
+    }
+    finally
+    {
+      fc.close();
+    }
+  }
+
+  private void sendHTTPRemote(String sourceUrl, String fallbackType) throws java.io.IOException
+  {
+    java.net.URLConnection con = new java.net.URL(sourceUrl).openConnection();
+    con.setConnectTimeout((int) Math.min(Integer.MAX_VALUE, Math.max(1000L, timeout)));
+    con.setReadTimeout((int) Math.min(Integer.MAX_VALUE, Math.max(1000L, timeout)));
+    con.setRequestProperty("User-Agent", "SageTV-OffCompanion/1.0");
+
+    java.io.InputStream in = null;
+    try
+    {
+      long len = con.getContentLengthLong();
+      String ctype = con.getContentType();
+      if (ctype == null || ctype.length() == 0)
+        ctype = fallbackType;
+
+      writeBuf.clear();
+      appendStringToWriteBuf("HTTP/1.1 200 OK\r\n");
+      appendStringToWriteBuf("Server: SageTV " + UIManager.SAGE + "\r\n");
+      appendStringToWriteBuf("Date: " + new java.util.Date().toString() + "\r\n");
+      appendStringToWriteBuf("Cache-Control: no-store\r\n");
+      appendStringToWriteBuf("Content-Type: " + ctype + "\r\n");
+      if (len >= 0)
+        appendStringToWriteBuf("Content-Length: " + len + "\r\n");
+      appendStringToWriteBuf("\r\n");
+      writeBuf.flip();
+      sake.write(writeBuf);
+
+      in = con.getInputStream();
+      byte[] buf = new byte[32768];
+      int r;
+      while ((r = in.read(buf)) > 0)
+      {
+        java.nio.ByteBuffer out = java.nio.ByteBuffer.wrap(buf, 0, r);
+        while (out.hasRemaining())
+          sake.write(out);
+      }
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("Failed proxying offline remote asset: " + t);
+      sendHTTPErrorResponse(404, "Not Found", "Remote asset unavailable.");
+    }
+    finally
+    {
+      if (in != null)
+        try{in.close();}catch(Throwable t){}
+    }
   }
 
   private boolean isTransferRequesterBoundToSession(
