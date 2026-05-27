@@ -27,7 +27,9 @@ public final class NgClientDownloadContractBuilder
       String ngClientId,
       String ngVersion,
       java.util.Set<String> clientCapabilities,
-      String sessionClientIp)
+      String sessionClientIp,
+      String downloadMode,
+      long estimatedBandwidthBps)
   {
     if (mf == null)
       return "{}";
@@ -42,13 +44,23 @@ public final class NgClientDownloadContractBuilder
     String title = show != null ? show.getTitle() : "";
     String episode = show != null ? show.getEpisodeName() : "";
     String desc = show != null ? show.getDesc() : "";
+    String normMode = normalizeDownloadMode(downloadMode);
+    boolean backgroundRequested = "background".equals(normMode);
+    long bytesComplete = 0L;
+    long bytesRemaining = Math.max(0L, fileSize - bytesComplete);
     StringBuilder sb = new StringBuilder(2048);
     sb.append('{');
     append(sb, "command_type", "CMD_DOWNLOAD_REQUEST");
+    append(sb, "download_mode", normMode);
+    append(sb, "download_id", tokenIssue != null ? tokenIssue.tokenHash : "");
     append(sb, "media_id", mf.getID());
     append(sb, "file_name", fileName);
     append(sb, "file_path", filePath);
     append(sb, "file_size", fileSize);
+    append(sb, "bytes_complete", bytesComplete);
+    append(sb, "bytes_remaining", bytesRemaining);
+    append(sb, "estimated_transfer_bps", estimatedBandwidthBps);
+    append(sb, "status", "queued");
     append(sb, "general_type", generalType);
     append(sb, "title", title);
     append(sb, "episode", episode);
@@ -61,6 +73,10 @@ public final class NgClientDownloadContractBuilder
     append(sb, "token", tokenIssue != null ? tokenIssue.token : "");
     append(sb, "token_hash", tokenIssue != null ? tokenIssue.tokenHash : "");
     append(sb, "token_expires_at", tokenIssue != null ? tokenIssue.expiresAt : 0L);
+    append(sb, "background_requested", backgroundRequested);
+    append(sb, "resume_supported", true);
+    append(sb, "retry_allowed", true);
+    append(sb, "retry_until", tokenIssue != null ? tokenIssue.expiresAt : 0L);
     appendArray(sb, "capabilities", clientCapabilities);
     sb.append('}');
     return sb.toString();
@@ -77,6 +93,12 @@ public final class NgClientDownloadContractBuilder
   {
     if (sb.charAt(sb.length() - 1) != '{') sb.append(',');
     sb.append('"').append(escape(key)).append('"').append(':').append(value);
+  }
+
+  private static void append(StringBuilder sb, String key, boolean value)
+  {
+    if (sb.charAt(sb.length() - 1) != '{') sb.append(',');
+    sb.append('"').append(escape(key)).append('"').append(':').append(value ? "true" : "false");
   }
 
   private static void appendArray(StringBuilder sb, String key, java.util.Set<String> values)
@@ -115,5 +137,13 @@ public final class NgClientDownloadContractBuilder
       }
     }
     return rv.toString();
+  }
+
+  private static String normalizeDownloadMode(String mode)
+  {
+    if (mode == null)
+      return "foreground";
+    String rv = mode.trim().toLowerCase();
+    return "background".equals(rv) ? rv : "foreground";
   }
 }

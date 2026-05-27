@@ -2724,6 +2724,293 @@
         </Attribute>
         <Action Ref="963" Name="&quot;REM Start a library i..."/>
        </Item>
+       <Item Name="Download Queue Management" Sym="NGDLQ-1100">
+        <Attribute Name="ButtonText" Sym="NGDLQ-1101">
+         <Value>"Download Queue Management"</Value>
+        </Attribute>
+        <Attribute Name="ThisItem" Sym="NGDLQ-1102">
+         <Value>"xItemSetupDownloadQueue"</Value>
+        </Attribute>
+        <Attribute Name="SubMenuType" Sym="NGDLQ-1103">
+         <Value>null</Value>
+        </Attribute>
+        <Action Name="&quot;Server download queue management.&quot;" Sym="NGDLQ-1104">
+         <OptionsMenu Name="DownloadQueueManagement" Sym="NGDLQ-1105">
+          <IgnoreThemeProps>false</IgnoreThemeProps>
+          <Action Name="&quot;Recording Copy Transfer Queue:\n \n&quot;" Sym="NGDLQ-1106">
+           <Text Name="" Sym="NGDLQ-1107"/>
+          </Action>
+          <Conditional Name="GetRecordingCopyTransferQueueItemCount() == 0" Sym="NGDLQ-1500">
+           <Panel Name="QueueEmpty" Sym="NGDLQ-1501">
+            <FixedWidth>1.0</FixedWidth>
+            <PadX>.02</PadX>
+            <PadY>.02</PadY>
+            <Insets>.02</Insets>
+            <WrapHNav>false</WrapHNav>
+            <WrapVNav>false</WrapVNav>
+            <IgnoreThemeProps>false</IgnoreThemeProps>
+            <Text Name="Queue:" Sym="NGDLQ-1502">
+             <AnchorX>0.0</AnchorX>
+             <FixedWidth>0.7</FixedWidth>
+             <AutosizeText>false</AutosizeText>
+             <WrapText>true</WrapText>
+             <TextShadow>true</TextShadow>
+             <DisableFontScaling>false</DisableFontScaling>
+             <IgnoreThemeProps>false</IgnoreThemeProps>
+            </Text>
+            <Action Name="&quot;No items in queue.&quot;" Sym="NGDLQ-1503">
+             <Text Name="(No queued recordings)" Sym="NGDLQ-1504"/>
+            </Action>
+            <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
+           </Panel>
+          </Conditional>
+          <Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 1" Sym="NGDLQ-1510">
+           <Item Name="QueueItem1" Sym="NGDLQ-1511">
+            <Action Name="&quot;Manage queue item #1.&quot;" Sym="NGDLQ-1512">
+             <OptionsMenu Name="DownloadQueueItem1" Sym="NGDLQ-1513">
+              <Action Name="GetRecordingCopyTransferQueueItemLabel(1)" Sym="NGDLQ-1514">
+               <Text Name="" Sym="NGDLQ-1515"/>
+              </Action>
+              <Panel Name="QueueItem1Progress" Sym="NGDLQ-1516">
+               <FixedWidth>1.0</FixedWidth>
+               <PadX>.02</PadX>
+               <PadY>.02</PadY>
+               <Insets>.02</Insets>
+               <WrapHNav>false</WrapHNav>
+               <WrapVNav>false</WrapVNav>
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <Text Name="Progress:" Sym="NGDLQ-1517">
+                <AnchorX>0.0</AnchorX>
+                <FixedWidth>0.45</FixedWidth>
+                <AutosizeText>false</AutosizeText>
+                <WrapText>true</WrapText>
+                <TextShadow>true</TextShadow>
+                <DisableFontScaling>false</DisableFontScaling>
+                <IgnoreThemeProps>false</IgnoreThemeProps>
+               </Text>
+               <Action Name="GetRecordingCopyTransferQueueItemProgressText(1)" Sym="NGDLQ-1518">
+                <Text Name="" Sym="NGDLQ-1519"/>
+               </Action>
+               <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
+              </Panel>
+              <Panel Name="QueueItem1Pause" Sym="NGDLQ-1520">
+               <FixedWidth>1.0</FixedWidth>
+               <PadX>.02</PadX>
+               <PadY>.02</PadY>
+               <Insets>.02</Insets>
+               <WrapHNav>false</WrapHNav>
+               <WrapVNav>false</WrapVNav>
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <Text Name="Pause:" Sym="NGDLQ-1521">
+                <AnchorX>0.0</AnchorX>
+                <FixedWidth>0.7</FixedWidth>
+                <AutosizeText>false</AutosizeText>
+                <WrapText>true</WrapText>
+                <TextShadow>true</TextShadow>
+                <DisableFontScaling>false</DisableFontScaling>
+                <IgnoreThemeProps>false</IgnoreThemeProps>
+               </Text>
+               <Item Name="QueueItem1PauseBtn" Sym="NGDLQ-1522">
+                <IgnoreThemeProps>false</IgnoreThemeProps>
+                <BackgroundComponent>false</BackgroundComponent>
+                <Action Name="PauseRecordingCopyTransferQueueItem(1)" Sym="NGDLQ-1523">
+                 <Action Name="Refresh()" Sym="NGDLQ-1524"/>
+                </Action>
+                <Text Name="Pause" Sym="NGDLQ-1525"/>
+               </Item>
+               <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
+              </Panel>
+              <Panel Name="QueueItem1Cancel" Sym="NGDLQ-1526">
+               <FixedWidth>1.0</FixedWidth>
+               <PadX>.02</PadX>
+               <PadY>.02</PadY>
+               <Insets>.02</Insets>
+               <WrapHNav>false</WrapHNav>
+               <WrapVNav>false</WrapVNav>
+               <IgnoreThemeProps>false</IgnoreThemeProps>
+               <Text Name="Cancel:" Sym="NGDLQ-1527">
+                <AnchorX>0.0</AnchorX>
+                <FixedWidth>0.7</FixedWidth>
+                <AutosizeText>false</AutosizeText>
+                <WrapText>true</WrapText>
+                <TextShadow>true</TextShadow>
+                <DisableFontScaling>false</DisableFontScaling>
+                <IgnoreThemeProps>false</IgnoreThemeProps>
+               </Text>
+               <Item Name="QueueItem1CancelBtn" Sym="NGDLQ-1528">
+                <IgnoreThemeProps>false</IgnoreThemeProps>
+                <BackgroundComponent>false</BackgroundComponent>
+                <Action Name="CancelRecordingCopyTransferQueueItem(1)" Sym="NGDLQ-1529">
+                 <Action Name="Refresh()" Sym="NGDLQ-1530"/>
+                </Action>
+                <Text Name="Cancel" Sym="NGDLQ-1531"/>
+               </Item>
+               <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
+              </Panel>
+              <Item Name="Close" Sym="NGDLQ-1532">
+               <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1533"/>
+              </Item>
+              <Theme Ref="2131" Name="MutliSelectOptionsTheme"/>
+             </OptionsMenu>
+            </Action>
+            <Action Name="GetRecordingCopyTransferQueueItemLabel(1)" Sym="NGDLQ-1534">
+             <Text Name="" Sym="NGDLQ-1535"/>
+            </Action>
+           </Item>
+          </Conditional>
+          <Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 2" Sym="NGDLQ-1540">
+           <Item Name="QueueItem2" Sym="NGDLQ-1541">
+            <Action Name="&quot;Manage queue item #2.&quot;" Sym="NGDLQ-1542">
+             <OptionsMenu Name="DownloadQueueItem2" Sym="NGDLQ-1543">
+              <Action Name="GetRecordingCopyTransferQueueItemLabel(2)" Sym="NGDLQ-1544">
+               <Text Name="" Sym="NGDLQ-1545"/>
+              </Action>
+              <Action Name="GetRecordingCopyTransferQueueItemProgressText(2)" Sym="NGDLQ-1546">
+               <Text Name="" Sym="NGDLQ-1547"/>
+              </Action>
+              <Item Name="Pause" Sym="NGDLQ-1548">
+               <Action Name="PauseRecordingCopyTransferQueueItem(2)" Sym="NGDLQ-1549">
+                <Action Name="Refresh()" Sym="NGDLQ-1550"/>
+               </Action>
+              </Item>
+              <Item Name="Cancel" Sym="NGDLQ-1551">
+               <Action Name="CancelRecordingCopyTransferQueueItem(2)" Sym="NGDLQ-1552">
+                <Action Name="Refresh()" Sym="NGDLQ-1553"/>
+               </Action>
+              </Item>
+              <Item Name="Close" Sym="NGDLQ-1554">
+               <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1555"/>
+              </Item>
+              <Theme Ref="2131" Name="MutliSelectOptionsTheme"/>
+             </OptionsMenu>
+            </Action>
+            <Action Name="GetRecordingCopyTransferQueueItemLabel(2)" Sym="NGDLQ-1556">
+             <Text Name="" Sym="NGDLQ-1557"/>
+            </Action>
+           </Item>
+          </Conditional>
+          <Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 3" Sym="NGDLQ-1560">
+           <Item Name="QueueItem3" Sym="NGDLQ-1561">
+            <Action Name="&quot;Manage queue item #3.&quot;" Sym="NGDLQ-1562">
+             <OptionsMenu Name="DownloadQueueItem3" Sym="NGDLQ-1563">
+              <Action Name="GetRecordingCopyTransferQueueItemLabel(3)" Sym="NGDLQ-1564">
+               <Text Name="" Sym="NGDLQ-1565"/>
+              </Action>
+              <Action Name="GetRecordingCopyTransferQueueItemProgressText(3)" Sym="NGDLQ-1566">
+               <Text Name="" Sym="NGDLQ-1567"/>
+              </Action>
+              <Item Name="Pause" Sym="NGDLQ-1568">
+               <Action Name="PauseRecordingCopyTransferQueueItem(3)" Sym="NGDLQ-1569">
+                <Action Name="Refresh()" Sym="NGDLQ-1570"/>
+               </Action>
+              </Item>
+              <Item Name="Cancel" Sym="NGDLQ-1571">
+               <Action Name="CancelRecordingCopyTransferQueueItem(3)" Sym="NGDLQ-1572">
+                <Action Name="Refresh()" Sym="NGDLQ-1573"/>
+               </Action>
+              </Item>
+              <Item Name="Close" Sym="NGDLQ-1574">
+               <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1575"/>
+              </Item>
+              <Theme Ref="2131" Name="MutliSelectOptionsTheme"/>
+             </OptionsMenu>
+            </Action>
+            <Action Name="GetRecordingCopyTransferQueueItemLabel(3)" Sym="NGDLQ-1576">
+             <Text Name="" Sym="NGDLQ-1577"/>
+            </Action>
+           </Item>
+          </Conditional>
+          <Panel Name="PauseAll" Sym="NGDLQ-1114">
+           <FixedWidth>1.0</FixedWidth>
+           <PadX>.02</PadX>
+           <PadY>.02</PadY>
+           <Insets>.02</Insets>
+           <WrapHNav>false</WrapHNav>
+           <WrapVNav>false</WrapVNav>
+           <IgnoreThemeProps>false</IgnoreThemeProps>
+           <Text Name="Pause Active/Queued:" Sym="NGDLQ-1115">
+            <AnchorX>0.0</AnchorX>
+            <FixedWidth>0.7</FixedWidth>
+            <AutosizeText>false</AutosizeText>
+            <WrapText>true</WrapText>
+            <TextShadow>true</TextShadow>
+            <DisableFontScaling>false</DisableFontScaling>
+            <IgnoreThemeProps>false</IgnoreThemeProps>
+           </Text>
+           <Item Name="PauseAllBtn" Sym="NGDLQ-1116">
+            <IgnoreThemeProps>false</IgnoreThemeProps>
+            <BackgroundComponent>false</BackgroundComponent>
+            <Action Name="PauseAllRecordingCopyTransfers()" Sym="NGDLQ-1117">
+             <Action Name="Refresh()" Sym="NGDLQ-1118"/>
+            </Action>
+            <Text Name="Pause All" Sym="NGDLQ-1119"/>
+           </Item>
+           <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
+          </Panel>
+          <Panel Name="ResumeAll" Sym="NGDLQ-1120">
+           <FixedWidth>1.0</FixedWidth>
+           <PadX>.02</PadX>
+           <PadY>.02</PadY>
+           <Insets>.02</Insets>
+           <WrapHNav>false</WrapHNav>
+           <WrapVNav>false</WrapVNav>
+           <IgnoreThemeProps>false</IgnoreThemeProps>
+           <Text Name="Resume Paused:" Sym="NGDLQ-1121">
+            <AnchorX>0.0</AnchorX>
+            <FixedWidth>0.7</FixedWidth>
+            <AutosizeText>false</AutosizeText>
+            <WrapText>true</WrapText>
+            <TextShadow>true</TextShadow>
+            <DisableFontScaling>false</DisableFontScaling>
+            <IgnoreThemeProps>false</IgnoreThemeProps>
+           </Text>
+           <Item Name="ResumeAllBtn" Sym="NGDLQ-1122">
+            <IgnoreThemeProps>false</IgnoreThemeProps>
+            <BackgroundComponent>false</BackgroundComponent>
+            <Action Name="ResumeAllRecordingCopyTransfers()" Sym="NGDLQ-1123">
+             <Action Name="Refresh()" Sym="NGDLQ-1124"/>
+            </Action>
+            <Text Name="Resume All" Sym="NGDLQ-1125"/>
+           </Item>
+           <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
+          </Panel>
+          <Panel Name="ClearCompleted" Sym="NGDLQ-1126">
+           <FixedWidth>1.0</FixedWidth>
+           <PadX>.02</PadX>
+           <PadY>.02</PadY>
+           <Insets>.02</Insets>
+           <WrapHNav>false</WrapHNav>
+           <WrapVNav>false</WrapVNav>
+           <IgnoreThemeProps>false</IgnoreThemeProps>
+           <Text Name="Clear Completed:" Sym="NGDLQ-1127">
+            <AnchorX>0.0</AnchorX>
+            <FixedWidth>0.7</FixedWidth>
+            <AutosizeText>false</AutosizeText>
+            <WrapText>true</WrapText>
+            <TextShadow>true</TextShadow>
+            <DisableFontScaling>false</DisableFontScaling>
+            <IgnoreThemeProps>false</IgnoreThemeProps>
+           </Text>
+           <Item Name="ClearCompletedBtn" Sym="NGDLQ-1128">
+            <IgnoreThemeProps>false</IgnoreThemeProps>
+            <BackgroundComponent>false</BackgroundComponent>
+            <Action Name="ClearCompletedRecordingCopyTransfers()" Sym="NGDLQ-1129">
+             <Action Name="Refresh()" Sym="NGDLQ-1130"/>
+            </Action>
+            <Text Name="Clear Completed" Sym="NGDLQ-1131"/>
+           </Item>
+           <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
+          </Panel>
+          <Action Name="&quot;\n \n&quot;" Sym="NGDLQ-1132">
+           <Text Name="" Sym="NGDLQ-1133"/>
+          </Action>
+          <Item Name="Close" Sym="NGDLQ-1134">
+           <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1135"/>
+          </Item>
+          <Theme Ref="2131" Name="MutliSelectOptionsTheme"/>
+         </OptionsMenu>
+        </Action>
+       </Item>
        <Item Name="System Information" Sym="OPUS4A-174739">
         <Attribute Name="ButtonText" Sym="OPUS4A-174740">
          <Value>"System Information"</Value>
@@ -105917,6 +106204,68 @@
                                 </Action>
                                </Item>
                               </Conditional>
+                              <Conditional Name="FileListIsRecordings &amp;&amp; IsNgClientSession() &amp;&amp; HasClientCapability(&quot;DOWNLOAD&quot;)" Sym="NGDLQ-1200">
+                               <Item Name="Download all Recordings" Sym="NGDLQ-1201">
+                                <OptionsMenu Name="Download all Recordings Menu" Sym="NGDLQ-1217">
+                                 <IgnoreThemeProps>false</IgnoreThemeProps>
+                                 <Conditional Name="GetRecordingCopyTransferUiModeForMediaFiles(MediaFiles) == &quot;idle&quot;" Sym="NGDLQ-1218">
+                                  <Item Name="Download all now" Sym="NGDLQ-1219">
+                                   <Action Name="SendDownloadCommandsToClient(MediaFiles, &quot;foreground&quot;)" Sym="NGDLQ-1220">
+                                    <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1221">
+                                     <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1222"/>
+                                    </Action>
+                                   </Action>
+                                  </Item>
+                                  <Item Name="Queue all now" Sym="NGDLQ-1223">
+                                   <Action Name="SendDownloadCommandsToClient(MediaFiles, &quot;background&quot;)" Sym="NGDLQ-1224">
+                                    <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1225">
+                                     <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1226"/>
+                                    </Action>
+                                   </Action>
+                                  </Item>
+                                 </Conditional>
+                                 <Conditional Name="GetRecordingCopyTransferUiModeForMediaFiles(MediaFiles) == &quot;active&quot;" Sym="NGDLQ-1227">
+                                  <Item Name="Pause downloads" Sym="NGDLQ-1228">
+                                   <Action Name="PauseRecordingCopyTransfersForMediaFiles(MediaFiles)" Sym="NGDLQ-1229">
+                                    <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1230">
+                                     <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1231"/>
+                                    </Action>
+                                   </Action>
+                                  </Item>
+                                  <Item Name="Resume downloads" Sym="NGDLQ-1232">
+                                   <Action Name="ResumeRecordingCopyTransfersForMediaFiles(MediaFiles)" Sym="NGDLQ-1233">
+                                    <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1234">
+                                     <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1235"/>
+                                    </Action>
+                                   </Action>
+                                  </Item>
+                                  <Item Name="Remove downloads" Sym="NGDLQ-1236">
+                                   <Action Name="CancelRecordingCopyTransfersForMediaFiles(MediaFiles)" Sym="NGDLQ-1237">
+                                    <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1238">
+                                     <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1239"/>
+                                    </Action>
+                                   </Action>
+                                  </Item>
+                                  <Item Name="Queue snapshot" Sym="NGDLQ-1240">
+                                   <OptionsMenu Name="Download Queue Snapshot" Sym="NGDLQ-1241">
+                                    <IgnoreThemeProps>false</IgnoreThemeProps>
+                                    <Action Name="GetRecordingCopyTransferQueueSummaryText()" Sym="NGDLQ-1242">
+                                     <Text Name="" Sym="NGDLQ-1243"/>
+                                    </Action>
+                                    <Item Name="Close" Sym="NGDLQ-1244">
+                                     <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1245"/>
+                                    </Item>
+                                    <Theme Ref="954" Name="OptionsConfirmTheme"/>
+                                   </OptionsMenu>
+                                  </Item>
+                                 </Conditional>
+                                 <Item Name="Close" Sym="NGDLQ-1246">
+                                  <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1247"/>
+                                 </Item>
+                                 <Theme Ref="954" Name="OptionsConfirmTheme"/>
+                                </OptionsMenu>
+                               </Item>
+                              </Conditional>
                               <Conditional Name="(Size(SubDirMediaFiles) &gt; 0) &amp;&amp; (Size(SubDirMediaFiles) != Size(MediaFiles)) &amp;&amp; (Size(SubDirMediaFiles) &lt;= GetServerProperty(&quot;music/max_playlist_grouped_add&quot;,500))" Sym="BASE-58965">
                                <Item Name="Play all Videos in this folder" Sym="BASE-58966">
                                 <Conditional Name="FileListIsVideoGrouping" Sym="BASE-58967">
@@ -130739,17 +131088,6 @@
                      </Action>
                     </Item>
                    </Conditional>
-                   <Conditional Name="HasCommercialMarkers(MediaFile) &amp;&amp; !IsCommercialDetectRunning(MediaFile)" Sym="COMSKIP-630">
-                    <Item Name="Re-run Comskip" Sym="COMSKIP-631">
-                     <FixedWidth>0.5</FixedWidth>
-                     <Insets>10</Insets>
-                     <Action Name="ClearCommercialMarkers(MediaFile)" Sym="COMSKIP-632">
-                      <Action Name="RunCommercialDetect(MediaFile)" Sym="COMSKIP-633">
-                       <Action Name="CloseOptionsMenu()" Sym="COMSKIP-634"/>
-                      </Action>
-                     </Action>
-                    </Item>
-                   </Conditional>
                    <Conditional Name="IsCommercialDetectRunning(MediaFile)" Sym="COMSKIP-635">
                     <Item Name="Stop Comskip" Sym="COMSKIP-636">
                      <FixedWidth>0.5</FixedWidth>
@@ -130766,6 +131104,104 @@
                      <Action Name="ClearCommercialMarkers(MediaFile)" Sym="COMSKIP-232">
                       <Action Name="Refresh()" Sym="COMSKIP-233"/>
                      </Action>
+                    </Item>
+                   </Conditional>
+                   <Conditional Name="IsNgClientSession() &amp;&amp; HasClientCapability(&quot;DOWNLOAD&quot;)" Sym="NGDLQ-1000">
+                    <Item Name="Download Recording" Sym="NGDLQ-1001">
+                     <FixedWidth>0.5</FixedWidth>
+                     <Insets>10</Insets>
+                     <OptionsMenu Name="Download Recording Menu" Sym="NGDLQ-1022">
+                      <IgnoreThemeProps>false</IgnoreThemeProps>
+                      <Conditional Name="GetRecordingCopyTransferUiModeForMediaFile(MediaFile) == &quot;idle&quot;" Sym="NGDLQ-1023">
+                       <Item Name="Download now" Sym="NGDLQ-1024">
+                        <Action Name="TransferCreateResult = CreateRecordingCopyTransferSession(MediaFile, &quot;foreground&quot;, &quot;balanced&quot;, 0, 1, false, true)" Sym="NGDLQ-1025">
+                         <Conditional Name="StringIndex(TransferCreateResult, &quot;TRANSFER_SESSION_ACK&quot;) &gt;= 0" Sym="NGDLQ-1600">
+                          <Branch Name="true" Sym="NGDLQ-1601">
+                           <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1026">
+                            <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1027"/>
+                           </Action>
+                          </Branch>
+                          <Branch Name="else" Sym="NGDLQ-1602">
+                           <OptionsMenu Name="Download Request Result" Sym="NGDLQ-1603">
+                            <Action Name="TransferCreateResult" Sym="NGDLQ-1604">
+                             <Text Name="" Sym="NGDLQ-1605"/>
+                            </Action>
+                            <Item Name="Close" Sym="NGDLQ-1606">
+                             <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1607"/>
+                            </Item>
+                            <Theme Ref="954" Name="OptionsConfirmTheme"/>
+                           </OptionsMenu>
+                          </Branch>
+                         </Conditional>
+                        </Action>
+                       </Item>
+                       <Item Name="Queue recording download" Sym="NGDLQ-1028">
+                        <Action Name="TransferCreateResult = CreateRecordingCopyTransferSession(MediaFile, &quot;background&quot;, &quot;balanced&quot;, 0, 1, false, true)" Sym="NGDLQ-1029">
+                         <Conditional Name="StringIndex(TransferCreateResult, &quot;TRANSFER_SESSION_ACK&quot;) &gt;= 0" Sym="NGDLQ-1610">
+                          <Branch Name="true" Sym="NGDLQ-1611">
+                           <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1030">
+                            <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1031"/>
+                           </Action>
+                          </Branch>
+                          <Branch Name="else" Sym="NGDLQ-1612">
+                           <OptionsMenu Name="Queue Request Result" Sym="NGDLQ-1613">
+                            <Action Name="TransferCreateResult" Sym="NGDLQ-1614">
+                             <Text Name="" Sym="NGDLQ-1615"/>
+                            </Action>
+                            <Item Name="Close" Sym="NGDLQ-1616">
+                             <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1617"/>
+                            </Item>
+                            <Theme Ref="954" Name="OptionsConfirmTheme"/>
+                           </OptionsMenu>
+                          </Branch>
+                         </Conditional>
+                        </Action>
+                       </Item>
+                      </Conditional>
+                      <Conditional Name="GetRecordingCopyTransferUiModeForMediaFile(MediaFile) == &quot;active&quot;" Sym="NGDLQ-1032">
+                       <Conditional Name="GetLatestRecordingCopyTransferStateForMediaFile(MediaFile) != &quot;paused_by_client&quot; &amp;&amp; GetLatestRecordingCopyTransferStateForMediaFile(MediaFile) != &quot;paused_by_server&quot;" Sym="NGDLQ-1033">
+                        <Item Name="Pause recording download" Sym="NGDLQ-1034">
+                         <Action Name="PauseLatestRecordingCopyTransferForMediaFile(MediaFile)" Sym="NGDLQ-1035">
+                          <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1036">
+                           <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1037"/>
+                          </Action>
+                         </Action>
+                        </Item>
+                       </Conditional>
+                       <Conditional Name="GetLatestRecordingCopyTransferStateForMediaFile(MediaFile) == &quot;paused_by_client&quot; || GetLatestRecordingCopyTransferStateForMediaFile(MediaFile) == &quot;paused_by_server&quot;" Sym="NGDLQ-1038">
+                        <Item Name="Resume recording download" Sym="NGDLQ-1039">
+                         <Action Name="ResumeLatestRecordingCopyTransferForMediaFile(MediaFile)" Sym="NGDLQ-1040">
+                          <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1041">
+                           <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1042"/>
+                          </Action>
+                         </Action>
+                        </Item>
+                       </Conditional>
+                       <Item Name="Remove recording download" Sym="NGDLQ-1043">
+                        <Action Name="CancelLatestRecordingCopyTransferForMediaFile(MediaFile)" Sym="NGDLQ-1044">
+                         <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1045">
+                          <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1046"/>
+                         </Action>
+                        </Action>
+                       </Item>
+                       <Item Name="Queue snapshot" Sym="NGDLQ-1047">
+                        <OptionsMenu Name="Download Queue Snapshot" Sym="NGDLQ-1048">
+                         <IgnoreThemeProps>false</IgnoreThemeProps>
+                         <Action Name="GetRecordingCopyTransferQueueSummaryText()" Sym="NGDLQ-1049">
+                          <Text Name="" Sym="NGDLQ-1050"/>
+                         </Action>
+                         <Item Name="Close" Sym="NGDLQ-1051">
+                          <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1052"/>
+                         </Item>
+                         <Theme Ref="954" Name="OptionsConfirmTheme"/>
+                        </OptionsMenu>
+                       </Item>
+                      </Conditional>
+                      <Item Name="Close" Sym="NGDLQ-1053">
+                       <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1054"/>
+                      </Item>
+                      <Theme Ref="954" Name="OptionsConfirmTheme"/>
+                     </OptionsMenu>
                     </Item>
                    </Conditional>
                   </Branch>
@@ -130858,6 +131294,17 @@
                <IgnoreThemeProps>false</IgnoreThemeProps>
                <BackgroundComponent>false</BackgroundComponent>
                <MouseTransparency>false</MouseTransparency>
+               <Conditional Name="HasCommercialMarkers(MediaFile) &amp;&amp; !IsCommercialDetectRunning(MediaFile)" Sym="COMSKIP-630">
+                <Item Name="Re-run Comskip" Sym="COMSKIP-631">
+                 <FixedWidth>0.5</FixedWidth>
+                 <Insets>10</Insets>
+                 <Action Name="ClearCommercialMarkers(MediaFile)" Sym="COMSKIP-632">
+                  <Action Name="RunCommercialDetect(MediaFile)" Sym="COMSKIP-633">
+                   <Action Name="CloseOptionsMenu()" Sym="COMSKIP-634"/>
+                  </Action>
+                 </Action>
+                </Item>
+               </Conditional>
                <Conditional Name="((MediaFile == null) || IsTVFile(Airing)) &amp;&amp; IsPVR()" Sym="BASE-50065">
                 <Conditional Name="GetAiringTitle(Airing) != LocalizeString(&quot;EPG_Cell_No_Data&quot;)" Sym="BASE-50066">
                  <Panel Name="Future/Past Airings" Sym="BASE-50101">
@@ -214898,3 +215345,5 @@
   <Item Ref="73982" Name="Games Mode"/>
  </Panel>
 </Module>
+
+

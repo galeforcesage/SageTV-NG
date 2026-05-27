@@ -15,6 +15,9 @@
  */
 package sage;
 
+import sage.client.NgClientDownloadTokenManager;
+import sage.client.NgClientRecordingCopyTransferManager;
+
 /**
  * This class handles the server side portion of HTTP LiveStreaming to iOS clients. It takes a socket from the MCSR that has already had the first 8 bytes consumed
  * as part of the MCSR protocol. That will be the start of the GET request for the HTTP Live Session. The MCSR also passes in the UIManager so we can communicate with the
@@ -103,14 +106,21 @@ public class HTTPLSServer implements Runnable
         {
           int colonIdx = requestParam.indexOf(':');
           if (colonIdx != -1)
-            paramMap.put(requestParam.substring(0, colonIdx).trim(), requestParam.substring(colonIdx + 1).trim());
+            paramMap.put(requestParam.substring(0, colonIdx).trim().toLowerCase(),
+                requestParam.substring(colonIdx + 1).trim());
           requestParam = IOUtils.readLineBytes(sake, readBuf, timeout, sb);
         }
         if (Sage.DBG) System.out.println("Complete HTTP request received! page=" + pageRequest + " httpVer=" + httpVer + " params=" + paramMap);
 
-        keepAlive = "keep-alive".equals(paramMap.get("Connection"));
-        if (paramMap.containsKey("Host"))
-          myHost = (String) paramMap.get("Host");
+        keepAlive = "keep-alive".equalsIgnoreCase((String) paramMap.get("connection"));
+        if (paramMap.containsKey("host"))
+          myHost = (String) paramMap.get("host");
+
+        if (pageRequest.startsWith("/api/transfers/"))
+        {
+          handleTransferContentRequest(pageRequest, paramMap);
+          continue;
+        }
 
         // Now determine which type of the 3 requests it is
         if (!pageRequest.startsWith("/iosstream_"))
@@ -170,7 +180,7 @@ public class HTTPLSServer implements Runnable
           }
         }
 
-        String sessionID = (String)paramMap.get("X-Playback-Session-Id");
+        String sessionID = (String)paramMap.get("x-playback-session-id");
         if (sessionID == null)
           sessionID = clientMac + "-" + mfId + "-" + segmentNum;
 
@@ -297,6 +307,337 @@ public class HTTPLSServer implements Runnable
     {
       try{sake.close();}catch(Exception e){}
     }
+  }
+
+  private void handleTransferContentRequest(String pageRequest, java.util.Map paramMap)
+      throws java.io.IOException
+  {
+    String cleanPath = pageRequest;
+    int queryIdx = cleanPath.indexOf('?');
+    if (queryIdx >= 0)
+      cleanPath = cleanPath.substring(0, queryIdx);
+
+    String prefix = "/api/transfers/";
+    if (!cleanPath.startsWith(prefix) || !cleanPath.endsWith("/content"))
+    {
+      sendTransferErrorResponse(404, "Not Found", "TRANSFER_ENDPOINT_NOT_FOUND",
+          "Unknown transfer endpoint.", false);
+      return;
+    }
+
+    String token = cleanPath.substring(prefix.length(), cleanPath.length() - "/content".length());
+    if (token.length() == 0)
+    {
+      sendTransferErrorResponse(400, "Bad Request", "TRANSFER_TOKEN_MISSING",
+          "Missing transfer token.", false);
+      return;
+    }
+
+    NgClientRecordingCopyTransferManager transferMgr = NgClientRecordingCopyTransferManager.getInstance();
+    NgClientRecordingCopyTransferManager.TransferSession session = transferMgr.getSession(token, null);
+    if (session == null)
+    {
+      sendTransferErrorResponse(404, "Not Found", "TRANSFER_SESSION_NOT_FOUND",
+          "Transfer session not found.", true);
+      return;
+    }
+
+    if (Sage.getBoolean("miniclient/transfer/enforce_client_binding", false) &&
+        !isTransferRequesterBoundToSession(session, paramMap))
+    {
+      sendTransferErrorResponse(401, "Unauthorized", "TRANSFER_CLIENT_MISMATCH",
+          "Transfer token is not valid for this client session.", false);
+      return;
+    }
+
+    if (!NgClientDownloadTokenManager.getInstance().validateToken(token, session.clientName, session.recordingId))
+    {
+      sendTransferErrorResponse(401, "Unauthorized", "TRANSFER_TOKEN_INVALID",
+          "Transfer token is invalid or expired.", true);
+      return;
+    }
+
+    if (NgClientRecordingCopyTransferManager.STATE_CANCELED.equals(session.sessionState) ||
+        NgClientRecordingCopyTransferManager.STATE_ERROR.equals(session.sessionState) ||
+        NgClientRecordingCopyTransferManager.STATE_EXPIRED.equals(session.sessionState))
+    {
+      sendTransferErrorResponse(410, "Gone", "TRANSFER_SESSION_INACTIVE",
+          "Transfer session is no longer active.", true);
+      return;
+    }
+
+    if (NgClientRecordingCopyTransferManager.STATE_PAUSED_BY_CLIENT.equals(session.sessionState) ||
+        NgClientRecordingCopyTransferManager.STATE_PAUSED_BY_SERVER.equals(session.sessionState) ||
+        NgClientRecordingCopyTransferManager.STATE_QUEUED.equals(session.sessionState))
+    {
+      sendHTTPJsonResponse(409, "Conflict", transferMgr.buildStatusJson(session), "application/json");
+      return;
+    }
+
+    MediaFile mf = Wizard.getInstance().getFileForID(session.recordingId);
+    if (mf == null)
+    {
+      sendTransferErrorResponse(404, "Not Found", "TRANSFER_MEDIA_NOT_FOUND",
+          "Media file is no longer available.", false);
+      return;
+    }
+
+    java.io.File sourceFile = mf.getFile(0);
+    if (sourceFile == null || !sourceFile.isFile())
+    {
+      sendTransferErrorResponse(404, "Not Found", "TRANSFER_MEDIA_MISSING",
+          "Media file is missing.", false);
+      return;
+    }
+
+    String sourcePath = sourceFile.getAbsolutePath();
+    if (session.filePath != null && session.filePath.length() > 0 && !sourcePath.equals(session.filePath))
+    {
+      sendTransferErrorResponse(409, "Conflict", "TRANSFER_SOURCE_CHANGED",
+          "Transfer session source file changed.", true);
+      return;
+    }
+
+    long totalSize = sourceFile.length();
+    if (totalSize < 0)
+      totalSize = 0;
+
+    long start = 0;
+    long end = Math.max(0, totalSize - 1);
+    boolean partial = false;
+
+    String range = (String) paramMap.get("range");
+    if (range != null && range.length() > 0)
+    {
+      if (!range.startsWith("bytes="))
+      {
+        sendHTTPRangeNotSatisfiable(totalSize);
+        return;
+      }
+
+      String rangeSpec = range.substring(6).trim();
+      int commaIdx = rangeSpec.indexOf(',');
+      if (commaIdx != -1)
+        rangeSpec = rangeSpec.substring(0, commaIdx).trim();
+      int dashIdx = rangeSpec.indexOf('-');
+      if (dashIdx < 0)
+      {
+        sendHTTPRangeNotSatisfiable(totalSize);
+        return;
+      }
+
+      try
+      {
+        String startText = rangeSpec.substring(0, dashIdx).trim();
+        String endText = rangeSpec.substring(dashIdx + 1).trim();
+        if (startText.length() == 0)
+        {
+          long suffixLen = Long.parseLong(endText);
+          if (suffixLen <= 0)
+          {
+            sendHTTPRangeNotSatisfiable(totalSize);
+            return;
+          }
+          if (suffixLen >= totalSize)
+            start = 0;
+          else
+            start = totalSize - suffixLen;
+          end = Math.max(0, totalSize - 1);
+        }
+        else
+        {
+          start = Long.parseLong(startText);
+          if (endText.length() > 0)
+            end = Long.parseLong(endText);
+          else
+            end = Math.max(0, totalSize - 1);
+        }
+      }
+      catch (NumberFormatException nfe)
+      {
+        sendHTTPRangeNotSatisfiable(totalSize);
+        return;
+      }
+
+      if (start < 0 || start >= totalSize || end < start)
+      {
+        sendHTTPRangeNotSatisfiable(totalSize);
+        return;
+      }
+
+      if (end >= totalSize)
+        end = totalSize - 1;
+      partial = true;
+    }
+
+    if (totalSize == 0)
+    {
+      start = 0;
+      end = -1;
+      partial = false;
+    }
+
+    long contentLength = (end >= start) ? (end - start + 1) : 0;
+
+    writeBuf.clear();
+    appendStringToWriteBuf(partial ? "HTTP/1.1 206 Partial Content\r\n" : "HTTP/1.1 200 OK\r\n");
+    appendStringToWriteBuf("Server: SageTV " + UIManager.SAGE + "\r\n");
+    appendStringToWriteBuf("Date: " + new java.util.Date().toString() + "\r\n");
+    appendStringToWriteBuf("Accept-Ranges: bytes\r\n");
+    appendStringToWriteBuf("Content-Type: application/octet-stream\r\n");
+    appendStringToWriteBuf("Content-Disposition: attachment; filename=\"" + sanitizeHeaderValue(sourceFile.getName()) + "\"\r\n");
+    appendStringToWriteBuf("Cache-Control: no-store\r\n");
+    if (partial)
+      appendStringToWriteBuf("Content-Range: bytes " + start + "-" + end + "/" + totalSize + "\r\n");
+    appendStringToWriteBuf("Content-Length: " + contentLength + "\r\n\r\n");
+    if (writeBuf.position() > 0)
+    {
+      writeBuf.flip();
+      sake.write(writeBuf);
+    }
+
+    long bytesSent = 0;
+    long started = Sage.time();
+    java.nio.channels.FileChannel fc = new java.io.FileInputStream(sourceFile).getChannel();
+    try
+    {
+      long offset = start;
+      int transferChunkSize = Math.max(16384, Sage.getInt("ng_transfer_http_chunk_size", 32768));
+      while (bytesSent < contentLength)
+      {
+        long toSend = Math.min(transferChunkSize, contentLength - bytesSent);
+        long sent = fc.transferTo(offset, toSend, sake);
+        if (sent <= 0)
+          break;
+        offset += sent;
+        bytesSent += sent;
+      }
+    }
+    finally
+    {
+      fc.close();
+    }
+
+    long elapsedMs = Math.max(1L, Sage.time() - started);
+    long kbps = Math.max(0L, ((bytesSent * 8L * 1000L) / elapsedMs) / 1024L);
+    long progressedTo = Math.max(session.bytesTransferred, start + bytesSent);
+    transferMgr.updateProgress(token, progressedTo, kbps, null);
+  }
+
+  private boolean isTransferRequesterBoundToSession(
+      NgClientRecordingCopyTransferManager.TransferSession session, java.util.Map paramMap)
+  {
+    if (session == null)
+      return false;
+
+    String requesterClientId = paramMap == null ? null : (String) paramMap.get("x-ng-client-id");
+    if (requesterClientId != null)
+      requesterClientId = requesterClientId.trim();
+    String expectedClientId = session.ngClientId == null ? "" : session.ngClientId.trim();
+    if (expectedClientId.length() > 0)
+    {
+      if (requesterClientId == null || requesterClientId.length() == 0)
+        return false;
+      return expectedClientId.equals(requesterClientId);
+    }
+
+    String expectedIp = session.clientIp == null ? "" : session.clientIp.trim();
+    if (expectedIp.length() == 0)
+      return true;
+
+    String requesterIp = "";
+    try
+    {
+      if (sake != null && sake.socket() != null && sake.socket().getInetAddress() != null)
+        requesterIp = sake.socket().getInetAddress().getHostAddress();
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("Failed resolving transfer requester IP: " + t);
+    }
+    return expectedIp.equals(requesterIp);
+  }
+
+  private void sendTransferErrorResponse(int statusCode, String statusText, String errorCode,
+      String message, boolean retriable) throws java.io.IOException
+  {
+    String body = "{\"type\":\"TRANSFER_ERROR\",\"error_code\":\"" +
+        escapeForJson(errorCode) + "\",\"message\":\"" +
+        escapeForJson(message) + "\",\"retriable\":" +
+        (retriable ? "true" : "false") + "}";
+    sendHTTPJsonResponse(statusCode, statusText, body, "application/json");
+  }
+
+  private void sendHTTPRangeNotSatisfiable(long totalSize) throws java.io.IOException
+  {
+    writeBuf.clear();
+    appendStringToWriteBuf("HTTP/1.1 416 Range Not Satisfiable\r\n");
+    appendStringToWriteBuf("Server: SageTV " + UIManager.SAGE + "\r\n");
+    appendStringToWriteBuf("Date: " + new java.util.Date().toString() + "\r\n");
+    appendStringToWriteBuf("Accept-Ranges: bytes\r\n");
+    appendStringToWriteBuf("Content-Range: bytes */" + Math.max(0L, totalSize) + "\r\n");
+    appendStringToWriteBuf("Content-Length: 0\r\n\r\n");
+    if (writeBuf.position() > 0)
+    {
+      writeBuf.flip();
+      sake.write(writeBuf);
+    }
+  }
+
+  private void sendHTTPErrorResponse(int statusCode, String statusText, String message) throws java.io.IOException
+  {
+    String body = "{\"error\":\"" + escapeForJson(message) + "\"}";
+    sendHTTPJsonResponse(statusCode, statusText, body, "application/json");
+  }
+
+  private void sendHTTPJsonResponse(int statusCode, String statusText, String body, String contentType)
+      throws java.io.IOException
+  {
+    if (body == null)
+      body = "";
+    if (contentType == null || contentType.length() == 0)
+      contentType = "application/json";
+    writeBuf.clear();
+    appendStringToWriteBuf("HTTP/1.1 " + statusCode + " " + statusText + "\r\n");
+    appendStringToWriteBuf("Server: SageTV " + UIManager.SAGE + "\r\n");
+    appendStringToWriteBuf("Date: " + new java.util.Date().toString() + "\r\n");
+    appendStringToWriteBuf("Content-Type: " + contentType + "\r\n");
+    appendStringToWriteBuf("Cache-Control: no-store\r\n");
+    appendStringToWriteBuf("Content-Length: " + body.length() + "\r\n\r\n");
+    appendStringToWriteBuf(body);
+    if (writeBuf.position() > 0)
+    {
+      writeBuf.flip();
+      sake.write(writeBuf);
+    }
+  }
+
+  private String escapeForJson(String s)
+  {
+    if (s == null || s.length() == 0)
+      return "";
+    StringBuilder rv = new StringBuilder(s.length() + 8);
+    for (int i = 0; i < s.length(); i++)
+    {
+      char c = s.charAt(i);
+      switch (c)
+      {
+        case '\\': rv.append("\\\\"); break;
+        case '"': rv.append("\\\""); break;
+        case '\n': rv.append("\\n"); break;
+        case '\r': rv.append("\\r"); break;
+        case '\t': rv.append("\\t"); break;
+        default: rv.append(c); break;
+      }
+    }
+    return rv.toString();
+  }
+
+  private String sanitizeHeaderValue(String s)
+  {
+    if (s == null)
+      return "recording.bin";
+    return s.replace('"', '_').replace('\r', '_').replace('\n', '_');
   }
 
   // Returns true if a new transcoder was spawned
