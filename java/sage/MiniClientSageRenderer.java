@@ -6465,6 +6465,17 @@ public class MiniClientSageRenderer extends SageRenderer
 
   protected void ensureBufferCanHandle(int dataSize) throws java.io.IOException
   {
+    if (dataSize > sockBuf.capacity())
+    {
+      sendBufferNow();
+      int newSize = sockBuf.capacity();
+      while (newSize < dataSize)
+        newSize <<= 1;
+      if (newSize > MAX_CMD_LEN + 4)
+        throw new java.io.IOException("MiniClient command too large for buffer: " + dataSize);
+      sockBuf = java.nio.ByteBuffer.allocate(newSize);
+      return;
+    }
     // We need to flush the buffer before we do another command
     if (sockBuf.remaining() < dataSize)
       sendBufferNow();
@@ -6649,6 +6660,9 @@ public class MiniClientSageRenderer extends SageRenderer
   {
     byte[] propNameBytes = propName.getBytes(Sage.BYTE_CHARSET);
     byte[] propValBytes = propVal.getBytes(Sage.BYTE_CHARSET);
+    if (propNameBytes.length > 0xFFFF || propValBytes.length > 0xFFFF)
+      throw new java.io.IOException("MiniClient SET_PROPERTY payload too large nameLen=" + propNameBytes.length +
+          " valueLen=" + propValBytes.length + " prop=" + propName);
     // Clean up any batched texture commands
     if (textureBatchLimit > 0)
       checkTextureBatchLimit(true);
@@ -6667,6 +6681,9 @@ public class MiniClientSageRenderer extends SageRenderer
   }
   protected synchronized int sendSetProperty(byte[] propName, byte[] propVal) throws java.io.IOException
   {
+    if (propName.length > 0xFFFF || propVal.length > 0xFFFF)
+      throw new java.io.IOException("MiniClient SET_PROPERTY payload too large nameLen=" + propName.length +
+          " valueLen=" + propVal.length);
     // Clean up any batched texture commands
     if (textureBatchLimit > 0)
       checkTextureBatchLimit(true);
@@ -7582,6 +7599,7 @@ public class MiniClientSageRenderer extends SageRenderer
             getSessionClientIp(),
             getNgClientId(),
             getNgVersion(),
+        getTransferBaseUrlForClient(),
             getClientCapabilities(),
             mf,
             req,
@@ -7618,6 +7636,29 @@ public class MiniClientSageRenderer extends SageRenderer
     }
     catch (Throwable t)
     {
+      if (isTransferAckPayloadException(t))
+      {
+        String slimAck = mgr.buildSessionAckJsonWithoutOffline(session);
+        if (Sage.DBG)
+          System.out.println("MiniClient transfer create retrying with slim ACK queueItem=" + session.queueItemId +
+              " recordingId=" + session.recordingId + " cause=" + t);
+        try
+        {
+          int rv = sendSetProperty("CMD_DOWNLOAD_REQUEST", slimAck);
+          if (rv == 0)
+          {
+            if (Sage.DBG)
+              System.out.println("MiniClient transfer dispatch success with slim ACK queueItem=" + session.queueItemId +
+                  " recordingId=" + session.recordingId);
+            return slimAck;
+          }
+          t = new java.io.IOException("SET_PROPERTY rv=" + rv + " while sending slim ACK");
+        }
+        catch (Throwable t2)
+        {
+          t = t2;
+        }
+      }
       mgr.markDispatchFailure(session.sessionToken, "exception=" + t);
       if (Sage.DBG) System.out.println("MiniClient transfer create failed: " + t);
       return mgr.buildErrorJson("TRANSFER_SESSION_ERROR",
@@ -7849,6 +7890,25 @@ public class MiniClientSageRenderer extends SageRenderer
     return "";
   }
 
+  private String getTransferBaseUrlForClient()
+  {
+    String host = "";
+    try
+    {
+      if (clientSocket != null && clientSocket.socket() != null && clientSocket.socket().getLocalAddress() != null)
+        host = clientSocket.socket().getLocalAddress().getHostAddress();
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("Error resolving transfer base URL host: " + t);
+    }
+
+    if (host == null || host.length() == 0)
+      return "";
+    int port = Sage.getInt("extender_and_placeshifter_server_port", 31099);
+    return "http://" + host + ":" + port;
+  }
+
   private boolean handleInboundClientSetProperty(byte[] payload)
   {
     if (payload == null || payload.length < 4)
@@ -7936,8 +7996,17 @@ public class MiniClientSageRenderer extends SageRenderer
     if (requesterClientId == null || requesterClientId.length() == 0)
       requesterClientId = getNgClientId();
 
+    sage.client.NgClientRecordingCopyTransferManager.TransferSession sessionByToken = null;
+    if (req.sessionToken != null && req.sessionToken.length() > 0)
+      sessionByToken = mgr.getSession(req.sessionToken, null);
+
+    // Allow token-only refresh requests by deriving the recording from the existing session.
+    if (mediaFileId <= 0 && sessionByToken != null)
+      mediaFileId = sessionByToken.recordingId;
+
     if (mediaFileId <= 0)
     {
+      logDownloadRefreshAudit("MEDIA_NOT_FOUND", mediaFileId, req, sessionByToken, null);
       sendDownloadRefreshError("MEDIA_NOT_FOUND",
           "MediaFile ID was missing or invalid.", false, req.correlationId);
       return;
@@ -7945,6 +8014,7 @@ public class MiniClientSageRenderer extends SageRenderer
 
     if (isDownloadRefreshRateLimited(mediaFileId, requesterClientId))
     {
+      logDownloadRefreshAudit("COALESCED", mediaFileId, req, sessionByToken, null);
       if (Sage.DBG)
         System.out.println("MiniClient DOWNLOAD_REFRESH_REQUEST coalesced mediaFileID=" + mediaFileId +
             " clientId=" + requesterClientId);
@@ -7954,17 +8024,15 @@ public class MiniClientSageRenderer extends SageRenderer
     MediaFile mf = Wizard.getInstance().getFileForID(mediaFileId);
     if (mf == null)
     {
+      logDownloadRefreshAudit("MEDIA_NOT_FOUND", mediaFileId, req, sessionByToken, null);
       sendDownloadRefreshError("MEDIA_NOT_FOUND",
           "MediaFile not found for ID " + mediaFileId + ".", false, req.correlationId);
       return;
     }
 
-    sage.client.NgClientRecordingCopyTransferManager.TransferSession sessionByToken = null;
-    if (req.sessionToken != null && req.sessionToken.length() > 0)
-      sessionByToken = mgr.getSession(req.sessionToken, null);
-
     if (sessionByToken != null && !isTransferRequesterBoundToSession(sessionByToken, requesterClientId))
     {
+      logDownloadRefreshAudit("TRANSFER_CLIENT_MISMATCH", mediaFileId, req, sessionByToken, null);
       sendDownloadRefreshError("TRANSFER_CLIENT_MISMATCH",
           "Transfer session belongs to a different client.", false, req.correlationId);
       return;
@@ -7975,6 +8043,7 @@ public class MiniClientSageRenderer extends SageRenderer
     if (sessionByToken == null && latestForMedia != null && !latestForMedia.isTerminal() &&
         !isTransferRequesterBoundToSession(latestForMedia, requesterClientId))
     {
+      logDownloadRefreshAudit("TRANSFER_CLIENT_MISMATCH", mediaFileId, req, latestForMedia, null);
       sendDownloadRefreshError("TRANSFER_CLIENT_MISMATCH",
           "Active transfer session belongs to a different client.", false, req.correlationId);
       return;
@@ -8010,6 +8079,7 @@ public class MiniClientSageRenderer extends SageRenderer
           getSessionClientIp(),
           getNgClientId(),
           getNgVersion(),
+          getTransferBaseUrlForClient(),
           getClientCapabilities(),
           mf,
           defaultPolicy,
@@ -8018,6 +8088,7 @@ public class MiniClientSageRenderer extends SageRenderer
 
     if (responseSession == null)
     {
+      logDownloadRefreshAudit("TRANSFER_BUSY", mediaFileId, req, sessionByToken, null);
       sendDownloadRefreshError("TRANSFER_BUSY",
           "Transfer refresh request could not be processed right now.", true, req.correlationId);
       return;
@@ -8025,18 +8096,33 @@ public class MiniClientSageRenderer extends SageRenderer
 
     String ackPayload = mgr.buildSessionAckJson(responseSession);
     ackPayload = appendJsonStringField(ackPayload, "correlationId", req.correlationId);
-    sendDownloadRefreshResponse(ackPayload);
+    if (!sendDownloadRefreshResponse(ackPayload) && isTransferAckPayloadException(lastDownloadRefreshError))
+    {
+      String slimAck = mgr.buildSessionAckJsonWithoutOffline(responseSession);
+      slimAck = appendJsonStringField(slimAck, "correlationId", req.correlationId);
+      boolean sentSlim = sendDownloadRefreshResponse(slimAck);
+      logDownloadRefreshAudit(sentSlim ? "ACK_SLIM" : "ACK_SEND_FAILED", mediaFileId, req, sessionByToken, responseSession);
+      return;
+    }
+
+    logDownloadRefreshAudit("ACK", mediaFileId, req, sessionByToken, responseSession);
   }
 
-  private void sendDownloadRefreshResponse(String payload)
+  private volatile Throwable lastDownloadRefreshError;
+
+  private boolean sendDownloadRefreshResponse(String payload)
   {
     try
     {
       sendSetPropertyAsync("CMD_DOWNLOAD_REQUEST", payload);
+      lastDownloadRefreshError = null;
+      return true;
     }
     catch (Throwable t)
     {
+      lastDownloadRefreshError = t;
       if (Sage.DBG) System.out.println("MiniClient download refresh notify failed: " + t);
+      return false;
     }
   }
 
@@ -8060,6 +8146,60 @@ public class MiniClientSageRenderer extends SageRenderer
       sb.append(',').append("\"correlationId\":\"").append(escapeJsonString(correlationId)).append('\"');
     sb.append('}');
     return sb.toString();
+  }
+
+  private void logDownloadRefreshAudit(String outcome,
+      int mediaFileId,
+      DownloadRefreshRequest req,
+      sage.client.NgClientRecordingCopyTransferManager.TransferSession priorSession,
+      sage.client.NgClientRecordingCopyTransferManager.TransferSession responseSession)
+  {
+    String reqToken = req == null ? "" : req.sessionToken;
+    String reqClient = req == null ? "" : req.clientId;
+    String corr = req == null ? "" : req.correlationId;
+    String priorToken = priorSession == null ? "" : priorSession.sessionToken;
+    String priorState = priorSession == null ? "" : priorSession.sessionState;
+    String responseToken = responseSession == null ? "" : responseSession.sessionToken;
+    String responseState = responseSession == null ? "" : responseSession.sessionState;
+    System.out.println("NG_DOWNLOAD_REFRESH_AUDIT"
+        + " ts=" + Sage.df(Sage.time())
+        + " client=" + escapeJsonString(getNgClientId() == null ? "" : getNgClientId())
+        + " media_id=" + mediaFileId
+        + " outcome=" + escapeJsonString(outcome == null ? "" : outcome)
+        + " req_has_token=" + ((reqToken != null && reqToken.length() > 0) ? 1 : 0)
+        + " req_client=" + escapeJsonString(reqClient == null ? "" : reqClient)
+        + " correlation=" + escapeJsonString(corr == null ? "" : corr)
+        + " prior_state=" + escapeJsonString(priorState == null ? "" : priorState)
+        + " prior_token_prefix=" + tokenPrefix(priorToken)
+        + " response_state=" + escapeJsonString(responseState == null ? "" : responseState)
+        + " response_token_prefix=" + tokenPrefix(responseToken));
+  }
+
+  private static String tokenPrefix(String token)
+  {
+    if (token == null || token.length() == 0)
+      return "";
+    return token.length() <= 8 ? token : token.substring(0, 8);
+  }
+
+  private static boolean isTransferAckPayloadException(Throwable t)
+  {
+    Throwable x = t;
+    while (x != null)
+    {
+      if (x instanceof java.nio.BufferOverflowException)
+        return true;
+      String msg = x.getMessage();
+      if (msg != null)
+      {
+        String m = msg.toLowerCase();
+        if (m.indexOf("payload too large") != -1 || m.indexOf("command too large") != -1 ||
+            m.indexOf("bufferoverflow") != -1)
+          return true;
+      }
+      x = x.getCause();
+    }
+    return false;
   }
 
   private boolean isTransferRequesterBoundToSession(
@@ -8118,31 +8258,105 @@ public class MiniClientSageRenderer extends SageRenderer
 
   private static DownloadRefreshRequest parseDownloadRefreshRequest(String payload)
   {
+    String parsedPayload = normalizeRefreshPayload(payload);
     DownloadRefreshRequest req = new DownloadRefreshRequest();
     req.mediaFileId = firstNonEmpty(
-        extractRefreshStringValue(payload, "mediaFileID"),
-        extractRefreshStringValue(payload, "mediaFileId"),
-        extractRefreshStringValue(payload, "recording_id"),
-        extractRefreshStringValue(payload, "recordingId"));
+        extractRefreshStringValue(parsedPayload, "mediaFileID"),
+        extractRefreshStringValue(parsedPayload, "mediaFileId"),
+        extractRefreshStringValue(parsedPayload, "media_id"),
+        extractRefreshStringValue(parsedPayload, "mediaId"));
+    if (req.mediaFileId.length() == 0)
+    {
+      req.mediaFileId = firstNonEmpty(
+          extractRefreshStringValue(parsedPayload, "recording_id"),
+          extractRefreshStringValue(parsedPayload, "recordingId"),
+        "",
+        "");
+    }
+    if (req.mediaFileId.length() == 0)
+    {
+      long numericMediaId = extractRefreshLongValue(parsedPayload, "mediaFileID", -1L);
+      if (numericMediaId < 0)
+        numericMediaId = extractRefreshLongValue(parsedPayload, "mediaFileId", -1L);
+      if (numericMediaId < 0)
+        numericMediaId = extractRefreshLongValue(parsedPayload, "media_id", -1L);
+      if (numericMediaId < 0)
+        numericMediaId = extractRefreshLongValue(parsedPayload, "mediaId", -1L);
+      if (numericMediaId < 0)
+        numericMediaId = extractRefreshLongValue(parsedPayload, "recording_id", -1L);
+      if (numericMediaId < 0)
+        numericMediaId = extractRefreshLongValue(parsedPayload, "recordingId", -1L);
+      if (numericMediaId > 0)
+        req.mediaFileId = String.valueOf(numericMediaId);
+    }
     req.sessionToken = firstNonEmpty(
-        extractRefreshStringValue(payload, "sessionToken"),
-        extractRefreshStringValue(payload, "session_token"),
-      extractRefreshStringValue(payload, "token"),
-      "");
-    req.reason = extractRefreshStringValue(payload, "reason");
-    req.correlationId = extractRefreshStringValue(payload, "correlationId");
+        extractRefreshStringValue(parsedPayload, "sessionToken"),
+        extractRefreshStringValue(parsedPayload, "session_token"),
+        extractRefreshStringValue(parsedPayload, "downloadSessionToken"),
+        extractRefreshStringValue(parsedPayload, "transferToken"));
+    if (req.sessionToken.length() == 0)
+      req.sessionToken = firstNonEmpty(
+          extractRefreshStringValue(parsedPayload, "transfer_token"),
+          extractRefreshStringValue(parsedPayload, "token"),
+          extractRefreshStringValue(parsedPayload, "sessionId"),
+          extractRefreshStringValue(parsedPayload, "session_id"));
+    if (req.sessionToken.length() == 0 && parsedPayload != null)
+    {
+      String trimmedPayload = parsedPayload.trim();
+      if (trimmedPayload.length() >= 16 &&
+          trimmedPayload.indexOf('{') == -1 &&
+          trimmedPayload.indexOf('=') == -1 &&
+          trimmedPayload.indexOf(':') == -1)
+      {
+        req.sessionToken = trimmedPayload;
+      }
+    }
+    req.reason = extractRefreshStringValue(parsedPayload, "reason");
+    req.correlationId = firstNonEmpty(
+        extractRefreshStringValue(parsedPayload, "correlationId"),
+        extractRefreshStringValue(parsedPayload, "correlation_id"),
+        "",
+        "");
     req.clientId = firstNonEmpty(
-        extractRefreshStringValue(payload, "clientId"),
-      extractRefreshStringValue(payload, "x-ng-client-id"),
-      "",
-      "");
-    long parsedOffset = extractRefreshLongValue(payload, "bytesTransferred", -1L);
+        extractRefreshStringValue(parsedPayload, "clientId"),
+        extractRefreshStringValue(parsedPayload, "client_id"),
+        extractRefreshStringValue(parsedPayload, "x-ng-client-id"),
+        "");
+    long parsedOffset = extractRefreshLongValue(parsedPayload, "bytesTransferred", -1L);
     if (parsedOffset < 0)
-      parsedOffset = extractRefreshLongValue(payload, "bytes_transferred", -1L);
+      parsedOffset = extractRefreshLongValue(parsedPayload, "bytes_transferred", -1L);
     if (parsedOffset < 0)
-      parsedOffset = extractRefreshLongValue(payload, "offset", -1L);
+      parsedOffset = extractRefreshLongValue(parsedPayload, "offset", -1L);
     req.bytesTransferred = parsedOffset;
     return req;
+  }
+
+  private static String normalizeRefreshPayload(String payload)
+  {
+    if (payload == null)
+      return "";
+
+    String rv = payload.trim();
+
+    // Some clients wrap JSON payload as a quoted/escaped string.
+    if (rv.length() >= 2 && rv.charAt(0) == '"' && rv.charAt(rv.length() - 1) == '"')
+      rv = rv.substring(1, rv.length() - 1);
+    if (rv.indexOf("\\\"") != -1)
+      rv = rv.replace("\\\"", "\"");
+    if (rv.indexOf("\\\\") != -1)
+      rv = rv.replace("\\\\", "\\");
+
+    // Some clients URL-encode refresh payloads before transport.
+    if (rv.indexOf('%') != -1)
+    {
+      try
+      {
+        rv = java.net.URLDecoder.decode(rv, "UTF-8");
+      }
+      catch (Exception e){}
+    }
+
+    return rv;
   }
 
   private static int parseRefreshMediaFileId(String mediaFileId)
@@ -8213,7 +8427,17 @@ public class MiniClientSageRenderer extends SageRenderer
       return m.group(1) == null ? "" : m.group(1);
     m = java.util.regex.Pattern.compile("(?:^|[?&;,\\s])" + java.util.regex.Pattern.quote(key) + "=([^&;,\\s]+)").matcher(payload);
     if (m.find())
-      return m.group(1);
+    {
+      String rawVal = m.group(1);
+      try
+      {
+        return java.net.URLDecoder.decode(rawVal, "UTF-8");
+      }
+      catch (Exception e)
+      {
+        return rawVal;
+      }
+    }
     return "";
   }
 

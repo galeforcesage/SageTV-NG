@@ -539,6 +539,8 @@ public class PluginWrapper
     // get the MD5 from the URL and store it locally
     private String rawMD5;
     private String computedMD5;
+    private String rawSHA256;
+    private String computedSHA256;
     public boolean overwrite = true;
 
     /**
@@ -596,9 +598,49 @@ public class PluginWrapper
       return rawMD5;
     }
 
+    /**
+     * The rawSHA256 field can be empty, or it can be a URL from which to download the SHA-256.
+     * If the rawSHA256 is null/empty then this method returns an empty string.
+     *
+     * @return sha256 for the package or empty string if unavailable
+     */
+    public String getSHA256()
+    {
+      if (computedSHA256 != null)
+        return computedSHA256;
+
+      if (rawSHA256 != null && (rawSHA256.startsWith("http") || rawSHA256.startsWith("file:")))
+      {
+        computedSHA256 = IOUtils.getUrlAsString(rawSHA256);
+      }
+      else if (rawSHA256 == null || rawSHA256.trim().length() == 0)
+      {
+        computedSHA256 = "";
+      }
+      else
+      {
+        computedSHA256 = rawSHA256;
+      }
+
+      if (computedSHA256 != null)
+        computedSHA256 = computedSHA256.trim();
+      return computedSHA256 == null ? "" : computedSHA256;
+    }
+
+    public void setRawSHA256(String sha256)
+    {
+      this.rawSHA256 = sha256;
+      this.computedSHA256 = null;
+    }
+
+    public String getRawSHA256()
+    {
+      return rawSHA256;
+    }
+
     public String toString()
     {
-      return "Package[type=" + type + " url=" + url + " md5=" + rawMD5 + " overwrite=" + overwrite + "]";
+      return "Package[type=" + type + " url=" + url + " md5=" + rawMD5 + " sha256=" + rawSHA256 + " overwrite=" + overwrite + "]";
     }
 
   }

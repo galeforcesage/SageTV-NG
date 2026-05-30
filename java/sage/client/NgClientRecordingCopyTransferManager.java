@@ -114,6 +114,7 @@ public final class NgClientRecordingCopyTransferManager
     public final String clientIp;
     public final String ngClientId;
     public final String ngVersion;
+    public final String transferBaseUrl;
     public final int recordingId;
     public final String fileName;
     public final String filePath;
@@ -132,7 +133,7 @@ public final class NgClientRecordingCopyTransferManager
     public final boolean recordingComplete;
 
     private TransferSession(long queueItemId, String sessionToken, String tokenHash, String clientName,
-        String clientIp, String ngClientId, String ngVersion, int recordingId,
+      String clientIp, String ngClientId, String ngVersion, String transferBaseUrl, int recordingId,
         String fileName, String filePath, long totalBytes, long reconnectGraceSeconds,
         long createdAt, long expiresAt, AcceptedPolicy acceptedPolicy,
         java.util.List<PolicyAdjustment> adjustments, String sessionState,
@@ -145,6 +146,7 @@ public final class NgClientRecordingCopyTransferManager
       this.clientIp = clientIp;
       this.ngClientId = ngClientId;
       this.ngVersion = ngVersion;
+      this.transferBaseUrl = transferBaseUrl;
       this.recordingId = recordingId;
       this.fileName = fileName;
       this.filePath = filePath;
@@ -198,6 +200,15 @@ public final class NgClientRecordingCopyTransferManager
   public synchronized TransferSession createSession(String clientName, String clientIp,
       String ngClientId, String ngVersion, java.util.Set<String> clientCapabilities,
       MediaFile mf, RequestedPolicy requestedPolicy, long estimatedBandwidthBps)
+    {
+    return createSession(clientName, clientIp, ngClientId, ngVersion, null,
+      clientCapabilities, mf, requestedPolicy, estimatedBandwidthBps);
+    }
+
+    public synchronized TransferSession createSession(String clientName, String clientIp,
+      String ngClientId, String ngVersion, String transferBaseUrl,
+      java.util.Set<String> clientCapabilities,
+      MediaFile mf, RequestedPolicy requestedPolicy, long estimatedBandwidthBps)
   {
     cleanupExpired();
     if (mf == null)
@@ -245,6 +256,7 @@ public final class NgClientRecordingCopyTransferManager
         safe(clientIp),
         safe(ngClientId),
         safe(ngVersion),
+        safe(transferBaseUrl),
         mf.getID(),
         sourceFile.getName(),
         sourceFile.getAbsolutePath(),
@@ -414,6 +426,8 @@ public final class NgClientRecordingCopyTransferManager
   public synchronized void cleanupExpired()
   {
     long now = Sage.time();
+    long terminalRetentionMs = Math.max(5L * 60L * 1000L,
+        Sage.getLong("miniclient/transfer/terminal_session_retention_ms", 60L * 60L * 1000L));
     java.util.Iterator<java.util.Map.Entry<String, TransferSession>> walker =
         sessionsByToken.entrySet().iterator();
     while (walker.hasNext())
@@ -427,8 +441,15 @@ public final class NgClientRecordingCopyTransferManager
       }
       if (session.expiresAt <= now)
       {
-        session.sessionState = STATE_EXPIRED;
-        addReasonCode(session, CODE_SESSION_EXPIRED, "Transfer session expired.");
+        if (!STATE_EXPIRED.equals(session.sessionState))
+        {
+          session.sessionState = STATE_EXPIRED;
+          session.updatedAt = now;
+          addReasonCode(session, CODE_SESSION_EXPIRED, "Transfer session expired.");
+        }
+      }
+      if (session.isTerminal() && (now - session.updatedAt) > terminalRetentionMs)
+      {
         walker.remove();
       }
     }
@@ -456,6 +477,16 @@ public final class NgClientRecordingCopyTransferManager
 
   public String buildSessionAckJson(TransferSession session)
   {
+    return buildSessionAckJsonInternal(session, true);
+  }
+
+  public String buildSessionAckJsonWithoutOffline(TransferSession session)
+  {
+    return buildSessionAckJsonInternal(session, false);
+  }
+
+  private String buildSessionAckJsonInternal(TransferSession session, boolean includeOffline)
+  {
     if (session == null)
       return buildErrorJson("TRANSFER_SESSION_ERROR", CODE_TOKEN_INVALID, "No transfer session was created.");
 
@@ -468,7 +499,8 @@ public final class NgClientRecordingCopyTransferManager
     append(sb, "file_name", session.fileName);
     append(sb, "total_bytes", session.totalBytes);
     append(sb, "session_state", session.sessionState);
-    append(sb, "download_url", "/api/transfers/" + escape(session.sessionToken) + "/content?v=" + session.urlRevision);
+    append(sb, "download_url", buildTransferContentUrl(session));
+    append(sb, "download_path", buildTransferContentPath(session));
     append(sb, "resume_from_offset", session.bytesTransferred);
     appendAcceptedPolicy(sb, session.acceptedPolicy);
     appendPolicyAdjustments(sb, session.adjustments);
@@ -476,11 +508,14 @@ public final class NgClientRecordingCopyTransferManager
     append(sb, "reconnect_grace_seconds", session.reconnectGraceSeconds);
     append(sb, "expires_in_seconds", Math.max(0L, (session.expiresAt - Sage.time()) / 1000L));
     appendArray(sb, "recent_reason_codes", session.recentReasonCodes);
-    String offlineJson = NgClientOfflineCompanionBuilder.buildOfflineBlockJson(session);
-    if (offlineJson != null && offlineJson.length() > 0)
+    if (includeOffline)
     {
-      if (sb.charAt(sb.length() - 1) != '{') sb.append(',');
-      sb.append('"').append("offline").append('"').append(':').append(offlineJson);
+      String offlineJson = NgClientOfflineCompanionBuilder.buildOfflineBlockJson(session);
+      if (offlineJson != null && offlineJson.length() > 0)
+      {
+        if (sb.charAt(sb.length() - 1) != '{') sb.append(',');
+        sb.append('"').append("offline").append('"').append(':').append(offlineJson);
+      }
     }
     closeObject(sb);
     return sb.toString();
@@ -497,7 +532,8 @@ public final class NgClientRecordingCopyTransferManager
     append(sb, "queue_item_id", session.queueItemId);
     append(sb, "session_token", session.sessionToken);
     append(sb, "session_state", session.sessionState);
-    append(sb, "download_url", "/api/transfers/" + escape(session.sessionToken) + "/content?v=" + session.urlRevision);
+    append(sb, "download_url", buildTransferContentUrl(session));
+    append(sb, "download_path", buildTransferContentPath(session));
     append(sb, "bytes_transferred", session.bytesTransferred);
     append(sb, "total_bytes", session.totalBytes);
     append(sb, "effective_rate_kbps", session.effectiveRateKbps);
@@ -522,7 +558,8 @@ public final class NgClientRecordingCopyTransferManager
     append(sb, "queue_item_id", session.queueItemId);
     append(sb, "session_token", session.sessionToken);
     append(sb, "session_state", session.sessionState);
-    append(sb, "download_url", "/api/transfers/" + escape(session.sessionToken) + "/content?v=" + session.urlRevision);
+    append(sb, "download_url", buildTransferContentUrl(session));
+    append(sb, "download_path", buildTransferContentPath(session));
     append(sb, "bytes_transferred", session.bytesTransferred);
     append(sb, "total_bytes", session.totalBytes);
     appendArray(sb, "recent_reason_codes", session.recentReasonCodes);
@@ -568,7 +605,8 @@ public final class NgClientRecordingCopyTransferManager
       append(sb, "bytes_transferred", session.bytesTransferred);
       append(sb, "total_bytes", session.totalBytes);
       append(sb, "effective_rate_kbps", session.effectiveRateKbps);
-      append(sb, "download_url", "/api/transfers/" + escape(session.sessionToken) + "/content?v=" + session.urlRevision);
+      append(sb, "download_url", buildTransferContentUrl(session));
+      append(sb, "download_path", buildTransferContentPath(session));
       append(sb, "created_at", session.createdAt);
       append(sb, "updated_at", session.updatedAt);
       append(sb, "client_name", session.clientName);
@@ -1054,6 +1092,56 @@ public final class NgClientRecordingCopyTransferManager
     if (sb.charAt(sb.length() - 1) != '{') sb.append(',');
     sb.append('"').append(escape(key)).append('"').append(':')
         .append('"').append(escape(value == null ? "" : value)).append('"');
+  }
+
+  private static String buildTransferContentPath(TransferSession session)
+  {
+    if (session == null)
+      return "";
+    return "/api/transfers/" + escape(session.sessionToken) + "/content?v=" + session.urlRevision;
+  }
+
+  private static String buildTransferContentUrl(TransferSession session)
+  {
+    String path = buildTransferContentPath(session);
+    if (path.length() == 0)
+      return "";
+
+    if (session != null && session.transferBaseUrl != null && session.transferBaseUrl.length() > 0)
+      return trimTrailingSlash(session.transferBaseUrl) + path;
+
+    String configuredBase = Sage.get("miniclient/transfer/base_url", "");
+    if (configuredBase != null)
+      configuredBase = configuredBase.trim();
+    if (configuredBase != null && configuredBase.length() > 0)
+      return trimTrailingSlash(configuredBase) + path;
+
+    String host = Sage.get("hostname", "");
+    if (host != null)
+      host = host.trim();
+    if (host == null || host.length() == 0)
+    {
+      try
+      {
+        host = java.net.InetAddress.getLocalHost().getHostAddress();
+      }
+      catch (Throwable t)
+      {
+        host = "127.0.0.1";
+      }
+    }
+
+    int port = Sage.getInt("extender_and_placeshifter_server_port", 31099);
+    return "http://" + host + ":" + port + path;
+  }
+
+  private static String trimTrailingSlash(String s)
+  {
+    if (s == null)
+      return "";
+    while (s.endsWith("/"))
+      s = s.substring(0, s.length() - 1);
+    return s;
   }
 
   private static void append(StringBuilder sb, String key, long value)

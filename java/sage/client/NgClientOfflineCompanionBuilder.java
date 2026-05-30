@@ -16,6 +16,7 @@
 package sage.client;
 
 import sage.Airing;
+import sage.Agent;
 import sage.Carny;
 import sage.Channel;
 import sage.ManualRecord;
@@ -30,6 +31,7 @@ import sage.media.format.AudioFormat;
 import sage.media.format.ContainerFormat;
 
 import java.io.File;
+import java.util.Arrays;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -71,7 +73,168 @@ public final class NgClientOfflineCompanionBuilder
       caps.add("OFFLINE_COMSKIP");
     if (isEnabled("miniclient/transfer/offline_transcript_enabled", true))
       caps.add("OFFLINE_TRANSCRIPT");
+    if (isEnabled("miniclient/transfer/offline_guide_enabled", true))
+    {
+      caps.add("OFFLINE_GUIDE");
+      caps.add("GUIDE_SNAPSHOT");
+    }
+    if (isEnabled("miniclient/transfer/offline_scheduled_enabled", true))
+    {
+      caps.add("OFFLINE_SCHEDULED");
+      caps.add("SCHEDULED_SNAPSHOT");
+    }
+    if (isEnabled("miniclient/transfer/offline_favorites_enabled", true))
+    {
+      caps.add("OFFLINE_FAVORITES");
+      caps.add("FAVORITES_SNAPSHOT");
+    }
     return (String[]) caps.toArray(new String[0]);
+  }
+
+  public static String buildFavoritesSnapshotJson()
+  {
+    long now = Sage.time();
+    Agent[] favorites = Wizard.getInstance().getFavorites();
+    if (favorites == null)
+      favorites = new Agent[0];
+    Arrays.sort(favorites, new java.util.Comparator<Agent>()
+    {
+      public int compare(Agent a1, Agent a2)
+      {
+        if (a1 == a2)
+          return 0;
+        if (a1 == null)
+          return 1;
+        if (a2 == null)
+          return -1;
+        return a1.getUID() - a2.getUID();
+      }
+    });
+
+    StringBuilder sb = new StringBuilder(favorites.length * 320 + 256);
+    sb.append('{');
+    append(sb, "snapshot_id", "fav-" + now);
+    appendFavoritesArray(sb, favorites);
+    closeObject(sb);
+    return sb.toString();
+  }
+
+  /**
+   * Builds the full guide snapshot for the active server. Clients should treat the
+   * returned data as a complete per-server snapshot and key it by the server identity.
+   */
+  public static String buildGuideSnapshotJson()
+  {
+    long now = Sage.time();
+    long horizonStart = startOfUtcDay(now);
+    long horizonEnd = horizonStart + (getGuideSnapshotWindowDays() * Sage.MILLIS_PER_DAY);
+    Channel[] channels = Wizard.getInstance().getChannels();
+    if (channels == null)
+      channels = new Channel[0];
+    Arrays.sort(channels, Channel.STATION_ID_COMPARATOR);
+
+    ArrayList<Airing> airings = new ArrayList<Airing>();
+    Wizard wiz = Wizard.getInstance();
+    for (int i = 0; i < channels.length; i++)
+    {
+      Channel channel = channels[i];
+      if (channel == null)
+        continue;
+      Airing[] channelAirings = wiz.getAirings(channel.getStationID(), horizonStart, horizonEnd, false);
+      if (channelAirings == null)
+        continue;
+      airings.addAll(Arrays.asList(channelAirings));
+    }
+    java.util.Collections.sort(airings, new java.util.Comparator<Airing>()
+    {
+      public int compare(Airing a1, Airing a2)
+      {
+        if (a1 == a2)
+          return 0;
+        if (a1 == null)
+          return 1;
+        if (a2 == null)
+          return -1;
+        long diff = a1.getStartTime() - a2.getStartTime();
+        if (diff < 0L)
+          return -1;
+        if (diff > 0L)
+          return 1;
+        diff = a1.getStationID() - a2.getStationID();
+        if (diff < 0L)
+          return -1;
+        if (diff > 0L)
+          return 1;
+        return a1.getID() - a2.getID();
+      }
+    });
+
+    StringBuilder sb = new StringBuilder(airings.size() * 256 + channels.length * 128 + 256);
+    sb.append('{');
+    append(sb, "snapshot_id", "guide-" + now);
+    append(sb, "horizon_start", formatIsoUtc(horizonStart));
+    append(sb, "horizon_end", formatIsoUtc(horizonEnd));
+    appendChannelArray(sb, channels);
+    appendGuideAiringsArray(sb, airings);
+    closeObject(sb);
+    return sb.toString();
+  }
+
+  public static String buildSchedSnapshotJson()
+  {
+    long now = Sage.time();
+    Airing[] scheduled = getScheduledAirings();
+    if (scheduled == null)
+      scheduled = new Airing[0];
+    Arrays.sort(scheduled, new java.util.Comparator<Airing>()
+    {
+      public int compare(Airing a1, Airing a2)
+      {
+        if (a1 == a2)
+          return 0;
+        if (a1 == null)
+          return 1;
+        if (a2 == null)
+          return -1;
+        long diff = a1.getStartTime() - a2.getStartTime();
+        if (diff < 0L)
+          return -1;
+        if (diff > 0L)
+          return 1;
+        diff = a1.getStationID() - a2.getStationID();
+        if (diff < 0L)
+          return -1;
+        if (diff > 0L)
+          return 1;
+        return a1.getID() - a2.getID();
+      }
+    });
+
+    long horizonStart = 0L;
+    long horizonEnd = 0L;
+    for (int i = 0; i < scheduled.length; i++)
+    {
+      Airing airing = scheduled[i];
+      if (airing == null)
+        continue;
+      long start = airing.getStartTime();
+      long end = airing.getEndTime();
+      if (horizonStart == 0L || start < horizonStart)
+        horizonStart = start;
+      if (end > horizonEnd)
+        horizonEnd = end;
+    }
+
+    StringBuilder sb = new StringBuilder(scheduled.length * 192 + 256);
+    sb.append('{');
+    append(sb, "snapshot_id", "sched-" + now);
+    if (horizonStart > 0L)
+      append(sb, "horizon_start", formatIsoUtc(horizonStart));
+    if (horizonEnd > 0L)
+      append(sb, "horizon_end", formatIsoUtc(horizonEnd));
+    appendScheduledArray(sb, scheduled);
+    closeObject(sb);
+    return sb.toString();
   }
 
   public static String buildOfflineBlockJson(NgClientRecordingCopyTransferManager.TransferSession session)
@@ -518,7 +681,7 @@ public final class NgClientOfflineCompanionBuilder
       if (i > 0) sb.append(',');
       sb.append('{');
       append(sb, "kind", safe(a.kind));
-      append(sb, "url", "/api/transfers/" + escape(session.sessionToken) + "/offline/artwork/" + i + "?v=" + session.urlRevision);
+      append(sb, "url", "/api/transfers/" + escape(session.sessionToken) + "/offline/artwork/" + i);
       if (a.personId != null && a.personId.length() > 0)
         append(sb, "person_id", a.personId);
       sb.append('}');
@@ -539,7 +702,7 @@ public final class NgClientOfflineCompanionBuilder
       sb.append('{');
       append(sb, "language", safe(a.language));
       append(sb, "kind", safe(a.kind));
-      append(sb, "url", "/api/transfers/" + escape(session.sessionToken) + "/offline/captions/" + i + "?v=" + session.urlRevision);
+      append(sb, "url", "/api/transfers/" + escape(session.sessionToken) + "/offline/captions/" + i);
       sb.append('}');
     }
     sb.append(']');
@@ -553,7 +716,7 @@ public final class NgClientOfflineCompanionBuilder
       return;
     appendObjectStart(sb, key);
     append(sb, "format", safe(asset.format));
-    append(sb, "url", "/api/transfers/" + escape(session.sessionToken) + "/offline/comskip?v=" + session.urlRevision);
+    append(sb, "url", "/api/transfers/" + escape(session.sessionToken) + "/offline/comskip");
     closeObject(sb);
   }
 
@@ -566,7 +729,7 @@ public final class NgClientOfflineCompanionBuilder
     appendObjectStart(sb, key);
     append(sb, "format", safe(asset.format));
     append(sb, "language", safe(asset.language));
-    append(sb, "url", "/api/transfers/" + escape(session.sessionToken) + "/offline/transcript?v=" + session.urlRevision);
+    append(sb, "url", "/api/transfers/" + escape(session.sessionToken) + "/offline/transcript");
     closeObject(sb);
   }
 
@@ -594,6 +757,299 @@ public final class NgClientOfflineCompanionBuilder
       sb.append('"').append(escape(v)).append('"');
     }
     sb.append(']');
+  }
+
+  private static void appendChannelArray(StringBuilder sb, Channel[] channels)
+  {
+    appendArrayStart(sb, "channels");
+    boolean first = true;
+    for (int i = 0; channels != null && i < channels.length; i++)
+    {
+      Channel channel = channels[i];
+      if (channel == null)
+        continue;
+      if (!first)
+        sb.append(',');
+      first = false;
+      sb.append('{');
+      append(sb, "id", channelId(channel));
+      append(sb, "number", safe(channel.getNumber()));
+      String channelName = safe(channel.getLongName());
+      if (channelName.length() == 0)
+        channelName = safe(channel.getName());
+      append(sb, "name", channelName);
+      String logoUrl = safe(channel.getLogoUrl(0, Channel.LOGO_MED));
+      if (logoUrl.length() > 0)
+        append(sb, "logo_url", logoUrl);
+      sb.append('}');
+    }
+    sb.append(']');
+  }
+
+  private static void appendGuideAiringsArray(StringBuilder sb, ArrayList<Airing> airings)
+  {
+    appendArrayStart(sb, "airings");
+    boolean first = true;
+    for (int i = 0; airings != null && i < airings.size(); i++)
+    {
+      Airing airing = airings.get(i);
+      if (airing == null)
+        continue;
+      if (!first)
+        sb.append(',');
+      first = false;
+      sb.append('{');
+      append(sb, "id", airingId(airing));
+      append(sb, "channel_id", channelId(airing.getStationID()));
+      append(sb, "start_ms", airing.getStartTime());
+      append(sb, "start", formatIsoUtc(airing.getStartTime()));
+      append(sb, "duration_ms", Math.max(0L, airing.getDuration()));
+      append(sb, "title", safe(airing.getTitle()));
+      Show show = airing.getShow();
+      if (show != null)
+      {
+        if (show.getEpisodeName().length() > 0)
+          append(sb, "episode_title", show.getEpisodeName());
+        append(sb, "season", Math.max(0, show.getSeasonNumber()));
+        append(sb, "episode", Math.max(0, show.getEpisodeNumber()));
+      }
+      sb.append('}');
+    }
+    sb.append(']');
+  }
+
+  private static void appendScheduledArray(StringBuilder sb, Airing[] scheduled)
+  {
+    appendArrayStart(sb, "scheduled");
+    boolean first = true;
+    for (int i = 0; scheduled != null && i < scheduled.length; i++)
+    {
+      Airing airing = scheduled[i];
+      if (airing == null)
+        continue;
+      if (!first)
+        sb.append(',');
+      first = false;
+      sb.append('{');
+      append(sb, "airing_id", airingId(airing));
+      append(sb, "channel_id", channelId(airing.getStationID()));
+      append(sb, "start_ms", airing.getStartTime());
+      append(sb, "start", formatIsoUtc(airing.getStartTime()));
+      append(sb, "title", safe(airing.getTitle()));
+      sb.append('}');
+    }
+    sb.append(']');
+  }
+
+  private static void appendFavoritesArray(StringBuilder sb, Agent[] favorites)
+  {
+    appendArrayStart(sb, "favorites");
+    boolean first = true;
+    for (int i = 0; favorites != null && i < favorites.length; i++)
+    {
+      Agent favorite = favorites[i];
+      if (favorite == null)
+        continue;
+      if (!first)
+        sb.append(',');
+      first = false;
+
+      Airing representative = findRepresentativeAiring(favorite);
+      String channelId = favoriteChannelId(favorite, representative);
+      String airingId = representative == null ? "" : airingId(representative);
+
+      sb.append('{');
+      append(sb, "favorite_id", favoriteId(favorite));
+      append(sb, "type", "recording");
+      append(sb, "title", safe(favorite.getTitle()));
+      append(sb, "channel_id", channelId);
+      append(sb, "airing_id", airingId);
+      append(sb, "enabled", !favorite.testAgentFlag(Agent.DISABLED_FLAG));
+      appendRawJson(sb, "data_json", buildFavoriteDataJson(favorite, channelId, airingId));
+      sb.append('}');
+    }
+    sb.append(']');
+  }
+
+  private static Airing findRepresentativeAiring(Agent favorite)
+  {
+    if (favorite == null)
+      return null;
+    long horizonStart = startOfUtcDay(Sage.time());
+    long horizonEnd = horizonStart + (getGuideSnapshotWindowDays() * Sage.MILLIS_PER_DAY);
+    Channel[] channels = Wizard.getInstance().getChannels();
+    if (channels == null)
+      return null;
+
+    StringBuilder sbCache = new StringBuilder();
+    for (int i = 0; i < channels.length; i++)
+    {
+      Channel channel = channels[i];
+      if (channel == null)
+        continue;
+      Airing[] airings = Wizard.getInstance().getAirings(channel.getStationID(), horizonStart, horizonEnd, false);
+      for (int j = 0; airings != null && j < airings.length; j++)
+      {
+        Airing airing = airings[j];
+        if (airing != null && favorite.followsTrend(airing, false, sbCache))
+          return airing;
+      }
+    }
+    return null;
+  }
+
+  private static String favoriteChannelId(Agent favorite, Airing representative)
+  {
+    if (representative != null)
+      return channelId(representative.getStationID());
+    if (favorite == null)
+      return "";
+    String channelName = safe(favorite.getChannelName());
+    if (channelName.length() == 0)
+      return "";
+    Channel[] channels = Wizard.getInstance().getChannels();
+    for (int i = 0; channels != null && i < channels.length; i++)
+    {
+      Channel channel = channels[i];
+      if (channel == null)
+        continue;
+      if (channelName.equalsIgnoreCase(channel.getName()) || channelName.equalsIgnoreCase(channel.getLongName()))
+        return channelId(channel);
+    }
+    return "";
+  }
+
+  private static String buildFavoriteDataJson(Agent favorite, String channelId, String airingId)
+  {
+    StringBuilder sb = new StringBuilder(512);
+    sb.append('{');
+    append(sb, "agent_mask", favorite.getAgentMask());
+    append(sb, "trend_name", favoriteTypeLabel(favorite));
+    append(sb, "title", safe(favorite.getTitle()));
+    append(sb, "category", safe(favorite.getCategory()));
+    append(sb, "sub_category", safe(favorite.getSubCategory()));
+    append(sb, "person", safe(favorite.getPerson()));
+    append(sb, "rated", safe(favorite.getRated()));
+    append(sb, "year", safe(favorite.getYear()));
+    append(sb, "pr", safe(favorite.getPR()));
+    append(sb, "channel_name", safe(favorite.getChannelName()));
+    append(sb, "network", safe(favorite.getNetwork()));
+    append(sb, "keyword", safe(favorite.getKeyword()));
+    append(sb, "slot_type", favorite.getSlotType());
+    appendIntArray(sb, "timeslots", favorite.getTimeslots());
+    append(sb, "first_runs_only", favorite.isFirstRunsOnly());
+    append(sb, "reruns_only", favorite.isReRunsOnly());
+    append(sb, "keep_at_most", favorite.getAgentFlag(Agent.KEEP_AT_MOST_MASK));
+    append(sb, "dont_autodelete", favorite.testAgentFlag(Agent.DONT_AUTODELETE_FLAG));
+    append(sb, "delete_after_convert", favorite.testAgentFlag(Agent.DELETE_AFTER_CONVERT_FLAG));
+    append(sb, "disabled", favorite.testAgentFlag(Agent.DISABLED_FLAG));
+    append(sb, "favorite_id", favoriteId(favorite));
+    append(sb, "channel_id", channelId);
+    append(sb, "airing_id", airingId);
+    closeObject(sb);
+    return sb.toString();
+  }
+
+  private static String favoriteTypeLabel(Agent favorite)
+  {
+    if (favorite == null)
+      return "";
+    StringBuilder sb = new StringBuilder();
+    if ((favorite.getAgentMask() & Agent.TITLE_MASK) != 0) sb.append("title");
+    if ((favorite.getAgentMask() & Agent.CATEGORY_MASK) != 0) sb.append("category");
+    if ((favorite.getAgentMask() & Agent.ACTOR_MASK) != 0) sb.append("person");
+    if ((favorite.getAgentMask() & Agent.RATED_MASK) != 0) sb.append("rated");
+    if ((favorite.getAgentMask() & Agent.YEAR_MASK) != 0) sb.append("year");
+    if ((favorite.getAgentMask() & Agent.PR_MASK) != 0) sb.append("pr");
+    if ((favorite.getAgentMask() & Agent.CHANNEL_MASK) != 0) sb.append("channel");
+    if ((favorite.getAgentMask() & Agent.NETWORK_MASK) != 0) sb.append("network");
+    if ((favorite.getAgentMask() & Agent.KEYWORD_MASK) != 0) sb.append("keyword");
+    if (sb.length() == 0)
+      return "recording";
+    return sb.toString();
+  }
+
+  private static String favoriteId(Agent favorite)
+  {
+    return favorite == null ? "" : "FAV-" + favorite.getUID();
+  }
+
+  private static void appendIntArray(StringBuilder sb, String key, int[] values)
+  {
+    if (sb.charAt(sb.length() - 1) != '{') sb.append(',');
+    sb.append('"').append(escape(key)).append('"').append(':').append('[');
+    boolean first = true;
+    for (int i = 0; values != null && i < values.length; i++)
+    {
+      if (!first) sb.append(',');
+      first = false;
+      sb.append(values[i]);
+    }
+    sb.append(']');
+  }
+
+  private static void appendArrayStart(StringBuilder sb, String key)
+  {
+    if (sb.charAt(sb.length() - 1) != '{') sb.append(',');
+    sb.append('"').append(escape(key)).append('"').append(':').append('[');
+  }
+
+  private static void appendRawJson(StringBuilder sb, String key, String rawJson)
+  {
+    if (rawJson == null || rawJson.length() == 0)
+      return;
+    if (sb.charAt(sb.length() - 1) != '{') sb.append(',');
+    sb.append('"').append(escape(key)).append('"').append(':').append(rawJson);
+  }
+
+  private static Airing[] getScheduledAirings()
+  {
+    sage.Hunter hunter = sage.SeekerSelector.getInstance();
+    if (hunter == null)
+      return new Airing[0];
+    Airing[] scheduled = hunter.getInterleavedScheduledAirings();
+    return scheduled == null ? new Airing[0] : scheduled;
+  }
+
+  private static String channelId(Channel channel)
+  {
+    return channel == null ? "" : channelId(channel.getStationID());
+  }
+
+  private static String channelId(int stationId)
+  {
+    return "CH-" + stationId;
+  }
+
+  private static String airingId(Airing airing)
+  {
+    return airing == null ? "" : "AIR-" + airing.getID();
+  }
+
+  private static String formatIsoUtc(long millis)
+  {
+    if (millis <= 0L)
+      return "";
+    SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US);
+    sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
+    return sdf.format(new Date(millis));
+  }
+
+  private static long startOfUtcDay(long millis)
+  {
+    java.util.Calendar cal = java.util.Calendar.getInstance(TimeZone.getTimeZone("UTC"), Locale.US);
+    cal.setTimeInMillis(millis);
+    cal.set(java.util.Calendar.HOUR_OF_DAY, 0);
+    cal.set(java.util.Calendar.MINUTE, 0);
+    cal.set(java.util.Calendar.SECOND, 0);
+    cal.set(java.util.Calendar.MILLISECOND, 0);
+    return cal.getTimeInMillis();
+  }
+
+  private static long getGuideSnapshotWindowDays()
+  {
+    long days = Sage.getLong("miniclient/transfer/offline_guide_horizon_days", 7L);
+    return Math.max(1L, Math.min(16L, days));
   }
 
   private static void appendObjectStart(StringBuilder sb, String key)
