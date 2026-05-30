@@ -19,6 +19,8 @@ import sage.client.NgClientDownloadTokenManager;
 import sage.client.NgClientOfflineCompanionBuilder;
 import sage.client.NgClientRecordingCopyTransferManager;
 
+import java.nio.charset.StandardCharsets;
+
 /**
  * This class handles the server side portion of HTTP LiveStreaming to iOS clients. It takes a socket from the MCSR that has already had the first 8 bytes consumed
  * as part of the MCSR protocol. That will be the start of the GET request for the HTTP Live Session. The MCSR also passes in the UIManager so we can communicate with the
@@ -116,6 +118,12 @@ public class HTTPLSServer implements Runnable
         keepAlive = "keep-alive".equalsIgnoreCase((String) paramMap.get("connection"));
         if (paramMap.containsKey("host"))
           myHost = (String) paramMap.get("host");
+
+        if (pageRequest.startsWith("/api/offline/"))
+        {
+          handleOfflineSnapshotRequest(pageRequest);
+          continue;
+        }
 
         if (pageRequest.startsWith("/api/transfers/"))
         {
@@ -364,6 +372,18 @@ public class HTTPLSServer implements Runnable
 
     if (!NgClientDownloadTokenManager.getInstance().validateToken(token, session.clientName, session.recordingId))
     {
+      NgClientRecordingCopyTransferManager.TransferSession refreshedSession =
+          refreshTransferSessionForExpiredToken(transferMgr, session);
+      if (refreshedSession != null)
+      {
+        String redirectPath = "/api/transfers/" + refreshedSession.sessionToken + suffix +
+            "?v=" + refreshedSession.urlRevision;
+        if (Sage.DBG)
+          System.out.println("Transfer token expired; issuing redirect to refreshed URL: " + redirectPath);
+        sendHTTPRedirectResponse(307, "Temporary Redirect", redirectPath);
+        return;
+      }
+
       sendTransferErrorResponse(401, "Unauthorized", "TRANSFER_TOKEN_INVALID",
           "Transfer token is invalid or expired.", true);
       return;
@@ -547,6 +567,37 @@ public class HTTPLSServer implements Runnable
     long kbps = Math.max(0L, ((bytesSent * 8L * 1000L) / elapsedMs) / 1024L);
     long progressedTo = Math.max(session.bytesTransferred, start + bytesSent);
     transferMgr.updateProgress(token, progressedTo, kbps, null);
+  }
+
+  private void handleOfflineSnapshotRequest(String pageRequest) throws java.io.IOException
+  {
+    String cleanPath = pageRequest;
+    int queryIdx = cleanPath.indexOf('?');
+    if (queryIdx >= 0)
+      cleanPath = cleanPath.substring(0, queryIdx);
+
+    if ("/api/offline/guide-snapshot".equals(cleanPath))
+    {
+      String body = NgClientOfflineCompanionBuilder.buildGuideSnapshotJson();
+      sendHTTPJsonResponse(200, "OK", body, "application/json");
+      return;
+    }
+
+    if ("/api/offline/sched-snapshot".equals(cleanPath))
+    {
+      String body = NgClientOfflineCompanionBuilder.buildSchedSnapshotJson();
+      sendHTTPJsonResponse(200, "OK", body, "application/json");
+      return;
+    }
+
+    if ("/api/offline/favorites-snapshot".equals(cleanPath))
+    {
+      String body = NgClientOfflineCompanionBuilder.buildFavoritesSnapshotJson();
+      sendHTTPJsonResponse(200, "OK", body, "application/json");
+      return;
+    }
+
+    sendHTTPErrorResponse(404, "Not Found", "Unknown offline snapshot endpoint.");
   }
 
   private boolean isTransferTokenHintValid(String token, String pageRequest, java.util.Map paramMap)
@@ -859,6 +910,63 @@ public class HTTPLSServer implements Runnable
     }
   }
 
+  private NgClientRecordingCopyTransferManager.TransferSession refreshTransferSessionForExpiredToken(
+      NgClientRecordingCopyTransferManager transferMgr,
+      NgClientRecordingCopyTransferManager.TransferSession oldSession)
+  {
+    if (transferMgr == null || oldSession == null || oldSession.recordingId <= 0 || oldSession.isTerminal())
+      return null;
+
+    MediaFile mf = Wizard.getInstance().getFileForID(oldSession.recordingId);
+    if (mf == null)
+      return null;
+
+    NgClientRecordingCopyTransferManager.RequestedPolicy reqPolicy =
+        oldSession.acceptedPolicy == null ?
+        NgClientRecordingCopyTransferManager.RequestedPolicy.createDefault("foreground") :
+        new NgClientRecordingCopyTransferManager.RequestedPolicy(
+            oldSession.acceptedPolicy.downloadMode,
+            oldSession.acceptedPolicy.rateProfile,
+            oldSession.acceptedPolicy.maxRateKbps,
+            oldSession.acceptedPolicy.concurrency,
+            oldSession.acceptedPolicy.wifiOnly,
+            oldSession.acceptedPolicy.allowMetered);
+
+    NgClientRecordingCopyTransferManager.TransferSession refreshed = transferMgr.createSession(
+        oldSession.clientName,
+        oldSession.clientIp,
+        oldSession.ngClientId,
+        oldSession.ngVersion,
+      oldSession.transferBaseUrl,
+        null,
+        mf,
+        reqPolicy,
+        0L);
+
+    if (refreshed != null)
+      refreshed.bytesTransferred = Math.max(0L, oldSession.bytesTransferred);
+    return refreshed;
+  }
+
+  private void sendHTTPRedirectResponse(int statusCode, String statusText, String location)
+      throws java.io.IOException
+  {
+    if (location == null || location.length() == 0)
+      location = "/";
+    writeBuf.clear();
+    appendStringToWriteBuf("HTTP/1.1 " + statusCode + " " + statusText + "\r\n");
+    appendStringToWriteBuf("Server: SageTV " + UIManager.SAGE + "\r\n");
+    appendStringToWriteBuf("Date: " + new java.util.Date().toString() + "\r\n");
+    appendStringToWriteBuf("Location: " + location + "\r\n");
+    appendStringToWriteBuf("Cache-Control: no-store\r\n");
+    appendStringToWriteBuf("Content-Length: 0\r\n\r\n");
+    if (writeBuf.position() > 0)
+    {
+      writeBuf.flip();
+      sake.write(writeBuf);
+    }
+  }
+
   private void sendHTTPErrorResponse(int statusCode, String statusText, String message) throws java.io.IOException
   {
     String body = "{\"error\":\"" + escapeForJson(message) + "\"}";
@@ -872,14 +980,18 @@ public class HTTPLSServer implements Runnable
       body = "";
     if (contentType == null || contentType.length() == 0)
       contentType = "application/json";
+    byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
     writeBuf.clear();
     appendStringToWriteBuf("HTTP/1.1 " + statusCode + " " + statusText + "\r\n");
     appendStringToWriteBuf("Server: SageTV " + UIManager.SAGE + "\r\n");
     appendStringToWriteBuf("Date: " + new java.util.Date().toString() + "\r\n");
-    appendStringToWriteBuf("Content-Type: " + contentType + "\r\n");
+    if (contentType.toLowerCase().indexOf("charset=") == -1)
+      appendStringToWriteBuf("Content-Type: " + contentType + "; charset=UTF-8\r\n");
+    else
+      appendStringToWriteBuf("Content-Type: " + contentType + "\r\n");
     appendStringToWriteBuf("Cache-Control: no-store\r\n");
-    appendStringToWriteBuf("Content-Length: " + body.length() + "\r\n\r\n");
-    appendStringToWriteBuf(body);
+    appendStringToWriteBuf("Content-Length: " + bodyBytes.length + "\r\n\r\n");
+    appendBytesToWriteBuf(bodyBytes);
     if (writeBuf.position() > 0)
     {
       writeBuf.flip();
@@ -1057,7 +1169,11 @@ public class HTTPLSServer implements Runnable
 
   private void appendStringToWriteBuf(String s) throws java.io.IOException
   {
-    byte[] b = s.getBytes();
+    appendBytesToWriteBuf(s.getBytes(StandardCharsets.UTF_8));
+  }
+
+  private void appendBytesToWriteBuf(byte[] b) throws java.io.IOException
+  {
     if (writeBuf.remaining() > b.length)
     {
       writeBuf.put(b);
@@ -1074,14 +1190,14 @@ public class HTTPLSServer implements Runnable
     while (len > 0)
     {
       int rem = Math.min(writeBuf.remaining(), len);
-      writeBuf.put(b, 0, rem);
+      writeBuf.put(b, off, rem);
       if (writeBuf.remaining() == 0)
       {
         writeBuf.flip();
         sake.write(writeBuf);
         writeBuf.clear();
       }
-      off = rem;
+      off += rem;
       len -= rem;
     }
   }

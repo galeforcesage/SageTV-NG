@@ -27,6 +27,7 @@ config*.log
 /scripts/
 /tmp-*.sh
 /tmp-*/
+/tmp-Sage.properties
 /lineup.json
 /discover.json
 /scan-tail.txt

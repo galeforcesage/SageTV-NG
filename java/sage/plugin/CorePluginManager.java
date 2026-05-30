@@ -1740,33 +1740,13 @@ public class CorePluginManager implements Runnable
     }
   }
 
-  // Installs, re-installs or upgrades the specified plugin. Returns "OK" on success, "RESTART" if a restart is required at which time the install will complete,
-  // or "FAILED - XXX" with XXX being the reason for the installation failure.
-  public synchronized String installPlugin(PluginWrapper plug, UIManager uiMgr, java.io.File stvRoot)
+  private String getPluginReviewKey(PluginWrapper plug)
   {
-    // First thing we do is check to make sure this plugin is compatible
-    if (Sage.DBG) System.out.println("Plugin installation is starting for " + plug + " ver=" + plug.getVersion());
-    if (plug == null)
-      return "FAILED - NULL";
-    if (Sage.DBG) System.out.println("Checking for compatability of the new plugin...");
-    if (!isPluginCompatible(plug, uiMgr, true))
-    {
-      String reason = getPluginIncompatibleReason(plug, uiMgr, true);
-      if (Sage.DBG) System.out.println("Plugin cannot be installed due to compatability reason of: " + reason);
-      return "FAILED - Dependency: " + reason;
-    }
-    if (Sage.DBG) System.out.println("Plugin is compatible!");
+    return plug.getId() + "@" + plug.getVersion();
+  }
 
-    if (stvRoot == null && uiMgr != null)
-    {
-      stvRoot = new java.io.File(uiMgr.getModuleGroup().defaultModule.description()).getParentFile();
-    }
-
-    if (stvRoot == null && plug.getSTVImports().length > 0)
-      return "FAIL - STV relative items need to be installed, but no STV context exists. Try installing this plugin from a local UI, extender or placeshifter instead.";
-
-    // Before we do the uninstall; we should download and verify all the packages to ensure we won't fail for that reason and leave them with no plugin installed.
-    // Now we get all of the resources for the plugin and download and store them in our local cache if they don't already exist
+  private String cachePluginPackagesForInstall(PluginWrapper plug, java.util.Map packageMap)
+  {
     java.io.File cacheDir = new java.io.File("PluginInstallers" + java.io.File.separator + plug.getId() + java.io.File.separator + plug.getVersion());
     if (!cacheDir.isDirectory())
     {
@@ -1777,9 +1757,6 @@ public class CorePluginManager implements Runnable
       }
     }
 
-    // Download all of the packages first; and when that's done extract them
-    // Keyed on Package, values are the local File
-    java.util.Map packageMap = new java.util.HashMap();
     PluginWrapper.Package[] packages = plug.getPackages();
     for (int i = 0; i < packages.length; i++)
     {
@@ -1795,7 +1772,6 @@ public class CorePluginManager implements Runnable
         progressMsg = "";
         return "FAILED - Invalid URL " + packages[i].url;
       }
-      // Now check to see if its in our local cache or not
       String assetName = MediaFile.createValidFilename(packURL.toString());
       if (Sage.DBG) System.out.println("Plugin asset name is " + assetName);
       java.io.File assetFile = new java.io.File(cacheDir, assetName);
@@ -1836,7 +1812,6 @@ public class CorePluginManager implements Runnable
           progressMsg = "";
           return "FAILED - Resource Download " + packages[i].url;
         }
-        // Wait for the download to finish....this could be awhile of course
         while (!downer.isComplete())
         {
           try { Thread.sleep(250); } catch(Exception e){}
@@ -1847,7 +1822,6 @@ public class CorePluginManager implements Runnable
         {
           progressMsg = Sage.rez("Verifying install packages") + ": " + plug.getName() + " " + (i + 1) + " /" + packages.length;
           if (Sage.DBG) System.out.println("Download of package from " + packages[i].url + " is complete");
-          // Now we check the MD5
           String localMd5 = IOUtils.calcMD5(assetFile);
           if (!packages[i].getMD5().equalsIgnoreCase(localMd5))
           {
@@ -1866,6 +1840,292 @@ public class CorePluginManager implements Runnable
         }
       }
       packageMap.put(packages[i], assetFile);
+    }
+    return null;
+  }
+
+  private PluginInstallSecurityReview.Result runPluginInstallSecurityReview(PluginWrapper plug, java.util.Map packageMap)
+  {
+    PluginInstallSecurityReview.Result review = PluginInstallSecurityReview.evaluate(plug, packageMap);
+    lastSecurityReviews.put(getPluginReviewKey(plug), review);
+    return review;
+  }
+
+  private java.util.Set getOverriddenChecks(PluginInstallSecurityReview.Result review, String[] acceptedChecks, boolean acceptAllSoftBlocks)
+  {
+    java.util.HashSet accepted = new java.util.HashSet();
+    boolean allowOverrideHardBlocks = Sage.getBoolean("plugin/security/allow_override_hard_blocks", true);
+    if (acceptedChecks != null)
+    {
+      for (int i = 0; i < acceptedChecks.length; i++)
+      {
+        if (acceptedChecks[i] != null)
+          accepted.add(acceptedChecks[i]);
+      }
+    }
+    java.util.HashSet overridden = new java.util.HashSet();
+    for (int i = 0; i < review.findings.size(); i++)
+    {
+      PluginInstallSecurityReview.Finding f = (PluginInstallSecurityReview.Finding) review.findings.get(i);
+      if ((f.severity == PluginInstallSecurityReview.Severity.WARN ||
+          (f.severity == PluginInstallSecurityReview.Severity.BLOCK && (f.overridable || allowOverrideHardBlocks))) &&
+          (acceptAllSoftBlocks || accepted.contains(f.check)))
+      {
+        overridden.add(f.check);
+      }
+    }
+    return overridden;
+  }
+
+  private String checkPluginSecurityGate(PluginInstallSecurityReview.Result review, String[] acceptedChecks, boolean acceptAllSoftBlocks)
+  {
+    boolean allowOverrideHardBlocks = Sage.getBoolean("plugin/security/allow_override_hard_blocks", true);
+    for (int i = 0; i < review.findings.size(); i++)
+    {
+      PluginInstallSecurityReview.Finding f = (PluginInstallSecurityReview.Finding) review.findings.get(i);
+      if (f.severity == PluginInstallSecurityReview.Severity.BLOCK && !f.overridable && !allowOverrideHardBlocks)
+      {
+        return "FAILED - Security Hard Block: " + f.check + " - " + f.title;
+      }
+    }
+
+    java.util.HashSet accepted = new java.util.HashSet();
+    if (acceptedChecks != null)
+    {
+      for (int i = 0; i < acceptedChecks.length; i++)
+      {
+        if (acceptedChecks[i] != null)
+          accepted.add(acceptedChecks[i]);
+      }
+    }
+
+    if (!acceptAllSoftBlocks)
+    {
+      for (int i = 0; i < review.findings.size(); i++)
+      {
+        PluginInstallSecurityReview.Finding f = (PluginInstallSecurityReview.Finding) review.findings.get(i);
+        if (f.severity == PluginInstallSecurityReview.Severity.WARN ||
+            (f.severity == PluginInstallSecurityReview.Severity.BLOCK && (f.overridable || allowOverrideHardBlocks)))
+        {
+          if (!accepted.contains(f.check))
+            return "FAILED - Security Review Required: " + f.check;
+        }
+      }
+    }
+    return null;
+  }
+
+  private void appendPluginSecurityAudit(String decision, PluginWrapper plug, PluginInstallSecurityReview.Result review, java.util.Set overriddenChecks)
+  {
+    java.io.File auditFile = new java.io.File(Sage.get("plugin_security_audit_log", "plugin-audit.log"));
+    java.io.PrintWriter out = null;
+    try
+    {
+      out = new java.io.PrintWriter(new java.io.BufferedWriter(new java.io.FileWriter(auditFile, true)));
+      String auditId = Long.toHexString(Sage.time()) + Integer.toHexString((int)(Math.random() * 0xFFFF));
+      String actor = Sage.get("plugin_security_actor", System.getProperty("user.name", "unknown"));
+      String actorIP = Sage.get("plugin_security_actor_ip", "unknown");
+      String ts = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX").format(new java.util.Date());
+      StringBuilder sb = new StringBuilder();
+      sb.append('{');
+      sb.append("\"ts\":\"").append(PluginInstallSecurityReview.jsonEscape(ts)).append("\",");
+      sb.append("\"audit_id\":\"").append(PluginInstallSecurityReview.jsonEscape(auditId)).append("\",");
+      sb.append("\"actor\":\"").append(PluginInstallSecurityReview.jsonEscape(actor)).append("\",");
+      sb.append("\"actor_ip\":\"").append(PluginInstallSecurityReview.jsonEscape(actorIP)).append("\",");
+      sb.append("\"action\":\"plugin.install\",");
+      sb.append("\"plugin\":\"").append(PluginInstallSecurityReview.jsonEscape(plug.getId())).append("\",");
+      sb.append("\"version\":\"").append(PluginInstallSecurityReview.jsonEscape(plug.getVersion())).append("\",");
+      sb.append("\"tier\":").append(review.tier).append(',');
+      sb.append("\"risk_score\":").append(review.riskScore).append(',');
+      sb.append("\"source_repo\":\"").append(PluginInstallSecurityReview.jsonEscape(review.sourceRepo)).append("\",");
+      sb.append("\"sha256\":\"").append(PluginInstallSecurityReview.jsonEscape(review.bundleSha256)).append("\",");
+      sb.append("\"decision\":\"").append(PluginInstallSecurityReview.jsonEscape(decision)).append("\",");
+      sb.append("\"findings\":[");
+      for (int i = 0; i < review.findings.size(); i++)
+      {
+        PluginInstallSecurityReview.Finding f = (PluginInstallSecurityReview.Finding) review.findings.get(i);
+        if (i != 0)
+          sb.append(',');
+        sb.append('{');
+        sb.append("\"check\":\"").append(PluginInstallSecurityReview.jsonEscape(f.check)).append("\",");
+        sb.append("\"severity\":\"").append(PluginInstallSecurityReview.jsonEscape(f.severity.name())).append("\",");
+        sb.append("\"overridden\":").append(overriddenChecks != null && overriddenChecks.contains(f.check) ? "true" : "false");
+        sb.append('}');
+      }
+      sb.append("]}");
+      out.println(sb.toString());
+    }
+    catch (java.io.IOException ioe)
+    {
+      if (Sage.DBG) System.out.println("Failed writing plugin security audit log: " + ioe);
+    }
+    finally
+    {
+      IOUtils.closeQuietly(out);
+    }
+
+    postPluginSecuritySystemMessage(decision, plug, review, overriddenChecks);
+  }
+
+  private void postPluginSecuritySystemMessage(String decision, PluginWrapper plug,
+      PluginInstallSecurityReview.Result review, java.util.Set overriddenChecks)
+  {
+    try
+    {
+      java.util.List required = review.requiredAcceptanceChecks();
+      java.util.HashSet overridden = overriddenChecks == null ? new java.util.HashSet() : new java.util.HashSet(overriddenChecks);
+      java.util.ArrayList unresolved = new java.util.ArrayList();
+      for (int i = 0; i < required.size(); i++)
+      {
+        Object o = required.get(i);
+        if (o != null && !overridden.contains(o.toString()))
+          unresolved.add(o.toString());
+      }
+
+      int priority;
+      if ("blocked".equals(decision))
+        priority = sage.msg.SystemMessage.ERROR_PRIORITY;
+      else if (review.riskScore >= Sage.getInt("plugin/security/high_risk_double_confirm_threshold", 80))
+        priority = sage.msg.SystemMessage.WARNING_PRIORITY;
+      else
+        priority = sage.msg.SystemMessage.INFO_PRIORITY;
+
+      String firstUnresolved = unresolved.isEmpty() ? "none" : unresolved.get(0).toString();
+      String msgText = "Plugin security review " + decision.toUpperCase() + ": " + plug.getName() +
+          " (" + plug.getId() + ") v" + plug.getVersion() +
+          " risk=" + review.riskScore +
+          " tier=" + review.tier +
+          " unresolved=" + unresolved.size() +
+          " overridden=" + overridden.size() +
+          " first_unresolved=" + firstUnresolved;
+
+      java.util.Properties props = new java.util.Properties();
+      props.setProperty("Category", "PluginSecurityReview");
+      props.setProperty("Decision", decision);
+      props.setProperty("PluginID", plug.getId());
+      props.setProperty("PluginName", plug.getName());
+      props.setProperty("Version", plug.getVersion());
+      props.setProperty("RiskScore", Integer.toString(review.riskScore));
+      props.setProperty("Tier", Integer.toString(review.tier));
+      props.setProperty("SourceRepo", review.sourceRepo == null ? "" : review.sourceRepo);
+      props.setProperty("BundleSHA256", review.bundleSha256 == null ? "" : review.bundleSha256);
+      props.setProperty("RequiredChecks", joinChecks(required));
+      props.setProperty("OverriddenChecks", joinChecks(new java.util.ArrayList(overridden)));
+      props.setProperty("UnresolvedChecks", joinChecks(unresolved));
+
+      sage.msg.MsgManager.postMessage(new sage.msg.SystemMessage(
+          sage.msg.SystemMessage.GENERAL_MSG, priority, msgText, props));
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("Failed posting plugin security system message: " + t);
+    }
+  }
+
+  private static String joinChecks(java.util.List checks)
+  {
+    if (checks == null || checks.isEmpty())
+      return "";
+    StringBuffer sb = new StringBuffer();
+    for (int i = 0; i < checks.size(); i++)
+    {
+      if (i != 0)
+        sb.append(',');
+      Object o = checks.get(i);
+      if (o != null)
+        sb.append(o.toString());
+    }
+    return sb.toString();
+  }
+
+  public synchronized java.util.Map getPluginInstallSecurityReview(PluginWrapper plug, UIManager uiMgr, java.io.File stvRoot)
+  {
+    java.util.HashMap rv = new java.util.HashMap();
+    if (plug == null)
+    {
+      rv.put("error", "FAILED - NULL");
+      rv.put("findings", new Object[0]);
+      return rv;
+    }
+
+    if (stvRoot == null && uiMgr != null)
+      stvRoot = new java.io.File(uiMgr.getModuleGroup().defaultModule.description()).getParentFile();
+    if (stvRoot == null && plug.getSTVImports().length > 0)
+    {
+      rv.put("error", "FAIL - STV relative items need to be installed, but no STV context exists. Try installing this plugin from a local UI, extender or placeshifter instead.");
+      rv.put("findings", new Object[0]);
+      return rv;
+    }
+
+    java.util.HashMap packageMap = new java.util.HashMap();
+    String dlError = cachePluginPackagesForInstall(plug, packageMap);
+    if (dlError != null)
+    {
+      rv.put("error", dlError);
+      rv.put("findings", new Object[0]);
+      return rv;
+    }
+
+    PluginInstallSecurityReview.Result review = runPluginInstallSecurityReview(plug, packageMap);
+    rv.put("error", "");
+    rv.put("plugin", plug.getId());
+    rv.put("version", plug.getVersion());
+    rv.put("tier", new Integer(review.tier));
+    rv.put("risk_score", new Integer(review.riskScore));
+    rv.put("capability_summary", review.capabilitySummary);
+    rv.put("sha256", review.bundleSha256);
+    rv.put("source_repo", review.sourceRepo);
+    rv.put("findings", review.toSerializableFindings().toArray());
+    rv.put("has_hard_block", review.hasHardBlock() ? Boolean.TRUE : Boolean.FALSE);
+    rv.put("required_acceptance_checks", review.requiredAcceptanceChecks().toArray());
+    return rv;
+  }
+
+  // Installs, re-installs or upgrades the specified plugin. Returns "OK" on success, "RESTART" if a restart is required at which time the install will complete,
+  // or "FAILED - XXX" with XXX being the reason for the installation failure.
+  public synchronized String installPlugin(PluginWrapper plug, UIManager uiMgr, java.io.File stvRoot)
+  {
+    // Preserve legacy behavior by auto-accepting soft blocks unless strict review is enabled.
+    boolean autoAcceptSoftBlocks = !Sage.getBoolean("plugin/security/require_explicit_acceptance", false);
+    return installPlugin(plug, uiMgr, stvRoot, Pooler.EMPTY_STRING_ARRAY, autoAcceptSoftBlocks);
+  }
+
+  public synchronized String installPlugin(PluginWrapper plug, UIManager uiMgr, java.io.File stvRoot,
+      String[] acceptedRiskChecks, boolean acceptAllSoftBlocks)
+  {
+    // First thing we do is check to make sure this plugin is compatible
+    if (Sage.DBG) System.out.println("Plugin installation is starting for " + plug + " ver=" + plug.getVersion());
+    if (plug == null)
+      return "FAILED - NULL";
+    if (Sage.DBG) System.out.println("Checking for compatability of the new plugin...");
+    if (!isPluginCompatible(plug, uiMgr, true))
+    {
+      String reason = getPluginIncompatibleReason(plug, uiMgr, true);
+      if (Sage.DBG) System.out.println("Plugin cannot be installed due to compatability reason of: " + reason);
+      return "FAILED - Dependency: " + reason;
+    }
+    if (Sage.DBG) System.out.println("Plugin is compatible!");
+
+    if (stvRoot == null && uiMgr != null)
+    {
+      stvRoot = new java.io.File(uiMgr.getModuleGroup().defaultModule.description()).getParentFile();
+    }
+
+    if (stvRoot == null && plug.getSTVImports().length > 0)
+      return "FAIL - STV relative items need to be installed, but no STV context exists. Try installing this plugin from a local UI, extender or placeshifter instead.";
+
+    java.util.Map packageMap = new java.util.HashMap();
+    PluginWrapper.Package[] packages = plug.getPackages();
+    String cacheFailure = cachePluginPackagesForInstall(plug, packageMap);
+    if (cacheFailure != null)
+      return cacheFailure;
+
+    PluginInstallSecurityReview.Result review = runPluginInstallSecurityReview(plug, packageMap);
+    String securityGate = checkPluginSecurityGate(review, acceptedRiskChecks, acceptAllSoftBlocks);
+    if (securityGate != null)
+    {
+      appendPluginSecurityAudit("blocked", plug, review, getOverriddenChecks(review, acceptedRiskChecks, acceptAllSoftBlocks));
+      return securityGate;
     }
 
     if (Sage.DBG) System.out.println("All packages are now downloaded for the plugin " + plug.getId() + " beginning uninstall and dependency verification...");
@@ -1890,7 +2150,8 @@ public class CorePluginManager implements Runnable
         if (instDep == null || !isVersionCompatible(instDep.getVersion(), deps[i].minVersion, deps[i].maxVersion))
         {
           if (Sage.DBG) System.out.println("Plugin installation has a missing/incompatible dependency of: " + deps[i] + " installing that first...");
-          String subRes = installPlugin((PluginWrapper) getLatestRepoPluginInVersionRange(deps[i].id, deps[i].minVersion, deps[i].maxVersion), uiMgr, stvRoot);
+          String subRes = installPlugin((PluginWrapper) getLatestRepoPluginInVersionRange(deps[i].id, deps[i].minVersion, deps[i].maxVersion),
+              uiMgr, stvRoot, acceptedRiskChecks, acceptAllSoftBlocks);
           if ("RESTART".equals(subRes))
             needRestart = true;
           else if (!"OK".equals(subRes))
@@ -2179,6 +2440,7 @@ public class CorePluginManager implements Runnable
 
     if (Sage.DBG) System.out.println("DONE with plugin installation for " + plug.getId() + " " + plug.getVersion());
     if (Sage.DBG && !pendingFilesystem.isEmpty()) System.out.println("Pending filesystem MD5 state: " + pendingFilesystem);
+    appendPluginSecurityAudit("installed", plug, review, getOverriddenChecks(review, acceptedRiskChecks, acceptAllSoftBlocks));
     progressMsg = "";
     return needRestart ? "RESTART" : "OK";
   }
@@ -2829,6 +3091,7 @@ public class CorePluginManager implements Runnable
   private String progressMsg = "";
   // This is for storing the MD5 of what the filesystem is going to look like after we restart and process the staging files.
   private java.util.Map pendingFilesystem = new java.util.HashMap();
+  private java.util.Map lastSecurityReviews = new java.util.HashMap();
   private boolean pseudoClient;
 
   // When we stop the plugins; we process this in reverse order
@@ -2954,6 +3217,10 @@ public class CorePluginManager implements Runnable
         else if ("MD5".equalsIgnoreCase(qName))
         {
           currPackage.setRawMD5(data);
+        }
+        else if ("SHA256".equalsIgnoreCase(qName))
+        {
+          currPackage.setRawSHA256(data);
         }
         else if ("Overwrite".equalsIgnoreCase(qName))
         {

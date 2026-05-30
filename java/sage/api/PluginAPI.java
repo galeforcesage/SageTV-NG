@@ -740,7 +740,7 @@ public class PluginAPI {
           return rv;
         }
         if (pluggy != null)
-          return sage.plugin.CorePluginManager.getInstance().installPlugin(pluggy, stack.getUIMgr(), stvRoot);
+          return installPluginWithSecurityPrompt(pluggy, stack.getUIMgr(), stvRoot);
         return "FAILED - NULL";
       }});
     rft.put(new PredefinedJEPFunction("Plugin", "InstallClientPlugin", new String[] { "Plugin" })
@@ -760,8 +760,244 @@ public class PluginAPI {
         if (!Sage.isNonLocalClient())
           return "FAILED - INVALID API CALL - Not a non-localhost SageTVClient";
         if (pluggy != null)
-          return sage.plugin.CorePluginManager.getInstance().installPlugin(pluggy, stack.getUIMgr(), null);
+          return installPluginWithSecurityPrompt(pluggy, stack.getUIMgr(), null);
         return "FAILED - NULL";
+      }});
+    rft.put(new PredefinedJEPFunction("Plugin", "GetPluginInstallSecurityReview", new String[] { "Plugin" })
+    {
+      /**
+       * Runs the plugin install security preflight and returns a Map containing findings and metadata.
+       * @param Plugin the specified Plugin object
+        * @return a Map with keys: error, findings, tier, risk_score, capability_summary, sha256, source_repo, has_hard_block, required_acceptance_checks
+       * @since 9.3
+       *
+       * @declaration public java.util.Map GetPluginInstallSecurityReview(Plugin Plugin);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        sage.plugin.PluginWrapper pluggy = getPlugin(stack);
+        if (pluggy == null)
+          return null;
+        if (Sage.client)
+        {
+          stack.push(pluggy);
+          return makeNetworkedCall(stack);
+        }
+        return sage.plugin.CorePluginManager.getInstance().getPluginInstallSecurityReview(pluggy, stack.getUIMgr(), null);
+      }});
+    rft.put(new PredefinedJEPFunction("Plugin", "GetPluginInstallSecurityError", new String[] { "Plugin" })
+    {
+      /**
+       * Runs plugin install security preflight and returns only the error string.
+       * @param Plugin the specified Plugin object
+       * @return empty string when review succeeded, otherwise a failure/error string
+       * @since 9.3
+       *
+       * @declaration public String GetPluginInstallSecurityError(Plugin Plugin);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        sage.plugin.PluginWrapper pluggy = getPlugin(stack);
+        if (pluggy == null)
+          return "FAILED - NULL";
+        java.util.Map review;
+        if (Sage.client)
+        {
+          stack.push(pluggy);
+          Object rv = makeNetworkedCall(stack);
+          if (rv instanceof java.util.Map)
+            review = (java.util.Map) rv;
+          else
+            return "FAILED - Security Review Unavailable";
+        }
+        else
+        {
+          review = sage.plugin.CorePluginManager.getInstance().getPluginInstallSecurityReview(pluggy, stack.getUIMgr(), null);
+        }
+        Object err = review == null ? null : review.get("error");
+        return err == null ? "" : err.toString();
+      }});
+    rft.put(new PredefinedJEPFunction("Plugin", "GetPluginInstallRiskScore", new String[] { "Plugin" })
+    {
+      /**
+       * Runs plugin install security preflight and returns the numeric risk score.
+       * @param Plugin the specified Plugin object
+       * @return risk score from 0-100 (0 when unavailable)
+       * @since 9.3
+       *
+       * @declaration public int GetPluginInstallRiskScore(Plugin Plugin);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        sage.plugin.PluginWrapper pluggy = getPlugin(stack);
+        if (pluggy == null)
+          return new Integer(0);
+        java.util.Map review;
+        if (Sage.client)
+        {
+          stack.push(pluggy);
+          Object rv = makeNetworkedCall(stack);
+          if (rv instanceof java.util.Map)
+            review = (java.util.Map) rv;
+          else
+            return new Integer(0);
+        }
+        else
+        {
+          review = sage.plugin.CorePluginManager.getInstance().getPluginInstallSecurityReview(pluggy, stack.getUIMgr(), null);
+        }
+        Object risk = review == null ? null : review.get("risk_score");
+        if (risk instanceof Number)
+          return new Integer(((Number) risk).intValue());
+        if (risk != null)
+        {
+          try
+          {
+            return new Integer(Integer.parseInt(risk.toString()));
+          }
+          catch (NumberFormatException ignored)
+          {
+          }
+        }
+        return new Integer(0);
+      }});
+    rft.put(new PredefinedJEPFunction("Plugin", "GetPluginInstallRequiredAcceptanceChecks", new String[] { "Plugin" })
+    {
+      /**
+       * Runs plugin install security preflight and returns required check IDs for acceptance.
+       * @param Plugin the specified Plugin object
+       * @return String[] of required check IDs; empty when none
+       * @since 9.3
+       *
+       * @declaration public String[] GetPluginInstallRequiredAcceptanceChecks(Plugin Plugin);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        sage.plugin.PluginWrapper pluggy = getPlugin(stack);
+        if (pluggy == null)
+          return Pooler.EMPTY_STRING_ARRAY;
+        java.util.Map review;
+        if (Sage.client)
+        {
+          stack.push(pluggy);
+          Object rv = makeNetworkedCall(stack);
+          if (rv instanceof java.util.Map)
+            review = (java.util.Map) rv;
+          else
+            return Pooler.EMPTY_STRING_ARRAY;
+        }
+        else
+        {
+          review = sage.plugin.CorePluginManager.getInstance().getPluginInstallSecurityReview(pluggy, stack.getUIMgr(), null);
+        }
+        return toStringArray(review == null ? null : review.get("required_acceptance_checks"));
+      }});
+    rft.put(new PredefinedJEPFunction("Plugin", "InstallPluginWithRiskAcceptance", new String[] { "Plugin", "AcceptedRiskChecks", "AcceptAllSoftBlocks" })
+    {
+      /**
+       * Installs a plugin while explicitly acknowledging soft-block/warn findings.
+       * @param Plugin the specified Plugin object
+       * @param AcceptedRiskChecks String[] of check IDs to override
+       * @param AcceptAllSoftBlocks convenience boolean to accept all overridable findings
+       * @return a String describing the install result
+       * @since 9.3
+       *
+       * @declaration public String InstallPluginWithRiskAcceptance(Plugin Plugin, String[] AcceptedRiskChecks, boolean AcceptAllSoftBlocks);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        boolean acceptAllSoftBlocks = evalBool(stack.pop());
+        Object acceptedChecksObj = stack.pop();
+        sage.plugin.PluginWrapper pluggy = getPlugin(stack);
+        if (pluggy == null)
+          return "FAILED - NULL";
+
+        String[] acceptedChecks;
+        if (acceptedChecksObj instanceof String[])
+        {
+          acceptedChecks = (String[]) acceptedChecksObj;
+        }
+        else if (acceptedChecksObj instanceof Object[])
+        {
+          Object[] oarr = (Object[]) acceptedChecksObj;
+          acceptedChecks = new String[oarr.length];
+          for (int i = 0; i < oarr.length; i++)
+            acceptedChecks[i] = oarr[i] == null ? "" : oarr[i].toString();
+        }
+        else if (acceptedChecksObj instanceof java.util.Collection)
+        {
+          Object[] oarr = ((java.util.Collection) acceptedChecksObj).toArray();
+          acceptedChecks = new String[oarr.length];
+          for (int i = 0; i < oarr.length; i++)
+            acceptedChecks[i] = oarr[i] == null ? "" : oarr[i].toString();
+        }
+        else
+        {
+          acceptedChecks = Pooler.EMPTY_STRING_ARRAY;
+        }
+
+        if (Sage.client)
+        {
+          stack.push(pluggy);
+          stack.push(acceptedChecks);
+          stack.push(Boolean.valueOf(acceptAllSoftBlocks));
+          Object rv = makeNetworkedCall(stack);
+          if (rv != null && !rv.toString().startsWith("FAIL") && !Sage.isNonLocalClient())
+          {
+            if (!pluggy.isServerConfiguredPlugin())
+              sage.plugin.CorePluginManager.getInstance().enablePlugin(pluggy.getId(), stack.getUIMgr());
+            Sage.updateJARLoader();
+            sage.plugin.CorePluginManager.getInstance().refreshLoadedPlugins();
+          }
+          return rv;
+        }
+
+        java.io.File stvRoot = null;
+        if (stack.getUIMgr() != null)
+          stvRoot = new java.io.File(stack.getUIMgr().getModuleGroup().defaultModule.description()).getParentFile();
+        return sage.plugin.CorePluginManager.getInstance().installPlugin(pluggy, stack.getUIMgr(), stvRoot, acceptedChecks, acceptAllSoftBlocks);
+      }});
+    rft.put(new PredefinedJEPFunction("Plugin", "InstallClientPluginWithRiskAcceptance", new String[] { "Plugin", "AcceptedRiskChecks", "AcceptAllSoftBlocks" })
+    {
+      /**
+       * Installs a client plugin while explicitly acknowledging soft-block/warn findings.
+       * @param Plugin the specified Plugin object
+       * @param AcceptedRiskChecks String[] of check IDs to override
+       * @param AcceptAllSoftBlocks convenience boolean to accept all overridable findings
+       * @return a String describing the install result
+       * @since 9.3
+       *
+       * @declaration public String InstallClientPluginWithRiskAcceptance(Plugin Plugin, String[] AcceptedRiskChecks, boolean AcceptAllSoftBlocks);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        boolean acceptAllSoftBlocks = evalBool(stack.pop());
+        Object acceptedChecksObj = stack.pop();
+        sage.plugin.PluginWrapper pluggy = getPlugin(stack);
+        if (pluggy == null)
+          return "FAILED - NULL";
+
+        String[] acceptedChecks;
+        if (acceptedChecksObj instanceof String[])
+        {
+          acceptedChecks = (String[]) acceptedChecksObj;
+        }
+        else if (acceptedChecksObj instanceof Object[])
+        {
+          Object[] oarr = (Object[]) acceptedChecksObj;
+          acceptedChecks = new String[oarr.length];
+          for (int i = 0; i < oarr.length; i++)
+            acceptedChecks[i] = oarr[i] == null ? "" : oarr[i].toString();
+        }
+        else if (acceptedChecksObj instanceof java.util.Collection)
+        {
+          Object[] oarr = ((java.util.Collection) acceptedChecksObj).toArray();
+          acceptedChecks = new String[oarr.length];
+          for (int i = 0; i < oarr.length; i++)
+            acceptedChecks[i] = oarr[i] == null ? "" : oarr[i].toString();
+        }
+        else
+        {
+          acceptedChecks = Pooler.EMPTY_STRING_ARRAY;
+        }
+
+        if (!Sage.isNonLocalClient())
+          return "FAILED - INVALID API CALL - Not a non-localhost SageTVClient";
+        return sage.plugin.CorePluginManager.getInstance().installPlugin(pluggy, stack.getUIMgr(), null, acceptedChecks, acceptAllSoftBlocks);
       }});
     rft.put(new PredefinedJEPFunction("Plugin", "UninstallPlugin", new String[] { "Plugin" })
     {
@@ -1299,5 +1535,135 @@ public class PluginAPI {
         }
         return SageTV.isPluginStartupComplete() ? Boolean.TRUE : Boolean.FALSE;
       }});
+  }
+
+  private static String installPluginWithSecurityPrompt(sage.plugin.PluginWrapper pluggy, UIManager uiMgr, java.io.File stvRoot)
+  {
+    sage.plugin.CorePluginManager mgr = sage.plugin.CorePluginManager.getInstance();
+    boolean strictAcceptance = Sage.getBoolean("plugin/security/require_explicit_acceptance", false);
+    if (!strictAcceptance)
+      return mgr.installPlugin(pluggy, uiMgr, stvRoot);
+
+    java.util.Map review = mgr.getPluginInstallSecurityReview(pluggy, uiMgr, stvRoot);
+    if (review == null)
+      return "FAILED - Security Review Unavailable";
+
+    String err = toStringOrEmpty(review.get("error"));
+    if (err.length() > 0)
+      return err;
+
+    String[] requiredChecks = toStringArray(review.get("required_acceptance_checks"));
+    if (requiredChecks.length == 0)
+      return mgr.installPlugin(pluggy, uiMgr, stvRoot);
+
+    // Non-desktop/headless UI contexts cannot render Swing confirmation dialogs.
+    // Allow policy-driven non-interactive overrides so plugin installs from these UIs do not dead-end.
+    if (!canShowSecurityConfirmDialogs(uiMgr))
+    {
+      if (Sage.getBoolean("plugin/security/noninteractive_allow_override", false))
+        return mgr.installPlugin(pluggy, uiMgr, stvRoot, requiredChecks, false);
+      return "FAILED - Security Review Required: Interactive confirmation UI unavailable; review with GetPluginInstallSecurityReview and install with InstallPluginWithRiskAcceptance";
+    }
+
+    int riskScore = toInt(review.get("risk_score"), 0);
+    if (!showSecurityConfirmDialogs(uiMgr, pluggy, requiredChecks, riskScore))
+      return "FAILED - Security Review Declined";
+
+    return mgr.installPlugin(pluggy, uiMgr, stvRoot, requiredChecks, false);
+  }
+
+  private static boolean showSecurityConfirmDialogs(UIManager uiMgr, sage.plugin.PluginWrapper pluggy, String[] requiredChecks, int riskScore)
+  {
+    if (!canShowSecurityConfirmDialogs(uiMgr))
+      return false;
+
+    StringBuilder checkList = new StringBuilder();
+    for (int i = 0; i < requiredChecks.length; i++)
+    {
+      if (i > 0)
+        checkList.append("\n");
+      checkList.append(" - ").append(requiredChecks[i]);
+    }
+
+    String msg = "Plugin security review requires explicit acceptance.\n\n" +
+        "Plugin: " + pluggy.getName() + " (" + pluggy.getId() + ")\n" +
+        "Risk Score: " + riskScore + " / 100\n" +
+        "Checks to override:\n" + checkList.toString() + "\n\n" +
+        "Do you want to proceed with this install anyway?";
+
+    int confirm = javax.swing.JOptionPane.showConfirmDialog(uiMgr.getGlobalFrame(), msg,
+        "Plugin Security Review", javax.swing.JOptionPane.YES_NO_OPTION, javax.swing.JOptionPane.WARNING_MESSAGE);
+    if (confirm != javax.swing.JOptionPane.YES_OPTION)
+      return false;
+
+    int threshold = Sage.getInt("plugin/security/high_risk_double_confirm_threshold", 80);
+    if (riskScore >= threshold)
+    {
+      String msg2 = "High-risk install confirmation\n\n" +
+          "Plugin: " + pluggy.getName() + "\n" +
+          "Risk Score: " + riskScore + " / 100\n\n" +
+          "Are you absolutely sure you want to override and install this plugin?";
+      int confirm2 = javax.swing.JOptionPane.showConfirmDialog(uiMgr.getGlobalFrame(), msg2,
+          "High Risk Override", javax.swing.JOptionPane.YES_NO_OPTION, javax.swing.JOptionPane.WARNING_MESSAGE);
+      if (confirm2 != javax.swing.JOptionPane.YES_OPTION)
+        return false;
+    }
+
+    return true;
+  }
+
+  private static boolean canShowSecurityConfirmDialogs(UIManager uiMgr)
+  {
+    return !Sage.isHeadless() && uiMgr != null && uiMgr.getGlobalFrame() != null;
+  }
+
+  private static String[] toStringArray(Object o)
+  {
+    if (o == null)
+      return Pooler.EMPTY_STRING_ARRAY;
+    if (o instanceof String[])
+      return (String[]) o;
+    if (o instanceof Object[])
+    {
+      Object[] in = (Object[]) o;
+      String[] out = new String[in.length];
+      for (int i = 0; i < in.length; i++)
+        out[i] = in[i] == null ? "" : in[i].toString();
+      return out;
+    }
+    if (o instanceof java.util.Collection)
+    {
+      java.util.Collection c = (java.util.Collection) o;
+      String[] out = new String[c.size()];
+      int i = 0;
+      for (java.util.Iterator it = c.iterator(); it.hasNext(); i++)
+      {
+        Object x = it.next();
+        out[i] = x == null ? "" : x.toString();
+      }
+      return out;
+    }
+    return new String[] { o.toString() };
+  }
+
+  private static int toInt(Object o, int defVal)
+  {
+    if (o == null)
+      return defVal;
+    if (o instanceof Number)
+      return ((Number) o).intValue();
+    try
+    {
+      return Integer.parseInt(o.toString());
+    }
+    catch (NumberFormatException nfe)
+    {
+      return defVal;
+    }
+  }
+
+  private static String toStringOrEmpty(Object o)
+  {
+    return o == null ? "" : o.toString();
   }
 }
