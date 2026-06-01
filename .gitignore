@@ -28,6 +28,8 @@ config*.log
 /tmp-*.sh
 /tmp-*/
 /tmp-Sage.properties
+/tmp_*.properties
+/tmp_*.log
 /lineup.json
 /discover.json
 /scan-tail.txt
