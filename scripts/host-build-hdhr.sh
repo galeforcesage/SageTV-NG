@@ -1,8 +1,9 @@
 #!/bin/bash
-# host-build-hdhr.sh — runs on the docker host (192.168.0.75) as user sagetv.
+# host-build-hdhr.sh — runs on a Docker host and stages/builds HDHR sources.
 # Stages source into the container, builds, deploys.
 set -euo pipefail
-CONT=sagetv-mine
+CONT=${SAGETV_CONTAINER:-sagetv-mine}
+CONTAINER_USER=${SAGETV_CONTAINER_USER:-sagetv}
 
 echo "=== check tarball ==="
 ls -la /tmp/hdhrbuild.tar.gz /tmp/build-hdhr-lib.sh
@@ -12,7 +13,7 @@ docker cp /tmp/hdhrbuild.tar.gz "${CONT}:/tmp/hdhrbuild.tar.gz"
 docker cp /tmp/build-hdhr-lib.sh "${CONT}:/tmp/build-hdhr-lib.sh"
 
 echo "=== extract ==="
-docker exec --user sagetv "$CONT" bash -c '
+docker exec --user "$CONTAINER_USER" "$CONT" bash -c '
 set -e
 rm -rf /tmp/hdhrbuild
 mkdir /tmp/hdhrbuild
@@ -28,10 +29,10 @@ grep -c hdhomerun_video_parse_packet_header /tmp/hdhrbuild/third_party/SiliconDu
 '
 
 echo "=== check supporting source dirs (NativeCore / Channel-2) ==="
-docker exec --user sagetv "$CONT" bash -c '
+docker exec --user "$CONTAINER_USER" "$CONT" bash -c '
 ls /tmp/hdhrbuild/native/lib/NativeCore/ 2>/dev/null | head || echo "(NativeCore source MISSING from tar)"
 ls /tmp/hdhrbuild/native/ax/Channel-2/ 2>/dev/null | head || echo "(Channel-2 source MISSING from tar)"
 '
 
 echo "=== run build ==="
-docker exec --user sagetv "$CONT" bash /tmp/build-hdhr-lib.sh
+docker exec --user "$CONTAINER_USER" "$CONT" bash /tmp/build-hdhr-lib.sh
