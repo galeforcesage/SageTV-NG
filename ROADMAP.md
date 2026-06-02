@@ -5,6 +5,16 @@ each track. Items move to a `## Done` section once shipped.
 
 ---
 
+## NG transfer security hardening track
+
+- Enforce strict transfer client binding for all transfer requests (enable
+  and keep `miniclient/transfer/enforce_client_binding=true` so tokens are
+  only usable by the originating client identity/session).
+- Restrict remote offline-artwork fetches to safe schemes only (`http`/
+  `https`) and reject all others.
+- Add an option to disable remote artwork proxying entirely so offline
+  artwork is served only from local cached/server-managed assets.
+
 ## ATSC 3.0 / EPG track
 
 ### Phase 1 — ATSC1 subchannel EPG via idle-tuner PSIP/EIT scan  *(real EPG win)*
@@ -322,6 +332,23 @@ two shipped presets + container/runtime plumbing + validation).
 
 ## Playback track
 
+- **Placeshifter loudness parity with major streaming apps.**
+  Problem: Placeshifter playback is often perceived as quieter than
+  Netflix/YouTube/Prime because those apps apply loudness normalization
+  and dynamic range control, while SageTV generally preserves source
+  dynamics. Plan:
+  1. Document recommended client output settings by device class
+    (passthrough on/off, FFmpeg audio extension mode) in
+    [docs/ClientSettings.md](docs/ClientSettings.md).
+  2. Add optional server-side FFmpeg audio filter knobs for push/
+    transcode paths (disabled by default), e.g.
+    `miniclient/audio/filter=` with vetted presets:
+    `off`, `volume=+3dB`, `dynaudnorm`, and a conservative `loudnorm`
+    profile.
+  3. Add per-client/profile override support so mobile/cellular clients
+    can use normalization without changing LAN/HT audio behavior.
+  4. Validate with A/B captures (LUFS + peak) against a reference app,
+    and ensure no clipping/pumping regressions.
 - **Per-airing audio language UI selector.** Server-side language-aware
   audio mapping is done (see Done section: `AC4TranscodeJob` honors
   `default_audio_language` / `hdhr/ac4_transcode_audio_lang`). Still
