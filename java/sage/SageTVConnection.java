@@ -39,7 +39,7 @@ public class SageTVConnection implements Runnable, Wizard.XctSyncClient, Carny.P
       // Check the password for login of the pitcher.
       checkLogin();
 
-      clientName = "/" + mySock.getInetAddress().getHostAddress() + ":" + mySock.getPort();
+      clientName = "/" + NetworkAddressUtils.formatHostPort(mySock.getInetAddress(), mySock.getPort());
 
       // The first request is identification of client connection as one we're listening
       // on or notifying on
@@ -71,7 +71,7 @@ public class SageTVConnection implements Runnable, Wizard.XctSyncClient, Carny.P
   {
     if (!Sage.client)
       throw new IllegalStateException("This is a client mode call.");
-    outStream.write(("NOTIFIER /" + theListener.mySock.getLocalAddress().getHostAddress() + ":" + theListener.mySock.getLocalPort() + "\r\n").getBytes(Sage.BYTE_CHARSET));
+    outStream.write(("NOTIFIER /" + NetworkAddressUtils.formatHostPort(theListener.mySock.getLocalAddress(), theListener.mySock.getLocalPort()) + "\r\n").getBytes(Sage.BYTE_CHARSET));
     outStream.flush();
     linkType = SERVER_NOTIFIER;
     String tempString = readLineBytes(inStream);
