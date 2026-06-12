@@ -5,16 +5,6 @@ each track. Items move to a `## Done` section once shipped.
 
 ---
 
-## NG transfer security hardening track
-
-- Enforce strict transfer client binding for all transfer requests (enable
-  and keep `miniclient/transfer/enforce_client_binding=true` so tokens are
-  only usable by the originating client identity/session).
-- Restrict remote offline-artwork fetches to safe schemes only (`http`/
-  `https`) and reject all others.
-- Add an option to disable remote artwork proxying entirely so offline
-  artwork is served only from local cached/server-managed assets.
-
 ## ATSC 3.0 / EPG track
 
 ### Phase 1 — ATSC1 subchannel EPG via idle-tuner PSIP/EIT scan  *(real EPG win)*
@@ -332,23 +322,6 @@ two shipped presets + container/runtime plumbing + validation).
 
 ## Playback track
 
-- **Placeshifter loudness parity with major streaming apps.**
-  Problem: Placeshifter playback is often perceived as quieter than
-  Netflix/YouTube/Prime because those apps apply loudness normalization
-  and dynamic range control, while SageTV generally preserves source
-  dynamics. Plan:
-  1. Document recommended client output settings by device class
-    (passthrough on/off, FFmpeg audio extension mode) in
-    [docs/ClientSettings.md](docs/ClientSettings.md).
-  2. Add optional server-side FFmpeg audio filter knobs for push/
-    transcode paths (disabled by default), e.g.
-    `miniclient/audio/filter=` with vetted presets:
-    `off`, `volume=+3dB`, `dynaudnorm`, and a conservative `loudnorm`
-    profile.
-  3. Add per-client/profile override support so mobile/cellular clients
-    can use normalization without changing LAN/HT audio behavior.
-  4. Validate with A/B captures (LUFS + peak) against a reference app,
-    and ensure no clipping/pumping regressions.
 - **Per-airing audio language UI selector.** Server-side language-aware
   audio mapping is done (see Done section: `AC4TranscodeJob` honors
   `default_audio_language` / `hdhr/ac4_transcode_audio_lang`). Still
@@ -469,6 +442,10 @@ Per-item compatibility plan is called out inline below.
   `HTTPLSServer` legacy URLs remain.
 
 ### Capture devices
+- **HDHomeRun IPv6 parity in OTA helper path.** `HdhrControl.pickReachableIp()`
+  currently skips IPv6 addresses (`if (ip.indexOf(':') >= 0) continue`).
+  Complete dual-stack support for interface selection and control-path
+  targeting so IPv6-only or IPv6-preferred LANs work without IPv4 fallback.
 - **HDHomeRun: pure-Java HTTP capture path (optional).** Today
   HDHomeRun tuning + capture goes through `libHDHomeRunCapture.so`
   (JNI → bundled `libhdhomerun` → RTP/UDP stream receive). The ATSC3
@@ -608,6 +585,15 @@ useful):
 ---
 
 ## Done
+
+- **Dual-stack host:port handling hardening (IPv4 + IPv6 literals).**
+  Added `java/sage/NetworkAddressUtils.java` and integrated it where
+  host:port text is constructed/parsing is performed:
+  `SageTVConnection` notifier/client identity formatting,
+  `NetworkEncoderManager` discovery host formatting, and
+  `miniclient/AppletConnection` endpoint parsing/formatting.
+  This removes `host + ":" + port` ambiguity for IPv6 literals by
+  using bracket-safe authority formatting (`[v6]:port`).
 
 - **Unified SageTV-patched, AC-4-capable FFmpeg binary** —
   `docker/build-sagetv-ffmpeg.sh` builds a single binary from the
