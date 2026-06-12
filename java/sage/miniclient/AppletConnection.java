@@ -15,27 +15,17 @@
  */
 package sage.miniclient;
 
+import sage.NetworkAddressUtils;
+
 public class AppletConnection
 {
   public AppletConnection(AppletGFXCMD theGfx, String serverName, String myID)
   {
     myGfx = theGfx;
     myGfx.setConn(this);
-    if (serverName.indexOf(":") == -1)
-    {
-      this.serverName = serverName;
-      this.port = 31099;
-    }
-    else
-    {
-      this.serverName = serverName.substring(0, serverName.indexOf(":"));
-      this.port = 31099;
-      try
-      {
-        this.port = Integer.parseInt(serverName.substring(serverName.indexOf(":") + 1));
-      }
-      catch (NumberFormatException e){}
-    }
+    NetworkAddressUtils.HostPort parsedEndpoint = NetworkAddressUtils.parseHostPort(serverName, 31099);
+    this.serverName = parsedEndpoint.host;
+    this.port = parsedEndpoint.port;
     if (myID == null)
       myID = "00:00:11:11:22:22";
     this.myID = myID;
@@ -108,7 +98,7 @@ public class AppletConnection
 
   public void connect() throws java.io.IOException
   {
-    System.out.println("Attempting to connect to server at " + serverName + ":" + port);
+    System.out.println("Attempting to connect to server at " + NetworkAddressUtils.formatHostPort(serverName, port));
     while (gfxSocket == null)
     {
       gfxSocket = EstablishServerConnection(0);

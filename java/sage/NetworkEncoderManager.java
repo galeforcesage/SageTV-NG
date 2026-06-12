@@ -242,7 +242,7 @@ public class NetworkEncoderManager implements CaptureDeviceManager
           }
           String encoderHost = (currEncoderProps.containsKey(NetworkCaptureDevice.ENCODING_HOST) && Sage.WINDOWS_OS) ?
               currEncoderProps.get(NetworkCaptureDevice.ENCODING_HOST).toString() :
-                ((Sage.WINDOWS_OS ? si.name : si.address) + ":" + si.port);
+                NetworkAddressUtils.formatHostPort((Sage.WINDOWS_OS ? si.name : si.address), si.port);
               boolean deviceMatched = false;
               for (int j = 0; j < vec.size(); j++)
               {
