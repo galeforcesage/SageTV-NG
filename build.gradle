@@ -127,9 +127,12 @@ dependencies {
   testImplementation 'org.testng:testng:7.9.0'
   testImplementation "org.mockito:mockito-core:5.8.0"
 
-  implementation files(
-    'third_party/UPnPLib/sbbi-upnplib-1.0.3.jar',
+  // JUPnP (replaces SBBI sbbi-upnplib-1.0.3.jar — see java/sage/upnp/PlaceshifterNATManager.java)
+  // The old vendored jar in third_party/UPnPLib/ can be removed once this build is stable.
+  implementation 'org.jupnp:org.jupnp:3.0.3'
+  implementation 'org.jupnp:org.jupnp.support:3.0.3'
 
+  implementation files(
     'third_party/Oracle/vecmath.jar',
     'third_party/Lucene/lucene-core-4.10.4.jar',
     'third_party/Lucene/lucene-analyzers-common-4.10.4.jar',
@@ -362,6 +365,14 @@ def getBuildNumber() {
     }
   }
 
+  // Allow manual bumping via .buildnumber when it is higher than git commit count.
+  if (file('.buildnumber').exists()) {
+    def pinnedBuildVer = file('.buildnumber').text.trim()
+    if (pinnedBuildVer ==~ /[0-9]+/ && pinnedBuildVer.toInteger() > buildVer.toString().toInteger()) {
+      buildVer = pinnedBuildVer
+    }
+  }
+
   if (buildVer == null || buildVer == "") buildVer = 0;
   return buildVer;
 }
@@ -516,89 +527,6 @@ Changelog for this version:  https://github.com/google/sagetv/blob/master/CHANGE
 Source code for SageTV:  https://github.com/google/sagetv
 """
   releaseAssets(fileTree(dir: stageBuildDir, includes: ['*.tar.gz', '*.deb', '*.zip']))
-}
-
-// Windows Placeshifter staging for Inno Setup installer
-task windowsPlaceshifterStage {
-  description 'Stage files for Windows Placeshifter installer'
-  dependsOn miniclientJar
-
-  doLast {
-    def stageDir = file('build/placeshifter-staging')
-    delete stageDir
-    stageDir.mkdirs()
-
-    def libDir = new File(stageDir, 'lib')
-    libDir.mkdirs()
-
-    // Copy MiniClient.jar
-    copy {
-      from 'build/minirelease/MiniClient.jar'
-      into libDir
-    }
-
-    // Copy JOGL runtime JARs (Windows only, exclude other platforms)
-    copy {
-      from configurations.miniclientRuntimeClasspath
-      into libDir
-      include '**/*.jar'
-      exclude '**/*-linux-*', '**/*-macosx-*', '**/*-solaris-*', '**/*-android-*', '**/*-armv6*'
-    }
-
-    // Copy license files
-    copy {
-      from 'LICENSE'
-      from 'third_party/ThirdPartyLicense.txt'
-      into stageDir
-    }
-
-    // Copy icon
-    copy {
-      from 'native/exe/MiniClientLauncher/SageIcon.ico'
-      into stageDir
-    }
-
-    // Create minimal JRE with jlink
-    def jreDir = new File(stageDir, 'runtime')
-    def javaHome = System.getProperty('java.home') ?: System.getenv('JAVA_HOME')
-    def jlinkExe = new File(javaHome, 'bin/jlink').absolutePath
-    if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
-      jlinkExe += '.exe'
-    }
-
-    // Modules needed by MiniClient + JOGL
-    def modules = [
-      'java.base', 'java.desktop', 'java.logging', 'java.naming',
-      'java.security.jgss', 'java.security.sasl', 'java.xml',
-      'java.management', 'java.sql', 'java.prefs',
-      'jdk.crypto.ec', 'jdk.unsupported'
-    ].join(',')
-
-    exec {
-      commandLine jlinkExe,
-        '--module-path', new File(javaHome, 'jmods').absolutePath,
-        '--add-modules', modules,
-        '--output', jreDir.absolutePath,
-        '--strip-debug',
-        '--no-man-pages',
-        '--no-header-files',
-        '--compress', 'zip-6'
-    }
-
-    // Calculate JRE size
-    long jreSize = 0
-    jreDir.eachFileRecurse { f -> if (f.isFile()) jreSize += f.length() }
-    println "Placeshifter files staged in ${stageDir.absolutePath}"
-    println "JRE size: ${jreSize / 1024 / 1024} MB"
-
-    // List staged files
-    stageDir.eachFileRecurse { f ->
-      if (f.isFile()) {
-        def relPath = stageDir.toPath().relativize(f.toPath())
-        println "  ${relPath} (${f.length() / 1024} KB)"
-      }
-    }
-  }
 }
 
 // This get run when you call ./gradlew without any targets

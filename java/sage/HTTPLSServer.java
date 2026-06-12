@@ -20,6 +20,7 @@ import sage.client.NgClientOfflineCompanionBuilder;
 import sage.client.NgClientRecordingCopyTransferManager;
 
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * This class handles the server side portion of HTTP LiveStreaming to iOS clients. It takes a socket from the MCSR that has already had the first 8 bytes consumed
@@ -39,11 +40,25 @@ import java.nio.charset.StandardCharsets;
  */
 public class HTTPLSServer implements Runnable
 {
+  private static final long TRANSFER_CACHE_MAX_BYTES =
+      Sage.getLong("miniclient/transfer/cache_max_bytes", 500L * 1024L * 1024L);
+  private static final String TRANSFER_CACHE_ROOT_DIR_NAME =
+      Sage.get("miniclient/transfer/cache_dir_name", "ng_transfer_cache");
+  private static final String TRANSFER_CACHE_ARTWORK_DIR_NAME = "artwork";
+  private static final String TRANSFER_CACHE_METADATA_DIR_NAME = "metadata";
+  private static final Object transferCacheLock = new Object();
+
   /** Creates a new instance of HTTPLSServer */
   public HTTPLSServer(java.nio.ByteBuffer bb, java.nio.channels.SocketChannel sake)
   {
+    this(bb, sake, "GET");
+  }
+
+  public HTTPLSServer(java.nio.ByteBuffer bb, java.nio.channels.SocketChannel sake, String initialHttpMethod)
+  {
     this.readBuf = bb;
     this.sake = sake;
+    this.initialHttpMethod = (initialHttpMethod == null || initialHttpMethod.length() == 0) ? "GET" : initialHttpMethod.toUpperCase();
     timeout = Sage.getLong("http_timeout", 30000);
     Pooler.execute(this, "HTTPRequest", Thread.NORM_PRIORITY);
     writeBuf = java.nio.ByteBuffer.allocate(65536);
@@ -80,8 +95,9 @@ public class HTTPLSServer implements Runnable
   // The main thing we do in this thread is process the HTTP requests and send their responses...we do it in a loop to handle HTTP Keep Alive properly
   public void run()
   {
-    // The first time the first 4 bytes have already been consumed by the MCSR
-    boolean skipGET = true;
+    // The first request method bytes are already consumed by MiniClientSageRenderer.
+    boolean skipInitialMethod = true;
+    String requestMethod = initialHttpMethod;
     try
     {
       boolean keepAlive = false;
@@ -89,16 +105,23 @@ public class HTTPLSServer implements Runnable
       {
         StringBuffer sb = new StringBuffer();
         String getRequest = IOUtils.readLineBytes(sake, readBuf, timeout, sb).trim();
-        if (!skipGET)
+        if (!skipInitialMethod)
         {
-          if (!getRequest.startsWith("GET "))
+          int firstSpace = getRequest.indexOf(' ');
+          if (firstSpace <= 0)
           {
             if (Sage.DBG) System.out.println("Invalid HTTP request received of: " + getRequest);
             break;
           }
-          getRequest = getRequest.substring(4);
+          requestMethod = getRequest.substring(0, firstSpace).trim().toUpperCase();
+          if (!"GET".equals(requestMethod) && !"POST".equals(requestMethod))
+          {
+            if (Sage.DBG) System.out.println("Unsupported HTTP method received of: " + requestMethod);
+            break;
+          }
+          getRequest = getRequest.substring(firstSpace + 1);
         }
-        skipGET = false;
+        skipInitialMethod = false;
         int spaceIdx = getRequest.lastIndexOf(' ');
         String pageRequest = getRequest.substring(0, spaceIdx).trim();
         String httpVer = getRequest.substring(spaceIdx + 1).trim();
@@ -113,21 +136,30 @@ public class HTTPLSServer implements Runnable
                 requestParam.substring(colonIdx + 1).trim());
           requestParam = IOUtils.readLineBytes(sake, readBuf, timeout, sb);
         }
-        if (Sage.DBG) System.out.println("Complete HTTP request received! page=" + pageRequest + " httpVer=" + httpVer + " params=" + paramMap);
+        if (Sage.DBG) System.out.println("Complete HTTP request received! method=" + requestMethod +
+          " page=" + pageRequest + " httpVer=" + httpVer + " params=" + sanitizeHeaderMapForLog(paramMap));
 
         keepAlive = "keep-alive".equalsIgnoreCase((String) paramMap.get("connection"));
         if (paramMap.containsKey("host"))
           myHost = (String) paramMap.get("host");
 
+        byte[] requestBody = null;
+        int contentLength = parseContentLength(paramMap);
+        if (contentLength > 0)
+          requestBody = readHttpRequestBody(contentLength);
+
         if (pageRequest.startsWith("/api/offline/"))
         {
-          handleOfflineSnapshotRequest(pageRequest);
+          handleOfflineSnapshotRequest(pageRequest, requestMethod, paramMap, requestBody);
           continue;
         }
 
         if (pageRequest.startsWith("/api/transfers/"))
         {
-          handleTransferContentRequest(pageRequest, paramMap);
+          String refreshBody = requestBody == null ? "" : new String(requestBody, StandardCharsets.UTF_8);
+          if (handleTransferRefreshRequest(pageRequest, paramMap, refreshBody))
+            continue;
+          handleTransferContentRequest(pageRequest, paramMap, requestMethod, requestBody);
           continue;
         }
 
@@ -318,7 +350,597 @@ public class HTTPLSServer implements Runnable
     }
   }
 
-  private void handleTransferContentRequest(String pageRequest, java.util.Map paramMap)
+  private String readHttpRequestBody(java.util.Map paramMap) throws java.io.IOException
+  {
+    String lenHeader = paramMap == null ? null : (String) paramMap.get("content-length");
+    if (lenHeader == null || lenHeader.length() == 0)
+      return "";
+
+    int bodyLen;
+    try
+    {
+      bodyLen = Integer.parseInt(lenHeader.trim());
+    }
+    catch (NumberFormatException nfe)
+    {
+      return "";
+    }
+    if (bodyLen <= 0)
+      return "";
+
+    byte[] body = new byte[bodyLen];
+    int off = 0;
+
+    if (readBuf != null && readBuf.hasRemaining())
+    {
+      int fromBuf = Math.min(readBuf.remaining(), bodyLen);
+      readBuf.get(body, 0, fromBuf);
+      off += fromBuf;
+    }
+
+    while (off < bodyLen)
+    {
+      java.nio.ByteBuffer target = java.nio.ByteBuffer.wrap(body, off, bodyLen - off);
+      TimeoutHandler.registerTimeout(timeout, sake);
+      int x = sake.read(target);
+      TimeoutHandler.clearTimeout(sake);
+      if (x < 0)
+        throw new java.io.EOFException();
+      off += x;
+    }
+
+    return new String(body, StandardCharsets.UTF_8);
+  }
+
+  private boolean handleTransferRefreshRequest(String pageRequest, java.util.Map paramMap,
+      String requestBody) throws java.io.IOException
+  {
+    String cleanPath = pageRequest;
+    int queryIdx = cleanPath.indexOf('?');
+    if (queryIdx >= 0)
+      cleanPath = cleanPath.substring(0, queryIdx);
+
+    String tokenFromPath = null;
+    if ("/api/transfers/refresh".equals(cleanPath))
+    {
+      // no token in path
+    }
+    else if (cleanPath.startsWith("/api/transfers/") && cleanPath.endsWith("/refresh"))
+    {
+      String middle = cleanPath.substring("/api/transfers/".length(), cleanPath.length() - "/refresh".length());
+      if (middle.length() == 0 || middle.indexOf('/') != -1)
+        return false;
+      tokenFromPath = middle;
+    }
+    else
+    {
+      return false;
+    }
+
+    java.util.Map<String, String> bodyMap = parseSimpleJsonBody(requestBody);
+    String bodyToken = firstNonEmptyTrimmed(
+      bodyMap.get("session_token"),
+      bodyMap.get("sessionToken"),
+      bodyMap.get("transfer_token"),
+      bodyMap.get("transferToken"),
+      bodyMap.get("token"));
+    String sessionToken = bodyToken.length() > 0 ? bodyToken : trimToEmpty(tokenFromPath);
+    if (tokenFromPath != null && tokenFromPath.length() > 0 && bodyToken.length() > 0 && !tokenFromPath.equals(bodyToken))
+    {
+      sendTransferErrorResponse(401, "Unauthorized", "TRANSFER_TOKEN_INVALID",
+          "Session token mismatch between path and body.", false);
+      return true;
+    }
+
+    int recordingId = parseIntSafe(firstNonEmptyTrimmed(
+        bodyMap.get("recording_id"),
+        bodyMap.get("recordingId"),
+        bodyMap.get("media_file_id"),
+        bodyMap.get("mediaFileID"),
+        bodyMap.get("mediaId")), -1);
+    long bytesTransferred = parseLongSafe(firstNonEmptyTrimmed(
+        bodyMap.get("bytes_transferred"),
+        bodyMap.get("bytesTransferred"),
+        bodyMap.get("offset"),
+        "",
+        ""), -1L);
+
+    String ngClientId = firstNonEmptyTrimmed(
+        bodyMap.get("ng_client_id"),
+        bodyMap.get("ngClientId"),
+        bodyMap.get("client_id"),
+        bodyMap.get("clientId"),
+        "");
+    if (ngClientId.length() == 0)
+      ngClientId = trimToEmpty((String) paramMap.get("x-ng-client-id"));
+    if (ngClientId.length() == 0)
+      ngClientId = trimToEmpty((String) paramMap.get("x-client-id"));
+    if (ngClientId.length() > 0)
+      paramMap.put("x-ng-client-id", ngClientId);
+
+    String hintedClientName = firstNonEmptyTrimmed(
+        bodyMap.get("client_name"),
+        bodyMap.get("clientName"),
+        "",
+        "",
+        "");
+    String correlationId = firstNonEmptyTrimmed(
+      bodyMap.get("correlation_id"),
+      bodyMap.get("correlationId"),
+      trimToEmpty((String) paramMap.get("x-correlation-id")),
+      "",
+      "");
+    String ngVersion = firstNonEmptyTrimmed(
+        bodyMap.get("ng_version"),
+        bodyMap.get("ngVersion"),
+        "",
+        "",
+        "");
+
+    NgClientRecordingCopyTransferManager transferMgr = NgClientRecordingCopyTransferManager.getInstance();
+    NgClientRecordingCopyTransferManager.TransferSession session = null;
+    if (sessionToken.length() > 0)
+      session = transferMgr.getSession(sessionToken, null);
+
+    int effectiveRecordingId = recordingId > 0 ? recordingId : (session == null ? 0 : session.recordingId);
+    if (correlationId.length() == 0)
+      correlationId = java.util.UUID.randomUUID().toString();
+    int coalescedWaitMs = Math.max(0,
+        Sage.getInt("miniclient/transfer/refresh_coalesced_wait_ms", 5000));
+    long coalescedWaitDeadline = Sage.time() + coalescedWaitMs;
+    NgClientRecordingCopyTransferManager.RefreshAttemptPermit refreshPermit;
+    while (true)
+    {
+      refreshPermit = transferMgr.beginRefreshAttempt(Math.max(0, effectiveRecordingId), correlationId, "http");
+      if (refreshPermit.allowed)
+        break;
+
+      if (!"COALESCED_ACTIVE".equals(refreshPermit.blockCode) || coalescedWaitMs <= 0)
+      {
+        sendTransferErrorResponse(429, "Too Many Requests", "TRANSFER_REFRESH_THROTTLED",
+            "Refresh request deferred by guardrail: " + refreshPermit.blockCode + ".", true);
+        return true;
+      }
+
+      long remainingMs = coalescedWaitDeadline - Sage.time();
+      if (remainingMs <= 0)
+      {
+        sendTransferErrorResponse(429, "Too Many Requests", "TRANSFER_REFRESH_THROTTLED",
+            "Refresh request coalesced while another refresh was active.", true);
+        return true;
+      }
+
+      try
+      {
+        Thread.sleep(Math.min(150L, remainingMs));
+      }
+      catch (InterruptedException ie)
+      {
+        Thread.currentThread().interrupt();
+        sendTransferErrorResponse(429, "Too Many Requests", "TRANSFER_REFRESH_THROTTLED",
+            "Refresh request wait was interrupted.", true);
+        return true;
+      }
+    }
+    correlationId = refreshPermit.correlationId;
+
+    String finalResultType = "ERROR";
+    String finalErrorCode = "UNKNOWN";
+    boolean finalRetriable = false;
+    int finalAttemptCount = 1;
+    int laneFallbackCount = 0;
+    try
+    {
+    if (session != null)
+    {
+      if (!isTransferRequesterBoundToSession(session, paramMap))
+      {
+        sendTransferErrorResponse(401, "Unauthorized", "TRANSFER_CLIENT_MISMATCH",
+            "Transfer token is not valid for this client session.", false);
+        finalResultType = "ERROR";
+        finalErrorCode = "TRANSFER_CLIENT_MISMATCH";
+        finalRetriable = false;
+        return true;
+      }
+
+      long resumeOffset = bytesTransferred >= 0 ? bytesTransferred : Math.max(0L, session.bytesTransferred);
+      NgClientRecordingCopyTransferManager.RequestedPolicy reqPolicy =
+          session.acceptedPolicy == null ? null :
+              new NgClientRecordingCopyTransferManager.RequestedPolicy(
+                  session.acceptedPolicy.downloadMode,
+                  session.acceptedPolicy.rateProfile,
+                  session.acceptedPolicy.maxRateKbps,
+                  session.acceptedPolicy.concurrency,
+                  session.acceptedPolicy.wifiOnly,
+                  session.acceptedPolicy.allowMetered);
+
+      NgClientRecordingCopyTransferManager.TransferSession resumed = null;
+      int maxAttempts = NgClientRecordingCopyTransferManager.getRefreshMaxAttempts();
+      for (int attempt = 1; attempt <= maxAttempts; attempt++)
+      {
+        finalAttemptCount = attempt;
+        resumed = transferMgr.resume(
+            session.sessionToken,
+            session.clientName,
+            resumeOffset,
+            reqPolicy,
+            0L);
+        if (resumed != null)
+          break;
+        if (attempt < maxAttempts && !NgClientRecordingCopyTransferManager.sleepRefreshRetryBackoff(attempt))
+          break;
+      }
+      if (resumed == null)
+      {
+        sendTransferErrorResponse(401, "Unauthorized", "TRANSFER_TOKEN_INVALID",
+            "Transfer token is invalid or expired.", true);
+        finalResultType = "ERROR";
+        finalErrorCode = "TRANSFER_TOKEN_INVALID";
+        finalRetriable = true;
+        return true;
+      }
+
+      if (NgClientRecordingCopyTransferManager.STATE_PAUSED_BY_CLIENT.equals(resumed.sessionState) ||
+          NgClientRecordingCopyTransferManager.STATE_PAUSED_BY_SERVER.equals(resumed.sessionState) ||
+          NgClientRecordingCopyTransferManager.STATE_QUEUED.equals(resumed.sessionState))
+      {
+        sendTransferErrorResponse(409, "Conflict", "TRANSFER_BUSY",
+            "Transfer refresh request could not be processed right now.", true);
+        finalResultType = "STATUS";
+        finalErrorCode = "TRANSFER_BUSY";
+        finalRetriable = true;
+        return true;
+      }
+
+      // HTTP refresh responses are not command-channel size constrained, so include the
+      // full inline manifest and avoid forcing a follow-up metadata fetch.
+      sendHTTPJsonResponse(200, "OK", transferMgr.buildSessionAckJson(resumed), "application/json");
+      finalResultType = "ACK";
+      finalErrorCode = "";
+      finalRetriable = false;
+      return true;
+    }
+
+    if (recordingId <= 0)
+    {
+      sendTransferErrorResponse(401, "Unauthorized", "TRANSFER_TOKEN_INVALID",
+          "Session token is invalid and recording_id was not provided.", true);
+      finalResultType = "ERROR";
+      finalErrorCode = "TRANSFER_TOKEN_INVALID";
+      finalRetriable = true;
+      return true;
+    }
+
+    MediaFile mf = Wizard.getInstance().getFileForID(recordingId);
+    if (mf == null)
+    {
+      sendTransferErrorResponse(404, "Not Found", "TRANSFER_MEDIA_NOT_FOUND",
+          "Media file is no longer available.", false);
+      finalResultType = "ERROR";
+      finalErrorCode = "TRANSFER_MEDIA_NOT_FOUND";
+      finalRetriable = false;
+      return true;
+    }
+
+    String clientName = hintedClientName.length() > 0 ? hintedClientName : "ng-http-refresh";
+    String clientIp = "";
+    try
+    {
+      if (sake != null && sake.socket() != null && sake.socket().getInetAddress() != null)
+        clientIp = sake.socket().getInetAddress().getHostAddress();
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("Failed resolving refresh requester IP: " + t);
+    }
+
+    String transferBaseUrl = buildTransferBaseUrlFromRequest(paramMap);
+    NgClientRecordingCopyTransferManager.RequestedPolicy defaultPolicy =
+        new NgClientRecordingCopyTransferManager.RequestedPolicy(
+            "foreground", "balanced", 0L, 1, false, true);
+    NgClientRecordingCopyTransferManager.TransferSession created = null;
+    int maxAttempts = NgClientRecordingCopyTransferManager.getRefreshMaxAttempts();
+    for (int attempt = 1; attempt <= maxAttempts; attempt++)
+    {
+      finalAttemptCount = attempt;
+      created = transferMgr.createSession(
+          clientName,
+          clientIp,
+          ngClientId,
+          ngVersion,
+          transferBaseUrl,
+          null,
+          mf,
+          defaultPolicy,
+          0L);
+      if (created != null)
+        break;
+      if (attempt < maxAttempts && !NgClientRecordingCopyTransferManager.sleepRefreshRetryBackoff(attempt))
+        break;
+    }
+
+    if (created == null)
+    {
+      sendTransferErrorResponse(404, "Not Found", "TRANSFER_MEDIA_MISSING",
+          "Media file is missing.", false);
+      finalResultType = "ERROR";
+      finalErrorCode = "TRANSFER_MEDIA_MISSING";
+      finalRetriable = false;
+      return true;
+    }
+
+    if (bytesTransferred >= 0)
+      created.bytesTransferred = Math.min(Math.max(0L, bytesTransferred), Math.max(0L, created.totalBytes));
+
+    if (NgClientRecordingCopyTransferManager.STATE_PAUSED_BY_CLIENT.equals(created.sessionState) ||
+        NgClientRecordingCopyTransferManager.STATE_PAUSED_BY_SERVER.equals(created.sessionState) ||
+        NgClientRecordingCopyTransferManager.STATE_QUEUED.equals(created.sessionState))
+    {
+      sendTransferErrorResponse(409, "Conflict", "TRANSFER_BUSY",
+          "Transfer refresh request could not be processed right now.", true);
+      finalResultType = "STATUS";
+      finalErrorCode = "TRANSFER_BUSY";
+      finalRetriable = true;
+      return true;
+    }
+
+    // HTTP refresh responses are not command-channel size constrained, so include the
+    // full inline manifest and avoid forcing a follow-up metadata fetch.
+    sendHTTPJsonResponse(200, "OK", transferMgr.buildSessionAckJson(created), "application/json");
+    finalResultType = "ACK";
+    finalErrorCode = "";
+    finalRetriable = false;
+    return true;
+    }
+    finally
+    {
+      transferMgr.finishRefreshAttempt(refreshPermit, finalResultType, finalErrorCode,
+          finalRetriable, laneFallbackCount, finalAttemptCount, Math.max(0, effectiveRecordingId));
+    }
+  }
+
+  private String buildTransferBaseUrlFromRequest(java.util.Map paramMap)
+  {
+    String host = trimToEmpty((String) paramMap.get("host"));
+    if (host.length() == 0)
+      return "";
+    String proto = trimToEmpty((String) paramMap.get("x-forwarded-proto"));
+    if (proto.length() == 0)
+      proto = "http";
+    return proto + "://" + host;
+  }
+
+  private java.util.Map<String, String> parseSimpleJsonBody(String body)
+  {
+    java.util.HashMap<String, String> rv = new java.util.HashMap<String, String>();
+    if (body == null || body.length() == 0)
+      return rv;
+
+    String normalized = normalizeRefreshLikePayload(body);
+    if (normalized == null || normalized.length() == 0)
+      return rv;
+
+    extractJsonField(normalized, "recording_id", rv);
+    extractJsonField(normalized, "recordingId", rv);
+    extractJsonField(normalized, "media_file_id", rv);
+    extractJsonField(normalized, "mediaFileID", rv);
+    extractJsonField(normalized, "mediaFileId", rv);
+    extractJsonField(normalized, "mediaId", rv);
+
+    extractJsonField(normalized, "session_token", rv);
+    extractJsonField(normalized, "sessionToken", rv);
+    extractJsonField(normalized, "transfer_token", rv);
+    extractJsonField(normalized, "transferToken", rv);
+    extractJsonField(normalized, "token", rv);
+
+    extractJsonField(normalized, "bytes_transferred", rv);
+    extractJsonField(normalized, "bytesTransferred", rv);
+    extractJsonField(normalized, "offset", rv);
+
+    extractJsonField(normalized, "correlation_id", rv);
+    extractJsonField(normalized, "correlationId", rv);
+    extractJsonField(normalized, "ng_client_id", rv);
+    extractJsonField(normalized, "ngClientId", rv);
+    extractJsonField(normalized, "client_id", rv);
+    extractJsonField(normalized, "clientId", rv);
+    extractJsonField(normalized, "client_name", rv);
+    extractJsonField(normalized, "clientName", rv);
+    extractJsonField(normalized, "ng_version", rv);
+    extractJsonField(normalized, "ngVersion", rv);
+
+    if (rv.isEmpty())
+      parseSimpleFormBody(normalized, rv);
+
+    return rv;
+  }
+
+  private void parseSimpleFormBody(String body, java.util.Map<String, String> out)
+  {
+    if (body == null || body.length() == 0 || out == null)
+      return;
+    int amp = body.indexOf('&');
+    int eq = body.indexOf('=');
+    if (amp < 0 || eq < 1)
+      return;
+    java.util.StringTokenizer toker = new java.util.StringTokenizer(body, "&");
+    while (toker.hasMoreTokens())
+    {
+      String pair = toker.nextToken();
+      int idx = pair.indexOf('=');
+      if (idx <= 0)
+        continue;
+      String k = pair.substring(0, idx).trim();
+      String v = pair.substring(idx + 1).trim();
+      if (k.length() == 0)
+        continue;
+      try
+      {
+        v = java.net.URLDecoder.decode(v, "UTF-8");
+      }
+      catch (Throwable t)
+      {
+      }
+      out.put(k, v);
+    }
+  }
+
+  private String normalizeRefreshLikePayload(String payload)
+  {
+    if (payload == null)
+      return "";
+
+    String rv = payload.trim();
+    if (rv.length() >= 2 && rv.charAt(0) == '"' && rv.charAt(rv.length() - 1) == '"')
+      rv = rv.substring(1, rv.length() - 1);
+    if (rv.indexOf("\\\"") != -1)
+      rv = rv.replace("\\\"", "\"");
+    if (rv.indexOf("\\\\") != -1)
+      rv = rv.replace("\\\\", "\\");
+    if (rv.indexOf('%') != -1)
+    {
+      try
+      {
+        rv = java.net.URLDecoder.decode(rv, "UTF-8");
+      }
+      catch (Throwable t)
+      {
+      }
+    }
+    return rv;
+  }
+
+  private String firstNonEmptyTrimmed(String a, String b, String c, String d, String e)
+  {
+    String ta = trimToEmpty(a);
+    if (ta.length() > 0) return ta;
+    String tb = trimToEmpty(b);
+    if (tb.length() > 0) return tb;
+    String tc = trimToEmpty(c);
+    if (tc.length() > 0) return tc;
+    String td = trimToEmpty(d);
+    if (td.length() > 0) return td;
+    return trimToEmpty(e);
+  }
+
+  private void extractJsonField(String json, String key, java.util.Map<String, String> out)
+  {
+    if (json == null || key == null || key.length() == 0)
+      return;
+    String needle = "\"" + key + "\"";
+    int idx = json.indexOf(needle);
+    if (idx < 0)
+      return;
+    int colon = json.indexOf(':', idx + needle.length());
+    if (colon < 0)
+      return;
+    int i = colon + 1;
+    while (i < json.length() && Character.isWhitespace(json.charAt(i))) i++;
+    if (i >= json.length())
+      return;
+
+    char c = json.charAt(i);
+    String value = "";
+    if (c == '"')
+    {
+      i++;
+      StringBuilder sb = new StringBuilder();
+      boolean escaped = false;
+      while (i < json.length())
+      {
+        char ch = json.charAt(i++);
+        if (escaped)
+        {
+          switch (ch)
+          {
+            case 'n': sb.append('\n'); break;
+            case 'r': sb.append('\r'); break;
+            case 't': sb.append('\t'); break;
+            case '"': sb.append('"'); break;
+            case '\\': sb.append('\\'); break;
+            default: sb.append(ch); break;
+          }
+          escaped = false;
+        }
+        else if (ch == '\\')
+        {
+          escaped = true;
+        }
+        else if (ch == '"')
+        {
+          break;
+        }
+        else
+        {
+          sb.append(ch);
+        }
+      }
+      value = sb.toString();
+    }
+    else
+    {
+      int end = i;
+      while (end < json.length())
+      {
+        char ch = json.charAt(end);
+        if (ch == ',' || ch == '}' || Character.isWhitespace(ch))
+          break;
+        end++;
+      }
+      value = json.substring(i, end).trim();
+      if ("null".equalsIgnoreCase(value))
+        value = "";
+    }
+    out.put(key, value);
+  }
+
+  private String trimToEmpty(String s)
+  {
+    return s == null ? "" : s.trim();
+  }
+
+  private String extractRemoteAddress()
+  {
+    try
+    {
+      if (sake != null && sake.socket() != null && sake.socket().getInetAddress() != null)
+        return trimToEmpty(sake.socket().getInetAddress().getHostAddress());
+    }
+    catch (Throwable t)
+    {
+    }
+    return "";
+  }
+
+  private int parseIntSafe(String s, int fallback)
+  {
+    if (s == null || s.length() == 0)
+      return fallback;
+    try
+    {
+      return Integer.parseInt(s.trim());
+    }
+    catch (NumberFormatException nfe)
+    {
+      return fallback;
+    }
+  }
+
+  private long parseLongSafe(String s, long fallback)
+  {
+    if (s == null || s.length() == 0)
+      return fallback;
+    try
+    {
+      return Long.parseLong(s.trim());
+    }
+    catch (NumberFormatException nfe)
+    {
+      return fallback;
+    }
+  }
+
+    private void handleTransferContentRequest(String pageRequest, java.util.Map paramMap,
+      String requestMethod, byte[] requestBody)
       throws java.io.IOException
   {
     String cleanPath = pageRequest;
@@ -391,7 +1013,13 @@ public class HTTPLSServer implements Runnable
 
     if (suffix.startsWith("/offline/"))
     {
-      handleTransferOfflineRequest(token, suffix, session);
+      handleTransferOfflineRequest(token, suffix, session, paramMap);
+      return;
+    }
+
+    if ("/refresh".equals(suffix))
+    {
+      handleTransferRefreshRequest(transferMgr, session, requestMethod, requestBody);
       return;
     }
 
@@ -399,6 +1027,13 @@ public class HTTPLSServer implements Runnable
     {
       sendTransferErrorResponse(404, "Not Found", "TRANSFER_ENDPOINT_NOT_FOUND",
           "Unknown transfer endpoint.", false);
+      return;
+    }
+
+    if (!"GET".equalsIgnoreCase(requestMethod))
+    {
+      sendTransferErrorResponse(405, "Method Not Allowed", "TRANSFER_METHOD_NOT_ALLOWED",
+          "Content endpoint only supports GET.", false);
       return;
     }
 
@@ -556,6 +1191,11 @@ public class HTTPLSServer implements Runnable
           break;
         offset += sent;
         bytesSent += sent;
+
+        long elapsedMs = Math.max(1L, Sage.time() - started);
+        long kbps = Math.max(0L, ((bytesSent * 8L * 1000L) / elapsedMs) / 1024L);
+        long progressedTo = Math.max(session.bytesTransferred, start + bytesSent);
+        transferMgr.updateProgress(token, progressedTo, kbps, null);
       }
     }
     finally
@@ -569,12 +1209,182 @@ public class HTTPLSServer implements Runnable
     transferMgr.updateProgress(token, progressedTo, kbps, null);
   }
 
-  private void handleOfflineSnapshotRequest(String pageRequest) throws java.io.IOException
+  private void handleTransferRefreshRequest(NgClientRecordingCopyTransferManager transferMgr,
+      NgClientRecordingCopyTransferManager.TransferSession session,
+      String requestMethod, byte[] requestBody) throws java.io.IOException
+  {
+    if (!"POST".equalsIgnoreCase(requestMethod) && !"GET".equalsIgnoreCase(requestMethod))
+    {
+      sendTransferErrorResponse(405, "Method Not Allowed", "TRANSFER_METHOD_NOT_ALLOWED",
+          "Refresh endpoint only supports GET or POST.", false);
+      return;
+    }
+
+    if (session == null)
+    {
+      sendTransferErrorResponse(404, "Not Found", "TRANSFER_SESSION_NOT_FOUND",
+          "Transfer session not found.", true);
+      return;
+    }
+
+    long requestedOffset = extractRefreshOffset(requestBody, session.bytesTransferred);
+    NgClientRecordingCopyTransferManager.RequestedPolicy reqPolicy =
+        session.acceptedPolicy == null ? null :
+        new NgClientRecordingCopyTransferManager.RequestedPolicy(
+            session.acceptedPolicy.downloadMode,
+            session.acceptedPolicy.rateProfile,
+            session.acceptedPolicy.maxRateKbps,
+            session.acceptedPolicy.concurrency,
+            session.acceptedPolicy.wifiOnly,
+            session.acceptedPolicy.allowMetered);
+
+    NgClientRecordingCopyTransferManager.TransferSession refreshed = transferMgr.resume(
+        session.sessionToken,
+        session.clientName,
+        requestedOffset,
+        reqPolicy,
+        0L);
+
+    if (refreshed == null)
+    {
+      sendTransferErrorResponse(409, "Conflict", "TRANSFER_REFRESH_FAILED",
+          "Transfer refresh request could not be processed right now.", true);
+      return;
+    }
+
+    // HTTP refresh ACKs can carry the full inline manifest, which keeps the client
+    // from having to reformulate a second metadata request.
+    String body = transferMgr.buildSessionAckJson(refreshed);
+    sendHTTPJsonResponse(200, "OK", body, "application/json");
+  }
+
+  private int parseContentLength(java.util.Map paramMap)
+  {
+    if (paramMap == null)
+      return 0;
+    String contentLength = (String) paramMap.get("content-length");
+    if (contentLength == null || contentLength.length() == 0)
+      return 0;
+    try
+    {
+      return Math.max(0, Integer.parseInt(contentLength.trim()));
+    }
+    catch (NumberFormatException nfe)
+    {
+      return 0;
+    }
+  }
+
+  private byte[] readHttpRequestBody(int contentLength) throws java.io.IOException
+  {
+    if (contentLength <= 0)
+      return null;
+
+    byte[] body = new byte[contentLength];
+    int copied = 0;
+    if (readBuf != null && readBuf.hasRemaining())
+    {
+      int fromBuffer = Math.min(contentLength, readBuf.remaining());
+      readBuf.get(body, 0, fromBuffer);
+      copied += fromBuffer;
+    }
+
+    while (copied < contentLength)
+    {
+      readBuf.clear();
+      TimeoutHandler.registerTimeout(timeout, sake);
+      try
+      {
+        int readCount = sake.read(readBuf);
+        if (readCount <= 0)
+          throw new java.io.EOFException();
+      }
+      finally
+      {
+        TimeoutHandler.clearTimeout(sake);
+      }
+      readBuf.flip();
+      int chunk = Math.min(contentLength - copied, readBuf.remaining());
+      readBuf.get(body, copied, chunk);
+      copied += chunk;
+    }
+    return body;
+  }
+
+  private long extractRefreshOffset(byte[] requestBody, long defaultOffset)
+  {
+    if (requestBody == null || requestBody.length == 0)
+      return Math.max(0L, defaultOffset);
+
+    String payload;
+    try
+    {
+      payload = new String(requestBody, Sage.BYTE_CHARSET);
+    }
+    catch (java.io.UnsupportedEncodingException e)
+    {
+      payload = new String(requestBody);
+    }
+
+    long offset = extractLongField(payload, "bytesTransferred", -1L);
+    if (offset < 0)
+      offset = extractLongField(payload, "bytes_transferred", -1L);
+    if (offset < 0)
+      offset = extractLongField(payload, "offset", -1L);
+    if (offset < 0)
+      offset = defaultOffset;
+    return Math.max(0L, offset);
+  }
+
+  private long extractLongField(String payload, String key, long defValue)
+  {
+    if (payload == null || key == null || key.length() == 0)
+      return defValue;
+
+    String marker = '"' + key + '"';
+    int idx = payload.indexOf(marker);
+    if (idx == -1)
+      return defValue;
+    int colon = payload.indexOf(':', idx + marker.length());
+    if (colon == -1)
+      return defValue;
+    int start = colon + 1;
+    int end = start;
+    while (end < payload.length())
+    {
+      char c = payload.charAt(end);
+      if ((c >= '0' && c <= '9') || c == '-' || c == '+')
+      {
+        end++;
+        continue;
+      }
+      break;
+    }
+    if (end <= start)
+      return defValue;
+    try
+    {
+      return Long.parseLong(payload.substring(start, end).trim());
+    }
+    catch (NumberFormatException nfe)
+    {
+      return defValue;
+    }
+  }
+
+  private void handleOfflineSnapshotRequest(String pageRequest, String requestMethod,
+      java.util.Map paramMap, byte[] requestBody) throws java.io.IOException
   {
     String cleanPath = pageRequest;
     int queryIdx = cleanPath.indexOf('?');
     if (queryIdx >= 0)
       cleanPath = cleanPath.substring(0, queryIdx);
+
+    if ("/api/offline/playback-state-sync".equals(cleanPath))
+    {
+      handleOfflinePlaybackStateSyncRequest(requestMethod, paramMap, requestBody);
+      return;
+    }
 
     if ("/api/offline/guide-snapshot".equals(cleanPath))
     {
@@ -598,6 +1408,374 @@ public class HTTPLSServer implements Runnable
     }
 
     sendHTTPErrorResponse(404, "Not Found", "Unknown offline snapshot endpoint.");
+  }
+
+  private void handleOfflinePlaybackStateSyncRequest(String requestMethod, java.util.Map paramMap,
+      byte[] requestBody) throws java.io.IOException
+  {
+    if (!"POST".equalsIgnoreCase(requestMethod))
+    {
+      sendPlaybackSyncErrorResponse(405, "Method Not Allowed", "PLAYBACK_SYNC_METHOD_NOT_ALLOWED",
+          "Playback sync endpoint only supports POST.", false);
+      return;
+    }
+
+    String bodyText = requestBody == null ? "" : new String(requestBody, StandardCharsets.UTF_8);
+    String normalizedBody = normalizeRefreshLikePayload(bodyText);
+    if (normalizedBody == null || normalizedBody.length() == 0)
+    {
+      sendPlaybackSyncErrorResponse(400, "Bad Request", "PLAYBACK_SYNC_INVALID_REQUEST",
+          "Playback sync payload is required.", false);
+      return;
+    }
+
+    java.util.HashMap<String, String> topLevel = new java.util.HashMap<String, String>();
+    extractJsonField(normalizedBody, "schema_version", topLevel);
+    extractJsonField(normalizedBody, "schemaVersion", topLevel);
+    int schemaVersion = parseIntSafe(firstNonEmptyTrimmed(
+        topLevel.get("schema_version"),
+        topLevel.get("schemaVersion"),
+        "",
+        "",
+        ""), 1);
+    if (schemaVersion != 1)
+    {
+      sendPlaybackSyncErrorResponse(400, "Bad Request", "PLAYBACK_SYNC_SCHEMA_UNSUPPORTED",
+          "Unsupported playback sync schema version.", false);
+      return;
+    }
+
+    String hintedToken = firstNonEmptyTrimmed(
+        trimToEmpty((String) paramMap.get("x-transfer-token")),
+        trimToEmpty((String) paramMap.get("transfer-token")),
+        "",
+        "",
+        "");
+    if (hintedToken.length() > 0)
+    {
+      NgClientRecordingCopyTransferManager transferMgr = NgClientRecordingCopyTransferManager.getInstance();
+      if (transferMgr.getSession(hintedToken, null) == null)
+      {
+        sendPlaybackSyncErrorResponse(401, "Unauthorized", "TRANSFER_TOKEN_INVALID",
+            "Transfer token is invalid or expired.", true);
+        return;
+      }
+    }
+
+    java.util.ArrayList<OfflinePlaybackSyncRecord> records = parseOfflinePlaybackSyncRecords(normalizedBody);
+    if (records.isEmpty())
+    {
+      sendPlaybackSyncErrorResponse(400, "Bad Request", "PLAYBACK_SYNC_INVALID_REQUEST",
+          "Playback sync payload must include recordings entries.", false);
+      return;
+    }
+
+    int appliedCount = 0;
+    StringBuilder sb = new StringBuilder(256 + records.size() * 96);
+    sb.append('{');
+    sb.append("\"type\":\"OFFLINE_PLAYBACK_SYNC_ACK\",");
+    sb.append("\"schema_version\":1,");
+    sb.append("\"applied_count\":");
+
+    StringBuilder itemBuilder = new StringBuilder(64 + records.size() * 96);
+    itemBuilder.append('[');
+    boolean firstItem = true;
+
+    for (int i = 0; i < records.size(); i++)
+    {
+      OfflinePlaybackSyncRecord rec = records.get(i);
+      String mediaIdText = trimToEmpty(rec.mediaFileId);
+      int mediaFileId = parseIntSafe(mediaIdText, -1);
+      if (mediaFileId <= 0)
+      {
+        if (!firstItem) itemBuilder.append(',');
+        appendPlaybackSyncItemError(itemBuilder, mediaIdText, "PLAYBACK_SYNC_MEDIA_ID_INVALID",
+            "media_file_id is missing or invalid.");
+        firstItem = false;
+        continue;
+      }
+
+      MediaFile mf = Wizard.getInstance().getFileForID(mediaFileId);
+      if (mf == null)
+      {
+        if (!firstItem) itemBuilder.append(',');
+        appendPlaybackSyncItemError(itemBuilder, Integer.toString(mediaFileId), "TRANSFER_MEDIA_NOT_FOUND",
+            "Media file is no longer available.");
+        firstItem = false;
+        continue;
+      }
+
+      Airing air = mf.getContentAiring();
+      if (air == null)
+      {
+        if (!firstItem) itemBuilder.append(',');
+        appendPlaybackSyncItemError(itemBuilder, Integer.toString(mediaFileId), "TRANSFER_MEDIA_NOT_FOUND",
+            "Content airing is unavailable.");
+        firstItem = false;
+        continue;
+      }
+
+      boolean serverWatched = BigBrother.isWatched(air);
+      long serverResumeMs = extractResumePositionMs(air);
+      long clientResumeMs = Math.max(0L, rec.resumePositionMs);
+      boolean mergedWatched = serverWatched || rec.watched;
+      long mergedResumeMs = Math.max(serverResumeMs, clientResumeMs);
+
+      boolean changed = false;
+      if (mergedWatched && !serverWatched)
+      {
+        BigBrother.setWatched(air);
+        changed = true;
+      }
+      if (!mergedWatched && mergedResumeMs > serverResumeMs)
+      {
+        if (applyResumePositionMs(air, mergedResumeMs))
+          changed = true;
+      }
+      if (changed)
+        appliedCount++;
+
+      boolean finalWatched = BigBrother.isWatched(air);
+      long finalResumeMs = extractResumePositionMs(air);
+
+      if (!firstItem) itemBuilder.append(',');
+      itemBuilder.append('{');
+      itemBuilder.append("\"media_file_id\":\"").append(escapeForJson(Integer.toString(mediaFileId))).append("\",");
+      itemBuilder.append("\"watched\":").append(finalWatched ? "true" : "false").append(',');
+      itemBuilder.append("\"resume_position_ms\":").append(finalResumeMs);
+      itemBuilder.append('}');
+      firstItem = false;
+    }
+
+    itemBuilder.append(']');
+    sb.append(appliedCount);
+    sb.append(",\"recordings\":");
+    sb.append(itemBuilder);
+    sb.append('}');
+
+    sendHTTPJsonResponse(200, "OK", sb.toString(), "application/json");
+  }
+
+  private void appendPlaybackSyncItemError(StringBuilder sb, String mediaFileId,
+      String errorCode, String message)
+  {
+    sb.append('{');
+    sb.append("\"media_file_id\":\"").append(escapeForJson(trimToEmpty(mediaFileId))).append("\",");
+    sb.append("\"error_code\":\"").append(escapeForJson(errorCode)).append("\",");
+    sb.append("\"message\":\"").append(escapeForJson(message)).append("\"");
+    sb.append('}');
+  }
+
+  private void sendPlaybackSyncErrorResponse(int statusCode, String statusText, String errorCode,
+      String message, boolean retriable) throws java.io.IOException
+  {
+    String body = "{\"type\":\"TRANSFER_ERROR\",\"error_code\":\"" +
+        escapeForJson(errorCode) + "\",\"message\":\"" +
+        escapeForJson(message) + "\",\"retriable\":" +
+        (retriable ? "true" : "false") + "}";
+    sendHTTPJsonResponse(statusCode, statusText, body, "application/json");
+  }
+
+  private java.util.ArrayList<OfflinePlaybackSyncRecord> parseOfflinePlaybackSyncRecords(String jsonBody)
+  {
+    java.util.ArrayList<OfflinePlaybackSyncRecord> rv = new java.util.ArrayList<OfflinePlaybackSyncRecord>();
+    String recordingsArray = extractJsonArrayForKey(jsonBody, "recordings");
+    if (recordingsArray.length() == 0)
+      return rv;
+
+    java.util.ArrayList<String> objects = splitTopLevelJsonObjects(recordingsArray);
+    for (int i = 0; i < objects.size(); i++)
+    {
+      String obj = objects.get(i);
+      java.util.HashMap<String, String> fields = new java.util.HashMap<String, String>();
+      extractJsonField(obj, "media_file_id", fields);
+      extractJsonField(obj, "mediaFileID", fields);
+      extractJsonField(obj, "mediaFileId", fields);
+      extractJsonField(obj, "recording_id", fields);
+      extractJsonField(obj, "recordingId", fields);
+      extractJsonField(obj, "resume_position_ms", fields);
+      extractJsonField(obj, "resumePositionMs", fields);
+      extractJsonField(obj, "watched", fields);
+
+      String mediaFileId = firstNonEmptyTrimmed(
+          fields.get("media_file_id"),
+          fields.get("mediaFileID"),
+          fields.get("mediaFileId"),
+          fields.get("recording_id"),
+          fields.get("recordingId"));
+      if (mediaFileId.length() == 0)
+        continue;
+
+      long resumeMs = parseLongSafe(firstNonEmptyTrimmed(
+          fields.get("resume_position_ms"),
+          fields.get("resumePositionMs"),
+          "0",
+          "",
+          ""), 0L);
+      boolean watched = parseBooleanSafe(fields.get("watched"));
+      rv.add(new OfflinePlaybackSyncRecord(mediaFileId, Math.max(0L, resumeMs), watched));
+    }
+    return rv;
+  }
+
+  private String extractJsonArrayForKey(String json, String key)
+  {
+    if (json == null || key == null || key.length() == 0)
+      return "";
+    String needle = "\"" + key + "\"";
+    int idx = json.indexOf(needle);
+    if (idx < 0)
+      return "";
+    int colon = json.indexOf(':', idx + needle.length());
+    if (colon < 0)
+      return "";
+
+    int i = colon + 1;
+    while (i < json.length() && Character.isWhitespace(json.charAt(i))) i++;
+    if (i >= json.length() || json.charAt(i) != '[')
+      return "";
+
+    int depth = 0;
+    boolean inString = false;
+    boolean escaped = false;
+    for (int p = i; p < json.length(); p++)
+    {
+      char ch = json.charAt(p);
+      if (inString)
+      {
+        if (escaped)
+          escaped = false;
+        else if (ch == '\\')
+          escaped = true;
+        else if (ch == '"')
+          inString = false;
+        continue;
+      }
+
+      if (ch == '"')
+      {
+        inString = true;
+        continue;
+      }
+      if (ch == '[')
+      {
+        depth++;
+        continue;
+      }
+      if (ch == ']')
+      {
+        depth--;
+        if (depth == 0)
+          return json.substring(i, p + 1);
+      }
+    }
+    return "";
+  }
+
+  private java.util.ArrayList<String> splitTopLevelJsonObjects(String jsonArray)
+  {
+    java.util.ArrayList<String> rv = new java.util.ArrayList<String>();
+    if (jsonArray == null || jsonArray.length() < 2)
+      return rv;
+
+    int start = jsonArray.indexOf('[');
+    int end = jsonArray.lastIndexOf(']');
+    if (start < 0 || end <= start)
+      return rv;
+
+    int depth = 0;
+    int objStart = -1;
+    boolean inString = false;
+    boolean escaped = false;
+    for (int i = start + 1; i < end; i++)
+    {
+      char ch = jsonArray.charAt(i);
+      if (inString)
+      {
+        if (escaped)
+          escaped = false;
+        else if (ch == '\\')
+          escaped = true;
+        else if (ch == '"')
+          inString = false;
+        continue;
+      }
+
+      if (ch == '"')
+      {
+        inString = true;
+        continue;
+      }
+      if (ch == '{')
+      {
+        if (depth == 0)
+          objStart = i;
+        depth++;
+        continue;
+      }
+      if (ch == '}')
+      {
+        depth--;
+        if (depth == 0 && objStart >= 0)
+        {
+          rv.add(jsonArray.substring(objStart, i + 1));
+          objStart = -1;
+        }
+      }
+    }
+    return rv;
+  }
+
+  private boolean parseBooleanSafe(String s)
+  {
+    if (s == null)
+      return false;
+    String v = s.trim();
+    if (v.length() == 0)
+      return false;
+    return "true".equalsIgnoreCase(v) || "1".equals(v) || "yes".equalsIgnoreCase(v);
+  }
+
+  private long extractResumePositionMs(Airing air)
+  {
+    if (air == null)
+      return 0L;
+    long latestWatch = BigBrother.getLatestWatch(air);
+    long start = air.getStartTime();
+    long end = air.getEndTime();
+    long resumeMs = Math.max(0L, latestWatch - start);
+    long maxMs = Math.max(0L, end - start);
+    if (resumeMs > maxMs)
+      resumeMs = maxMs;
+    return resumeMs;
+  }
+
+  private boolean applyResumePositionMs(Airing air, long resumePositionMs)
+  {
+    if (air == null)
+      return false;
+    long start = air.getStartTime();
+    long end = air.getEndTime();
+    long maxMs = Math.max(0L, end - start);
+    long clampedMs = Math.max(0L, Math.min(maxMs, resumePositionMs));
+    long watchEnd = start + clampedMs;
+    if (watchEnd <= start)
+      return false;
+    return BigBrother.setWatched(air, start, watchEnd, 0L, 0L, false);
+  }
+
+  private static final class OfflinePlaybackSyncRecord
+  {
+    private final String mediaFileId;
+    private final long resumePositionMs;
+    private final boolean watched;
+
+    private OfflinePlaybackSyncRecord(String mediaFileId, long resumePositionMs, boolean watched)
+    {
+      this.mediaFileId = mediaFileId;
+      this.resumePositionMs = resumePositionMs;
+      this.watched = watched;
+    }
   }
 
   private boolean isTransferTokenHintValid(String token, String pageRequest, java.util.Map paramMap)
@@ -651,16 +1829,33 @@ public class HTTPLSServer implements Runnable
     return "";
   }
 
-  private void handleTransferOfflineRequest(String token, String suffix,
-      NgClientRecordingCopyTransferManager.TransferSession session) throws java.io.IOException
+    private void handleTransferOfflineRequest(String token, String suffix,
+      NgClientRecordingCopyTransferManager.TransferSession session,
+      java.util.Map paramMap) throws java.io.IOException
   {
     if ("/offline/metadata".equals(suffix))
     {
-      String offlineJson = NgClientOfflineCompanionBuilder.buildOfflineBlockJson(session);
+        String offlineJson = readCachedTransferMetadata(token);
+        if (offlineJson.length() == 0)
+        {
+          offlineJson = NgClientOfflineCompanionBuilder.buildOfflineBlockJson(session);
+          if (offlineJson != null && offlineJson.length() > 0)
+            writeCachedTransferMetadata(token, offlineJson);
+        }
       if (offlineJson == null || offlineJson.length() == 0)
       {
         sendHTTPErrorResponse(404, "Not Found", "Offline metadata unavailable.");
         return;
+      }
+      if (Sage.getBoolean("miniclient/transfer/log_offline_metadata_manifest", true))
+      {
+        int artworkRefs = countOccurrences(offlineJson, "/offline/artwork/");
+        int captionRefs = countOccurrences(offlineJson, "/offline/captions/");
+        System.out.println("NG_TRANSFER_METADATA"
+            + " token_prefix=" + shortTokenPrefix(token)
+            + " artwork_refs=" + artworkRefs
+            + " caption_refs=" + captionRefs
+            + " bytes=" + offlineJson.length());
       }
       sendHTTPJsonResponse(200, "OK", offlineJson, "application/json");
       return;
@@ -669,14 +1864,15 @@ public class HTTPLSServer implements Runnable
     if (suffix.startsWith("/offline/artwork/"))
     {
       int index = parsePositiveIndex(suffix.substring("/offline/artwork/".length()));
-      NgClientOfflineCompanionBuilder.OfflineAsset asset =
-          NgClientOfflineCompanionBuilder.resolveArtworkAsset(session, index);
-      if (asset == null)
+      if (index < 0)
       {
-        sendHTTPErrorResponse(404, "Not Found", "Offline artwork not available.");
+        sendTransferErrorResponse(400, "Bad Request", "TRANSFER_ARTWORK_INDEX_INVALID",
+            "Artwork index is missing or invalid.", false);
         return;
       }
-      sendOfflineAsset(asset);
+      NgClientOfflineCompanionBuilder.OfflineAsset asset =
+          NgClientOfflineCompanionBuilder.resolveArtworkAsset(session, index);
+      sendTransferArtworkAsset(token, index, asset, extractTransferCorrelationId(paramMap));
       return;
     }
 
@@ -762,6 +1958,535 @@ public class HTTPLSServer implements Runnable
       return;
     }
     sendHTTPErrorResponse(404, "Not Found", "Offline asset unavailable.");
+  }
+
+  private void sendTransferArtworkAsset(String token, int artworkIndex,
+      NgClientOfflineCompanionBuilder.OfflineAsset asset, String correlationId)
+      throws java.io.IOException
+  {
+    long startedAt = Sage.time();
+    long endedAt = startedAt;
+    String status = "500";
+    String source = "none";
+    String exceptionText = "";
+    TransferStreamMetrics metrics = new TransferStreamMetrics();
+    try
+    {
+      if (asset == null)
+      {
+        status = "404";
+        sendTransferErrorResponse(404, "Not Found", "TRANSFER_ARTWORK_NOT_FOUND",
+            "Offline artwork not available.", false);
+        return;
+      }
+
+      String contentType = asset.contentType == null || asset.contentType.length() == 0 ?
+          "application/octet-stream" : asset.contentType;
+      if (asset.localFile != null)
+      {
+        source = "local";
+        streamLocalTransferAsset(asset.localFile, contentType, metrics);
+        status = "200";
+        return;
+      }
+
+      if (asset.sourceUrl != null && asset.sourceUrl.length() > 0)
+      {
+        source = "remote";
+        streamRemoteTransferAsset(asset.sourceUrl, contentType, metrics);
+        status = "200";
+        return;
+      }
+
+      status = "404";
+      sendTransferErrorResponse(404, "Not Found", "TRANSFER_ARTWORK_NOT_FOUND",
+          "Offline artwork source is unavailable.", false);
+    }
+    catch (java.io.FileNotFoundException fnfe)
+    {
+      exceptionText = String.valueOf(fnfe);
+      status = "404";
+      if (!metrics.responseStarted)
+      {
+        sendTransferErrorResponse(404, "Not Found", "TRANSFER_ARTWORK_NOT_FOUND",
+            "Offline artwork source was not found.", false);
+      }
+    }
+    catch (java.net.SocketTimeoutException ste)
+    {
+      exceptionText = String.valueOf(ste);
+      status = "504";
+      if (!metrics.responseStarted)
+      {
+        sendTransferErrorResponse(504, "Gateway Timeout", "TRANSFER_ARTWORK_TIMEOUT",
+            "Artwork fetch timed out.", true);
+      }
+    }
+    catch (Throwable t)
+    {
+      exceptionText = String.valueOf(t);
+      status = "502";
+      if (!metrics.responseStarted)
+      {
+        sendTransferErrorResponse(502, "Bad Gateway", "TRANSFER_ARTWORK_FETCH_FAILED",
+            "Artwork fetch failed.", true);
+      }
+    }
+    finally
+    {
+      endedAt = Sage.time();
+      if (Sage.getBoolean("miniclient/transfer/log_artwork_requests", true))
+      {
+        long ttfbMs = metrics.firstByteAtMs > 0 ? (metrics.firstByteAtMs - startedAt) : -1L;
+        long totalMs = Math.max(0L, endedAt - startedAt);
+        System.out.println("NG_TRANSFER_ARTWORK"
+            + " status=" + status
+            + " token_prefix=" + shortTokenPrefix(token)
+            + " idx=" + artworkIndex
+            + " corr=" + (correlationId == null ? "" : correlationId)
+            + " source=" + source
+            + " ttfb_ms=" + ttfbMs
+            + " total_ms=" + totalMs
+            + " bytes=" + metrics.bytesWritten
+            + " response_started=" + metrics.responseStarted
+            + " ex=" + exceptionText);
+      }
+    }
+  }
+
+  private void streamLocalTransferAsset(java.io.File sourceFile, String contentType,
+      TransferStreamMetrics metrics) throws java.io.IOException
+  {
+    if (sourceFile == null || !sourceFile.isFile())
+      throw new java.io.FileNotFoundException("Missing local artwork file.");
+
+    long len = Math.max(0L, sourceFile.length());
+    writeBuf.clear();
+    appendStringToWriteBuf("HTTP/1.1 200 OK\r\n");
+    appendStringToWriteBuf("Server: SageTV " + UIManager.SAGE + "\r\n");
+    appendStringToWriteBuf("Date: " + new java.util.Date().toString() + "\r\n");
+    appendStringToWriteBuf("Cache-Control: no-store\r\n");
+    appendStringToWriteBuf("Content-Type: " + contentType + "\r\n");
+    appendStringToWriteBuf("Content-Length: " + len + "\r\n\r\n");
+    writeBuf.flip();
+    sake.write(writeBuf);
+    metrics.responseStarted = true;
+    metrics.firstByteAtMs = Sage.time();
+
+    java.nio.channels.FileChannel fc = new java.io.FileInputStream(sourceFile).getChannel();
+    try
+    {
+      long offset = 0;
+      while (offset < len)
+      {
+        long sent = fc.transferTo(offset, Math.min(32768L, len - offset), sake);
+        if (sent <= 0)
+          break;
+        offset += sent;
+        metrics.bytesWritten += sent;
+      }
+    }
+    finally
+    {
+      fc.close();
+    }
+  }
+
+  private void streamRemoteTransferAsset(String sourceUrl, String fallbackType,
+      TransferStreamMetrics metrics) throws java.io.IOException
+  {
+    java.io.IOException lastError = null;
+    byte[] bodyBytes = null;
+
+    java.util.ArrayList<String> candidates = buildArtworkSourceCandidates(sourceUrl);
+    for (int i = 0; i < candidates.size(); i++)
+    {
+      String candidate = candidates.get(i);
+      try
+      {
+        bodyBytes = readCachedTransferArtwork(candidate);
+        if (bodyBytes != null)
+        {
+          lastError = null;
+          break;
+        }
+        bodyBytes = loadRemoteTransferAssetBytes(candidate);
+        if (bodyBytes != null && bodyBytes.length > 0)
+          writeCachedTransferArtwork(candidate, bodyBytes);
+        lastError = null;
+        break;
+      }
+      catch (java.io.IOException ioe)
+      {
+        lastError = ioe;
+      }
+    }
+
+    if (bodyBytes == null)
+      throw (lastError == null ? new java.io.IOException("Artwork source unavailable") : lastError);
+
+    writeBuf.clear();
+    appendStringToWriteBuf("HTTP/1.1 200 OK\r\n");
+    appendStringToWriteBuf("Server: SageTV " + UIManager.SAGE + "\r\n");
+    appendStringToWriteBuf("Date: " + new java.util.Date().toString() + "\r\n");
+    appendStringToWriteBuf("Cache-Control: no-store\r\n");
+    appendStringToWriteBuf("Content-Type: " + fallbackType + "\r\n");
+    appendStringToWriteBuf("Content-Length: " + bodyBytes.length + "\r\n");
+    appendStringToWriteBuf("\r\n");
+    writeBuf.flip();
+    sake.write(writeBuf);
+    metrics.responseStarted = true;
+    metrics.firstByteAtMs = Sage.time();
+
+    java.nio.ByteBuffer out = java.nio.ByteBuffer.wrap(bodyBytes);
+    while (out.hasRemaining())
+      sake.write(out);
+    metrics.bytesWritten += bodyBytes.length;
+  }
+
+  private byte[] loadRemoteTransferAssetBytes(String sourceUrl) throws java.io.IOException
+  {
+    MetaImage metaImage = MetaImage.getMetaImage(new java.net.URL(sourceUrl));
+    if (metaImage == null || metaImage.isNullOrFailed())
+      throw new java.io.IOException("Artwork cache load failed for " + sourceUrl);
+
+    byte[] bodyBytes = metaImage.getSourceAsBytes();
+    if (bodyBytes == null || bodyBytes.length == 0)
+      throw new java.io.IOException("Artwork cache bytes unavailable for " + sourceUrl);
+    return bodyBytes;
+  }
+
+  private java.net.URLConnection openArtworkRemoteConnection(String sourceUrl) throws java.io.IOException
+  {
+    java.net.URLConnection con = new java.net.URL(sourceUrl).openConnection();
+    con.setConnectTimeout((int) Math.min(Integer.MAX_VALUE, Math.max(1000L, timeout)));
+    con.setReadTimeout((int) Math.min(Integer.MAX_VALUE, Math.max(1000L, timeout)));
+    con.setRequestProperty("User-Agent", "Mozilla/5.0 (compatible; SageTV-OffCompanion/1.0)");
+    con.setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8");
+    con.setRequestProperty("Referer", "https://json.schedulesdirect.org/");
+    if (con instanceof java.net.HttpURLConnection)
+      ((java.net.HttpURLConnection) con).setInstanceFollowRedirects(true);
+    return con;
+  }
+
+  private java.util.ArrayList<String> buildArtworkSourceCandidates(String sourceUrl)
+  {
+    java.util.ArrayList<String> rv = new java.util.ArrayList<String>();
+    addSourceCandidate(rv, sourceUrl);
+    if (sourceUrl == null || sourceUrl.length() == 0)
+      return rv;
+
+    if (sourceUrl.indexOf("json.schedulesdirect.org/20141201/image/") != -1)
+    {
+      String assetsPath = sourceUrl.replace("/20141201/image/", "/20141201/image/assets/");
+      addSourceCandidate(rv, assetsPath);
+
+      String filePart = sourceUrl;
+      int slash = filePart.lastIndexOf('/');
+      if (slash != -1 && slash + 1 < filePart.length())
+        filePart = filePart.substring(slash + 1);
+      int q = filePart.indexOf('?');
+      if (q != -1)
+        filePart = filePart.substring(0, q);
+      if (filePart.length() > 0)
+      {
+        addSourceCandidate(rv, "https://s3.amazonaws.com/schedulesdirect/assets/" + filePart);
+      }
+    }
+    return rv;
+  }
+
+  private void addSourceCandidate(java.util.ArrayList<String> candidates, String url)
+  {
+    if (url == null || url.length() == 0)
+      return;
+    if (!candidates.contains(url))
+      candidates.add(url);
+  }
+
+  private String extractTransferCorrelationId(java.util.Map paramMap)
+  {
+    if (paramMap == null)
+      return "";
+    return firstNonEmptyTrimmed(
+        trimToEmpty((String) paramMap.get("x-correlation-id")),
+        trimToEmpty((String) paramMap.get("x-request-id")),
+        "",
+        "",
+        "");
+  }
+
+  private String shortTokenPrefix(String token)
+  {
+    if (token == null)
+      return "";
+    String t = token.trim();
+    if (t.length() <= 8)
+      return t;
+    return t.substring(0, 8);
+  }
+
+  private int countOccurrences(String text, String needle)
+  {
+    if (text == null || needle == null || needle.length() == 0)
+      return 0;
+    int count = 0;
+    int idx = 0;
+    while ((idx = text.indexOf(needle, idx)) >= 0)
+    {
+      count++;
+      idx += needle.length();
+    }
+    return count;
+  }
+
+  private String readCachedTransferMetadata(String token)
+  {
+    if (token == null || token.length() == 0)
+      return "";
+    synchronized (transferCacheLock)
+    {
+      java.io.File f = getTransferMetadataCacheFile(token);
+      if (f == null || !f.isFile())
+        return "";
+      try
+      {
+        byte[] bytes = java.nio.file.Files.readAllBytes(f.toPath());
+        f.setLastModified(Sage.time());
+        return new String(bytes, StandardCharsets.UTF_8);
+      }
+      catch (Throwable t)
+      {
+        if (Sage.DBG) System.out.println("Failed reading transfer metadata cache: " + t);
+        return "";
+      }
+    }
+  }
+
+  private void writeCachedTransferMetadata(String token, String metadataJson)
+  {
+    if (token == null || token.length() == 0 || metadataJson == null || metadataJson.length() == 0)
+      return;
+    synchronized (transferCacheLock)
+    {
+      java.io.File f = getTransferMetadataCacheFile(token);
+      if (f == null)
+        return;
+      writeBytesAtomic(f, metadataJson.getBytes(StandardCharsets.UTF_8));
+      pruneTransferCacheIfNeededLocked();
+    }
+  }
+
+  private byte[] readCachedTransferArtwork(String sourceUrl)
+  {
+    if (sourceUrl == null || sourceUrl.length() == 0)
+      return null;
+    synchronized (transferCacheLock)
+    {
+      java.io.File f = getTransferArtworkCacheFile(sourceUrl);
+      if (f == null || !f.isFile())
+        return null;
+      try
+      {
+        byte[] bytes = java.nio.file.Files.readAllBytes(f.toPath());
+        if (bytes == null || bytes.length == 0)
+          return null;
+        f.setLastModified(Sage.time());
+        return bytes;
+      }
+      catch (Throwable t)
+      {
+        if (Sage.DBG) System.out.println("Failed reading transfer artwork cache: " + t);
+        return null;
+      }
+    }
+  }
+
+  private void writeCachedTransferArtwork(String sourceUrl, byte[] bodyBytes)
+  {
+    if (sourceUrl == null || sourceUrl.length() == 0 || bodyBytes == null || bodyBytes.length == 0)
+      return;
+    synchronized (transferCacheLock)
+    {
+      java.io.File f = getTransferArtworkCacheFile(sourceUrl);
+      if (f == null)
+        return;
+      writeBytesAtomic(f, bodyBytes);
+      pruneTransferCacheIfNeededLocked();
+    }
+  }
+
+  private java.io.File getTransferCacheRootDir()
+  {
+    java.io.File root = new java.io.File(Sage.getPath("cache"), TRANSFER_CACHE_ROOT_DIR_NAME);
+    if (!root.isDirectory())
+      root.mkdirs();
+    return root;
+  }
+
+  private java.io.File getTransferCacheSubDir(String name)
+  {
+    java.io.File dir = new java.io.File(getTransferCacheRootDir(), name);
+    if (!dir.isDirectory())
+      dir.mkdirs();
+    return dir;
+  }
+
+  private java.io.File getTransferMetadataCacheFile(String token)
+  {
+    String safeToken = sanitizeCacheKey(token);
+    if (safeToken.length() == 0)
+      return null;
+    return new java.io.File(getTransferCacheSubDir(TRANSFER_CACHE_METADATA_DIR_NAME), safeToken + ".json");
+  }
+
+  private java.io.File getTransferArtworkCacheFile(String sourceUrl)
+  {
+    String hash = hashForCacheKey(sourceUrl);
+    if (hash.length() == 0)
+      return null;
+    return new java.io.File(getTransferCacheSubDir(TRANSFER_CACHE_ARTWORK_DIR_NAME), hash + ".bin");
+  }
+
+  private String sanitizeCacheKey(String input)
+  {
+    if (input == null)
+      return "";
+    StringBuilder sb = new StringBuilder(input.length());
+    for (int i = 0; i < input.length(); i++)
+    {
+      char c = input.charAt(i);
+      if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_')
+        sb.append(c);
+    }
+    return sb.toString();
+  }
+
+  private String hashForCacheKey(String input)
+  {
+    if (input == null || input.length() == 0)
+      return "";
+    try
+    {
+      java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-1");
+      byte[] digest = md.digest(input.getBytes(StandardCharsets.UTF_8));
+      StringBuilder sb = new StringBuilder(digest.length * 2);
+      for (int i = 0; i < digest.length; i++)
+      {
+        int v = digest[i] & 0xFF;
+        if (v < 16)
+          sb.append('0');
+        sb.append(Integer.toHexString(v));
+      }
+      return sb.toString();
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("Failed hashing transfer cache key: " + t);
+      return "";
+    }
+  }
+
+  private void writeBytesAtomic(java.io.File target, byte[] body)
+  {
+    if (target == null || body == null)
+      return;
+    java.io.File parent = target.getParentFile();
+    if (parent != null && !parent.isDirectory())
+      parent.mkdirs();
+    java.io.File tmp = new java.io.File(target.getAbsolutePath() + ".tmp");
+    try
+    {
+      java.nio.file.Files.write(tmp.toPath(), body);
+      try
+      {
+        java.nio.file.Files.move(tmp.toPath(), target.toPath(),
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+            java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+      }
+      catch (Throwable moveErr)
+      {
+        java.nio.file.Files.move(tmp.toPath(), target.toPath(),
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+      }
+      target.setLastModified(Sage.time());
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("Failed writing transfer cache file: " + t);
+      if (tmp.isFile())
+        tmp.delete();
+    }
+  }
+
+  private void pruneTransferCacheIfNeededLocked()
+  {
+    long maxBytes = Math.max(0L, TRANSFER_CACHE_MAX_BYTES);
+    if (maxBytes <= 0L)
+      return;
+
+    java.io.File root = getTransferCacheRootDir();
+    java.util.ArrayList<java.io.File> files = new java.util.ArrayList<java.io.File>();
+    collectTransferCacheFiles(root, files);
+    if (files.isEmpty())
+      return;
+
+    long totalBytes = 0L;
+    for (int i = 0; i < files.size(); i++)
+      totalBytes += Math.max(0L, files.get(i).length());
+    if (totalBytes <= maxBytes)
+      return;
+
+    java.util.Collections.sort(files, new java.util.Comparator<java.io.File>()
+    {
+      public int compare(java.io.File f1, java.io.File f2)
+      {
+        long d = f1.lastModified() - f2.lastModified();
+        if (d < 0L)
+          return -1;
+        if (d > 0L)
+          return 1;
+        return f1.getName().compareTo(f2.getName());
+      }
+    });
+
+    for (int i = 0; i < files.size() && totalBytes > maxBytes; i++)
+    {
+      java.io.File f = files.get(i);
+      long len = Math.max(0L, f.length());
+      if (f.delete())
+        totalBytes -= len;
+    }
+  }
+
+  private void collectTransferCacheFiles(java.io.File dir, java.util.ArrayList<java.io.File> out)
+  {
+    if (dir == null || out == null || !dir.isDirectory())
+      return;
+    java.io.File[] kids = dir.listFiles();
+    if (kids == null)
+      return;
+    for (int i = 0; i < kids.length; i++)
+    {
+      java.io.File f = kids[i];
+      if (f == null)
+        continue;
+      if (f.isDirectory())
+      {
+        collectTransferCacheFiles(f, out);
+      }
+      else
+      {
+        out.add(f);
+      }
+    }
+  }
+
+  private static class TransferStreamMetrics
+  {
+    public boolean responseStarted;
+    public long firstByteAtMs;
+    public long bytesWritten;
   }
 
   private void sendHTTPFile(java.io.File sourceFile, String contentType) throws java.io.IOException
@@ -892,6 +2617,25 @@ public class HTTPLSServer implements Runnable
         escapeForJson(message) + "\",\"retriable\":" +
         (retriable ? "true" : "false") + "}";
     sendHTTPJsonResponse(statusCode, statusText, body, "application/json");
+  }
+
+  private java.util.Map sanitizeHeaderMapForLog(java.util.Map source)
+  {
+    if (source == null || source.isEmpty())
+      return source;
+    java.util.HashMap copy = new java.util.HashMap(source);
+    maskHeader(copy, "authorization");
+    maskHeader(copy, "proxy-authorization");
+    return copy;
+  }
+
+  private void maskHeader(java.util.Map map, String key)
+  {
+    if (map == null || key == null)
+      return;
+    if (!map.containsKey(key))
+      return;
+    map.put(key, "<redacted>");
   }
 
   private void sendHTTPRangeNotSatisfiable(long totalSize) throws java.io.IOException
@@ -1134,15 +2878,21 @@ public class HTTPLSServer implements Runnable
     {
       if (transferChunkSize == 0)
       {
-        fc.transferTo(0, totalSize, sake);
+        long sent = fc.transferTo(0, totalSize, sake);
+        // Repo sync note: deployed jar currently does not invoke active-window BW tracking here.
+        // MiniClientSageRenderer.recordServerActiveWindowWrite(sent);
       }
       else
       {
         while (totalSize > offset)
         {
           long currSize = Math.min(transferChunkSize, totalSize - offset);
-          fc.transferTo(offset, currSize, sake);
-          offset += currSize;
+          long sent = fc.transferTo(offset, currSize, sake);
+          // Repo sync note: deployed jar currently does not invoke active-window BW tracking here.
+          // MiniClientSageRenderer.recordServerActiveWindowWrite(sent);
+          if (sent <= 0)
+            break;
+          offset += sent;
         }
       }
     }
@@ -1205,6 +2955,7 @@ public class HTTPLSServer implements Runnable
   private java.nio.ByteBuffer readBuf;
   private java.nio.ByteBuffer writeBuf;
   private java.nio.channels.SocketChannel sake;
+  private String initialHttpMethod;
   private String myHost;
   private long timeout;
   private int[] bandwidths;

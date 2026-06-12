@@ -41,6 +41,15 @@ public class MiniClientSageRenderer extends SageRenderer
 
   private static final int NUM_SAMPLES_BANDWIDTH_ESTIMATE = 5;
 
+  // Server-side active-window bandwidth tracking.
+  private static final Object activeBwLock = new Object();
+  private static long activeBwWindowStartMs = 0L;
+  private static long activeBwBytesInWindow = 0L;
+  private static long activeBwLastUpdateMs = 0L;
+  private static final int[] activeBwPeakHistoryKbps = new int[60];
+  private static int activeBwPeakHistoryIdx = 0;
+  private static int activeBwPeakHistoryCount = 0;
+
   private static final int MAX_WINDOW_SIZE = 3000;
 
   private static final int HI_RES_SURFACE_SIZE_LIMIT = 2048;
@@ -465,6 +474,66 @@ public class MiniClientSageRenderer extends SageRenderer
     if (t != null)
     {
       try { t.join(5000);} catch(Exception e){}
+    }
+  }
+
+  public static void recordServerActiveWindowWrite(long numBytes)
+  {
+    if (numBytes <= 0)
+      return;
+
+    long now = Sage.eventTime();
+    synchronized (activeBwLock)
+    {
+      if (Sage.getBoolean("miniplayer/log_bw_estimator_diagnostics", false))
+        System.out.println("Server active window write bytes=" + numBytes + " windowBytes=" + activeBwBytesInWindow);
+
+      if (activeBwWindowStartMs <= 0)
+        activeBwWindowStartMs = now;
+
+      activeBwBytesInWindow += numBytes;
+      activeBwLastUpdateMs = now;
+
+      long windowElapsed = now - activeBwWindowStartMs;
+      if (windowElapsed < 1000)
+        return;
+
+      if (activeBwBytesInWindow >= 32768)
+      {
+        int sampleKbps = (int) ((activeBwBytesInWindow * 8) / Math.max(1L, windowElapsed));
+        activeBwPeakHistoryKbps[activeBwPeakHistoryIdx] = Math.max(0, sampleKbps);
+        activeBwPeakHistoryIdx = (activeBwPeakHistoryIdx + 1) % 60;
+        if (activeBwPeakHistoryCount < 60)
+          activeBwPeakHistoryCount++;
+      }
+
+      activeBwBytesInWindow = 0;
+      activeBwWindowStartMs = now;
+    }
+  }
+
+  public int getServerActiveWindowPeakKbps()
+  {
+    synchronized (activeBwLock)
+    {
+      int peak = 0;
+      for (int i = 0; i < activeBwPeakHistoryCount; i++)
+      {
+        if (activeBwPeakHistoryKbps[i] > peak)
+          peak = activeBwPeakHistoryKbps[i];
+      }
+      return peak;
+    }
+  }
+
+  public long getServerActiveWindowSampleAgeMs()
+  {
+    synchronized (activeBwLock)
+    {
+      if (activeBwLastUpdateMs <= 0)
+        return -1L;
+      long age = Sage.eventTime() - activeBwLastUpdateMs;
+      return age < 0 ? 0 : age;
     }
   }
 
@@ -7047,6 +7116,81 @@ public class MiniClientSageRenderer extends SageRenderer
   {
     estimatedBandwidthTime += time;
     estimatedBandwidthBytes += bytes;
+    // Track sample age for stale detection
+    estimatedBandwidthLastUpdateTime = Sage.eventTime();
+    estimatedBandwidthSampleCount++;
+  }
+
+  public long getEstimatedBandwidthSampleAgeMs()
+  {
+    if (estimatedBandwidthLastUpdateTime <= 0)
+      return -1;
+    long ageMs = Sage.eventTime() - estimatedBandwidthLastUpdateTime;
+    return (ageMs < 0) ? 0 : ageMs;
+  }
+
+  public long getEstimatedBandwidthSampleCount()
+  {
+    return estimatedBandwidthSampleCount;
+  }
+
+  public String getEstimatedBandwidthDiagnostics()
+  {
+    long kbps = (estimatedBandwidthTime == 0) ? 0 : (estimatedBandwidthBytes * 8000 / estimatedBandwidthTime);
+    long sampleAgeMs = getEstimatedBandwidthSampleAgeMs();
+    return String.format("kbps=%d bytes=%d time=%d count=%d ageMs=%d local=%s loopback=%s",
+        kbps, estimatedBandwidthBytes, estimatedBandwidthTime, estimatedBandwidthSampleCount,
+        sampleAgeMs, localConnection, loopbackConnection);
+  }
+
+  public boolean supportsNgBandwidthFeedbackV1()
+  {
+    return hasClientCapability("BANDWIDTH_FEEDBACK_V1");
+  }
+
+  public synchronized String pollNgBandwidthFeedbackPayload()
+  {
+    if (!supportsNgBandwidthFeedbackV1())
+      return "";
+    try
+    {
+      String result = sendGetProperty("SAGETV_NG_BANDWIDTH_FEEDBACK_V1");
+      if (result == null || result.trim().length() == 0)
+      {
+        result = sendGetProperty("SAGETV_NG_BW_FEEDBACK_V1");
+      }
+      return (result != null) ? result.trim() : "";
+    }
+    catch (java.io.IOException e)
+    {
+      System.out.println("Error polling NG bandwidth feedback: " + e);
+      return "";
+    }
+  }
+
+  public boolean resetEstimatedBandwidthIfStale(long thresholdMs, String reason)
+  {
+    if (thresholdMs <= 0)
+      return false;
+    long ageMs = getEstimatedBandwidthSampleAgeMs();
+    if (ageMs < 0 || ageMs <= thresholdMs)
+      return false;
+    String resetReason = (reason == null || reason.length() == 0) ? "stale" : reason;
+    resetEstimatedBandwidthCalc(resetReason + "_ageMs=" + ageMs + "_thresholdMs=" + thresholdMs);
+    return true;
+  }
+
+  public void resetEstimatedBandwidthCalc(String reason)
+  {
+    estimatedBandwidthBytes = 0;
+    estimatedBandwidthTime = 0;
+    estimatedBandwidthLastUpdateTime = 0;
+    estimatedBandwidthSampleCount = 0;
+    if (Sage.getBoolean("miniplayer/log_bw_estimator_resets", false))
+    {
+      String logMsg = (reason == null || reason.length() == 0) ? "" : reason;
+      System.out.println("Bandwidth reset: " + logMsg);
+    }
   }
 
   public void cacheAuthenticationNow()
@@ -8960,6 +9104,8 @@ public class MiniClientSageRenderer extends SageRenderer
 
   private long estimatedBandwidthBytes;
   private long estimatedBandwidthTime;
+  private long estimatedBandwidthLastUpdateTime;
+  private long estimatedBandwidthSampleCount;
 
   private java.util.Set videoCodecs;
   private java.util.Set audioCodecs;

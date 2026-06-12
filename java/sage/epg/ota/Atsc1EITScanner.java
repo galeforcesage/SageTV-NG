@@ -681,22 +681,60 @@ public final class Atsc1EITScanner
   private boolean shouldYield(String deviceId, int tunerIdx)
   {
     if (!running.get()) return true;
-    // Re-poll the tuner's status; if something else has locked it (e.g.
-    // a user started a recording on a sister DVR sharing the device),
-    // we get out of the way.
+    // Re-poll the tuner/device state on every callback; if anything no
+    // longer looks safely idle, abort immediately so live TV/recording
+    // can preempt the scan dwell.
     try
     {
       HdhrControl ctrl = new HdhrControl(deviceId);
+      int tunerCount = inferTunerCount(deviceId);
+      boolean dedicated = Sage.getBoolean(PROP_DEDICATED, false);
+      int idleNeeded = dedicated ? 1 : Math.max(1, tunerCount - 1);
+
       HdhrControl.Status st = ctrl.queryStatus(tunerIdx);
-      // We are the streamer, so bps > 0 is expected. Detect external
-      // interference by an unexpected channel change: the "target" gets
-      // overwritten when someone else tunes via libhdhomerun.
-      // Heuristic: if we no longer hold the lock the device will report
-      // lock=none briefly during a retune by another client.
-      // Conservative: keep streaming; rely on max duration cap.
+      if (st == null || !st.isLocked() || !st.isStreaming())
+      {
+        if (Sage.DBG) System.out.println("Atsc1EITScanner: yielding, tuner " + tunerIdx + " no longer held by scan");
+        return true;
+      }
+
+      if (countIdleTuners(ctrl, tunerCount) < idleNeeded)
+      {
+        if (Sage.DBG) System.out.println("Atsc1EITScanner: yielding, idle headroom dropped below " + idleNeeded + " tuners");
+        return true;
+      }
+
+      if (!dedicated)
+      {
+        long lookahead = Sage.getLong(PROP_REC_LOOKAHEAD_MS, DEFAULT_REC_LOOKAHEAD_MS);
+        if (hasUpcomingRecordingOnDevice(deviceId, lookahead))
+        {
+          if (Sage.DBG) System.out.println("Atsc1EITScanner: yielding, upcoming recording detected on device");
+          return true;
+        }
+      }
+
       return false;
     }
-    catch (IOException e) { return false; }
+    catch (IOException e)
+    {
+      return true;
+    }
+  }
+
+  private int countIdleTuners(HdhrControl ctrl, int tunerCount)
+  {
+    int idle = 0;
+    for (int t = 0; t < tunerCount; t++)
+    {
+      try
+      {
+        HdhrControl.Status st = ctrl.queryStatus(t);
+        if (st != null && !st.isLocked() && !st.isStreaming()) idle++;
+      }
+      catch (IOException e) { /* count as busy */ }
+    }
+    return idle;
   }
 
   // ------------------------------------------------------------------
@@ -763,16 +801,7 @@ public final class Atsc1EITScanner
     String deviceId = Sage.get(PROP_DEVICE_ID, "");
     if (deviceId.isEmpty()) return false;
     HdhrControl ctrl = new HdhrControl(deviceId);
-    int idle = 0;
-    for (int t = 0; t < tunerCount; t++)
-    {
-      try
-      {
-        HdhrControl.Status st = ctrl.queryStatus(t);
-        if (!st.isLocked() && !st.isStreaming()) idle++;
-      }
-      catch (IOException e) { /* count as busy */ }
-    }
+    int idle = countIdleTuners(ctrl, tunerCount);
     int idleNeeded = dedicated ? 1 : Math.max(1, tunerCount - 1);
     if (idle < idleNeeded)
     {

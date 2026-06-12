@@ -21,6 +21,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
 {
   private static final boolean XCODE_DEBUG = Sage.DBG && Sage.getBoolean("media_server/transcode_debug", false);
   static final String BITRATE_OPTIONS_SIZE_KEY = "httpls_bandwidth/%s/video_size";
+  private static final String[] EMBED_CC_SIDECAR_SUFFIXES = {
+      ".srt", ".eng.srt", ".cc.srt", ".vtt"
+  };
 
   public FFMPEGTranscoder()
   {
@@ -403,6 +406,15 @@ public class FFMPEGTranscoder implements TranscodeEngine
     currServer = server;
   }
 
+  /**
+   * Optional source file used for caption extraction when the transcode input
+   * is an intermediate (for example AI-upscale phase 2).
+   */
+  public void setCaptionSourceFile(java.io.File theFile)
+  {
+    captionSourceFile = theFile;
+  }
+
   public void setTranscodeFormat(sage.media.format.ContainerFormat inSourceFormat, sage.media.format.ContainerFormat newFormat)
   {
     sourceFormat = inSourceFormat;
@@ -739,7 +751,13 @@ public class FFMPEGTranscoder implements TranscodeEngine
             {
               if ("D1".equals(propVal))
               {
-                s = MMC.getInstance().isNTSCVideoFormat() ? "720x480" : "720x576";
+                // Hybrid rule: enforce a 720p floor for HD sources, but do
+                // not upscale true SD sources.
+                sage.media.format.VideoFormat svf = (inSourceFormat == null) ? null : inSourceFormat.getVideoFormat();
+                if (svf != null && svf.getHeight() > 0 && svf.getHeight() < 720 && svf.getWidth() > 0)
+                  s = svf.getWidth() + "x" + svf.getHeight();
+                else
+                  s = "1280x720";
                 deinterlace = false;
               }
               else if("720".equals(propVal))
@@ -749,7 +767,15 @@ public class FFMPEGTranscoder implements TranscodeEngine
               else if("SOURCE".equals(propVal))
                 s = inSourceFormat.getVideoFormat().getWidth() + "x" + inSourceFormat.getVideoFormat().getHeight();
               else
-                s = MMC.getInstance().isNTSCVideoFormat() ? "352x240" : "352x288";
+              {
+                // Unknown/legacy resolution token. Keep SD at source size;
+                // otherwise use the HD floor.
+                sage.media.format.VideoFormat svf = (inSourceFormat == null) ? null : inSourceFormat.getVideoFormat();
+                if (svf != null && svf.getHeight() > 0 && svf.getHeight() < 720 && svf.getWidth() > 0)
+                  s = svf.getWidth() + "x" + svf.getHeight();
+                else
+                  s = "1280x720";
+              }
             }
             else if ("container".equals(propName))
               f = propVal;
@@ -882,6 +908,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
   {
     xcodeBufferBaseNum = 0;
     lastExitCode = -1;
+    clearPreparedEmbeddedCcSubtitleFile();
 
     java.util.ArrayList xcodeParamsVec = new java.util.ArrayList();
     // Reduce process priority this way on non-windows platforms.
@@ -964,8 +991,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add("2");
     }
 
-    // We never transcode subtitles, so disable them if they exist
-    xcodeParamsVec.add("-sn");
+    // For offline conversion outputs, allow subtitle/CC streams to be carried
+    // in the destination container instead of force-dropping them.
+    boolean embedSubtitleStreams = shouldEmbedSubtitleStreams();
+    if (!embedSubtitleStreams)
+      xcodeParamsVec.add("-sn");
 
     // Set the flag to disable DTS parsing (which is broken in some HDPVR files) if its an MPEG2-TS w/ H264 video
     if (sourceFormat != null && sage.media.format.MediaFormat.MPEG2_TS.equals(sourceFormat.getFormatName()) &&
@@ -1024,6 +1054,14 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add(IOUtils.getLibAVFilenameString(currFile.toString()));
     else
       xcodeParamsVec.add(IOUtils.getLibAVFilenameString("stv://" + currServer + "/" + currFile.toString()));
+
+    boolean sourceHasSubtitleStreams = sourceFormat != null && sourceFormat.getNumSubpictureStreams() > 0;
+    java.io.File extractedCcSubtitleFile = maybePrepareEmbeddedCcSubtitleFile(embedSubtitleStreams, sourceHasSubtitleStreams);
+    if (extractedCcSubtitleFile != null)
+    {
+      xcodeParamsVec.add("-i");
+      xcodeParamsVec.add(IOUtils.getLibAVFilenameString(extractedCcSubtitleFile.toString()));
+    }
 
     // output file threading (encode)
     int numThreads = Sage.getInt("xcode_process_num_threads", 0);
@@ -1177,10 +1215,18 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add(iOSMode ? "mpegts" : "dvd");
       xcodeParamsVec.add("-vcodec");
       xcodeParamsVec.add(videoCodec = "mpeg4");
+      int dynamicWidth = 1280;
+      int dynamicHeight = 720;
+      if (srcVideo != null && srcVideo.getWidth() > 0 && srcVideo.getHeight() > 0 && srcVideo.getHeight() < 720)
+      {
+        // Do not upscale SD sources in dynamic mode.
+        dynamicWidth = srcVideo.getWidth();
+        dynamicHeight = srcVideo.getHeight();
+      }
       xcodeParamsVec.add("-s");
-      xcodeParamsVec.add(MMC.getInstance().isNTSCVideoFormat() ? "352x240" : "352x288");
-      targetWidth = 352;
-      targetHeight = MMC.getInstance().isNTSCVideoFormat() ? 240 : 288;
+      xcodeParamsVec.add(dynamicWidth + "x" + dynamicHeight);
+      targetWidth = dynamicWidth;
+      targetHeight = dynamicHeight;
       xcodeParamsVec.add("-ac");
       // Workaround issue where AAC audio doesn't transcode properly to mono mp2
       xcodeParamsVec.add(Sage.getBoolean("xcode_disable_mono_audio", true) ? "2" : "1");
@@ -1482,6 +1528,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
     // See if there's multiple audio streams which means we need to setup stream mappings. But
     // we can only setup stream mappings if we have index information in the format.
+    boolean usedExplicitStreamMapping = false;
     if (currAudioBitrateKbps > 0 && sourceFormat != null && sourceFormat.getNumAudioStreams() > 1 && currVideoBitrateKbps > 0)
     {
       // Get the FFMPEG only format so we can go off the stream indexes that it wants for transcoding
@@ -1532,9 +1579,41 @@ public class FFMPEGTranscoder implements TranscodeEngine
             xcodeParamsVec.add("0:" + vf.getOrderIndex());
             xcodeParamsVec.add("-map");
             xcodeParamsVec.add("0:" + af.getOrderIndex());
+            if (embedSubtitleStreams && sourceHasSubtitleStreams)
+            {
+              xcodeParamsVec.add("-map");
+              xcodeParamsVec.add("0:s?");
+            }
+            else if (embedSubtitleStreams && extractedCcSubtitleFile != null)
+            {
+              xcodeParamsVec.add("-map");
+              xcodeParamsVec.add("1:0");
+            }
+            usedExplicitStreamMapping = true;
           }
         }
       }
+    }
+
+    if (embedSubtitleStreams && extractedCcSubtitleFile != null && !usedExplicitStreamMapping)
+    {
+      // A secondary subtitle input requires explicit mapping, otherwise ffmpeg
+      // may not include the encoded A/V streams in the output.
+      xcodeParamsVec.add("-map");
+      xcodeParamsVec.add("0:v:0");
+      xcodeParamsVec.add("-map");
+      xcodeParamsVec.add("0:a:0?");
+      xcodeParamsVec.add("-map");
+      xcodeParamsVec.add("1:0");
+      usedExplicitStreamMapping = true;
+    }
+
+    if (embedSubtitleStreams)
+    {
+      // Preserve subtitle streams when possible. MP4-family outputs require a
+      // text subtitle codec, so use mov_text there.
+      xcodeParamsVec.add("-c:s");
+      xcodeParamsVec.add(isMp4FamilyOutput() ? "mov_text" : "copy");
     }
 
     // NOTE: Don't use interlaced ME/DCT on MPEG4 content
@@ -2031,6 +2110,227 @@ public class FFMPEGTranscoder implements TranscodeEngine
     return size;
   }
 
+  private boolean shouldEmbedSubtitleStreams()
+  {
+    return outputFile != null && Sage.getBoolean("transcoder/embed_subtitles_in_output", true);
+  }
+
+  private java.io.File maybePrepareEmbeddedCcSubtitleFile(boolean embedSubtitleStreams, boolean sourceHasSubtitleStreams)
+  {
+    if (!embedSubtitleStreams || sourceHasSubtitleStreams || rawCmdlineMode) return null;
+    java.io.File ccSrc = (captionSourceFile != null) ? captionSourceFile : currFile;
+    if (ccSrc == null || !ccSrc.isFile()) return null;
+
+    java.io.File sidecar = findExistingCaptionSidecar(ccSrc);
+    if (sidecar != null)
+    {
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: using existing CC sidecar for embedding " + sidecar);
+      return sidecar;
+    }
+
+    if (!Sage.getBoolean("transcoder/embed_cc_extract_fallback", true)) return null;
+
+    java.io.File tmpSrt;
+    try
+    {
+      tmpSrt = java.io.File.createTempFile("sagetv_embedcc_", ".srt");
+    }
+    catch (java.io.IOException e)
+    {
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: unable to create temp CC sidecar " + e);
+      return null;
+    }
+
+    if (!extractEmbeddedCcToSrt(ccSrc, tmpSrt))
+    {
+      tmpSrt.delete();
+      return null;
+    }
+
+    if (!tmpSrt.isFile() || tmpSrt.length() < 8)
+    {
+      tmpSrt.delete();
+      return null;
+    }
+
+    preparedEmbeddedCcSubtitleFile = tmpSrt;
+    if (Sage.DBG) System.out.println("FFMPEGTranscoder: extracted CC sidecar for embedding " + tmpSrt);
+    return tmpSrt;
+  }
+
+  private java.io.File findExistingCaptionSidecar(java.io.File mediaFile)
+  {
+    String base = stripFileExtension(mediaFile.getAbsolutePath());
+    if (base == null || base.length() == 0) return null;
+    for (int i = 0; i < EMBED_CC_SIDECAR_SUFFIXES.length; i++)
+    {
+      java.io.File f = new java.io.File(base + EMBED_CC_SIDECAR_SUFFIXES[i]);
+      if (f.isFile() && f.length() > 0) return f;
+    }
+    return null;
+  }
+
+  private boolean extractEmbeddedCcToSrt(java.io.File srcFile, java.io.File outSrt)
+  {
+    String ccextractor = Sage.get("caption_extraction/ccextractor_path", "ccextractor");
+    if (isCommandAvailable(ccextractor))
+    {
+      java.util.ArrayList cmd = new java.util.ArrayList();
+      cmd.add(ccextractor);
+      String inFmt = ccextractorInputFlag(srcFile.getName());
+      if (inFmt != null) cmd.add(inFmt);
+      cmd.add("-out=srt");
+      int extractSec = Sage.getInt("transcoder/embed_cc_extract_seconds", 0);
+      if (extractSec > 0)
+      {
+        cmd.add("-endat");
+        cmd.add(secondsToHms(extractSec));
+      }
+      cmd.add(srcFile.getAbsolutePath());
+      cmd.add("-o");
+      cmd.add(outSrt.getAbsolutePath());
+      if (runCommandForCc(cmd, "ccextractor")) return true;
+    }
+
+    String ffmpeg = Sage.get("caption_extraction/ffmpeg_path", getTranscoderPath(sourceFormat));
+    java.util.ArrayList cmd = new java.util.ArrayList();
+    cmd.add(ffmpeg);
+    cmd.add("-hide_banner");
+    cmd.add("-loglevel");
+    cmd.add("error");
+    cmd.add("-y");
+    cmd.add("-f");
+    cmd.add("lavfi");
+    cmd.add("-i");
+    cmd.add("movie=" + escapeForLavfi(srcFile.getAbsolutePath()) + "[out0+subcc]");
+    cmd.add("-map");
+    cmd.add("0:1");
+    cmd.add("-c:s");
+    cmd.add("srt");
+    cmd.add("-f");
+    cmd.add("srt");
+    int extractSec = Sage.getInt("transcoder/embed_cc_extract_seconds", 0);
+    if (extractSec > 0)
+    {
+      cmd.add("-t");
+      cmd.add(Integer.toString(extractSec));
+    }
+    cmd.add(outSrt.getAbsolutePath());
+    return runCommandForCc(cmd, "ffmpeg-subcc");
+  }
+
+  private boolean runCommandForCc(java.util.ArrayList cmd, String label)
+  {
+    if (Sage.DBG) System.out.println("FFMPEGTranscoder: running " + label + " command " + cmd);
+    Process p = null;
+    try
+    {
+      ProcessBuilder pb = new ProcessBuilder((java.util.List<String>) (java.util.List) cmd);
+      pb.redirectErrorStream(true);
+      p = pb.start();
+      java.io.BufferedReader br = new java.io.BufferedReader(
+          new java.io.InputStreamReader(p.getInputStream(), Sage.I18N_CHARSET));
+      String line;
+      StringBuffer out = new StringBuffer();
+      while ((line = br.readLine()) != null)
+      {
+        if (out.length() < 4096) out.append(line).append('\n');
+      }
+      int rc = p.waitFor();
+      if (rc != 0 && rc != 2)
+      {
+        if (Sage.DBG) System.out.println("FFMPEGTranscoder: " + label + " failed rc=" + rc + " output=" + out);
+        return false;
+      }
+      return true;
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: " + label + " error=" + t);
+      return false;
+    }
+    finally
+    {
+      if (p != null)
+      {
+        try { p.getInputStream().close(); } catch (Throwable t) {}
+      }
+    }
+  }
+
+  private static String stripFileExtension(String path)
+  {
+    if (path == null || path.length() == 0) return path;
+    int dot = path.lastIndexOf('.');
+    if (dot <= 0) return path;
+    return path.substring(0, dot);
+  }
+
+  private static String ccextractorInputFlag(String fname)
+  {
+    String n = (fname == null) ? "" : fname.toLowerCase();
+    if (n.endsWith(".ts") || n.endsWith(".m2ts")) return "-ts";
+    if (n.endsWith(".mpg") || n.endsWith(".mpeg") || n.endsWith(".vob")) return "-ps";
+    if (n.endsWith(".mp4") || n.endsWith(".m4v") || n.endsWith(".mov")) return "-mp4";
+    if (n.endsWith(".mkv") || n.endsWith(".webm")) return "-mkv";
+    if (n.endsWith(".wtv")) return "-wtv";
+    return null;
+  }
+
+  private static String secondsToHms(int s)
+  {
+    int h = s / 3600;
+    int m = (s % 3600) / 60;
+    int sec = s % 60;
+    return String.format("%02d:%02d:%02d", h, m, sec);
+  }
+
+  private static String escapeForLavfi(String path)
+  {
+    StringBuilder sb = new StringBuilder(path.length() + 16);
+    for (int i = 0; i < path.length(); i++)
+    {
+      char c = path.charAt(i);
+      if (c == '\\' || c == '\'' || c == ':' || c == ',' || c == '[' || c == ']' || c == ';')
+        sb.append('\\');
+      sb.append(c);
+    }
+    return sb.toString();
+  }
+
+  private static boolean isCommandAvailable(String binary)
+  {
+    if (binary == null || binary.length() == 0) return false;
+    java.io.File f = new java.io.File(binary);
+    if (f.isAbsolute()) return f.canExecute();
+    String path = System.getenv("PATH");
+    if (path == null) return false;
+    String[] dirs = path.split(java.io.File.pathSeparator);
+    for (int i = 0; i < dirs.length; i++)
+    {
+      java.io.File c = new java.io.File(dirs[i], binary);
+      if (c.canExecute()) return true;
+    }
+    return false;
+  }
+
+  private void clearPreparedEmbeddedCcSubtitleFile()
+  {
+    java.io.File f = preparedEmbeddedCcSubtitleFile;
+    preparedEmbeddedCcSubtitleFile = null;
+    if (f != null)
+    {
+      try { f.delete(); } catch (Throwable t) {}
+    }
+  }
+
+  private boolean isMp4FamilyOutput()
+  {
+    if (outputFile == null) return false;
+    String name = outputFile.getName().toLowerCase();
+    return name.endsWith(".mp4") || name.endsWith(".m4v") || name.endsWith(".3gp") || name.endsWith(".psp");
+  }
+
   public void stopTranscode()
   {
     forciblyStopped = true;
@@ -2090,6 +2390,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
       for (int i = 0; i < segmentData.length; i++)
         segmentData[i].file.delete();
     }
+
+    clearPreparedEmbeddedCcSubtitleFile();
   }
 
   /**
@@ -2211,6 +2513,59 @@ public class FFMPEGTranscoder implements TranscodeEngine
   public void setEstimatedBandwidth(long bps)
   {
     estimatedBandwidth = bps;
+  }
+
+  /**
+   * Feed periodic link-capacity hints (Kbps) from the player loop.
+   *
+   * Uses EWMA smoothing and simple hysteresis counters so callers can avoid
+   * one-sample mode/bitrate oscillation:
+   * - downshift hint only after repeated deficit windows
+   * - upshift hint only after sustained headroom windows
+   *
+   * Returns the smoothed hint currently applied.
+   */
+  public synchronized int ingestLiveBandwidthHintKbps(int measuredKbps)
+  {
+    if (measuredKbps <= 0)
+      return liveSmoothedBandwidthHintKbps;
+
+    liveLastBandwidthHintKbps = measuredKbps;
+    if (liveSmoothedBandwidthHintKbps <= 0)
+      liveSmoothedBandwidthHintKbps = measuredKbps;
+    else
+      liveSmoothedBandwidthHintKbps = (int) Math.round((liveSmoothedBandwidthHintKbps * 0.7) + (measuredKbps * 0.3));
+
+    int streamKbps = Math.max(1, getCurrentStreamBitrateKbps());
+    int deficitThreshold = Math.max(1, streamKbps - 150);
+    int headroomThreshold = streamKbps + 300;
+
+    if (liveSmoothedBandwidthHintKbps < deficitThreshold)
+    {
+      liveDeficitWindows++;
+      liveHeadroomWindows = 0;
+    }
+    else if (liveSmoothedBandwidthHintKbps > headroomThreshold)
+    {
+      liveHeadroomWindows++;
+      liveDeficitWindows = 0;
+    }
+    else
+    {
+      liveDeficitWindows = 0;
+      liveHeadroomWindows = 0;
+    }
+
+    // Only mutate estimatedBandwidth after hysteresis windows are satisfied.
+    if (liveDeficitWindows >= 2 || liveHeadroomWindows >= 3)
+      estimatedBandwidth = Math.max(1L, liveSmoothedBandwidthHintKbps * 1000L);
+
+    return liveSmoothedBandwidthHintKbps;
+  }
+
+  public synchronized int getSmoothedLiveBandwidthHintKbps()
+  {
+    return liveSmoothedBandwidthHintKbps;
   }
 
   public long getEstimatedBandwidth()
@@ -2375,8 +2730,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
   protected java.nio.ByteBuffer overageBuf;
 
   protected java.io.File currFile;
+  protected java.io.File captionSourceFile;
   protected String currServer;
   protected java.io.File outputFile;
+  protected java.io.File preparedEmbeddedCcSubtitleFile;
 
   protected long transcodeStartSeekTime;
   protected java.io.FileInputStream fileStream;
@@ -2403,6 +2760,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
   protected boolean dynamicRateAdjust = false;
   protected boolean iOSMode = false;
   protected long estimatedBandwidth;
+  protected int liveLastBandwidthHintKbps;
+  protected int liveSmoothedBandwidthHintKbps;
+  protected int liveDeficitWindows;
+  protected int liveHeadroomWindows;
   protected boolean httplsMode = false;
 
   protected int lastExitCode = -1;

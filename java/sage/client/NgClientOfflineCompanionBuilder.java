@@ -249,49 +249,66 @@ public final class NgClientOfflineCompanionBuilder
     Airing airing = mf.getContentAiring();
     Show show = mf.getShow();
 
-    StringBuilder sb = new StringBuilder(3072);
+    StringBuilder sb = new StringBuilder(4096);
     sb.append('{');
 
-    appendObjectStart(sb, "metadata");
-    appendOfflineMetadata(sb, session, mf, airing, show);
+    append(sb, "manifest_version", 1);
+    append(sb, "recording_id", String.valueOf(mf.getID()));
+    append(sb, "generated_at", formatIsoUtc(Sage.time()));
+
+    appendCoreObject(sb, mf, airing, show);
+    appendMetadataObject(sb, mf, airing, show);
+    appendCreditsArray(sb, show);
+
+    ArrayList<OfflineAsset> artwork = isEnabled("miniclient/transfer/offline_artwork_enabled", true)
+        ? buildArtworkAssets(session, mf, show)
+        : new ArrayList<OfflineAsset>();
+    appendArtworkArray(sb, "artwork", session, artwork);
+
+    ArrayList<OfflineAsset> captions = isEnabled("miniclient/transfer/offline_captions_enabled", true)
+        ? buildCaptionAssets(mf)
+        : new ArrayList<OfflineAsset>();
+    OfflineAsset comskip = isEnabled("miniclient/transfer/offline_comskip_enabled", true)
+        ? buildComskipAsset(mf)
+        : null;
+    OfflineAsset transcript = isEnabled("miniclient/transfer/offline_transcript_enabled", true)
+        ? buildTranscriptAsset(mf)
+        : null;
+    appendAssetsObject(sb, session, mf, captions, comskip, transcript);
+
+    sb.append('}');
+    return sb.toString();
+  }
+
+  public static String buildOfflineCoreBlockJson(NgClientRecordingCopyTransferManager.TransferSession session)
+  {
+    if (session == null || !isEnabled("miniclient/transfer/offline_metadata_enabled", true))
+      return "";
+
+    MediaFile mf = Wizard.getInstance().getFileForID(session.recordingId);
+    if (mf == null)
+      return "";
+
+    Airing airing = mf.getContentAiring();
+    Show show = mf.getShow();
+
+    StringBuilder sb = new StringBuilder(2048);
+    sb.append('{');
+    append(sb, "manifest_version", 1);
+    append(sb, "recording_id", String.valueOf(mf.getID()));
+    append(sb, "generated_at", formatIsoUtc(Sage.time()));
+    appendCoreObject(sb, mf, airing, show);
+    appendMetadataObject(sb, mf, airing, show);
+    appendArrayStart(sb, "credits");
+    sb.append(']');
+    appendArrayStart(sb, "artwork");
+    sb.append(']');
+    appendObjectStart(sb, "assets");
+    appendObjectStart(sb, "video");
+    appendFileArray(sb, "recording_files", mf.getFile(0));
+    append(sb, "recording_file_size", Math.max(0L, mf.getSize()));
     closeObject(sb);
-
-    if (isEnabled("miniclient/transfer/offline_artwork_enabled", true))
-    {
-      ArrayList<OfflineAsset> artwork = buildArtworkAssets(session, mf, show);
-      if (!artwork.isEmpty())
-      {
-        appendArtworkArray(sb, "artwork", session, artwork);
-      }
-    }
-
-    if (isEnabled("miniclient/transfer/offline_captions_enabled", true))
-    {
-      ArrayList<OfflineAsset> captions = buildCaptionAssets(mf);
-      if (!captions.isEmpty())
-      {
-        appendCaptionArray(sb, "captions", session, captions);
-      }
-    }
-
-    if (isEnabled("miniclient/transfer/offline_comskip_enabled", true))
-    {
-      OfflineAsset comskip = buildComskipAsset(mf);
-      if (comskip != null)
-      {
-        appendComskipObject(sb, "comskip", session, comskip);
-      }
-    }
-
-    if (isEnabled("miniclient/transfer/offline_transcript_enabled", true))
-    {
-      OfflineAsset transcript = buildTranscriptAsset(mf);
-      if (transcript != null)
-      {
-        appendTranscriptObject(sb, "transcript", session, transcript);
-      }
-    }
-
+    closeObject(sb);
     sb.append('}');
     return sb.toString();
   }
@@ -338,66 +355,81 @@ public final class NgClientOfflineCompanionBuilder
     return (mf == null) ? null : buildTranscriptAsset(mf);
   }
 
-  private static void appendOfflineMetadata(StringBuilder sb,
-      NgClientRecordingCopyTransferManager.TransferSession session,
+  private static void appendCoreObject(StringBuilder sb,
       MediaFile mf,
       Airing airing,
       Show show)
   {
-    appendObjectStart(sb, "media_file");
-    append(sb, "id", String.valueOf(mf.getID()));
-    ContainerFormat cf = mf.getFileFormat();
-    append(sb, "format", cf == null ? "" : cf.getPrettyDesc());
-    appendFileArray(sb, "recording_files", mf.getFile(0));
-    append(sb, "recording_file_size", Math.max(0L, mf.getSize()));
-    append(sb, "audio_format_summary", buildAudioSummary(cf));
-    appendObjectStart(sb, "file_properties");
-    append(sb, "hdtv", airing != null && airing.isHDTV());
-    append(sb, "surround", airing != null && airing.isSurround());
-    append(sb, "cc", airing != null && airing.isCC());
-    append(sb, "subtitles_available", hasSubtitles(mf, airing));
-    closeObject(sb);
-    closeObject(sb);
+    appendObjectStart(sb, "core");
+    String title = safe(airing == null ? "" : airing.getTitle());
+    if (title.length() == 0)
+      title = safe(show == null ? "" : show.getTitle());
+    append(sb, "title", title);
+    String description = show == null ? "" : safe(show.getDesc());
+    append(sb, "description", description);
+    append(sb, "runtime_ms", show == null ? 0L : Math.max(0L, show.getDuration()));
 
-    appendObjectStart(sb, "airing");
-    append(sb, "title", airing == null ? "" : airing.getTitle());
-    append(sb, "show_title", show == null ? "" : show.getTitle());
-    append(sb, "description", show == null ? "" : show.getDesc());
-    append(sb, "original_air_date", formatDate(show == null ? 0L : show.getOriginalAirDate()));
-    append(sb, "season_number", show == null ? 0 : show.getSeasonNumber());
-    append(sb, "episode_number", show == null ? 0 : show.getEpisodeNumber());
-    append(sb, "first_run", airing != null && airing.isFirstRun());
-    append(sb, "rated", show == null ? "" : show.getRated());
-    append(sb, "show_id", show == null ? "" : show.getExternalID());
-    appendStringArray(sb, "categories", show == null ? null : show.getCategories());
-    append(sb, "run_time_minutes", show == null ? 0L : Math.max(0L, show.getDuration() / 60000L));
+    appendIfNotEmpty(sb, "subtitle", show == null ? "" : show.getEpisodeName());
+    appendIfNotEmpty(sb, "show_title", show == null ? "" : show.getTitle());
+    appendIfNotEmpty(sb, "show_id", show == null ? "" : show.getExternalID());
+    appendIfNotEmpty(sb, "original_air_date", formatDate(show == null ? 0L : show.getOriginalAirDate()));
+    if (airing != null)
+    {
+      long recordingStart = airing.getStartTime();
+      long recordingEnd = airing.getEndTime();
+      append(sb, "recording_start_ms", Math.max(0L, recordingStart));
+      append(sb, "recording_end_ms", Math.max(0L, recordingEnd));
+      appendIfNotEmpty(sb, "recording_start_utc", formatIsoUtc(recordingStart));
+      appendIfNotEmpty(sb, "recording_end_utc", formatIsoUtc(recordingEnd));
+    }
+    appendIfPositiveInt(sb, "season_number", show == null ? 0 : show.getSeasonNumber());
+    appendIfPositiveInt(sb, "episode_number", show == null ? 0 : show.getEpisodeNumber());
+    if (airing != null)
+      append(sb, "first_run", airing.isFirstRun());
+
     if (airing != null)
     {
       Channel chan = airing.getChannel();
-      append(sb, "channel", airing.getChannelNum(0));
-      append(sb, "station", airing.getChannelName());
-      append(sb, "network", chan == null ? "" : safe(chan.getNetwork()));
+      appendIfNotEmpty(sb, "channel", airing.getChannelNum(0));
+      appendIfNotEmpty(sb, "station", airing.getChannelName());
+      appendIfNotEmpty(sb, "network", chan == null ? "" : chan.getNetwork());
       append(sb, "station_id", airing.getStationID());
     }
     closeObject(sb);
+  }
 
-    appendObjectStart(sb, "show");
-    appendRoleGroup(sb, "cast", show, new byte[] {
-        Show.ACTOR_ROLE, Show.LEAD_ACTOR_ROLE, Show.SUPPORTING_ACTOR_ROLE,
-        Show.ACTRESS_ROLE, Show.LEAD_ACTRESS_ROLE, Show.SUPPORTING_ACTRESS_ROLE,
-        Show.GUEST_ROLE, Show.GUEST_STAR_ROLE, Show.HOST_ROLE,
-        Show.NARRATOR_ROLE, Show.ANCHOR_ROLE, Show.VOICE_ROLE,
-        Show.MUSICAL_GUEST_ROLE
-    });
-    appendRoleGroup(sb, "director", show, new byte[] { Show.DIRECTOR_ROLE });
-    appendRoleGroup(sb, "writer", show, new byte[] { Show.WRITER_ROLE });
-    appendRoleGroup(sb, "executive_producer", show,
-        new byte[] { Show.EXECUTIVE_PRODUCER_ROLE, Show.CO_EXECUTIVE_PRODUCER_ROLE });
-    closeObject(sb);
+  private static void appendMetadataObject(StringBuilder sb,
+      MediaFile mf,
+      Airing airing,
+      Show show)
+  {
+    appendObjectStart(sb, "metadata");
 
-    appendObjectStart(sb, "viewing");
-    boolean watchedFlag = airing != null && airing.isWatched();
-    append(sb, "watched", watchedFlag);
+    if (show != null)
+    {
+      appendIfNotEmpty(sb, "rated", show.getRated());
+      appendIfNotEmpty(sb, "parental_rating", show.getParentalRating());
+      appendIfNotEmpty(sb, "year", show.getYear());
+      appendIfNotEmpty(sb, "language", show.getLanguage());
+      appendIfNotEmpty(sb, "studio", show.getStudio());
+      appendIfNotEmpty(sb, "star_rating", show.getRating());
+      appendStringArrayIfAny(sb, "categories", show.getCategories());
+      appendStringArrayIfAny(sb, "expanded_ratings", show.getExpandedRatings());
+    }
+
+    ContainerFormat cf = mf == null ? null : mf.getFileFormat();
+    appendIfNotEmpty(sb, "audio_format_summary", buildAudioSummary(cf));
+
+    if (airing != null)
+    {
+      append(sb, "hdtv", airing.isHDTV());
+      append(sb, "surround", airing.isSurround());
+      append(sb, "cc", airing.isCC());
+      append(sb, "watched", airing.isWatched());
+      append(sb, "first_run", airing.isFirstRun());
+    }
+    append(sb, "subtitles_available", hasSubtitles(mf, airing));
+
     long resumeMs = 0L;
     if (airing != null)
     {
@@ -406,33 +438,68 @@ public final class NgClientOfflineCompanionBuilder
         resumeMs = Math.max(0L, w.getWatchEnd() - airing.getStartTime());
     }
     append(sb, "resume_position_ms", resumeMs);
-    closeObject(sb);
 
-    appendObjectStart(sb, "scheduling");
     boolean isFavorite = airing != null && Carny.getInstance().isLoveAir(airing);
     ManualRecord mr = airing == null ? null : Wizard.getInstance().getManualRecord(airing);
     append(sb, "favorite", isFavorite);
     append(sb, "manual", mr != null);
     append(sb, "epg_scheduled", mr == null);
-    closeObject(sb);
 
+    closeObject(sb);
+  }
+
+  private static void appendCreditsArray(StringBuilder sb, Show show)
+  {
+    appendArrayStart(sb, "credits");
+    boolean first = true;
+    LinkedHashSet<String> seen = new LinkedHashSet<String>();
     if (show != null)
     {
-      SeriesInfo si = show.getSeriesInfo();
-      if (si != null)
+      byte[] roles = show.getRoles();
+      for (int i = 0; roles != null && i < roles.length; i++)
       {
-        appendObjectStart(sb, "series");
-        append(sb, "title", safe(si.getTitle()));
-        append(sb, "description", safe(si.getDescription()));
-        append(sb, "network", safe(si.getNetwork()));
-        append(sb, "showcard_id", show.getShowcardID());
+        Person p = show.getPersonObj(i);
+        if (p == null)
+          continue;
+        String personId = "P" + Math.abs(p.getID());
+        int roleCode = roles[i] & 0xFF;
+        String dedupeKey = personId + "|" + roleCode;
+        if (!seen.add(dedupeKey))
+          continue;
+        if (!first)
+          sb.append(',');
+        first = false;
+        sb.append('{');
+        append(sb, "person_id", personId);
+        append(sb, "person_name", p.getName());
+        append(sb, "role_code", roleCode);
+        append(sb, "role_name", Show.getRoleString(roleCode));
         closeObject(sb);
       }
     }
+    sb.append(']');
+  }
 
-    appendObjectStart(sb, "compat");
-    append(sb, "session_token", safe(session.sessionToken));
-    append(sb, "url_revision", session.urlRevision);
+  private static void appendAssetsObject(StringBuilder sb,
+      NgClientRecordingCopyTransferManager.TransferSession session,
+      MediaFile mf,
+      ArrayList<OfflineAsset> captions,
+      OfflineAsset comskip,
+      OfflineAsset transcript)
+  {
+    appendObjectStart(sb, "assets");
+    appendObjectStart(sb, "video");
+    appendFileArray(sb, "recording_files", mf == null ? null : mf.getFile(0));
+    append(sb, "recording_file_size", mf == null ? 0L : Math.max(0L, mf.getSize()));
+    closeObject(sb);
+
+    if (captions != null && !captions.isEmpty())
+      appendCaptionArray(sb, "captions", session, captions);
+    if (comskip != null)
+      appendComskipObject(sb, "comskip", session, comskip);
+    if (transcript != null)
+      appendTranscriptObject(sb, "transcript", session, transcript);
+
     closeObject(sb);
   }
 
@@ -443,12 +510,50 @@ public final class NgClientOfflineCompanionBuilder
     if (show == null)
       return rv;
 
-    addRemoteArtwork(rv, "poster", show.getImageUrl(0, Show.IMAGE_POSTER_TALL), null, "image/jpeg");
-    addRemoteArtwork(rv, "fanart", show.getImageUrl(0, Show.IMAGE_PHOTO_WIDE), null, "image/jpeg");
+    // Prefer a local recording thumbnail first so the transfer sidecar can serve at least
+    // one stable image even when remote artwork providers are unavailable.
+    File localThumb = null;
+    if (mf != null)
+    {
+      localThumb = mf.getSpecificThumbnailFile();
+      if ((localThumb == null || !localThumb.isFile()) && mf.getGeneratedThumbnailFileLocation() != null)
+      {
+        File generatedThumb = mf.getGeneratedThumbnailFileLocation();
+        if (generatedThumb.isFile())
+          localThumb = generatedThumb;
+      }
+    }
+    addLocalArtwork(rv, "thumbnail", localThumb, null, "image/jpeg");
+
+    LinkedHashSet<String> seenShowUrls = new LinkedHashSet<String>();
+
+    String thumbUrl = firstNonEmpty(
+        show.getAnyImageUrl(0, true),
+        show.getAnyImageUrl(0, false));
+    addRemoteArtworkUnique(rv, seenShowUrls, "thumbnail", thumbUrl, null, "image/jpeg");
+
+    String posterUrl = firstNonEmpty(
+        show.getImageUrl(0, Show.IMAGE_POSTER_TALL),
+        show.getImageUrl(0, Show.IMAGE_POSTER_WIDE),
+        show.getAnyImageUrl(0, false));
+    addRemoteArtworkUnique(rv, seenShowUrls, "poster", posterUrl, null, "image/jpeg");
+
+    String fanartUrl = firstNonEmpty(
+        show.getImageUrl(0, Show.IMAGE_PHOTO_WIDE),
+        show.getImageUrl(0, Show.IMAGE_PHOTO_TALL),
+        show.getAnyImageUrl(1, false),
+        show.getAnyImageUrl(0, false));
+    addRemoteArtworkUnique(rv, seenShowUrls, "fanart", fanartUrl, null, "image/jpeg");
+
+    for (int i = 0; i < 8; i++)
+    {
+      String extra = show.getImageUrlForIndex(i, false);
+      addRemoteArtworkUnique(rv, seenShowUrls, "other", extra, null, "image/jpeg");
+    }
 
     SeriesInfo si = show.getSeriesInfo();
     if (si != null)
-      addRemoteArtwork(rv, "banner", si.getImageURL(false), null, "image/jpeg");
+      addRemoteArtworkUnique(rv, seenShowUrls, "banner", si.getImageURL(false), null, "image/jpeg");
 
     LinkedHashSet<String> seenCast = new LinkedHashSet<String>();
     byte[] roles = show.getRoles();
@@ -462,11 +567,46 @@ public final class NgClientOfflineCompanionBuilder
         continue;
       String headshot = p.getImageURL(false);
       if (headshot == null || headshot.length() == 0)
+        headshot = p.getImageURL(true);
+      if (headshot == null || headshot.length() == 0)
         continue;
-      addRemoteArtwork(rv, "cast", headshot, personId, "image/jpeg");
+      addRemoteArtwork(rv, "person", headshot, personId, "image/jpeg");
     }
 
     return rv;
+  }
+
+  private static void addRemoteArtworkUnique(ArrayList<OfflineAsset> out, LinkedHashSet<String> seenUrls,
+      String kind, String sourceUrl, String personId, String contentType)
+  {
+    if (sourceUrl == null || sourceUrl.length() == 0)
+      return;
+    if (seenUrls != null && !seenUrls.add(sourceUrl))
+      return;
+    addRemoteArtwork(out, kind, sourceUrl, personId, contentType);
+  }
+
+  private static String firstNonEmpty(String v1, String v2)
+  {
+    if (v1 != null && v1.length() > 0)
+      return v1;
+    return (v2 != null && v2.length() > 0) ? v2 : "";
+  }
+
+  private static String firstNonEmpty(String v1, String v2, String v3)
+  {
+    String rv = firstNonEmpty(v1, v2);
+    if (rv.length() > 0)
+      return rv;
+    return (v3 != null && v3.length() > 0) ? v3 : "";
+  }
+
+  private static String firstNonEmpty(String v1, String v2, String v3, String v4)
+  {
+    String rv = firstNonEmpty(v1, v2, v3);
+    if (rv.length() > 0)
+      return rv;
+    return (v4 != null && v4.length() > 0) ? v4 : "";
   }
 
   private static void addRemoteArtwork(ArrayList<OfflineAsset> out, String kind, String sourceUrl,
@@ -477,6 +617,19 @@ public final class NgClientOfflineCompanionBuilder
     OfflineAsset a = new OfflineAsset();
     a.kind = kind;
     a.sourceUrl = sourceUrl;
+    a.personId = personId;
+    a.contentType = contentType;
+    out.add(a);
+  }
+
+  private static void addLocalArtwork(ArrayList<OfflineAsset> out, String kind, File localFile,
+      String personId, String contentType)
+  {
+    if (localFile == null || !localFile.isFile())
+      return;
+    OfflineAsset a = new OfflineAsset();
+    a.kind = kind;
+    a.localFile = localFile;
     a.personId = personId;
     a.contentType = contentType;
     out.add(a);
@@ -683,7 +836,7 @@ public final class NgClientOfflineCompanionBuilder
       append(sb, "kind", safe(a.kind));
       append(sb, "url", "/api/transfers/" + escape(session.sessionToken) + "/offline/artwork/" + i);
       if (a.personId != null && a.personId.length() > 0)
-        append(sb, "person_id", a.personId);
+        append(sb, "subject_id", a.personId);
       sb.append('}');
     }
     sb.append(']');
@@ -702,6 +855,7 @@ public final class NgClientOfflineCompanionBuilder
       sb.append('{');
       append(sb, "language", safe(a.language));
       append(sb, "kind", safe(a.kind));
+      append(sb, "format", safe(a.format));
       append(sb, "url", "/api/transfers/" + escape(session.sessionToken) + "/offline/captions/" + i);
       sb.append('}');
     }
@@ -1063,6 +1217,36 @@ public final class NgClientOfflineCompanionBuilder
     if (sb.charAt(sb.length() - 1) != '{') sb.append(',');
     sb.append('"').append(escape(key)).append('"').append(':')
         .append('"').append(escape(value == null ? "" : value)).append('"');
+  }
+
+  private static void appendIfNotEmpty(StringBuilder sb, String key, String value)
+  {
+    String s = safe(value);
+    if (s.length() == 0)
+      return;
+    append(sb, key, s);
+  }
+
+  private static void appendIfPositiveInt(StringBuilder sb, String key, int value)
+  {
+    if (value > 0)
+      append(sb, key, value);
+  }
+
+  private static void appendStringArrayIfAny(StringBuilder sb, String key, String[] values)
+  {
+    boolean hasAny = false;
+    for (int i = 0; values != null && i < values.length; i++)
+    {
+      String v = values[i];
+      if (v != null && v.length() > 0)
+      {
+        hasAny = true;
+        break;
+      }
+    }
+    if (hasAny)
+      appendStringArray(sb, key, values);
   }
 
   private static void append(StringBuilder sb, String key, long value)
