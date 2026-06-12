@@ -1941,8 +1941,18 @@ public class Global {
         if (uiMgr != null && uiMgr.getUIClientType() == UIClient.REMOTE_UI &&
             uiMgr.getRootPanel() != null && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
         {
-          return Boolean.valueOf(((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine()).hasClientCapability(getString(stack)));
+          MiniClientSageRenderer renderer = (MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine();
+          String capability = getString(stack);
+          boolean rv = renderer.hasClientCapability(capability);
+          if (Sage.DBG && "DOWNLOAD".equalsIgnoreCase(capability))
+            System.out.println("NG_MENU_GATE HasClientCapability(DOWNLOAD)=" + rv +
+                " client=" + uiMgr.getLocalUIClientName() +
+                " ngVersion=" + renderer.getNgVersion() +
+                " caps=" + renderer.getClientCapabilities());
+          return Boolean.valueOf(rv);
         }
+        if (Sage.DBG)
+          System.out.println("NG_MENU_GATE HasClientCapability(" + getString(stack) + ")=false reason=non_remote_or_no_renderer");
         return Boolean.FALSE;
       }});
     rft.put(new PredefinedJEPFunction("Global", "IsNgClientSession")
@@ -1957,8 +1967,17 @@ public class Global {
         if (uiMgr != null && uiMgr.getUIClientType() == UIClient.REMOTE_UI &&
             uiMgr.getRootPanel() != null && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
         {
-          return Boolean.valueOf(((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine()).isNgCapableSession());
+          MiniClientSageRenderer renderer = (MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine();
+          boolean rv = renderer.isNgCapableSession();
+          if (Sage.DBG)
+            System.out.println("NG_MENU_GATE IsNgClientSession=" + rv +
+                " client=" + uiMgr.getLocalUIClientName() +
+                " ngVersion=" + renderer.getNgVersion() +
+                " caps=" + renderer.getClientCapabilities());
+          return Boolean.valueOf(rv);
         }
+        if (Sage.DBG)
+          System.out.println("NG_MENU_GATE IsNgClientSession=false reason=non_remote_or_no_renderer");
         return Boolean.FALSE;
       }});
     rft.put(new PredefinedJEPFunction("Global", "SendDownloadCommandToClient", new String[] { "MediaFile" })
@@ -2401,6 +2420,26 @@ public class Global {
       public Object runSafely(Catbert.FastStack stack) throws Exception{
         return sage.client.NgClientRecordingCopyTransferManager.getInstance().getQueueItemProgressText(getInt(stack));
       }});
+    rft.put(new PredefinedJEPFunction("Global", "GetRecordingCopyTransferQueueItemId", new String[] { "QueueIndex" })
+    {
+      /**
+       * Gets the queue item id for a queue item at the given 1-based index.
+       *
+       * @declaration public long GetRecordingCopyTransferQueueItemId(int QueueIndex);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return new Long(sage.client.NgClientRecordingCopyTransferManager.getInstance().getQueueItemId(getInt(stack)));
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "GetRecordingCopyTransferQueueItemDetailText", new String[] { "QueueIndex" })
+    {
+      /**
+       * Gets detailed progress/state text for a queue item at the given 1-based index.
+       *
+       * @declaration public String GetRecordingCopyTransferQueueItemDetailText(int QueueIndex);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return sage.client.NgClientRecordingCopyTransferManager.getInstance().getQueueItemDetailText(getInt(stack));
+      }});
     rft.put(new PredefinedJEPFunction("Global", "PauseRecordingCopyTransferQueueItem", new String[] { "QueueIndex" })
     {
       /**
@@ -2411,6 +2450,16 @@ public class Global {
       public Object runSafely(Catbert.FastStack stack) throws Exception{
         return new Integer(sage.client.NgClientRecordingCopyTransferManager.getInstance().pauseQueueItem(getInt(stack)) == null ? 0 : 1);
       }});
+    rft.put(new PredefinedJEPFunction("Global", "PauseRecordingCopyTransferQueueItemById", new String[] { "QueueItemId" })
+    {
+      /**
+       * Pauses a queue item by stable queue item id.
+       *
+       * @declaration public int PauseRecordingCopyTransferQueueItemById(long QueueItemId);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return new Integer(sage.client.NgClientRecordingCopyTransferManager.getInstance().pauseQueueItemById(getLong(stack)) == null ? 0 : 1);
+      }});
     rft.put(new PredefinedJEPFunction("Global", "CancelRecordingCopyTransferQueueItem", new String[] { "QueueIndex" })
     {
       /**
@@ -2420,6 +2469,16 @@ public class Global {
        */
       public Object runSafely(Catbert.FastStack stack) throws Exception{
         return new Integer(sage.client.NgClientRecordingCopyTransferManager.getInstance().cancelQueueItem(getInt(stack)) == null ? 0 : 1);
+      }});
+    rft.put(new PredefinedJEPFunction("Global", "CancelRecordingCopyTransferQueueItemById", new String[] { "QueueItemId" })
+    {
+      /**
+       * Cancels a queue item by stable queue item id.
+       *
+       * @declaration public int CancelRecordingCopyTransferQueueItemById(long QueueItemId);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return new Integer(sage.client.NgClientRecordingCopyTransferManager.getInstance().cancelQueueItemById(getLong(stack)) == null ? 0 : 1);
       }});
     rft.put(new PredefinedJEPFunction("Global", "PauseAllRecordingCopyTransfers")
     {

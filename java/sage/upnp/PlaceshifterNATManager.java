@@ -15,17 +15,62 @@
  */
 package sage.upnp;
 
+import org.jupnp.UpnpService;
+import org.jupnp.UpnpServiceImpl;
+import org.jupnp.controlpoint.ActionCallback;
+import org.jupnp.model.action.ActionInvocation;
+import org.jupnp.model.message.UpnpResponse;
+import org.jupnp.model.message.header.UDADeviceTypeHeader;
+import org.jupnp.model.meta.Device;
+import org.jupnp.model.meta.RemoteDevice;
+import org.jupnp.model.meta.Service;
+import org.jupnp.model.types.UDADeviceType;
+import org.jupnp.model.types.UDAServiceType;
+import org.jupnp.registry.DefaultRegistryListener;
+import org.jupnp.registry.Registry;
 import sage.*;
 
-public class PlaceshifterNATManager implements Runnable, net.sbbi.upnp.DiscoveryEventHandler, AbstractedService
-{
-  /** Creates a new instance of PlaceshifterNATManager */
-  public PlaceshifterNATManager()
-  {
-  }
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
-  public void start()
+/**
+ * JUPnP-based UPnP NAT manager for Placeshifter port forwarding.
+ * Migrated from SBBI (sbbi-upnplib) to JUPnP. Behaviour and all Sage.properties keys are
+ * identical to the original implementation.
+ */
+public class PlaceshifterNATManager implements Runnable, AbstractedService
+{
+  private volatile UpnpService upnpService;
+  private final List<RemoteDevice> allIgdDevices = new ArrayList<>();
+
+  private final DefaultRegistryListener registryListener = new DefaultRegistryListener()
   {
+    @Override public void remoteDeviceAdded(Registry registry, RemoteDevice device)
+    {
+      if (isIGD(device)) synchronized (allIgdDevices) { allIgdDevices.add(device); }
+      synchronized (waitLock) { waitLock.notifyAll(); }
+    }
+    @Override public void remoteDeviceRemoved(Registry registry, RemoteDevice device)
+    {
+      synchronized (allIgdDevices) { allIgdDevices.remove(device); }
+      if (device.equals(myRouter)) { myRouter = null; myWanService = null;
+        if (Sage.DBG) System.out.println("UPnP: configured router left the network"); }
+    }
+  };
+
+  private volatile RemoteDevice myRouter;
+  @SuppressWarnings("rawtypes") private volatile Service myWanService;
+  private volatile String myExternalIP;
+  private Thread myThread;
+  private volatile boolean alive;
+  private final Object waitLock = new Object();
+
+  @Override public void start()
+  {
+    upnpService = new UpnpServiceImpl();
+    upnpService.getRegistry().addListener(registryListener);
     alive = true;
     myThread = new Thread(this, "PSNATMGR");
     myThread.setDaemon(true);
@@ -33,422 +78,236 @@ public class PlaceshifterNATManager implements Runnable, net.sbbi.upnp.Discovery
     myThread.start();
   }
 
-  public void kill()
+  @Override public void kill()
   {
     alive = false;
-    synchronized (waitLock)
+    synchronized (waitLock) { waitLock.notifyAll(); }
+    try { myThread.join(2000); } catch (Exception e) {}
+    if (myRouter != null) removeMappings();
+    UpnpService svc = upnpService;
+    if (svc != null) { upnpService = null; svc.shutdown(); }
+  }
+
+  @Override public void run()
+  {
+    if (Sage.DBG) System.out.println("Starting UPnP NAT Manager (JUPnP)...");
+    if (usesUPnP()) { findMyRouter(); synchronizeMappings(); }
+    while (alive)
     {
-      waitLock.notifyAll();
-    }
-    try
-    {
-      myThread.join(2000);
-    }
-    catch (Exception e){}
-    if (myRouter != null)
-      removeMappings();
-    if (setupDiscoveryListener)
-    {
-      net.sbbi.upnp.DiscoveryAdvertisement instance = net.sbbi.upnp.DiscoveryAdvertisement.getInstance();
-      instance.unRegisterEvent(net.sbbi.upnp.DiscoveryAdvertisement.EVENT_SSDP_ALIVE, "upnp:rootdevice", this);
-      setupDiscoveryListener = false;
+      if (Sage.getBoolean("placeshifter_port_forward_upnp_active", false) || !usesUPnP())
+        { synchronized (waitLock) { try { waitLock.wait(15*60000); } catch (InterruptedException e) {} } continue; }
+      findMyRouter();
+      synchronizeMappings();
+      synchronized (waitLock) { try { waitLock.wait(15*60000); } catch (InterruptedException e) {} }
     }
   }
 
   private boolean usesUPnP()
-  {
-    return "xUPnP".equals(Sage.get("placeshifter_port_forward_method", null));
-  }
+  { return "xUPnP".equals(Sage.get("placeshifter_port_forward_method", null)); }
 
-  private void setupDiscovery()
-  {
-    // NOTE: Disable this by default because it wastes lots of memory when it runs because it's
-    // very inefficient in how it uses Java/XML/HTTP
-    if (Sage.getBoolean("enable_upnp_event_listener", false))
-    {
-      // Set us up to listen to discovery broadcast of new devices on the network
-      try
-      {
-        net.sbbi.upnp.DiscoveryAdvertisement instance = net.sbbi.upnp.DiscoveryAdvertisement.getInstance();
-        instance.setDaemon(true);
-        instance.registerEvent(net.sbbi.upnp.DiscoveryAdvertisement.EVENT_SSDP_ALIVE, "upnp:rootdevice", this);
-      }
-      catch (java.io.IOException e)
-      {
-        // If this fails I still want to indicate it's setup so we don't keep retrying if it's not going to work
-        System.out.println("ERROR setting up UPnP discovery of:" + e);
-      }
-      setupDiscoveryListener = true;
-    }
-  }
-
-  public void run()
-  {
-    if (Sage.DBG) System.out.println("Starting UPnP NAT Manager...");
-    // Establish the initial UPnP setup
-    if (usesUPnP())
-    {
-      findMyRouter();
-      synchronizeMappings();
-      setupDiscovery();
-    }
-
-    // Any changes that occur to the UPnP configuration while we are running do NOT need to be handled by us
-    // because they are dealt with in the UI itself. We only need to address inconsistencies between the configuration
-    // and the state we are seeing. But we do not make any changes while the sync lock is active.
-    while (alive)
-    {
-      if (Sage.getBoolean("placeshifter_port_forward_upnp_active", false) || !usesUPnP())
-      {
-        synchronized (waitLock)
-        {
-          try
-          {
-            waitLock.wait(15*60000);
-          }
-          catch (InterruptedException e){}
-        }
-        continue;
-      }
-
-      findMyRouter();
-      synchronizeMappings();
-      if (!setupDiscoveryListener)
-        setupDiscovery();
-      synchronized (waitLock)
-      {
-        try
-        {
-          waitLock.wait(15*60000);
-        }
-        catch (InterruptedException e){}
-      }
-    }
-  }
-
-  // This finds all UPnP routers that are on our network and sets the allRouters variable
   private void discoverRouters()
   {
-    try
+    UpnpService svc = upnpService;
+    if (svc == null) return;
+    synchronized (allIgdDevices)
+    { allIgdDevices.clear(); for (RemoteDevice d : svc.getRegistry().getRemoteDevices()) if (isIGD(d)) allIgdDevices.add(d); }
+    boolean isEmpty; synchronized (allIgdDevices) { isEmpty = allIgdDevices.isEmpty(); }
+    if (isEmpty)
     {
-      allRouters = net.sbbi.upnp.impls.InternetGatewayDevice.getDevices(5000);
-    }
-    catch (Exception e)
-    {
-      if (Sage.DBG) System.out.println("Error with UPnP discovery of: " + e);
-      allRouters = null;
+      if (Sage.DBG) System.out.println("UPnP: M-SEARCH for InternetGatewayDevice");
+      svc.getControlPoint().search(new UDADeviceTypeHeader(new UDADeviceType("InternetGatewayDevice")));
+      try { Thread.sleep(5000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
     }
   }
 
-  // This finds the router that we're setup to configure if it's available on the network. If we can't find a router
-  // then we set myRouter to null.
   private void findMyRouter()
   {
     if (myRouter != null)
     {
-      String oldExternalIP = myExternalIP;
-      try
-      {
-        myExternalIP = myRouter.getExternalIPAddress();
-      }
-      catch (Exception e){}
-      if (oldExternalIP != myExternalIP && (oldExternalIP == null || !oldExternalIP.equals(myExternalIP)))
-      {
-        SageTV.forceLocatorUpdate();
-      }
+      String old = myExternalIP; myExternalIP = getExternalIP();
+      if ((old == null && myExternalIP != null) || (old != null && !old.equals(myExternalIP))) SageTV.forceLocatorUpdate();
       return;
     }
-    if (allRouters == null)
-      discoverRouters();
-    if (allRouters == null || allRouters.length == 0)
-      return;
-
-    // See if we can find a router that matches our UDN. If so, then we use it. If not, then we take the first one and
-    // use that one anyways. We also update our properties to reflect this change.
-    for (int i = 0; i < allRouters.length; i++)
+    discoverRouters();
+    List<RemoteDevice> snap; synchronized (allIgdDevices) { snap = new ArrayList<>(allIgdDevices); }
+    if (snap.isEmpty()) return;
+    String wantedUDN = Sage.get("placeshifter_port_forward_upnp_udn", null);
+    for (RemoteDevice dev : snap)
     {
-      String currUDN = allRouters[i].getIGDRootDevice().getUDN();
-      if (currUDN != null && currUDN.equals(Sage.get("placeshifter_port_forward_upnp_udn", null)))
-      {
-        myRouter = allRouters[i];
-        break;
-      }
+      if (dev.getIdentity().getUdn().getIdentifierString().equals(wantedUDN))
+        { myRouter = dev; myWanService = findWanService(dev); break; }
     }
     if (myRouter == null)
     {
-      // Check if the UI is going to override us
       if (Sage.getBoolean("placeshifter_port_forward_upnp_active", false)) return;
-
-      try
+      for (RemoteDevice dev : snap)
       {
-        String externalIP = allRouters[0].getExternalIPAddress();
-        if (externalIP != null && !externalIP.equals("0.0.0.0"))
+        @SuppressWarnings("rawtypes") Service ws = findWanService(dev);
+        if (ws == null) continue;
+        myRouter = dev; myWanService = ws;
+        String ip = getExternalIP();
+        if (ip != null && !ip.equals("0.0.0.0"))
         {
-          System.out.println("Previuosly configured UPnP router not found on network. It's UDN was:" + Sage.get("placeshifter_port_forward_upnp_udn", null) +
-              " SageTV will automatically use the first UPnP router it finds now instead.");
-          myRouter = allRouters[0];
-          Sage.put("placeshifter_port_forward_upnp_udn", myRouter.getIGDRootDevice().getUDN());
-          SageTV.forceLocatorUpdate();
+          String udn = dev.getIdentity().getUdn().getIdentifierString();
+          System.out.println("Previously configured UPnP router not found. Using: " + udn);
+          Sage.put("placeshifter_port_forward_upnp_udn", udn);
+          myExternalIP = ip; SageTV.forceLocatorUpdate(); return;
         }
-        else
-        {
-          System.out.println("Cannot find a valid UPnP router on the network anymore!!!");
-        }
+        myRouter = null; myWanService = null;
       }
-      catch (Exception e)
-      {
-        System.out.println("ERROR getting router's external IP of:" + e);
-      }
+      System.out.println("Cannot find a valid UPnP router on the network!");
+      synchronized (allIgdDevices) { allIgdDevices.clear(); }
     }
-    if (myRouter != null)
-    {
-      try
-      {
-        myExternalIP = myRouter.getExternalIPAddress();
-      }
-      catch (Exception e){}
-    }
-    else
-      allRouters = null; // if we didn't find one then we definitely need to rediscover them all again next time
+    else myExternalIP = getExternalIP();
   }
 
-  // Sets up the port mapping on the router to match what we have in our configuration.
   private void synchronizeMappings()
   {
-    if (myRouter == null) return;
-    String desiredLocalIP = null;
-    try
-    {
-      if (sage.Sage.WINDOWS_OS || sage.Sage.MAC_OS_X)
-        desiredLocalIP = java.net.InetAddress.getLocalHost().getHostAddress();
-      else
-        desiredLocalIP = LinuxUtils.getIPAddress();
-    }
-    catch (java.io.IOException e)
-    {
-      if (Sage.DBG) System.out.println("Unable to setup UPnP mappings because we can't get a local IP address!");
-      return;
-    }
-    int desiredLocalPort = Sage.getInt("extender_and_placeshifter_server_port", 31099);
-    int desiredExternalPort = Sage.getInt("placeshifter_port_forward_extern_port", desiredLocalPort);
-    if (desiredExternalPort > 0)
-      setupMapping(desiredLocalIP, desiredLocalPort, desiredExternalPort, "SageTV", "TCP");
-
-    // Now go through any other custom UPnP port mappings they want us to establish
-    // The format is upnp_port_forward_additional_mappings/svcName/portType/externalPort=internalPort
-    // for example: upnp_port_forward_additional_mappings/WebServer/TCP/8080=8080
-    String[] customServices = Sage.childrenNames("upnp_port_forward_additional_mappings");
-    for (int i = 0; i < customServices.length; i++)
-    {
-      String[] customTypes = Sage.childrenNames("upnp_port_forward_additional_mappings/" + customServices[i]);
-      for (int j = 0; j < customTypes.length; j++)
+    if (myRouter == null || myWanService == null) return;
+    String localIP = null;
+    try { localIP = sage.Sage.WINDOWS_OS || sage.Sage.MAC_OS_X ? java.net.InetAddress.getLocalHost().getHostAddress() : LinuxUtils.getIPAddress(); }
+    catch (java.io.IOException e) { if (Sage.DBG) System.out.println("UPnP: cannot determine local IP"); return; }
+    int localPort = Sage.getInt("extender_and_placeshifter_server_port", 31099);
+    int extPort   = Sage.getInt("placeshifter_port_forward_extern_port", localPort);
+    if (extPort > 0) setupMapping(localIP, localPort, extPort, "SageTV", "TCP");
+    for (String svc : Sage.childrenNames("upnp_port_forward_additional_mappings"))
+      for (String type : Sage.childrenNames("upnp_port_forward_additional_mappings/" + svc))
       {
-        String currType = customTypes[j];
-        if (!currType.equals("TCP") && !currType.equals("UDP"))
+        if (!type.equals("TCP") && !type.equals("UDP")) continue;
+        for (String ep : Sage.keys("upnp_port_forward_additional_mappings/" + svc + "/" + type))
         {
-          System.out.println("Bad port type in properties configuration of:" + currType);
-          continue;
-        }
-        String[] customExternalPorts = Sage.keys("upnp_port_forward_additional_mappings/" + customServices[i] + "/" + currType);
-        for (int k = 0; k < customExternalPorts.length; k++)
-        {
-          int currExtPort;
-          try
-          {
-            currExtPort = Integer.parseInt(customExternalPorts[k]);
-          }
-          catch (NumberFormatException e)
-          {
-            System.out.println("Skipping custom port mapping for " + customServices[i] + " of " + customExternalPorts[k] + " due to bad formatting.");
-            continue;
-          }
-          int currIntPort = Sage.getInt("upnp_port_forward_additional_mappings/" + customServices[i] + "/" + currType + "/" +
-              currExtPort, 0);
-          if (currIntPort > 0 && currExtPort > 0)
-          {
-            setupMapping(desiredLocalIP, currIntPort, currExtPort, customServices[i], currType);
-          }
+          int ep2; try { ep2 = Integer.parseInt(ep); } catch (NumberFormatException e) { continue; }
+          int ip2 = Sage.getInt("upnp_port_forward_additional_mappings/" + svc + "/" + type + "/" + ep2, 0);
+          if (ip2 > 0 && ep2 > 0) setupMapping(localIP, ip2, ep2, svc, type);
         }
       }
-    }
   }
 
-  private boolean setupMapping(String desiredLocalIP, int desiredLocalPort, int desiredExternalPort, String svcName, String portType)
+  @SuppressWarnings("rawtypes")
+  private boolean setupMapping(String localIP, int localPort, int extPort, String svcName, String proto)
   {
-    if (myRouter == null) return false;
-    // Now get the mapping and see if it's correct
-    net.sbbi.upnp.messages.ActionResponse resp = null;
-    try
+    Service ws = myWanService;
+    if (ws == null) return false;
+    String[] ex = getSpecificPortMapping(ws, extPort, proto);
+    if (ex != null)
     {
-      resp = myRouter.getSpecificPortMappingEntry(null, desiredExternalPort, "TCP");
-    }
-    catch (Exception e)
-    {
-      System.out.println("UPnP ERROR:" + e);
-      e.printStackTrace();
-      // NOTE: Narflex has seen this happen on his router during normal operation
-    }
-    try
-    {
-      if (resp != null)
-      {
-        String currPort = resp.getOutActionArgumentValue("NewInternalPort");
-        String currIP = resp.getOutActionArgumentValue("NewInternalClient");
-        if (currPort != null && currPort.equals(Integer.toString(desiredLocalPort)) && currIP != null &&
-            currIP.equals(desiredLocalIP))
-        {
-          // Our UPnP port mappings are already setup correctly!
-          //if (Sage.DBG) System.out.println("UPnP port mappings were verified on router to be correct!");
-          return true;
-        }
-        // Check if the UI is going to override us
-        if (Sage.getBoolean("placeshifter_port_forward_upnp_active", false)) return true;
-
-        // Double-check to make sure the port is really not setup. Sometime they don't appear in getSpecificPortMappingEntry because
-        // they're on a predefined port. But they'll show up in the generic list hopefully in that case (at least they do for my router).
-        int portIdx = 0;
-        while (true)
-        {
-          try
-          {
-            net.sbbi.upnp.messages.ActionResponse genResp = myRouter.getGenericPortMappingEntry(portIdx);
-            if (genResp == null) break;
-            currPort = genResp.getOutActionArgumentValue("NewInternalPort");
-            currIP = genResp.getOutActionArgumentValue("NewInternalClient");
-            if (currPort != null && currPort.equals(Integer.toString(desiredLocalPort)) && currIP != null &&
-                currIP.equals(desiredLocalIP))
-            {
-              // Our UPnP port mappings are already setup correctly!
-              //if (Sage.DBG) System.out.println("UPnP port mappings were verified on router to be correct!");
-              return true;
-            }
-          }
-          catch (Exception e)
-          {
-            // beyond the end of the list most likely
-            break;
-          }
-          portIdx++;
-        }
-
-        // There's a port mappings already, but it's not correct for our purpose so remove it and register ours.
-        if (Sage.DBG) System.out.println("Removing port mapping for:" + resp);
-        myRouter.deletePortMapping(null, desiredExternalPort, portType);
-      }
-    }
-    catch (Exception e)
-    {
-      System.out.println("UPnP ERROR:" + e);
-      e.printStackTrace();
-      // NOTE: We should still go on after a failure here to try to establish the mapping; otherwise
-      // it may not be setup
-    }
-
-    try
-    {
-      // Check if the UI is going to override us
+      if (localIP.equals(ex[0]) && Integer.toString(localPort).equals(ex[1])) return true;
       if (Sage.getBoolean("placeshifter_port_forward_upnp_active", false)) return true;
-
-      // Now establish our port mapping on the router
-      if (myRouter.addPortMapping(svcName, null, desiredLocalPort, desiredExternalPort, desiredLocalIP, 0, portType))
-      {
-        if (Sage.DBG) System.out.println("Successfully setup UPnP port mapping!");
-        return true;
-      }
-      else
-      {
-        if (Sage.DBG) System.out.println("UPnP port mapping setup has failed!");
-        return false;
-      }
+      deletePortMapping(ws, extPort, proto);
     }
-    catch (Exception e)
-    {
-      System.out.println("UPnP ERROR:" + e);
-      e.printStackTrace();
-      myRouter = null;
-      allRouters = null; // Clear the global cache too since that'll be wrong now
-      return false;
-    }
+    if (Sage.getBoolean("placeshifter_port_forward_upnp_active", false)) return true;
+    boolean ok = addPortMapping(ws, localIP, localPort, extPort, svcName, proto);
+    if (!ok) { myRouter = null; myWanService = null; synchronized (allIgdDevices) { allIgdDevices.clear(); } }
+    else if (Sage.DBG) System.out.println("UPnP: mapped ext=" + extPort + " -> " + localIP + ":" + localPort);
+    return ok;
   }
 
+  @SuppressWarnings("rawtypes")
   private void removeMappings()
   {
-    if (myRouter == null) return;
-    int desiredExternalPort = Sage.getInt("placeshifter_port_forward_extern_port",
-        Sage.getInt("extender_and_placeshifter_server_port", 31099));
-    if (desiredExternalPort > 0)
-      removeMapping(desiredExternalPort, "TCP");
-
-    // Now go through any other custom UPnP port mappings they want us to establish
-    // The format is upnp_port_forward_additional_mappings/svcName/portType/externalPort=internalPort
-    // for example: upnp_port_forward_additional_mappings/WebServer/TCP/8080=8080
-    String[] customServices = Sage.childrenNames("upnp_port_forward_additional_mappings");
-    for (int i = 0; i < customServices.length; i++)
-    {
-      String[] customTypes = Sage.childrenNames("upnp_port_forward_additional_mappings/" + customServices[i]);
-      for (int j = 0; j < customTypes.length; j++)
+    Service ws = myWanService;
+    if (ws == null) return;
+    int ep = Sage.getInt("placeshifter_port_forward_extern_port", Sage.getInt("extender_and_placeshifter_server_port", 31099));
+    if (ep > 0) deletePortMapping(ws, ep, "TCP");
+    for (String svc : Sage.childrenNames("upnp_port_forward_additional_mappings"))
+      for (String type : Sage.childrenNames("upnp_port_forward_additional_mappings/" + svc))
       {
-        String currType = customTypes[j];
-        if (!currType.equals("TCP") && !currType.equals("UDP"))
-        {
-          System.out.println("Bad port type in properties configuration of:" + currType);
-          continue;
-        }
-        String[] customExternalPorts = Sage.keys("upnp_port_forward_additional_mappings/" + customServices[i] + "/" + currType);
-        for (int k = 0; k < customExternalPorts.length; k++)
-        {
-          int currExtPort;
-          try
-          {
-            currExtPort = Integer.parseInt(customExternalPorts[k]);
-          }
-          catch (NumberFormatException e)
-          {
-            System.out.println("Skipping custom port mapping for " + customServices[i] + " of " + customExternalPorts[k] + " due to bad formatting.");
-            continue;
-          }
-          if (currExtPort > 0)
-          {
-            removeMapping(currExtPort, currType);
-          }
-        }
+        if (!type.equals("TCP") && !type.equals("UDP")) continue;
+        for (String e : Sage.keys("upnp_port_forward_additional_mappings/" + svc + "/" + type))
+          try { deletePortMapping(ws, Integer.parseInt(e), type); } catch (NumberFormatException ex) {}
       }
-    }
   }
 
-  private void removeMapping(int desiredExternalPort, String portType)
+  // WANIPConnection actions via JUPnP core ActionCallback (no support-module dependency).
+
+  @SuppressWarnings({"rawtypes","unchecked"})
+  private String getExternalIP()
   {
+    Service ws = myWanService; UpnpService usvc = upnpService;
+    if (ws == null || usvc == null) return null;
+    org.jupnp.model.meta.Action act = ws.getAction("GetExternalIPAddress");
+    if (act == null) return null;
+    CompletableFuture<String> f = new CompletableFuture<>();
+    usvc.getControlPoint().execute(new ActionCallback(new ActionInvocation(act))
+    {
+      @Override public void success(ActionInvocation inv)
+      { try { Object v = inv.getOutput("NewExternalIPAddress").getValue(); f.complete(v!=null?v.toString():null); } catch (Exception e) { f.complete(null); } }
+      @Override public void failure(ActionInvocation inv, UpnpResponse r, String msg)
+      { if (Sage.DBG) System.out.println("UPnP GetExternalIPAddress: "+msg); f.complete(null); }
+    });
+    try { return f.get(5,TimeUnit.SECONDS); } catch (Exception e) { return null; }
+  }
+
+  @SuppressWarnings({"rawtypes","unchecked"})
+  private String[] getSpecificPortMapping(Service ws, int extPort, String proto)
+  {
+    UpnpService usvc = upnpService; if (usvc == null) return null;
+    org.jupnp.model.meta.Action act = ws.getAction("GetSpecificPortMappingEntry");
+    if (act == null) return null;
+    ActionInvocation inv = new ActionInvocation(act);
+    try { inv.setInput("NewRemoteHost",""); inv.setInput("NewExternalPort",extPort); inv.setInput("NewProtocol",proto); }
+    catch (Exception e) { return null; }
+    CompletableFuture<String[]> f = new CompletableFuture<>();
+    usvc.getControlPoint().execute(new ActionCallback(inv)
+    {
+      @Override public void success(ActionInvocation i)
+      { try { f.complete(new String[]{i.getOutput("NewInternalClient").getValue().toString(),i.getOutput("NewInternalPort").getValue().toString()}); } catch(Exception e){f.complete(null);} }
+      @Override public void failure(ActionInvocation i,UpnpResponse r,String msg){ f.complete(null); }
+    });
+    try { return f.get(5,TimeUnit.SECONDS); } catch (Exception e) { return null; }
+  }
+
+  @SuppressWarnings({"rawtypes","unchecked"})
+  private boolean addPortMapping(Service ws, String localIP, int localPort, int extPort, String desc, String proto)
+  {
+    UpnpService usvc = upnpService; if (usvc == null) return false;
+    org.jupnp.model.meta.Action act = ws.getAction("AddPortMapping");
+    if (act == null) return false;
+    ActionInvocation inv = new ActionInvocation(act);
     try
     {
-      myRouter.deletePortMapping(null, desiredExternalPort, portType);
+      inv.setInput("NewRemoteHost",""); inv.setInput("NewExternalPort",extPort); inv.setInput("NewProtocol",proto);
+      inv.setInput("NewInternalPort",localPort); inv.setInput("NewInternalClient",localIP);
+      inv.setInput("NewEnabled","1"); inv.setInput("NewPortMappingDescription",desc); inv.setInput("NewLeaseDuration","0");
     }
-    catch (Exception e)
+    catch (Exception e) { System.out.println("UPnP AddPortMapping build error: "+e); return false; }
+    CompletableFuture<Boolean> f = new CompletableFuture<>();
+    usvc.getControlPoint().execute(new ActionCallback(inv)
     {
-      System.out.println("UPnP ERROR:" + e);
-      e.printStackTrace();
-    }
+      @Override public void success(ActionInvocation i){ f.complete(true); }
+      @Override public void failure(ActionInvocation i,UpnpResponse r,String msg){ System.out.println("UPnP AddPortMapping: "+msg); f.complete(false); }
+    });
+    try { return Boolean.TRUE.equals(f.get(5,TimeUnit.SECONDS)); } catch (Exception e) { return false; }
   }
 
-  public void eventSSDPAlive(String usn, String udn, String nt, String maxAge, java.net.URL location)
+  @SuppressWarnings({"rawtypes","unchecked"})
+  private void deletePortMapping(Service ws, int extPort, String proto)
   {
-    synchronized (waitLock)
+    UpnpService usvc = upnpService; if (usvc == null) return;
+    org.jupnp.model.meta.Action act = ws.getAction("DeletePortMapping");
+    if (act == null) return;
+    ActionInvocation inv = new ActionInvocation(act);
+    try { inv.setInput("NewRemoteHost",""); inv.setInput("NewExternalPort",extPort); inv.setInput("NewProtocol",proto); }
+    catch (Exception e) { return; }
+    CompletableFuture<Void> f = new CompletableFuture<>();
+    usvc.getControlPoint().execute(new ActionCallback(inv)
     {
-      waitLock.notifyAll();
-    }
+      @Override public void success(ActionInvocation i){ f.complete(null); }
+      @Override public void failure(ActionInvocation i,UpnpResponse r,String msg){ if(Sage.DBG)System.out.println("UPnP DeletePortMapping: "+msg); f.complete(null); }
+    });
+    try { f.get(5,TimeUnit.SECONDS); } catch (Exception e) {}
   }
 
-  public void eventSSDPByeBye(String usn, String udn, String nt)
+  private static boolean isIGD(Device<?,?,?> d)
+  { return "InternetGatewayDevice".equals(d.getType().getType()); }
+
+  @SuppressWarnings("rawtypes")
+  private Service findWanService(Device<?,?,?> d)
   {
+    for (String t : new String[]{"WANIPConnection","WANPPPConnection"})
+    { Service s = d.findService(new UDAServiceType(t,1)); if (s!=null) return s; }
+    Device<?,?,?>[] emb = d.getEmbeddedDevices();
+    if (emb != null) for (Device<?,?,?> e : emb) { Service s = findWanService(e); if (s!=null) return s; }
+    return null;
   }
-
-  private Thread myThread;
-  private boolean alive;
-
-  private net.sbbi.upnp.impls.InternetGatewayDevice[] allRouters;
-  private net.sbbi.upnp.impls.InternetGatewayDevice myRouter;
-  private Object waitLock = new Object();
-
-  private boolean setupDiscoveryListener;
-
-  private String myExternalIP;
 }

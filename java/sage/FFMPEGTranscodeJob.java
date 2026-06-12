@@ -115,6 +115,7 @@ public class FFMPEGTranscodeJob extends TranscodeJob
     sage.media.format.ContainerFormat phaseTarget = (aiUpscalePhase == 2)
         ? Ministry.stripScaleFilterForPhase2(targetFormat) : targetFormat;
     tranny.setSourceFile(null, phaseInputFile);
+    tranny.setCaptionSourceFile(mf.getFile(transcodeSegment));
     tranny.setOutputFile(getTempFile(transcodeSegment));
     tranny.setTranscodeFormat(mf.getFileFormat(), phaseTarget);
     if (segmentForLastPass != transcodeSegment)

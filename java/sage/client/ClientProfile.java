@@ -40,6 +40,8 @@ public class ClientProfile
   private final int maxVideoHeight;
   private final boolean allowClientOverrides;
   private final LiveTranscodeProfile liveTranscode;
+  private final Set<String> preferPullContainers;
+  private final Set<String> avoidPushContainers;
 
   public ClientProfile(String profileId, String description, boolean managed,
       Collection<String> containers, Collection<String> videoCodecs,
@@ -55,6 +57,21 @@ public class ClientProfile
       Collection<String> audioCodecs, boolean allowHevc, String autoRemux,
       int maxVideoWidth, int maxVideoHeight, boolean allowClientOverrides,
       LiveTranscodeProfile liveTranscode)
+    {
+    this(profileId, description, managed,
+      containers, videoCodecs, audioCodecs,
+      allowHevc, autoRemux, maxVideoWidth, maxVideoHeight,
+      allowClientOverrides, liveTranscode,
+      Collections.<String>emptySet(), Collections.<String>emptySet());
+    }
+
+    public ClientProfile(String profileId, String description, boolean managed,
+      Collection<String> containers, Collection<String> videoCodecs,
+      Collection<String> audioCodecs, boolean allowHevc, String autoRemux,
+      int maxVideoWidth, int maxVideoHeight, boolean allowClientOverrides,
+      LiveTranscodeProfile liveTranscode,
+      Collection<String> preferPullContainers,
+      Collection<String> avoidPushContainers)
   {
     this.profileId = profileId;
     this.description = description;
@@ -71,6 +88,12 @@ public class ClientProfile
     this.maxVideoHeight = maxVideoHeight;
     this.allowClientOverrides = allowClientOverrides;
     this.liveTranscode = liveTranscode;
+    this.preferPullContainers = new LinkedHashSet<>();
+    if (preferPullContainers != null)
+      for (String c : preferPullContainers) this.preferPullContainers.add(c.toUpperCase());
+    this.avoidPushContainers = new LinkedHashSet<>();
+    if (avoidPushContainers != null)
+      for (String c : avoidPushContainers) this.avoidPushContainers.add(c.toUpperCase());
   }
 
   public String getProfileId() { return profileId; }
@@ -90,6 +113,8 @@ public class ClientProfile
   {
     return liveTranscode != null ? liveTranscode : LiveTranscodeProfile.safeDefault();
   }
+  public Set<String> getPreferPullContainers() { return Collections.unmodifiableSet(preferPullContainers); }
+  public Set<String> getAvoidPushContainers() { return Collections.unmodifiableSet(avoidPushContainers); }
 
   public boolean isContainerAllowed(String container)
   {
@@ -125,6 +150,24 @@ public class ClientProfile
   public boolean isAutoRemuxAggressive()
   {
     return AUTO_REMUX_AGGRESSIVE.equals(autoRemux);
+  }
+
+  public boolean shouldPreferPullForContainer(String container)
+  {
+    if (container == null) return false;
+    String upper = container.toUpperCase();
+    if ("MKV".equals(upper) || "MATROSKA".equals(upper))
+      return preferPullContainers.contains("MKV") || preferPullContainers.contains("MATROSKA");
+    return preferPullContainers.contains(upper);
+  }
+
+  public boolean shouldAvoidPushForContainer(String container)
+  {
+    if (container == null) return false;
+    String upper = container.toUpperCase();
+    if ("MKV".equals(upper) || "MATROSKA".equals(upper))
+      return avoidPushContainers.contains("MKV") || avoidPushContainers.contains("MATROSKA");
+    return avoidPushContainers.contains(upper);
   }
 
   /**
@@ -167,7 +210,8 @@ public class ClientProfile
     return new ClientProfile(profileId, description, managed,
         effectiveContainers, effectiveVideoCodecs, effectiveAudioCodecs,
         effectiveAllowHevc, effectiveAutoRemux,
-        maxVideoWidth, maxVideoHeight, allowClientOverrides, liveTranscode);
+      maxVideoWidth, maxVideoHeight, allowClientOverrides, liveTranscode,
+      preferPullContainers, avoidPushContainers);
   }
 
   @Override
@@ -175,6 +219,8 @@ public class ClientProfile
   {
     return "ClientProfile[" + profileId + " containers=" + containers +
         " video=" + videoCodecs + " audio=" + audioCodecs +
-        " hevc=" + allowHevc + " remux=" + autoRemux + " managed=" + managed + "]";
+        " hevc=" + allowHevc + " remux=" + autoRemux +
+        " preferPull=" + preferPullContainers + " avoidPush=" + avoidPushContainers +
+        " managed=" + managed + "]";
   }
 }

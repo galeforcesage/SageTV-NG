@@ -128,6 +128,8 @@ public final class NgClientRecordingCopyTransferManager
     public volatile long effectiveRateKbps;
     public volatile long urlRevision;
     public volatile AcceptedPolicy acceptedPolicy;
+    public volatile String downloadUsername;
+    public volatile String downloadPassword;
     public final java.util.List<PolicyAdjustment> adjustments;
     public final java.util.List<String> recentReasonCodes;
     public final boolean recordingComplete;
@@ -195,6 +197,193 @@ public final class NgClientRecordingCopyTransferManager
   public static NgClientRecordingCopyTransferManager getInstance()
   {
     return INSTANCE;
+  }
+
+  public static final class RefreshAttemptPermit
+  {
+    public final boolean allowed;
+    public final String correlationId;
+    public final String lane;
+    public final String operationKey;
+    public final String blockCode;
+    public final boolean retriable;
+    private final RefreshOperationState state;
+
+    private RefreshAttemptPermit(boolean allowed, String correlationId, String lane,
+        String operationKey, String blockCode, boolean retriable, RefreshOperationState state)
+    {
+      this.allowed = allowed;
+      this.correlationId = correlationId;
+      this.lane = lane;
+      this.operationKey = operationKey;
+      this.blockCode = blockCode;
+      this.retriable = retriable;
+      this.state = state;
+    }
+  }
+
+  private static final class RefreshOperationState
+  {
+    public boolean active;
+    public boolean pendingReplay;
+    public long lastAckAtMs;
+    public long coalescedTriggerCount;
+    public long cooldownSuppressedCount;
+  }
+
+  private final Object refreshGuardLock = new Object();
+  private final java.util.HashMap<String, RefreshOperationState> refreshStateByOperation =
+      new java.util.HashMap<String, RefreshOperationState>();
+  private final java.util.HashMap<String, String> activeLaneByCorrelation =
+      new java.util.HashMap<String, String>();
+
+  public RefreshAttemptPermit beginRefreshAttempt(int recordingId, String correlationId,
+      String lane)
+  {
+    String normLane = normalizeLane(lane);
+    String normCorrelation = normalizeCorrelationId(correlationId);
+    String opKey = "refresh:" + recordingId;
+    long now = Sage.time();
+    long cooldownMs = Math.max(0L,
+        Sage.getLong("miniclient/transfer/refresh_success_cooldown_ms", 1200L));
+
+    synchronized (refreshGuardLock)
+    {
+      RefreshOperationState state = refreshStateByOperation.get(opKey);
+      if (state == null)
+      {
+        state = new RefreshOperationState();
+        refreshStateByOperation.put(opKey, state);
+      }
+
+      String existingLane = activeLaneByCorrelation.get(normCorrelation);
+      if (existingLane != null && !existingLane.equals(normLane))
+      {
+        return new RefreshAttemptPermit(false, normCorrelation, normLane,
+            opKey, "LANE_MUTEX_BLOCKED", true, state);
+      }
+
+      if (state.active)
+      {
+        state.pendingReplay = true;
+        state.coalescedTriggerCount++;
+        return new RefreshAttemptPermit(false, normCorrelation, normLane,
+            opKey, "COALESCED_ACTIVE", true, state);
+      }
+
+      if (cooldownMs > 0L && state.lastAckAtMs > 0L && (now - state.lastAckAtMs) < cooldownMs)
+      {
+        state.cooldownSuppressedCount++;
+        return new RefreshAttemptPermit(false, normCorrelation, normLane,
+            opKey, "COOLDOWN_ACTIVE", true, state);
+      }
+
+      state.active = true;
+      state.coalescedTriggerCount = 0L;
+      state.cooldownSuppressedCount = 0L;
+      activeLaneByCorrelation.put(normCorrelation, normLane);
+      return new RefreshAttemptPermit(true, normCorrelation, normLane,
+          opKey, "", true, state);
+    }
+  }
+
+  public boolean finishRefreshAttempt(RefreshAttemptPermit permit, String resultType,
+      String errorCode, boolean retriable, int laneFallbackCount, int attemptCount,
+      int recordingId)
+  {
+    if (permit == null)
+      return false;
+
+    long now = Sage.time();
+    long cooldownMs = Math.max(0L,
+        Sage.getLong("miniclient/transfer/refresh_success_cooldown_ms", 1200L));
+    long cooldownSuppressedCount = 0L;
+    long coalescedTriggerCount = 0L;
+    boolean replayRequested = false;
+    synchronized (refreshGuardLock)
+    {
+      RefreshOperationState state = permit.state;
+      if (state != null)
+      {
+        state.active = false;
+        if ("ACK".equals(resultType))
+        {
+          state.lastAckAtMs = now;
+        }
+        cooldownSuppressedCount = state.cooldownSuppressedCount;
+        coalescedTriggerCount = state.coalescedTriggerCount;
+        if (state.pendingReplay)
+        {
+          boolean inCooldown = cooldownMs > 0L && state.lastAckAtMs > 0L &&
+              (now - state.lastAckAtMs) < cooldownMs;
+          replayRequested = !inCooldown;
+          state.pendingReplay = false;
+        }
+      }
+      activeLaneByCorrelation.remove(permit.correlationId);
+      refreshGuardLock.notifyAll();
+    }
+
+    if (Sage.getBoolean("miniclient/transfer/log_refresh_guardrails", true))
+    {
+      System.out.println("NG_TRANSFER_REFRESH_GUARDRAIL"
+          + " correlation_id=" + safe(permit.correlationId)
+          + " recording_id=" + recordingId
+          + " lane_selected=" + safe(permit.lane)
+          + " lane_fallback_count=" + Math.max(0, laneFallbackCount)
+          + " attempt_count=" + Math.max(0, attemptCount)
+          + " result_type=" + safe(resultType)
+          + " error_code=" + safe(errorCode)
+          + " retriable=" + retriable
+          + " cooldown_suppressed_count=" + cooldownSuppressedCount
+          + " coalesced_trigger_count=" + coalescedTriggerCount);
+    }
+
+      return replayRequested;
+  }
+
+  public static int getRefreshMaxAttempts()
+  {
+    return Math.max(1, Sage.getInt("miniclient/transfer/refresh_max_attempts", 3));
+  }
+
+  public static long computeRefreshRetryBackoffMs(int attempt)
+  {
+    int a = Math.max(1, attempt);
+    java.util.concurrent.ThreadLocalRandom rnd = java.util.concurrent.ThreadLocalRandom.current();
+    if (a <= 1) return rnd.nextLong(400L, 701L);
+    if (a == 2) return rnd.nextLong(900L, 1401L);
+    return rnd.nextLong(1800L, 2801L);
+  }
+
+  public static boolean sleepRefreshRetryBackoff(int attempt)
+  {
+    long sleepMs = computeRefreshRetryBackoffMs(attempt);
+    try
+    {
+      Thread.sleep(sleepMs);
+      return true;
+    }
+    catch (InterruptedException ie)
+    {
+      Thread.currentThread().interrupt();
+      return false;
+    }
+  }
+
+  private static String normalizeLane(String lane)
+  {
+    if (lane == null || lane.trim().length() == 0)
+      return "unknown";
+    return lane.trim().toLowerCase();
+  }
+
+  private static String normalizeCorrelationId(String correlationId)
+  {
+    String corr = safe(correlationId).trim();
+    if (corr.length() > 0)
+      return corr;
+    return java.util.UUID.randomUUID().toString();
   }
 
   public synchronized TransferSession createSession(String clientName, String clientIp,
@@ -269,6 +458,9 @@ public final class NgClientRecordingCopyTransferManager
         state,
         recordingComplete);
 
+      session.downloadUsername = generateDownloadUsername(session.sessionToken);
+      session.downloadPassword = generateDownloadPassword();
+
     addAdjustmentReasonCodes(session, adjustments);
     sessionsByToken.put(session.sessionToken, session);
     return session;
@@ -342,6 +534,11 @@ public final class NgClientRecordingCopyTransferManager
     session.expiresAt = session.updatedAt + Math.max(300L,
         Sage.getLong("miniclient/transfer/session_ttl_seconds", 86400L)) * 1000L;
     session.urlRevision = Math.max(1L, session.urlRevision + 1L);
+    if (Sage.getBoolean("miniclient/transfer/rotate_download_credentials_on_refresh", true))
+    {
+      session.downloadUsername = generateDownloadUsername(session.sessionToken);
+      session.downloadPassword = generateDownloadPassword();
+    }
     addReasonCode(session, CODE_URL_REFRESHED,
       "Download URL refreshed for resume or policy update.");
     return session;
@@ -439,7 +636,7 @@ public final class NgClientRecordingCopyTransferManager
         walker.remove();
         continue;
       }
-      if (session.expiresAt <= now)
+      if (!session.isTerminal() && session.expiresAt <= now)
       {
         if (!STATE_EXPIRED.equals(session.sessionState))
         {
@@ -490,6 +687,11 @@ public final class NgClientRecordingCopyTransferManager
     if (session == null)
       return buildErrorJson("TRANSFER_SESSION_ERROR", CODE_TOKEN_INVALID, "No transfer session was created.");
 
+    String downloadUrl = buildTransferContentUrl(session);
+    String downloadPath = buildTransferContentPath(session);
+    String offlineMetadataUrl = buildTransferOfflineMetadataUrl(session);
+    String offlineMetadataPath = buildTransferOfflineMetadataPath(session);
+
     StringBuilder sb = new StringBuilder(2048);
     sb.append('{');
     append(sb, "type", "TRANSFER_SESSION_ACK");
@@ -499,26 +701,70 @@ public final class NgClientRecordingCopyTransferManager
     append(sb, "file_name", session.fileName);
     append(sb, "total_bytes", session.totalBytes);
     append(sb, "session_state", session.sessionState);
-    append(sb, "download_url", buildTransferContentUrl(session));
-    append(sb, "download_path", buildTransferContentPath(session));
+    append(sb, "download_url", downloadUrl);
+    append(sb, "download_path", downloadPath);
+    append(sb, "download_username", session.downloadUsername);
+    append(sb, "download_password", session.downloadPassword);
+    append(sb, "offline_metadata_url", offlineMetadataUrl);
+    append(sb, "offline_metadata_path", offlineMetadataPath);
     append(sb, "resume_from_offset", session.bytesTransferred);
     appendAcceptedPolicy(sb, session.acceptedPolicy);
     appendPolicyAdjustments(sb, session.adjustments);
     append(sb, "recording_complete", session.recordingComplete);
     append(sb, "reconnect_grace_seconds", session.reconnectGraceSeconds);
     append(sb, "expires_in_seconds", Math.max(0L, (session.expiresAt - Sage.time()) / 1000L));
+    append(sb, "offline_inline_level", includeOffline ? "full" : "core");
     appendArray(sb, "recent_reason_codes", session.recentReasonCodes);
-    if (includeOffline)
+    String offlineJson = includeOffline
+        ? NgClientOfflineCompanionBuilder.buildOfflineBlockJson(session)
+        : NgClientOfflineCompanionBuilder.buildOfflineCoreBlockJson(session);
+    if (offlineJson != null && offlineJson.length() > 0)
     {
-      String offlineJson = NgClientOfflineCompanionBuilder.buildOfflineBlockJson(session);
-      if (offlineJson != null && offlineJson.length() > 0)
-      {
-        if (sb.charAt(sb.length() - 1) != '{') sb.append(',');
-        sb.append('"').append("offline").append('"').append(':').append(offlineJson);
-      }
+      if (sb.charAt(sb.length() - 1) != '{') sb.append(',');
+      sb.append('"').append("offline").append('"').append(':').append(offlineJson);
     }
+
+    if (Sage.getBoolean("miniclient/transfer/log_ack_summary", true))
+    {
+      int artworkRefs = countOccurrences(offlineJson, "/offline/artwork/");
+      int creditsEntries = countOccurrences(offlineJson, "\"role_name\"");
+      System.out.println("NG_TRANSFER_ACK"
+          + " token_prefix=" + shortTokenPrefix(session.sessionToken)
+          + " rec_id=" + session.recordingId
+          + " state=" + safe(session.sessionState)
+          + " inline=" + (includeOffline ? "full" : "core")
+          + " offline_url=" + safe(offlineMetadataUrl)
+          + " offline_path=" + safe(offlineMetadataPath)
+          + " artwork_refs=" + artworkRefs
+          + " credits_entries=" + creditsEntries);
+    }
+
     closeObject(sb);
     return sb.toString();
+  }
+
+  private static int countOccurrences(String text, String needle)
+  {
+    if (text == null || needle == null || needle.length() == 0)
+      return 0;
+    int count = 0;
+    int idx = 0;
+    while ((idx = text.indexOf(needle, idx)) >= 0)
+    {
+      count++;
+      idx += needle.length();
+    }
+    return count;
+  }
+
+  private static String shortTokenPrefix(String token)
+  {
+    if (token == null)
+      return "";
+    String t = token.trim();
+    if (t.length() <= 8)
+      return t;
+    return t.substring(0, 8);
   }
 
   public String buildStatusJson(TransferSession session)
@@ -534,6 +780,10 @@ public final class NgClientRecordingCopyTransferManager
     append(sb, "session_state", session.sessionState);
     append(sb, "download_url", buildTransferContentUrl(session));
     append(sb, "download_path", buildTransferContentPath(session));
+    append(sb, "download_username", session.downloadUsername);
+    append(sb, "download_password", session.downloadPassword);
+    append(sb, "offline_metadata_url", buildTransferOfflineMetadataUrl(session));
+    append(sb, "offline_metadata_path", buildTransferOfflineMetadataPath(session));
     append(sb, "bytes_transferred", session.bytesTransferred);
     append(sb, "total_bytes", session.totalBytes);
     append(sb, "effective_rate_kbps", session.effectiveRateKbps);
@@ -560,6 +810,10 @@ public final class NgClientRecordingCopyTransferManager
     append(sb, "session_state", session.sessionState);
     append(sb, "download_url", buildTransferContentUrl(session));
     append(sb, "download_path", buildTransferContentPath(session));
+    append(sb, "download_username", session.downloadUsername);
+    append(sb, "download_password", session.downloadPassword);
+    append(sb, "offline_metadata_url", buildTransferOfflineMetadataUrl(session));
+    append(sb, "offline_metadata_path", buildTransferOfflineMetadataPath(session));
     append(sb, "bytes_transferred", session.bytesTransferred);
     append(sb, "total_bytes", session.totalBytes);
     appendArray(sb, "recent_reason_codes", session.recentReasonCodes);
@@ -667,7 +921,40 @@ public final class NgClientRecordingCopyTransferManager
     if (session == null)
       return "Not found";
     long pct = session.totalBytes > 0 ? Math.min(100L, (session.bytesTransferred * 100L) / session.totalBytes) : 0L;
-    return pct + "% (" + session.bytesTransferred + " / " + session.totalBytes + " bytes)";
+    String totalText = formatBytesHuman(session.totalBytes);
+    String transferredText = formatBytesHuman(session.bytesTransferred);
+    StringBuilder sb = new StringBuilder(96);
+    sb.append(pct).append("% of ").append(totalText)
+        .append(" (").append(transferredText).append(" / ").append(totalText).append(")");
+    if (session.effectiveRateKbps > 0)
+      sb.append(" @ ").append(session.effectiveRateKbps).append(" kbps");
+    return sb.toString();
+  }
+
+  public synchronized long getQueueItemId(int queueIndex)
+  {
+    TransferSession session = getQueueItemByIndex(queueIndex);
+    return session == null ? 0L : session.queueItemId;
+  }
+
+  public synchronized String getQueueItemDetailText(int queueIndex)
+  {
+    TransferSession session = getQueueItemByIndex(queueIndex);
+    if (session == null)
+      return "Queue item not found.";
+
+    long pct = session.totalBytes > 0 ? Math.min(100L, (session.bytesTransferred * 100L) / session.totalBytes) : 0L;
+    StringBuilder sb = new StringBuilder(320);
+    sb.append("Queue Item #").append(session.queueItemId).append('\n');
+    sb.append("State: ").append(session.sessionState == null ? "unknown" : session.sessionState).append('\n');
+    sb.append("Progress: ").append(pct).append("% of ")
+        .append(formatBytesHuman(session.totalBytes)).append('\n');
+    sb.append("Transferred: ").append(formatBytesHuman(session.bytesTransferred))
+        .append(" / ").append(formatBytesHuman(session.totalBytes)).append('\n');
+    if (session.effectiveRateKbps > 0)
+      sb.append("Rate: ").append(session.effectiveRateKbps).append(" kbps\n");
+    sb.append("File: ").append(session.fileName == null ? "(unknown)" : session.fileName);
+    return sb.toString();
   }
 
   public synchronized TransferSession pauseQueueItem(int queueIndex)
@@ -681,6 +968,22 @@ public final class NgClientRecordingCopyTransferManager
   public synchronized TransferSession cancelQueueItem(int queueIndex)
   {
     TransferSession session = getQueueItemByIndex(queueIndex);
+    if (session == null)
+      return null;
+    return cancel(session.sessionToken, null);
+  }
+
+  public synchronized TransferSession pauseQueueItemById(long queueItemId)
+  {
+    TransferSession session = findSessionByQueueItemIdLocked(queueItemId);
+    if (session == null)
+      return null;
+    return pauseByClient(session.sessionToken, null);
+  }
+
+  public synchronized TransferSession cancelQueueItemById(long queueItemId)
+  {
+    TransferSession session = findSessionByQueueItemIdLocked(queueItemId);
     if (session == null)
       return null;
     return cancel(session.sessionToken, null);
@@ -769,6 +1072,39 @@ public final class NgClientRecordingCopyTransferManager
         accepted.allowMetered);
   }
 
+  private static final java.security.SecureRandom CREDENTIAL_RANDOM = new java.security.SecureRandom();
+
+  private static String generateDownloadUsername(String sessionToken)
+  {
+    String tokenPrefix = sessionToken == null ? "" : sessionToken;
+    if (tokenPrefix.length() > 8)
+      tokenPrefix = tokenPrefix.substring(0, 8);
+    if (tokenPrefix.length() == 0)
+      tokenPrefix = randomHex(4);
+    return "dl_" + tokenPrefix;
+  }
+
+  private static String generateDownloadPassword()
+  {
+    return randomHex(12);
+  }
+
+  private static String randomHex(int numBytes)
+  {
+    int safeBytes = numBytes <= 0 ? 8 : numBytes;
+    byte[] raw = new byte[safeBytes];
+    CREDENTIAL_RANDOM.nextBytes(raw);
+    StringBuilder sb = new StringBuilder(raw.length * 2);
+    for (int i = 0; i < raw.length; i++)
+    {
+      int b = raw[i] & 0xFF;
+      if (b < 16)
+        sb.append('0');
+      sb.append(Integer.toHexString(b));
+    }
+    return sb.toString();
+  }
+
   private java.util.ArrayList<TransferSession> getOrderedSessionsLocked()
   {
     cleanupExpired();
@@ -799,6 +1135,36 @@ public final class NgClientRecordingCopyTransferManager
     if (queueIndex > sessions.size())
       return null;
     return sessions.get(queueIndex - 1);
+  }
+
+  private TransferSession findSessionByQueueItemIdLocked(long queueItemId)
+  {
+    if (queueItemId <= 0)
+      return null;
+    java.util.Iterator<TransferSession> walker = sessionsByToken.values().iterator();
+    while (walker.hasNext())
+    {
+      TransferSession session = walker.next();
+      if (session != null && session.queueItemId == queueItemId)
+        return session;
+    }
+    return null;
+  }
+
+  private static String formatBytesHuman(long bytes)
+  {
+    if (bytes <= 0)
+      return "0 B";
+    final long kb = 1024L;
+    final long mb = kb * 1024L;
+    final long gb = mb * 1024L;
+    if (bytes >= gb)
+      return String.valueOf(Math.round((bytes * 10.0) / gb) / 10.0) + " GB";
+    if (bytes >= mb)
+      return String.valueOf(Math.round((bytes * 10.0) / mb) / 10.0) + " MB";
+    if (bytes >= kb)
+      return String.valueOf(Math.round((bytes * 10.0) / kb) / 10.0) + " KB";
+    return bytes + " B";
   }
 
   private TransferSession findLatestSessionForRecordingLocked(int recordingId,
@@ -1101,9 +1467,50 @@ public final class NgClientRecordingCopyTransferManager
     return "/api/transfers/" + escape(session.sessionToken) + "/content?v=" + session.urlRevision;
   }
 
+  private static String buildTransferOfflineMetadataPath(TransferSession session)
+  {
+    if (session == null)
+      return "";
+    return "/api/transfers/" + escape(session.sessionToken) + "/offline/metadata?v=" + session.urlRevision;
+  }
+
   private static String buildTransferContentUrl(TransferSession session)
   {
     String path = buildTransferContentPath(session);
+    if (path.length() == 0)
+      return "";
+
+    if (session != null && session.transferBaseUrl != null && session.transferBaseUrl.length() > 0)
+      return trimTrailingSlash(session.transferBaseUrl) + path;
+
+    String configuredBase = Sage.get("miniclient/transfer/base_url", "");
+    if (configuredBase != null)
+      configuredBase = configuredBase.trim();
+    if (configuredBase != null && configuredBase.length() > 0)
+      return trimTrailingSlash(configuredBase) + path;
+
+    String host = Sage.get("hostname", "");
+    if (host != null)
+      host = host.trim();
+    if (host == null || host.length() == 0)
+    {
+      try
+      {
+        host = java.net.InetAddress.getLocalHost().getHostAddress();
+      }
+      catch (Throwable t)
+      {
+        host = "127.0.0.1";
+      }
+    }
+
+    int port = Sage.getInt("extender_and_placeshifter_server_port", 31099);
+    return "http://" + host + ":" + port + path;
+  }
+
+  private static String buildTransferOfflineMetadataUrl(TransferSession session)
+  {
+    String path = buildTransferOfflineMetadataPath(session);
     if (path.length() == 0)
       return "";
 
