@@ -5,6 +5,10 @@
 # Clones from galeforcesage/SageTV-mine (all patches pre-applied)
 # and builds + runs a Docker container.
 #
+# NOTE: this script launches a direct shared-file-bind style container flow,
+# which remains a supported alternate profile. For fresh-install drift cleanup
+# and validation, use the state-managed deployment workflow in sagetv-deploy.
+#
 # Prerequisites: git, docker
 #
 # Usage:
