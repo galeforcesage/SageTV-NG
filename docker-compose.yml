@@ -1,8 +1,11 @@
-###############################################################################
-# sagetv-mine — Docker Compose (shared-data model)
+#-------------------------------------------------------------------------------
+# sagetv-mine — Docker Compose (shared-file-bind profile, supported alternate)
 #
-# Shared across all SageTV instances:  Wiz.bin, Sage.properties, recordings
-# Isolated to this container:          JARs, plugins, jetty, logs, native libs
+# This profile directly bind-mounts Wiz.bin and Sage.properties. Keep it for
+# implementations that intentionally rely on direct file binds.
+#
+# For fresh install validation and drift cleanup, prefer the state-managed
+# profile in sagetv-deploy (stage-in/mirror-out via STATE_DIR).
 #
 # IMPORTANT: Use identity mounts (same path host:container) for media volumes
 # so that paths stored in Wiz.bin resolve correctly inside the container.
@@ -11,7 +14,7 @@
 # Run:     docker compose up -d
 # Logs:    docker compose logs -f
 # Stop:    docker compose down
-###############################################################################
+#-------------------------------------------------------------------------------
 services:
   sagetv-mine:
     build:
