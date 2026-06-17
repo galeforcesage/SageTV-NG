@@ -238,6 +238,7 @@ public class CommercialDetectionJob implements Runnable
     if (sage.Sage.DBG) System.out.println("CommercialDetectionJob launching comskip: " + cmd);
 
     ProcessBuilder pb = new ProcessBuilder(cmd);
+    sage.Sage.applyTimeZoneToProcessBuilder(pb);
     pb.redirectErrorStream(true);
     // Set working directory to output dir so any extra comskip output lands there
     pb.directory(outputDir);
@@ -372,6 +373,7 @@ public class CommercialDetectionJob implements Runnable
     if (sage.Sage.DBG) System.out.println("CommercialDetectionJob launching external: " + cmd);
 
     ProcessBuilder pb = new ProcessBuilder(cmd);
+    sage.Sage.applyTimeZoneToProcessBuilder(pb);
     pb.redirectErrorStream(true);
 
     runningProcess = pb.start();

@@ -42,9 +42,11 @@ import java.awt.geom.Rectangle2D;
 import java.io.BufferedOutputStream;
 import java.io.DataInput;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InterruptedIOException;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.PrintStream;
 import java.net.MalformedURLException;
@@ -77,6 +79,7 @@ import java.util.TimeZone;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.Vector;
+import java.io.BufferedReader;
 
 public final class Sage
 {
@@ -88,6 +91,7 @@ public final class Sage
   public static boolean LINUX_OS = false;
   public static boolean LINUX_IS_ROOT = false; // will be true if SageTV Linux is running as 'root'
   public static boolean MAC_OS_X = false;
+  private static volatile String resolvedTimeZoneId;
   public static boolean VISTA_OS = false; // if this is true, then WINDOWS_OS is also true
 
   /**
@@ -1095,26 +1099,10 @@ public final class Sage
       // For linux we'd use
       //-Dsun.java2d.pmoffscreen=true/false
 
-      String myTimeZone = get("time_zone", "");
-      if (myTimeZone.length() > 0)
-      {
-        TimeZone tz = null;
-        try {
-          tz = new TimeZoneParse(myTimeZone).parse().convertToTz();
-          if (DBG) System.out.println("Parsed TZ format:" + myTimeZone + " to: " + tz);
-        } catch (ParseException e) {
-          if(DBG) System.out.println("Error processing TZ:" + myTimeZone + " threw:" + e);
-        }
-        if(tz == null) {
-          tz = TimeZone.getTimeZone(myTimeZone);
-        }
-        TimeZone.setDefault(tz);
-        if (DBG) System.out.println("Changed default timezone to:" + tz.getDisplayName());
-        DF.setTimeZone(tz);
-        DF_CLEAN.setTimeZone(tz);
-        DF_FULL.setTimeZone(tz);
-        DF_LITTLE.setTimeZone(tz);
-      }
+      TimeZone tz = resolveConfiguredTimeZone(get("time_zone", ""), true);
+      applyRuntimeTimeZone(tz);
+      logTimeZoneConsistencyCheck();
+      configureSmbClientDefaults();
 
       String preferredLanguage = Sage.get("ui/translation_language_code", "");
       String preferredCountry = Sage.get("ui/translation_country_code", "");
@@ -1372,17 +1360,8 @@ public final class Sage
       put("time_zone", x);
       myTimeZone = x;
 
-      TimeZone tz = null;
-      try {
-        tz = new TimeZoneParse(myTimeZone).parse().convertToTz();
-        if (DBG) System.out.println("Parsed TZ format:" + myTimeZone + " to: " + tz);
-      } catch (ParseException e) {
-        if(DBG) System.out.println("Error processing TZ:" + myTimeZone + " threw:" + e);
-      }
-      if(tz == null) {
-        tz = TimeZone.getTimeZone(myTimeZone);
-      }
-      TimeZone.setDefault(tz);
+      TimeZone tz = resolveConfiguredTimeZone(myTimeZone, false);
+      applyRuntimeTimeZone(tz);
       if (DBG) System.out.println("Changed default timezone to:" + tz.getDisplayName());
 
       // We now recreate the Locale so it's a new object and anything that's dependent upon
@@ -1409,6 +1388,180 @@ public final class Sage
         }
       });
     }
+  }
+
+  private static TimeZone resolveConfiguredTimeZone(String configuredTimeZone, boolean allowFallback)
+  {
+    String tzSpec = configuredTimeZone == null ? "" : configuredTimeZone.trim();
+    String source = "time_zone";
+    if (tzSpec.length() == 0 && allowFallback)
+    {
+      String etcTimeZone = readFirstLine("/etc/timezone");
+      if (etcTimeZone != null && etcTimeZone.length() > 0)
+      {
+        tzSpec = etcTimeZone;
+        source = "/etc/timezone";
+      }
+      else
+      {
+        String envTz = System.getenv("TZ");
+        if (envTz != null && envTz.trim().length() > 0)
+        {
+          tzSpec = envTz.trim();
+          source = "TZ env";
+        }
+        else
+        {
+          TimeZone jvmDefault = TimeZone.getDefault();
+          tzSpec = jvmDefault != null ? jvmDefault.getID() : "GMT";
+          source = "JVM default";
+        }
+      }
+    }
+
+    TimeZone tz = null;
+    if (tzSpec.length() > 0)
+    {
+      try
+      {
+        tz = new TimeZoneParse(tzSpec).parse().convertToTz();
+        if (DBG) System.out.println("Parsed TZ format:" + tzSpec + " to: " + tz);
+      }
+      catch (ParseException e)
+      {
+        if (DBG) System.out.println("Error processing TZ:" + tzSpec + " threw:" + e);
+      }
+      if (tz == null)
+        tz = TimeZone.getTimeZone(tzSpec);
+    }
+    if (tz == null)
+      tz = TimeZone.getDefault();
+    if (tz == null)
+      tz = TimeZone.getTimeZone("GMT");
+
+    if (allowFallback)
+      System.out.println("SageTV timezone resolved: source=" + source + " value=" + tzSpec + " id=" + tz.getID());
+    return tz;
+  }
+
+  private static void applyRuntimeTimeZone(TimeZone tz)
+  {
+    if (tz == null)
+      return;
+    TimeZone.setDefault(tz);
+    String tzId = tz.getID();
+    if (tzId != null && tzId.length() > 0)
+    {
+      System.setProperty("user.timezone", tzId);
+      resolvedTimeZoneId = tzId;
+    }
+    DF.setTimeZone(tz);
+    DF_CLEAN.setTimeZone(tz);
+    DF_FULL.setTimeZone(tz);
+    DF_LITTLE.setTimeZone(tz);
+  }
+
+  private static String readFirstLine(String path)
+  {
+    File f = new File(path);
+    if (!f.isFile())
+      return null;
+    BufferedReader reader = null;
+    try
+    {
+      reader = new BufferedReader(new InputStreamReader(new FileInputStream(f), Sage.I18N_CHARSET));
+      String line = reader.readLine();
+      return line == null ? null : line.trim();
+    }
+    catch (Exception e)
+    {
+      if (DBG) System.out.println("Error reading timezone from " + path + ": " + e);
+      return null;
+    }
+    finally
+    {
+      if (reader != null)
+      {
+        try { reader.close(); } catch (Exception e) {}
+      }
+    }
+  }
+
+  private static void logTimeZoneConsistencyCheck()
+  {
+    try
+    {
+      String zoneIdDefault = java.time.ZoneId.systemDefault().getId();
+      String tzDefault = TimeZone.getDefault().getID();
+      if (!zoneIdDefault.equals(tzDefault))
+      {
+        System.out.println("WARNING: Timezone mismatch detected ZoneId.systemDefault=" + zoneIdDefault
+            + " TimeZone.getDefault=" + tzDefault);
+      }
+
+      long nowMs = new Date().getTime();
+      TimeZone tz = TimeZone.getDefault();
+      int offsetMs = tz.getOffset(nowMs);
+      long utcMsOfDay = Math.floorMod(nowMs, 86400000L);
+      long expectedLocalMsOfDay = Math.floorMod(utcMsOfDay + offsetMs, 86400000L);
+
+      Calendar cal = Calendar.getInstance(tz);
+      long localMsOfDay = (((cal.get(Calendar.HOUR_OF_DAY) * 60L + cal.get(Calendar.MINUTE)) * 60L
+          + cal.get(Calendar.SECOND)) * 1000L) + cal.get(Calendar.MILLISECOND);
+
+      long deltaMs = Math.abs(localMsOfDay - expectedLocalMsOfDay);
+      deltaMs = Math.min(deltaMs, 86400000L - deltaMs);
+      if (deltaMs > 5000L)
+      {
+        System.out.println("WARNING: Timezone wall-clock drift detected deltaMs=" + deltaMs
+            + " tz=" + tz.getID() + " offsetMs=" + offsetMs);
+      }
+    }
+    catch (Throwable t)
+    {
+      if (DBG) System.out.println("Timezone consistency check failed: " + t);
+    }
+  }
+
+  public static String getResolvedTimeZoneId()
+  {
+    String tz = resolvedTimeZoneId;
+    if (tz == null || tz.length() == 0)
+      tz = TimeZone.getDefault().getID();
+    return tz;
+  }
+
+  public static void applyTimeZoneToProcessBuilder(ProcessBuilder pb)
+  {
+    if (pb == null)
+      return;
+    String tz = getResolvedTimeZoneId();
+    if (tz != null && tz.length() > 0)
+      pb.environment().put("TZ", tz);
+  }
+
+  private static void configureSmbClientDefaults()
+  {
+    // Prefer modern protocol negotiation by default. Operators can still
+    // override these with JVM -D options or Sage properties.
+    setSystemPropertyIfMissing("jcifs.smb.client.minVersion", Sage.get("network/smb_client_min_version", "SMB202"));
+    setSystemPropertyIfMissing("jcifs.smb.client.maxVersion", Sage.get("network/smb_client_max_version", "SMB311"));
+    if (DBG)
+    {
+      System.out.println("SMB client protocol policy: min="
+          + System.getProperty("jcifs.smb.client.minVersion")
+          + " max=" + System.getProperty("jcifs.smb.client.maxVersion"));
+    }
+  }
+
+  private static void setSystemPropertyIfMissing(String key, String value)
+  {
+    if (key == null || key.length() == 0 || value == null)
+      return;
+    String trimmedValue = value.trim();
+    if (trimmedValue.length() == 0 || System.getProperty(key) != null)
+      return;
+    System.setProperty(key, trimmedValue);
   }
 
   // For message formatting

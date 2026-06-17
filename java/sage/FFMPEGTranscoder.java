@@ -1748,7 +1748,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
     String[] xcodeParamArray = (String[]) xcodeParamsVec.toArray(Pooler.EMPTY_STRING_ARRAY);
     // Always log the FFmpeg command line for diagnosability (disable with xcode_cmdline_debug=FALSE)
     if (Sage.DBG && !"FALSE".equals(Sage.get("xcode_cmdline_debug", "TRUE"))) System.out.println("Executing xcoding process with args: " + java.util.Arrays.asList(xcodeParamArray));
-    xcodeProcess = Runtime.getRuntime().exec(xcodeParamArray);
+    ProcessBuilder xcodePb = new ProcessBuilder(xcodeParamArray);
+    Sage.applyTimeZoneToProcessBuilder(xcodePb);
+    xcodeProcess = xcodePb.start();
     // We open up the error stream and consume that for status info. The transcoded data is consumed by reading
     // from stdout.
     xcodeDone = false;
@@ -2226,6 +2228,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
     try
     {
       ProcessBuilder pb = new ProcessBuilder((java.util.List<String>) (java.util.List) cmd);
+      Sage.applyTimeZoneToProcessBuilder(pb);
       pb.redirectErrorStream(true);
       p = pb.start();
       java.io.BufferedReader br = new java.io.BufferedReader(
