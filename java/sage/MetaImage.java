@@ -903,7 +903,14 @@ public class MetaImage
     {
       try
       {
-        handler = (URLStreamHandler)Class.forName("jcifs.smb.Handler").newInstance();
+        try
+        {
+          handler = (URLStreamHandler)Class.forName("jcifs.smb.Handler").newInstance();
+        }
+        catch (Exception compatEx)
+        {
+          handler = (URLStreamHandler)Class.forName("org.codelibs.jcifs.smb.Handler").newInstance();
+        }
       }
       catch (Exception e)
       {

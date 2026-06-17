@@ -42,8 +42,14 @@ mkdir ./serverrelease/fonts
 cp -R ../third_party/DejaVuFonts/*.ttf ./serverrelease/fonts/
 cp ../install/config/*.frq ./serverrelease/
 mkdir ./serverrelease/JARs
-cp ../third_party/JCIFS/*.jar ./serverrelease/JARs/
 cp ../third_party/Oracle/*.jar ./serverrelease/JARs/
 cp ../third_party/Apache/*.jar ./serverrelease/JARs/
-cp ../third_party/UPnPLib/*.jar ./serverrelease/JARs/
 cp ../third_party/Lucene/*.jar ./serverrelease/JARs/
+# Maven-resolved runtime classpath (org.jupnp, slf4j-api, logback-*, etc.)
+# staged here by the Gradle copyRuntimeJars task. Note: Gradle's buildDir
+# is overridden in build.gradle to 'buildoutput' (so `gradle clean` won't
+# nuke the legacy build/ tree), hence ../buildoutput/runtime-jars/. The
+# wildcard cp may overwrite vendored jars of the same name (e.g. lucene/
+# jcifs/vecmath pulled in via implementation files()) which is harmless:
+# identical bits.
+cp ../buildoutput/runtime-jars/*.jar ./serverrelease/JARs/ 2>/dev/null || true

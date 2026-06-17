@@ -127,16 +127,21 @@ dependencies {
   testImplementation 'org.testng:testng:7.9.0'
   testImplementation "org.mockito:mockito-core:5.8.0"
 
-  // JUPnP (replaces SBBI sbbi-upnplib-1.0.3.jar — see java/sage/upnp/PlaceshifterNATManager.java)
-  // The old vendored jar in third_party/UPnPLib/ can be removed once this build is stable.
+  // JUPnP (replaces SBBI sbbi-upnplib-1.0.3.jar — see java/sage/upnp/PlaceshifterNATManager.java).
+  // Resolved from Maven Central. The runtime jars are exported into
+  // build/runtime-jars/ by the copyRuntimeJars task below and copied into
+  // serverrelease/JARs/ by build/copyserverfiles.sh.
   implementation 'org.jupnp:org.jupnp:3.0.3'
   implementation 'org.jupnp:org.jupnp.support:3.0.3'
+
+  // jcifs-ng replaces legacy JCIFS 1.1.6 (SMB1-only) with SMB2/SMB3-capable
+  // client support for modern Windows/NAS defaults.
+  implementation 'org.codelibs:jcifs:2.1.37'
 
   implementation files(
     'third_party/Oracle/vecmath.jar',
     'third_party/Lucene/lucene-core-4.10.4.jar',
     'third_party/Lucene/lucene-analyzers-common-4.10.4.jar',
-    'third_party/JCIFS/jcifs-1.1.6.jar',
 
     // SLF4J + Logback (Phase 1 logging modernization).
     // SLF4J API is compiled against; Logback is the runtime backend selected
@@ -190,6 +195,23 @@ task miniclient(type: JavaCompile) {
   }
 }
 
+// Export every jar on the main runtime classpath (Maven-resolved + the
+// vendored implementation files()) into build/runtime-jars/ so
+// build/copyserverfiles.sh can stage them into serverrelease/JARs/.
+// Without this, jars like org.jupnp-3.0.3.jar, slf4j-api, logback, etc.
+// would only live in the Gradle compile classpath and would never reach
+// the deployed /opt/sagetv/server/JARs/ directory, causing
+// NoClassDefFoundError at runtime when PlaceshifterNATManager (or any
+// other Maven-only consumer) is initialised.
+task copyRuntimeJars(type: Copy) {
+  description = 'Stage every main runtime classpath jar into build/runtime-jars/ for copyserverfiles.sh.'
+  doFirst {
+    delete "$buildDir/runtime-jars"
+  }
+  from configurations.runtimeClasspath
+  into "$buildDir/runtime-jars"
+}
+
 // remove the Sage.jar before updating it
 task cleanSageJar(type: Delete) {
   delete sageJarDestinationDir + '/' + sageJarName
@@ -197,6 +219,7 @@ task cleanSageJar(type: Delete) {
 
 // build the Sage.jar
 task sageJar(type: Jar) {
+  dependsOn copyRuntimeJars
   description = 'Build the Sage.jar'
   archiveFileName = sageJarName
   destinationDirectory = file(sageJarDestinationDir)

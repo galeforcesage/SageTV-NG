@@ -727,7 +727,17 @@ public class SageTV implements Runnable
 
 		// Delay the startup of this since its use of commons-logging may interfer with the log4j plugin loading
 		if (psnatmgr != null)
-			psnatmgr.start();
+		{
+			try
+			{
+				psnatmgr.start();
+			}
+			catch (Exception e)
+			{
+				if (Sage.DBG) System.out.println("WARNING: PlaceshifterNATManager failed to start: " + e);
+				System.err.println("WARNING: PlaceshifterNATManager failed to start (UPnP may be unavailable): " + e.getMessage());
+			}
+		}
     if (!Sage.client)
       writeOutStateInfo(SageTV.SAGETV_SERVER_LOADED, null, null);
   }
