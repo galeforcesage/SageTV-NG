@@ -2879,8 +2879,7 @@ public class HTTPLSServer implements Runnable
       if (transferChunkSize == 0)
       {
         long sent = fc.transferTo(0, totalSize, sake);
-        // Repo sync note: deployed jar currently does not invoke active-window BW tracking here.
-        // MiniClientSageRenderer.recordServerActiveWindowWrite(sent);
+        MiniClientSageRenderer.recordServerActiveWindowWrite(sent);
       }
       else
       {
@@ -2888,8 +2887,7 @@ public class HTTPLSServer implements Runnable
         {
           long currSize = Math.min(transferChunkSize, totalSize - offset);
           long sent = fc.transferTo(offset, currSize, sake);
-          // Repo sync note: deployed jar currently does not invoke active-window BW tracking here.
-          // MiniClientSageRenderer.recordServerActiveWindowWrite(sent);
+          MiniClientSageRenderer.recordServerActiveWindowWrite(sent);
           if (sent <= 0)
             break;
           offset += sent;
