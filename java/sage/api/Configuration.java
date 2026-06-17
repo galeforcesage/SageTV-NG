@@ -189,22 +189,6 @@ public class Configuration{
       public Object runSafely(Catbert.FastStack stack) throws Exception{
         return Boolean.valueOf(isSmbAuthRequiredInternal(getString(stack)));
       }});
-    rft.put(new PredefinedJEPFunction("Configuration", "HasSMBCredentials", new String[] { "SMBPath" }, true)
-    {
-      /**
-       * Cheap, non-blocking check: returns true if runtime SMB browse credentials are configured
-       * (or if SMBPath is the discovery root smb://). Does not perform any network I/O.
-       * Use as a UI gate to decide whether to prompt for credentials before navigating into an SMB host.
-       * @param SMBPath the SMB path being navigated to
-       * @return true if credentials exist (or no auth needed for the discovery root)
-       *
-       * @since 10.0
-       *
-       * @declaration public boolean HasSMBCredentials(String SMBPath);
-       */
-      public Object runSafely(Catbert.FastStack stack) throws Exception{
-        return Boolean.valueOf(hasSmbBrowseCredentialsInternal(getString(stack)));
-      }});
     rft.put(new PredefinedJEPFunction("Configuration", "SetSMBBrowseCredentials", new String[] { "Username", "Password", "Domain", "PersistUserAndDomain" }, true)
     {
       /**
@@ -3721,17 +3705,6 @@ public class Configuration{
     smbBrowsePass = "";
     smbBrowseDomain = "";
     clearSmbHostCacheInternal();
-  }
-
-  private static boolean hasSmbBrowseCredentialsInternal(String smbPath)
-  {
-    String normalized = normalizeSmbPath(smbPath);
-    if (normalized == null || "smb://".equals(normalized))
-      return true;
-    String user = smbBrowseUser;
-    if (user == null || user.length() == 0)
-      user = Sage.get("smb/browse_username", "");
-    return user != null && user.trim().length() > 0;
   }
 
   private static CIFSContext getConfiguredSmbContext()
