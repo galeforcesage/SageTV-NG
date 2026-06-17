@@ -148451,7 +148451,7 @@
                  <Branch Name="false" Sym="BASE-47249">
                   <Conditional Name="StringStartsWith(CurrentDirPath, &quot;smb:&quot;)" Sym="BASE-47250">
                    <Branch Name="true" Sym="BASE-47251">
-                    <Action Name="DirContents = jcifs_smb_SmbFile_listFiles(CurrentDirPath)" Sym="BASE-47252">
+                    <Action Name="DirContents = GetSMBBrowseEntries(CurrentDirPath)" Sym="BASE-47252">
                      <Action Name="&quot;REM Check that DirContents is valid&quot;" Sym="BASE-47253">
                       <Conditional Name="DirContents" Sym="BASE-47254">
                        <Branch Name="null" Sym="BASE-47255">
@@ -148816,18 +148816,253 @@
                           </Action>
                          </Branch>
                          <Branch Name="false" Sym="BASE-47324">
-                          <Action Name="CurrentDirPath = FolderCell" Sym="BASE-47325">
-                           <Action ID="53218" Name="IsValidDirBrowserDir = true" Sym="BASE-47321">
-                            <Action ID="53001" Name="&quot;REM Mark CurrentDirPath as a last-browsed dir, if needed.&quot;" Sym="BASE-47182">
-                             <Conditional Name="Size(TrackLastDirPathProperty) &gt; 0" Sym="BASE-47183">
-                              <Action Name="SetProperty( TrackLastDirPathProperty, CurrentDirPath )" Sym="BASE-47184"/>
-                             </Conditional>
+                          <Conditional Name="StringStartsWith(FolderCell + &quot;&quot;, &quot;smb://&quot;) &amp;&amp; IsSMBAuthRequired(FolderCell)" Sym="BASE-47324-AUTH-CHECK">
+                           <Branch Name="true" Sym="BASE-47324-AUTH-NEEDED">
+                            <Action Name="SMBAuthHost = FolderCell" Sym="BASE-47324-AUTH-HOST-SAVE">
+                             <Action Name="SMBAuthUsername = &quot;&quot;" Sym="BASE-47324-AUTH-USER-INIT">
+                              <Action Name="SMBAuthPassword = &quot;&quot;" Sym="BASE-47324-AUTH-PASS-INIT">
+                               <Action Name="SMBAuthDomain = &quot;MicrosoftAccount&quot;" Sym="BASE-47324-AUTH-DOMAIN-INIT">
+                                <Action Name="SMBAuthShowPassword = false" Sym="BASE-47324-AUTH-SHOW-INIT">
+                                 <Action Name="KeyboardMode = 0" Sym="BASE-47324-KEYBOARD-MODE-INIT-OPEN">
+                                  <OptionsMenu Name="SMBAuthPrompt_CenteredChooser" Sym="BASE-47324-AUTH-MENU">
+                                   <Text Name="SMB Authentication Required" Sym="BASE-47324-AUTH-TITLE">
+                                    <TextAlignment>0.5</TextAlignment>
+                                    <TextShadow>true</TextShadow>
+                                   </Text>
+                                   <Panel Name="AuthInputArea" Sym="BASE-47324-AUTH-PANEL">
+                                    <Layout>Vertical</Layout>
+                                    <FixedWidth>0.85</FixedWidth>
+                                    <PadY>0.01</PadY>
+                                    <WrapHNav>false</WrapHNav>
+                                    <WrapVNav>false</WrapVNav>
+                                    <IgnoreThemeProps>true</IgnoreThemeProps>
+                                    <BackgroundComponent>false</BackgroundComponent>
+                                    <MouseTransparency>false</MouseTransparency>
+                                    <Text Name="Username:" Sym="BASE-47324-AUTH-USER-LABEL">
+                                     <IgnoreThemeProps>true</IgnoreThemeProps>
+                                     <TextShadow>false</TextShadow>
+                                    </Text>
+                                    <TextInput Name="SMBAuthUsername" Sym="BASE-47324-AUTH-USER-INPUT">
+                                     <HideText>false</HideText>
+                                     <IgnoreThemeProps>false</IgnoreThemeProps>
+                                     <BackgroundComponent>false</BackgroundComponent>
+                                    </TextInput>
+                                    <Text Name="Password:" Sym="BASE-47324-AUTH-PASS-LABEL">
+                                     <IgnoreThemeProps>true</IgnoreThemeProps>
+                                     <TextShadow>false</TextShadow>
+                                    </Text>
+                                    <Conditional Name="SMBAuthShowPassword" Sym="BASE-47324-AUTH-SHOW-COND">
+                                     <Branch Name="true" Sym="BASE-47324-AUTH-SHOW-TRUE">
+                                      <TextInput ID="53230" Name="SMBAuthPassword" Sym="BASE-47324-AUTH-PASS-SHOW">
+                                       <HideText>false</HideText>
+                                       <IgnoreThemeProps>false</IgnoreThemeProps>
+                                       <BackgroundComponent>false</BackgroundComponent>
+                                      </TextInput>
+                                     </Branch>
+                                     <Branch Name="false" Sym="BASE-47324-AUTH-SHOW-FALSE">
+                                      <TextInput Ref="53230" Name="SMBAuthPassword" Sym="BASE-47324-AUTH-PASS-HIDE">
+                                       <HideText>true</HideText>
+                                       <IgnoreThemeProps>false</IgnoreThemeProps>
+                                       <BackgroundComponent>false</BackgroundComponent>
+                                      </TextInput>
+                                     </Branch>
+                                    </Conditional>
+                                    <Text Name="Domain (optional):" Sym="BASE-47324-AUTH-DOMAIN-LABEL">
+                                     <IgnoreThemeProps>true</IgnoreThemeProps>
+                                     <TextShadow>false</TextShadow>
+                                    </Text>
+                                    <TextInput Name="SMBAuthDomain" Sym="BASE-47324-AUTH-DOMAIN-INPUT">
+                                     <HideText>false</HideText>
+                                     <IgnoreThemeProps>false</IgnoreThemeProps>
+                                     <BackgroundComponent>false</BackgroundComponent>
+                                    </TextInput>
+                                    <Panel Name="ShowPasswordRow" Sym="BASE-47324-AUTH-TOGGLE-PANEL">
+                                     <Text Name="Show Password" Sym="BASE-47324-AUTH-TOGGLE-LABEL"/>
+                                     <Item Name="Toggle" Sym="BASE-47324-AUTH-TOGGLE-BTN">
+                                      <Action Name="SMBAuthShowPassword = !SMBAuthShowPassword" Sym="BASE-47324-AUTH-TOGGLE-ACTION">
+                                       <Action Name="Refresh()" Sym="BASE-47324-AUTH-TOGGLE-REFRESH"/>
+                                      </Action>
+                                      <Conditional Name="SMBAuthShowPassword" Sym="BASE-47324-AUTH-TOGGLE-STATE">
+                                       <Branch Name="true" Sym="BASE-47324-AUTH-TOGGLE-ON">
+                                        <Text Name="Enabled" Sym="BASE-47324-AUTH-TOGGLE-TEXT-ON"/>
+                                       </Branch>
+                                       <Branch Name="false" Sym="BASE-47324-AUTH-TOGGLE-OFF">
+                                        <Text Name="Disabled" Sym="BASE-47324-AUTH-TOGGLE-TEXT-OFF"/>
+                                       </Branch>
+                                      </Conditional>
+                                      <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+                                     </Item>
+                                    </Panel>
+                                    <Panel Name="SoftKeyboard" Sym="BASE-47324-AUTH-KEYBOARD">
+                                     <Layout>Vertical</Layout>
+                                     <FixedWidth>1.0</FixedWidth>
+                                     <PadY>0.005</PadY>
+                                     <WrapHNav>false</WrapHNav>
+                                     <WrapVNav>false</WrapVNav>
+                                     <IgnoreThemeProps>true</IgnoreThemeProps>
+                                     <BackgroundComponent>false</BackgroundComponent>
+                                     <MouseTransparency>false</MouseTransparency>
+                                     <Panel Name="KeyboardModeRow" Sym="BASE-47324-KEYBOARD-MODE">
+                                      <Text Name="Keyboard Mode:" Sym="BASE-47324-KEYBOARD-MODE-LABEL"/>
+                                      <Item Name="Next Mode" Sym="BASE-47324-KEYBOARD-MODE-BTN">
+                                       <Action Name="KeyboardMode = (KeyboardMode + 1) % 3" Sym="BASE-47324-KEYBOARD-MODE-TOGGLE">
+                                        <Action Name="Refresh()" Sym="BASE-47324-KEYBOARD-MODE-REFRESH"/>
+                                       </Action>
+                                       <Conditional Name="KeyboardMode == 0" Sym="BASE-47324-MODE-DISPLAY-CAPS">
+                                        <Branch Name="true" Sym="BASE-47324-MODE-DISPLAY-CAPS-TRUE">
+                                         <Text Name="A (Caps)" Sym="BASE-47324-MODE-CAPS-TEXT"/>
+                                        </Branch>
+                                       </Conditional>
+                                       <Conditional Name="KeyboardMode == 1" Sym="BASE-47324-MODE-DISPLAY-LOWER">
+                                        <Branch Name="true" Sym="BASE-47324-MODE-DISPLAY-LOWER-TRUE">
+                                         <Text Name="a (Lower)" Sym="BASE-47324-MODE-LOWER-TEXT"/>
+                                        </Branch>
+                                       </Conditional>
+                                       <Conditional Name="KeyboardMode == 2" Sym="BASE-47324-MODE-DISPLAY-SYM">
+                                        <Branch Name="true" Sym="BASE-47324-MODE-DISPLAY-SYM-TRUE">
+                                         <Text Name="Symbols" Sym="BASE-47324-MODE-SYM-TEXT"/>
+                                        </Branch>
+                                       </Conditional>
+                                       <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+                                      </Item>
+                                     </Panel>
+                                     <Conditional Name="KeyboardMode == 0" Sym="BASE-47324-KEYBOARD-CAPS">
+                                      <Branch Name="true" Sym="BASE-47324-KEYBOARD-CAPS-TRUE">
+                                       <Panel Name="KeyboardGridCaps" Sym="BASE-47324-KEYBOARD-GRID-CAPS">
+                                        <Layout>HorizontalGrid</Layout>
+                                        <FixedWidth>1.0</FixedWidth>
+                                        <NumCols>10</NumCols>
+                                        <PadX>0.005</PadX>
+                                        <PadY>0.003</PadY>
+                                        <WrapHNav>true</WrapHNav>
+                                        <WrapVNav>true</WrapVNav>
+                                        <IgnoreThemeProps>true</IgnoreThemeProps>
+                                        <BackgroundComponent>false</BackgroundComponent>
+                                        <Item Name="A" Sym="BASE-47324-KEY-A-CAPS"><Action Name="SMBAuthUsername = If(SMBAuthShowPassword == false &amp;&amp; Size(SMBAuthPassword) == 0, SMBAuthUsername + &quot;A&quot;, If(SMBAuthShowPassword == false, SMBAuthPassword + &quot;A&quot;, SMBAuthUsername + &quot;A&quot;))" Sym="BASE-47324-KEY-A-CAPS-ACT"/></Item>
+                                        <Item Name="B" Sym="BASE-47324-KEY-B-CAPS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;B&quot;" Sym="BASE-47324-KEY-B-CAPS-ACT"/></Item>
+                                        <Item Name="C" Sym="BASE-47324-KEY-C-CAPS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;C&quot;" Sym="BASE-47324-KEY-C-CAPS-ACT"/></Item>
+                                        <Item Name="D" Sym="BASE-47324-KEY-D-CAPS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;D&quot;" Sym="BASE-47324-KEY-D-CAPS-ACT"/></Item>
+                                        <Item Name="E" Sym="BASE-47324-KEY-E-CAPS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;E&quot;" Sym="BASE-47324-KEY-E-CAPS-ACT"/></Item>
+                                        <Item Name="F" Sym="BASE-47324-KEY-F-CAPS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;F&quot;" Sym="BASE-47324-KEY-F-CAPS-ACT"/></Item>
+                                        <Item Name="G" Sym="BASE-47324-KEY-G-CAPS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;G&quot;" Sym="BASE-47324-KEY-G-CAPS-ACT"/></Item>
+                                        <Item Name="H" Sym="BASE-47324-KEY-H-CAPS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;H&quot;" Sym="BASE-47324-KEY-H-CAPS-ACT"/></Item>
+                                        <Item Name="I" Sym="BASE-47324-KEY-I-CAPS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;I&quot;" Sym="BASE-47324-KEY-I-CAPS-ACT"/></Item>
+                                        <Item Name="J" Sym="BASE-47324-KEY-J-CAPS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;J&quot;" Sym="BASE-47324-KEY-J-CAPS-ACT"/></Item>
+                                       </Panel>
+                                      </Branch>
+                                     </Conditional>
+                                     <Conditional Name="KeyboardMode == 1" Sym="BASE-47324-KEYBOARD-LOWER">
+                                      <Branch Name="true" Sym="BASE-47324-KEYBOARD-LOWER-TRUE">
+                                       <Panel Name="KeyboardGridLower" Sym="BASE-47324-KEYBOARD-GRID-LOWER">
+                                        <Layout>HorizontalGrid</Layout>
+                                        <FixedWidth>1.0</FixedWidth>
+                                        <NumCols>10</NumCols>
+                                        <PadX>0.005</PadX>
+                                        <PadY>0.003</PadY>
+                                        <WrapHNav>true</WrapHNav>
+                                        <WrapVNav>true</WrapVNav>
+                                        <IgnoreThemeProps>true</IgnoreThemeProps>
+                                        <BackgroundComponent>false</BackgroundComponent>
+                                        <Item Name="a" Sym="BASE-47324-KEY-a-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;a&quot;" Sym="BASE-47324-KEY-a-LOWER-ACT"/></Item>
+                                        <Item Name="b" Sym="BASE-47324-KEY-b-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;b&quot;" Sym="BASE-47324-KEY-b-LOWER-ACT"/></Item>
+                                        <Item Name="c" Sym="BASE-47324-KEY-c-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;c&quot;" Sym="BASE-47324-KEY-c-LOWER-ACT"/></Item>
+                                        <Item Name="d" Sym="BASE-47324-KEY-d-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;d&quot;" Sym="BASE-47324-KEY-d-LOWER-ACT"/></Item>
+                                        <Item Name="e" Sym="BASE-47324-KEY-e-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;e&quot;" Sym="BASE-47324-KEY-e-LOWER-ACT"/></Item>
+                                        <Item Name="f" Sym="BASE-47324-KEY-f-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;f&quot;" Sym="BASE-47324-KEY-f-LOWER-ACT"/></Item>
+                                        <Item Name="g" Sym="BASE-47324-KEY-g-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;g&quot;" Sym="BASE-47324-KEY-g-LOWER-ACT"/></Item>
+                                        <Item Name="h" Sym="BASE-47324-KEY-h-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;h&quot;" Sym="BASE-47324-KEY-h-LOWER-ACT"/></Item>
+                                        <Item Name="i" Sym="BASE-47324-KEY-i-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;i&quot;" Sym="BASE-47324-KEY-i-LOWER-ACT"/></Item>
+                                        <Item Name="j" Sym="BASE-47324-KEY-j-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;j&quot;" Sym="BASE-47324-KEY-j-LOWER-ACT"/></Item>
+                                       </Panel>
+                                      </Branch>
+                                     </Conditional>
+                                     <Conditional Name="KeyboardMode == 2" Sym="BASE-47324-KEYBOARD-SYMBOLS">
+                                      <Branch Name="true" Sym="BASE-47324-KEYBOARD-SYMBOLS-TRUE">
+                                       <Panel Name="KeyboardGridSymbols" Sym="BASE-47324-KEYBOARD-GRID-SYMBOLS">
+                                        <Layout>HorizontalGrid</Layout>
+                                        <FixedWidth>1.0</FixedWidth>
+                                        <NumCols>10</NumCols>
+                                        <PadX>0.005</PadX>
+                                        <PadY>0.003</PadY>
+                                        <WrapHNav>true</WrapHNav>
+                                        <WrapVNav>true</WrapVNav>
+                                        <IgnoreThemeProps>true</IgnoreThemeProps>
+                                        <BackgroundComponent>false</BackgroundComponent>
+                                        <Item Name="0" Sym="BASE-47324-KEY-0"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;0&quot;" Sym="BASE-47324-KEY-0-ACT"/></Item>
+                                        <Item Name="1" Sym="BASE-47324-KEY-1"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;1&quot;" Sym="BASE-47324-KEY-1-ACT"/></Item>
+                                        <Item Name="2" Sym="BASE-47324-KEY-2"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;2&quot;" Sym="BASE-47324-KEY-2-ACT"/></Item>
+                                        <Item Name="3" Sym="BASE-47324-KEY-3"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;3&quot;" Sym="BASE-47324-KEY-3-ACT"/></Item>
+                                        <Item Name="4" Sym="BASE-47324-KEY-4"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;4&quot;" Sym="BASE-47324-KEY-4-ACT"/></Item>
+                                        <Item Name="5" Sym="BASE-47324-KEY-5"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;5&quot;" Sym="BASE-47324-KEY-5-ACT"/></Item>
+                                        <Item Name="6" Sym="BASE-47324-KEY-6"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;6&quot;" Sym="BASE-47324-KEY-6-ACT"/></Item>
+                                        <Item Name="7" Sym="BASE-47324-KEY-7"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;7&quot;" Sym="BASE-47324-KEY-7-ACT"/></Item>
+                                        <Item Name="8" Sym="BASE-47324-KEY-8"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;8&quot;" Sym="BASE-47324-KEY-8-ACT"/></Item>
+                                        <Item Name="9" Sym="BASE-47324-KEY-9"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;9&quot;" Sym="BASE-47324-KEY-9-ACT"/></Item>
+                                        <Item Name="!" Sym="BASE-47324-KEY-EXCLAIM"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;!&quot;" Sym="BASE-47324-KEY-EXCLAIM-ACT"/></Item>
+                                        <Item Name="@" Sym="BASE-47324-KEY-AT"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;@&quot;" Sym="BASE-47324-KEY-AT-ACT"/></Item>
+                                        <Item Name="#" Sym="BASE-47324-KEY-HASH"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;#&quot;" Sym="BASE-47324-KEY-HASH-ACT"/></Item>
+                                        <Item Name="$" Sym="BASE-47324-KEY-DOLLAR"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;$&quot;" Sym="BASE-47324-KEY-DOLLAR-ACT"/></Item>
+                                        <Item Name="%" Sym="BASE-47324-KEY-PERCENT"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;%&quot;" Sym="BASE-47324-KEY-PERCENT-ACT"/></Item>
+                                        <Item Name="&amp;" Sym="BASE-47324-KEY-AMP"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;&amp;&quot;" Sym="BASE-47324-KEY-AMP-ACT"/></Item>
+                                        <Item Name="*" Sym="BASE-47324-KEY-STAR"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;*&quot;" Sym="BASE-47324-KEY-STAR-ACT"/></Item>
+                                        <Item Name="-" Sym="BASE-47324-KEY-MINUS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;-&quot;" Sym="BASE-47324-KEY-MINUS-ACT"/></Item>
+                                        <Item Name="_" Sym="BASE-47324-KEY-UNDERSCORE"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;_&quot;" Sym="BASE-47324-KEY-UNDERSCORE-ACT"/></Item>
+                                        <Item Name="." Sym="BASE-47324-KEY-DOT"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;.&quot;" Sym="BASE-47324-KEY-DOT-ACT"/></Item>
+                                        <Item Name=":" Sym="BASE-47324-KEY-COLON"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;:&quot;" Sym="BASE-47324-KEY-COLON-ACT"/></Item>
+                                       </Panel>
+                                      </Branch>
+                                     </Conditional>
+                                     <Panel Name="ControlKeys" Sym="BASE-47324-KEYBOARD-CONTROLS">
+                                      <Layout>Horizontal</Layout>
+                                      <FixedWidth>1.0</FixedWidth>
+                                      <PadX>0.01</PadX>
+                                      <PadY>0.005</PadY>
+                                      <WrapHNav>false</WrapHNav>
+                                      <WrapVNav>false</WrapVNav>
+                                      <IgnoreThemeProps>true</IgnoreThemeProps>
+                                      <BackgroundComponent>false</BackgroundComponent>
+                                      <Item Name="Clear All" Sym="BASE-47324-KEY-CLEAR">
+                                       <FixedWidth>0.34</FixedWidth>
+                                       <Action Name="SMBAuthUsername = &quot;&quot;" Sym="BASE-47324-CLEAR-USER"><Action Name="SMBAuthPassword = &quot;&quot;" Sym="BASE-47324-CLEAR-PASS"><Action Name="SMBAuthDomain = &quot;&quot;" Sym="BASE-47324-CLEAR-DOMAIN"><Action Name="Refresh()" Sym="BASE-47324-CLEAR-REFRESH"/></Action></Action></Action>
+                                      </Item>
+                                     </Panel>
+                                    </Panel>
+                                   </Panel>
+                                   <Item Name="Send" Sym="BASE-47324-AUTH-SEND">
+                                    <Action Name="SetSMBBrowseCredentials(SMBAuthUsername, SMBAuthPassword, SMBAuthDomain, false)" Sym="BASE-47324-AUTH-SET-CREDS">
+                                     <Action Name="CurrentDirPath = SMBAuthHost" Sym="BASE-47324-AUTH-NAVIGATE">
+                                      <Action Name="SortedDirFiles = null" Sym="BASE-47324-AUTH-CLEAR-FILES">
+                                       <Action Name="CloseOptionsMenu()" Sym="BASE-47324-AUTH-CLOSE-MENU"/>
+                                      </Action>
+                                     </Action>
+                                    </Action>
+                                   </Item>
+                                   <Item Name="Cancel" Sym="BASE-47324-AUTH-CANCEL">
+                                    <Action Name="CloseOptionsMenu()" Sym="BASE-47324-AUTH-CANCEL-CLOSE"/>
+                                   </Item>
+                                  </OptionsMenu>
+                                 </Action>
+                                </Action>
+                               </Action>
+                              </Action>
+                             </Action>
                             </Action>
-                            <Action Name="SortedDirFiles = null" Sym="BASE-47322">
-                             <Action Name="Refresh()" Sym="BASE-47323"/>
+                           </Branch>
+                           <Branch Name="false" Sym="BASE-47324-NO-AUTH">
+                            <Action Name="CurrentDirPath = ReplaceAll(java_lang_Object_toString(FolderCell), &quot;\\&quot;, &quot;/&quot;)" Sym="BASE-47325-FIX">
+                             <Action ID="53218" Name="IsValidDirBrowserDir = true" Sym="BASE-47321">
+                              <Action ID="53001" Name="&quot;REM Mark CurrentDirPath as a last-browsed dir, if needed.&quot;" Sym="BASE-47182">
+                               <Conditional Name="Size(TrackLastDirPathProperty) &gt; 0" Sym="BASE-47183">
+                                <Action Name="SetProperty( TrackLastDirPathProperty, CurrentDirPath )" Sym="BASE-47184"/>
+                               </Conditional>
+                              </Action>
+                              <Action Name="SortedDirFiles = null" Sym="BASE-47322">
+                               <Action Name="Refresh()" Sym="BASE-47323"/>
+                              </Action>
+                             </Action>
                             </Action>
-                           </Action>
-                          </Action>
+                           </Branch>
+                          </Conditional>
                          </Branch>
                         </Conditional>
                         <Theme Name="" Sym="BASE-47326">

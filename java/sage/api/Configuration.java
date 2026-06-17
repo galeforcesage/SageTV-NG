@@ -47,6 +47,12 @@ import sage.UIClient;
 import sage.UIManager;
 import sage.UserEvent;
 import sage.VideoFrame;
+import jcifs.CIFSContext;
+import jcifs.context.SingletonContext;
+import jcifs.smb.NtlmPasswordAuthenticator;
+import jcifs.smb.SmbAuthException;
+import jcifs.smb.SmbException;
+import jcifs.smb.SmbFile;
 
 /**
  * Configuration and properties for the whole system
@@ -111,6 +117,137 @@ public class Configuration{
        */
       public Object runSafely(Catbert.FastStack stack) throws Exception{
         return SeekerSelector.getInstance().getArchiveDirectories(Seeker.VIDEO_DIR_MASK);
+      }});
+    rft.put(new PredefinedJEPFunction("Configuration", "GetSMBNetworkHosts", true)
+    {
+      /**
+       * Returns SMB hosts visible on the server's local network.
+         * @return SMB host roots as SmbFile objects sorted case-insensitively
+       *
+       * @since 10.0
+       *
+         * @declaration public Object[] GetSMBNetworkHosts();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return getSmbNetworkHostsInternal();
+      }});
+    rft.put(new PredefinedJEPFunction("Configuration", "GetSMBBrowseEntries", new String[] { "SMBPath" }, true)
+    {
+      /**
+       * Returns the child entries for an SMB browse path.
+       * If SMBPath is null/blank or smb:// then host roots are returned.
+       * @param SMBPath the SMB path to browse
+       * @return child SMB entries as SmbFile objects sorted case-insensitively
+       *
+       * @since 10.0
+       *
+       * @declaration public Object[] GetSMBBrowseEntries(String SMBPath);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return getSmbBrowseEntriesInternal(getString(stack));
+      }});
+    rft.put(new PredefinedJEPFunction("Configuration", "GetSMBParentPath", new String[] { "SMBPath" }, true)
+    {
+      /**
+       * Returns the logical parent SMB path for the provided SMB path.
+       * @param SMBPath the SMB path to evaluate
+       * @return parent SMB path, or smb:// at the root level
+       *
+       * @since 10.0
+       *
+       * @declaration public String GetSMBParentPath(String SMBPath);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return getSmbParentPathInternal(getString(stack));
+      }});
+    rft.put(new PredefinedJEPFunction("Configuration", "GetSMBHostDisplayLabel", new String[] { "SMBPath" }, true)
+    {
+      /**
+       * Returns a human-friendly label for an SMB browse entry.
+       * For SMB host roots, returns "ip (name)" when reverse name resolution succeeds.
+       * @param SMBPath the SMB path to label
+       * @return display label for UI lists
+       *
+       * @since 10.0
+       *
+       * @declaration public String GetSMBHostDisplayLabel(String SMBPath);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return getSmbHostDisplayLabelInternal(getString(stack));
+      }});
+    rft.put(new PredefinedJEPFunction("Configuration", "IsSMBAuthRequired", new String[] { "SMBPath" }, true)
+    {
+      /**
+       * Returns true if browsing the SMB path requires authentication.
+       * @param SMBPath the SMB path to probe
+       * @return true if authentication is required
+       *
+       * @since 10.0
+       *
+       * @declaration public boolean IsSMBAuthRequired(String SMBPath);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return Boolean.valueOf(isSmbAuthRequiredInternal(getString(stack)));
+      }});
+    rft.put(new PredefinedJEPFunction("Configuration", "SetSMBBrowseCredentials", new String[] { "Username", "Password", "Domain", "PersistUserAndDomain" }, true)
+    {
+      /**
+       * Sets SMB browse credentials for this runtime session.
+       * Password is kept in memory only; username/domain may be persisted if requested.
+       * @param Username SMB username
+       * @param Password SMB password (memory only)
+       * @param Domain SMB domain/workgroup (optional)
+       * @param PersistUserAndDomain true to persist username/domain to Sage.properties
+       *
+       * @since 10.0
+       *
+       * @declaration public void SetSMBBrowseCredentials(String Username, String Password, String Domain, boolean PersistUserAndDomain);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        boolean persistUserDomain = evalBool(stack.pop());
+        String domain = getString(stack);
+        String pass = getString(stack);
+        String user = getString(stack);
+        setSmbBrowseCredentialsInternal(user, pass, domain, persistUserDomain);
+        return null;
+      }});
+    rft.put(new PredefinedJEPFunction("Configuration", "ClearSMBBrowseCredentials", true)
+    {
+      /**
+       * Clears runtime SMB browse credentials and invalidates cached host scan results.
+       *
+       * @since 10.0
+       *
+       * @declaration public void ClearSMBBrowseCredentials();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        clearSmbBrowseCredentialsInternal();
+        return null;
+      }});
+    rft.put(new PredefinedJEPFunction("Configuration", "AddSMBLibraryImportPath", new String[] { "SMBPath", "IncludeVideos", "IncludeMusic", "IncludePictures" }, true)
+    {
+      /**
+       * Adds an SMB path as a library import path for the requested media types.
+       * @param SMBPath the SMB path to add
+       * @param IncludeVideos true to include videos
+       * @param IncludeMusic true to include music
+       * @param IncludePictures true to include pictures
+       * @return true if request accepted, false if path or mask is invalid
+       *
+       * @since 10.0
+       *
+       * @declaration public boolean AddSMBLibraryImportPath(String SMBPath, boolean IncludeVideos, boolean IncludeMusic, boolean IncludePictures);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        boolean includePictures = evalBool(stack.pop());
+        boolean includeMusic = evalBool(stack.pop());
+        boolean includeVideos = evalBool(stack.pop());
+        String smbPath = normalizeSmbPath(getString(stack));
+        int importMask = buildImportMask(includeVideos, includeMusic, includePictures);
+        if ("smb://".equals(smbPath) || importMask == 0)
+          return Boolean.FALSE;
+        SeekerSelector.getInstance().addArchiveDirectory(smbPath, importMask);
+        return Boolean.TRUE;
       }});
     rft.put(new PredefinedJEPFunction("Configuration", "IsMajorMinorDTVChannelTuningEnabled", true)
     {
@@ -3496,5 +3633,1184 @@ public class Configuration{
 		{public Object runSafely(Catbert.FastStack stack) throws Exception{
 			}});
      */
+  }
+
+  private static String normalizeSmbPath(String smbPath)
+  {
+    if (smbPath == null)
+      return "smb://";
+    String rv = smbPath.trim();
+    if (rv.length() == 0)
+      return "smb://";
+    rv = rv.replace('\\', '/');
+    if (rv.startsWith("//"))
+      rv = "smb:" + rv;
+    else if (!rv.startsWith("smb://"))
+      rv = "smb://" + rv;
+
+    // Collapse root forms like smb:/// and smb://// to canonical smb://.
+    if (rv.startsWith("smb://"))
+    {
+      int hostStart = "smb://".length();
+      while (hostStart < rv.length() && rv.charAt(hostStart) == '/')
+        hostStart++;
+      if (hostStart >= rv.length())
+        rv = "smb://";
+      else if (hostStart > "smb://".length())
+        rv = "smb://" + rv.substring(hostStart);
+    }
+
+    if (!"smb://".equals(rv) && !rv.endsWith("/"))
+      rv += "/";
+    return rv;
+  }
+
+  // Cache for SMB host scan results - avoid repeated expensive scans
+  private static volatile SmbFile[] smbHostCache = null;
+  private static volatile long smbHostCacheTime = 0;
+  private static final long SMB_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+  private static final long SMB_EMPTY_CACHE_TTL_MS = 15 * 1000; // 15 seconds
+  private static volatile boolean smbScanInProgress = false;
+  private static volatile String smbBrowseUser = null;
+  private static volatile String smbBrowsePass = null;
+  private static volatile String smbBrowseDomain = null;
+  private static final java.util.concurrent.ConcurrentMap<String, String> smbHostDisplayNameCache =
+      new java.util.concurrent.ConcurrentHashMap<String, String>();
+
+  private static void clearSmbHostCacheInternal()
+  {
+    smbHostCache = null;
+    smbHostCacheTime = 0;
+    smbHostDisplayNameCache.clear();
+  }
+
+  private static void setSmbBrowseCredentialsInternal(String username, String password, String domain, boolean persistUserDomain)
+  {
+    smbBrowseUser = (username == null) ? "" : username.trim();
+    smbBrowsePass = (password == null) ? "" : password;
+    smbBrowseDomain = (domain == null) ? "" : domain.trim();
+
+    if (persistUserDomain)
+    {
+      Sage.put("smb/browse_username", smbBrowseUser);
+      Sage.put("smb/browse_domain", smbBrowseDomain);
+      Sage.savePrefs();
+    }
+    clearSmbHostCacheInternal();
+  }
+
+  private static void clearSmbBrowseCredentialsInternal()
+  {
+    smbBrowseUser = "";
+    smbBrowsePass = "";
+    smbBrowseDomain = "";
+    clearSmbHostCacheInternal();
+  }
+
+  private static CIFSContext getConfiguredSmbContext()
+  {
+    try
+    {
+      CIFSContext base = SingletonContext.getInstance();
+      String user = (smbBrowseUser != null) ? smbBrowseUser : Sage.get("smb/browse_username", "").trim();
+      if (user.length() == 0)
+        return base;
+      String pass = (smbBrowsePass != null) ? smbBrowsePass : "";
+      String domain = (smbBrowseDomain != null) ? smbBrowseDomain : Sage.get("smb/browse_domain", "");
+      return base.withCredentials(new NtlmPasswordAuthenticator(domain, user, pass));
+    }
+    catch (Throwable t)
+    {
+      return SingletonContext.getInstance();
+    }
+  }
+
+  private static String tryResolveIpv4Address(String host)
+  {
+    if (host == null || host.length() == 0)
+      return null;
+    if (isIpv4Literal(host))
+      return host;
+    try
+    {
+      java.net.InetAddress addr = java.net.InetAddress.getByName(host);
+      if (addr instanceof java.net.Inet4Address &&
+          !addr.isAnyLocalAddress() &&
+          !addr.isLoopbackAddress() &&
+          !addr.isLinkLocalAddress() &&
+          !addr.isMulticastAddress())
+        return addr.getHostAddress();
+    }
+    catch (Exception e)
+    {
+      // Fall back to hostname-based identity when local resolution is unavailable.
+    }
+    return null;
+  }
+
+  private static void cacheSmbHostDisplayAlias(String primaryHost, String aliasHost)
+  {
+    if (!isIpv4Literal(primaryHost) || aliasHost == null)
+      return;
+    String alias = aliasHost.trim();
+    if (alias.length() == 0 || isIpv4Literal(alias) || primaryHost.equalsIgnoreCase(alias))
+      return;
+    smbHostDisplayNameCache.put(primaryHost, primaryHost + " (" + alias + ")");
+  }
+
+  private static String buildSmbDiscoveryKey(String host)
+  {
+    String resolvedIp = tryResolveIpv4Address(host);
+    return (resolvedIp != null && resolvedIp.length() > 0)
+        ? resolvedIp
+        : host.toLowerCase(java.util.Locale.ROOT);
+  }
+
+  private static void addSmbHostCandidate(java.util.Map<String, SmbFile> hostMap, CIFSContext smbContext, String rawHost)
+  {
+    if (rawHost == null)
+      return;
+    String host = rawHost.trim();
+    if (host.length() == 0)
+      return;
+
+    if (host.startsWith("smb://"))
+    {
+      String trimmed = normalizeSmbPath(host);
+      int nextSlash = trimmed.indexOf('/', "smb://".length());
+      host = (nextSlash == -1) ? trimmed.substring("smb://".length()) : trimmed.substring("smb://".length(), nextSlash);
+    }
+
+    if (host.endsWith("/"))
+      host = host.substring(0, host.length() - 1);
+    if (host.length() == 0 || "WORKGROUP".equalsIgnoreCase(host))
+      return;
+
+    String resolvedIp = tryResolveIpv4Address(host);
+    String preferredHost = (resolvedIp != null && resolvedIp.length() > 0) ? resolvedIp : host;
+    String dedupeKey = buildSmbDiscoveryKey(host);
+    cacheSmbHostDisplayAlias(preferredHost, host);
+
+    String hostPath = "smb://" + preferredHost + "/";
+    try
+    {
+      synchronized (hostMap)
+      {
+        SmbFile existing = hostMap.get(dedupeKey);
+        if (existing != null)
+        {
+          String existingHost = extractSmbHost(existing.toString());
+          if (!isIpv4Literal(existingHost) && isIpv4Literal(preferredHost))
+          {
+            hostMap.put(dedupeKey, new SmbFile(hostPath, smbContext));
+            System.out.println("[SMB] Upgraded SMB host candidate to IP-backed path: " + hostPath);
+          }
+          return;
+        }
+        hostMap.put(dedupeKey, new SmbFile(hostPath, smbContext));
+      }
+      System.out.println("[SMB] Added SMB host candidate: " + hostPath);
+    }
+    catch (Exception e)
+    {
+      if (Sage.DBG) System.out.println("[SMB] Failed creating host candidate for " + hostPath + " err=" + e);
+    }
+  }
+
+  private static boolean probeSmbHostCapability(final String host, final CIFSContext smbContext)
+  {
+    final String probePath = "smb://" + host + "/";
+    java.util.concurrent.ExecutorService es = java.util.concurrent.Executors.newSingleThreadExecutor();
+    try
+    {
+      java.util.concurrent.Future<Boolean> fut = es.submit(new java.util.concurrent.Callable<Boolean>() {
+        public Boolean call()
+        {
+          // Fallback keeps discovery behavior stable.
+          try
+          {
+            return Boolean.valueOf(new SmbFile(probePath, smbContext).exists());
+          }
+          catch (SmbAuthException sae)
+          {
+            return Boolean.TRUE;
+          }
+          catch (Exception e)
+          {
+            return Boolean.FALSE;
+          }
+        }
+      });
+      return fut.get(1200, java.util.concurrent.TimeUnit.MILLISECONDS).booleanValue();
+    }
+    catch (java.util.concurrent.TimeoutException te)
+    {
+      return false;
+    }
+    catch (Exception e)
+    {
+      return false;
+    }
+    finally
+    {
+      es.shutdownNow();
+    }
+  }
+
+  private static byte[] buildNetbiosNodeStatusRequest()
+  {
+    byte[] packet = new byte[50];
+    int txid = (int) (System.currentTimeMillis() & 0xFFFF);
+    packet[0] = (byte) ((txid >> 8) & 0xFF);
+    packet[1] = (byte) (txid & 0xFF);
+    packet[4] = 0x00;
+    packet[5] = 0x01;
+    packet[12] = 0x20;
+    byte[] wildcard = "CKAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+    System.arraycopy(wildcard, 0, packet, 13, wildcard.length);
+    packet[45] = 0x00;
+    packet[46] = 0x00;
+    packet[47] = 0x21;
+    packet[48] = 0x00;
+    packet[49] = 0x01;
+    return packet;
+  }
+
+  private static int skipNetbiosQuestionSection(byte[] data, int dataLength, int offset)
+  {
+    int pos = offset;
+    while (pos < dataLength)
+    {
+      int len = data[pos] & 0xFF;
+      pos++;
+      if (len == 0)
+        break;
+      pos += len;
+    }
+    return (pos + 4 <= dataLength) ? (pos + 4) : -1;
+  }
+
+  private static String parseNetbiosNodeStatusName(byte[] data, int dataLength)
+  {
+    if (data == null || dataLength < 57)
+      return null;
+
+    int qdCount = ((data[4] & 0xFF) << 8) | (data[5] & 0xFF);
+    int anCount = ((data[6] & 0xFF) << 8) | (data[7] & 0xFF);
+    if (anCount <= 0)
+      return null;
+
+    int pos = 12;
+    for (int i = 0; i < qdCount; i++)
+    {
+      pos = skipNetbiosQuestionSection(data, dataLength, pos);
+      if (pos < 0)
+        return null;
+    }
+
+    String bestName = null;
+    int bestScore = Integer.MAX_VALUE;
+    for (int answer = 0; answer < anCount && pos + 12 <= dataLength; answer++)
+    {
+      if ((data[pos] & 0xC0) == 0xC0)
+        pos += 2;
+      else
+      {
+        pos = skipNetbiosQuestionSection(data, dataLength, pos);
+        if (pos < 0)
+          return bestName;
+      }
+      if (pos + 10 > dataLength)
+        return bestName;
+
+      int type = ((data[pos] & 0xFF) << 8) | (data[pos + 1] & 0xFF);
+      int rdLength = ((data[pos + 8] & 0xFF) << 8) | (data[pos + 9] & 0xFF);
+      pos += 10;
+      if (pos + rdLength > dataLength)
+        return bestName;
+      if (type != 0x0021 || rdLength < 1)
+      {
+        pos += rdLength;
+        continue;
+      }
+
+      int nameCount = data[pos] & 0xFF;
+      int namePos = pos + 1;
+      for (int i = 0; i < nameCount && namePos + 18 <= pos + rdLength; i++)
+      {
+        String entryName = new String(data, namePos, 15, java.nio.charset.StandardCharsets.US_ASCII).trim();
+        int suffix = data[namePos + 15] & 0xFF;
+        int flags = ((data[namePos + 16] & 0xFF) << 8) | (data[namePos + 17] & 0xFF);
+        boolean group = (flags & 0x8000) != 0;
+        if (entryName.length() > 0 && !group)
+        {
+          int score = 100;
+          if (suffix == 0x00)
+            score = 0;
+          else if (suffix == 0x20)
+            score = 1;
+          else if (suffix == 0x03)
+            score = 2;
+          if (score < bestScore)
+          {
+            bestScore = score;
+            bestName = entryName;
+          }
+        }
+        namePos += 18;
+      }
+      pos += rdLength;
+    }
+    return bestName;
+  }
+
+  private static String parseNtlmTargetInfoName(byte[] targetInfo)
+  {
+    if (targetInfo == null || targetInfo.length < 4)
+      return null;
+
+    String nbComputer = null;
+    String dnsComputer = null;
+    String nbDomain = null;
+    String dnsDomain = null;
+
+    int pos = 0;
+    while (pos + 4 <= targetInfo.length)
+    {
+      int avId = (targetInfo[pos] & 0xFF) | ((targetInfo[pos + 1] & 0xFF) << 8);
+      int avLen = (targetInfo[pos + 2] & 0xFF) | ((targetInfo[pos + 3] & 0xFF) << 8);
+      pos += 4;
+      if (avId == 0)
+        break;
+      if (avLen < 0 || pos + avLen > targetInfo.length)
+        break;
+
+      if (avLen > 0)
+      {
+        String value = new String(targetInfo, pos, avLen, java.nio.charset.StandardCharsets.UTF_16LE).trim();
+        if (value.length() > 0)
+        {
+          if (avId == 1)
+            nbComputer = value;
+          else if (avId == 2)
+            nbDomain = value;
+          else if (avId == 3)
+            dnsComputer = value;
+          else if (avId == 4)
+            dnsDomain = value;
+        }
+      }
+      pos += avLen;
+    }
+
+    if (nbComputer != null)
+      return nbComputer;
+    if (dnsComputer != null)
+      return dnsComputer;
+    if (nbDomain != null)
+      return nbDomain;
+    return dnsDomain;
+  }
+
+  private static String querySmbNegotiatedIdentityName(String host, CIFSContext smbContext)
+  {
+    if (!isIpv4Literal(host))
+      return null;
+
+    try
+    {
+      Object smbClient = null;
+      Object connection = null;
+      Object session = null;
+      try
+      {
+        Class<?> clientClass = Class.forName("com.hierynomus.smbj.SMBClient");
+        smbClient = clientClass.getConstructor().newInstance();
+        java.lang.reflect.Method connect = clientClass.getMethod("connect", String.class);
+        connection = connect.invoke(smbClient, host);
+
+        String remoteHost = firstNonEmptyString(
+            invokeStringMethod(connection, "getRemoteHostname"),
+            invokeStringMethod(connection, "getRemoteHostName"),
+            invokeStringMethod(connection, "getServerName"));
+        if (Sage.DBG)
+          System.out.println("[SMB] SMBJ negotiate candidate from connection " + host + " -> " + remoteHost);
+        if (isUsableIdentityName(host, remoteHost))
+          return remoteHost.trim();
+
+        try
+        {
+          Class<?> authClass = Class.forName("com.hierynomus.smbj.auth.AuthenticationContext");
+          java.lang.reflect.Method anonymous = authClass.getMethod("anonymous");
+          Object anonAuth = anonymous.invoke(null);
+          java.lang.reflect.Method authenticate = connection.getClass().getMethod("authenticate", authClass);
+          session = authenticate.invoke(connection, anonAuth);
+
+          Object connInfo = invokeMethod(session, "getConnectionInfo");
+          String fromInfo = firstNonEmptyString(
+              invokeStringMethod(connInfo, "getServerName"),
+              invokeStringMethod(connInfo, "getNetBiosName"),
+              invokeStringMethod(connInfo, "getNetbiosName"),
+              invokeStringMethod(connInfo, "getDnsDomainName"),
+              invokeStringMethod(connInfo, "getDomainName"),
+              invokeStringMethod(connInfo, "getNetBiosDomainName"),
+              invokeStringMethod(connInfo, "getNetbiosDomainName"));
+          if (Sage.DBG)
+            System.out.println("[SMB] SMBJ negotiate candidate from connectionInfo " + host + " -> " + fromInfo);
+          if (isUsableIdentityName(host, fromInfo))
+            return fromInfo.trim();
+        }
+        catch (Throwable ignored)
+        {
+          // Anonymous auth and connection-info introspection are best-effort only.
+        }
+      }
+      finally
+      {
+        closeQuietly(session);
+        closeQuietly(connection);
+        closeQuietly(smbClient);
+      }
+    }
+    catch (Exception e)
+    {
+      return null;
+    }
+
+    return null;
+  }
+
+  private static String queryReverseDnsName(String host)
+  {
+    if (!isIpv4Literal(host))
+      return null;
+
+    try
+    {
+      java.net.InetAddress addr = java.net.InetAddress.getByName(host);
+      String rdns = addr.getCanonicalHostName();
+      if (rdns != null)
+      {
+        rdns = rdns.trim();
+        if (rdns.length() > 0 && !host.equalsIgnoreCase(rdns) && !isIpv4Literal(rdns))
+          return rdns;
+      }
+    }
+    catch (Exception e)
+    {
+      return null;
+    }
+    return null;
+  }
+
+  private static String queryJcifsNodeStatusName(String host, CIFSContext smbContext)
+  {
+    if (!isIpv4Literal(host) || smbContext == null)
+      return null;
+
+    try
+    {
+      CIFSContext probeContext = smbContext.withAnonymousCredentials();
+      jcifs.NetbiosAddress[] entries = probeContext.getNameServiceClient().getNbtAllByAddress(host);
+      if (entries == null || entries.length == 0)
+        return null;
+
+      String bestName = null;
+      int bestScore = Integer.MAX_VALUE;
+      for (int i = 0; i < entries.length; i++)
+      {
+        jcifs.NetbiosAddress entry = entries[i];
+        if (entry == null)
+          continue;
+
+        boolean group;
+        try
+        {
+          group = entry.isGroupAddress(probeContext);
+        }
+        catch (Exception e)
+        {
+          group = false;
+        }
+        if (group)
+          continue;
+
+        jcifs.NetbiosName nbName = entry.getName();
+        if (nbName == null)
+          continue;
+        String name = nbName.getName();
+        if (name == null)
+          continue;
+        name = name.trim();
+        if (!isUsableIdentityName(host, name))
+          continue;
+
+        int suffix = nbName.getNameType();
+        int score = 100;
+        if (suffix == 0x00)
+          score = 0;
+        else if (suffix == 0x20)
+          score = 1;
+        else if (suffix == 0x03)
+          score = 2;
+
+        if (score < bestScore)
+        {
+          bestScore = score;
+          bestName = name;
+        }
+      }
+      return bestName;
+    }
+    catch (Exception e)
+    {
+      return null;
+    }
+  }
+
+  private static String queryNetbiosNodeStatusName(String host, int timeoutMs)
+  {
+    if (!isIpv4Literal(host))
+      return null;
+
+    java.net.DatagramSocket socket = null;
+    try
+    {
+      socket = new java.net.DatagramSocket();
+      socket.setSoTimeout(timeoutMs);
+      byte[] req = buildNetbiosNodeStatusRequest();
+      java.net.DatagramPacket packet = new java.net.DatagramPacket(
+          req, req.length, java.net.InetAddress.getByName(host), 137);
+      socket.send(packet);
+
+      byte[] buf = new byte[1024];
+      java.net.DatagramPacket response = new java.net.DatagramPacket(buf, buf.length);
+      socket.receive(response);
+      return parseNetbiosNodeStatusName(response.getData(), response.getLength());
+    }
+    catch (Exception e)
+    {
+      return null;
+    }
+    finally
+    {
+      if (socket != null)
+        socket.close();
+    }
+  }
+
+  private static boolean isUsableIdentityName(String host, String value)
+  {
+    if (value == null)
+      return false;
+    String trimmed = value.trim();
+    return trimmed.length() > 0 && !isIpv4Literal(trimmed) && !host.equalsIgnoreCase(trimmed);
+  }
+
+  private static String firstNonEmptyString(String... values)
+  {
+    if (values == null)
+      return null;
+    for (int i = 0; i < values.length; i++)
+    {
+      String value = values[i];
+      if (value != null && value.trim().length() > 0)
+        return value;
+    }
+    return null;
+  }
+
+  private static Object invokeMethod(Object target, String methodName)
+  {
+    if (target == null)
+      return null;
+    try
+    {
+      java.lang.reflect.Method method = target.getClass().getMethod(methodName);
+      return method.invoke(target);
+    }
+    catch (Throwable t)
+    {
+      return null;
+    }
+  }
+
+  private static String invokeStringMethod(Object target, String methodName)
+  {
+    Object rv = invokeMethod(target, methodName);
+    return (rv instanceof String) ? (String) rv : null;
+  }
+
+  private static void closeQuietly(Object obj)
+  {
+    if (obj == null)
+      return;
+    if (obj instanceof java.io.Closeable)
+    {
+      try
+      {
+        ((java.io.Closeable) obj).close();
+      }
+      catch (Exception ignored) {}
+      return;
+    }
+    try
+    {
+      java.lang.reflect.Method close = obj.getClass().getMethod("close");
+      close.invoke(obj);
+    }
+    catch (Throwable ignored) {}
+  }
+
+  private static void enrichSmbHostDisplayNames(java.util.Map<String, SmbFile> hostMap, CIFSContext smbContext)
+  {
+    java.util.ArrayList<String> ipv4Hosts = new java.util.ArrayList<String>();
+    for (SmbFile hostFile : hostMap.values())
+    {
+      String host = extractSmbHost(hostFile.toString());
+      if (isIpv4Literal(host) && !smbHostDisplayNameCache.containsKey(host))
+        ipv4Hosts.add(host);
+    }
+    if (ipv4Hosts.isEmpty())
+      return;
+
+    java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(Math.min(16, ipv4Hosts.size()));
+    try
+    {
+      java.util.List<java.util.concurrent.Callable<Void>> tasks = new java.util.ArrayList<java.util.concurrent.Callable<Void>>();
+      for (int i = 0; i < ipv4Hosts.size(); i++)
+      {
+        final String host = ipv4Hosts.get(i);
+        tasks.add(new java.util.concurrent.Callable<Void>() {
+          public Void call()
+          {
+            String netbiosName = queryNetbiosNodeStatusName(host, 900);
+              if (netbiosName != null && netbiosName.length() > 0)
+              {
+                cacheSmbHostDisplayAlias(host, netbiosName);
+                System.out.println("[SMB] NetBIOS name resolved: " + host + " -> " + netbiosName);
+              }
+              else
+              {
+                String jcifsNodeName = queryJcifsNodeStatusName(host, smbContext);
+                if (jcifsNodeName != null && jcifsNodeName.length() > 0)
+                {
+                  cacheSmbHostDisplayAlias(host, jcifsNodeName);
+                  System.out.println("[SMB] JCIFS NetBIOS node-status resolved: " + host + " -> " + jcifsNodeName);
+                }
+                else
+                {
+                  String reverseDns = queryReverseDnsName(host);
+                  if (reverseDns != null && reverseDns.length() > 0)
+                  {
+                    cacheSmbHostDisplayAlias(host, reverseDns);
+                    System.out.println("[SMB] Reverse DNS resolved: " + host + " -> " + reverseDns);
+                  }
+                }
+              }
+            return null;
+          }
+        });
+      }
+      pool.invokeAll(tasks, 5, java.util.concurrent.TimeUnit.SECONDS);
+    }
+    catch (Exception e)
+    {
+      if (Sage.DBG) System.out.println("[SMB] NetBIOS enrichment failed: " + e);
+    }
+    finally
+    {
+      pool.shutdownNow();
+    }
+  }
+
+  private static void discoverSmbHostsViaWsDiscovery(java.util.Map<String, SmbFile> hostMap, CIFSContext smbContext)
+  {
+    String probe =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
+        "<e:Envelope xmlns:e=\"http://www.w3.org/2003/05/soap-envelope\" " +
+        "xmlns:w=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" " +
+        "xmlns:d=\"http://schemas.xmlsoap.org/ws/2005/04/discovery\">" +
+        "<e:Header>" +
+        "<w:MessageID>uuid:" + java.util.UUID.randomUUID() + "</w:MessageID>" +
+        "<w:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To>" +
+        "<w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action>" +
+        "</e:Header>" +
+        "<e:Body><d:Probe/></e:Body>" +
+        "</e:Envelope>";
+
+    java.net.DatagramSocket socket = null;
+    try
+    {
+      socket = new java.net.DatagramSocket();
+      socket.setReuseAddress(true);
+      socket.setBroadcast(true);
+      socket.setSoTimeout(1200);
+      byte[] data = probe.getBytes("UTF-8");
+      java.net.DatagramPacket packet = new java.net.DatagramPacket(
+          data, data.length, java.net.InetAddress.getByName("239.255.255.250"), 3702);
+      socket.send(packet);
+      socket.send(packet);
+      System.out.println("[SMB] WS-Discovery probe sent");
+
+      long deadline = System.currentTimeMillis() + 1800;
+      byte[] buf = new byte[16384];
+      java.util.HashSet<String> seenHosts = new java.util.HashSet<String>();
+      java.util.regex.Pattern xaddrsPattern = java.util.regex.Pattern.compile("<(?:\\w+:)?XAddrs>([^<]+)</(?:\\w+:)?XAddrs>", java.util.regex.Pattern.CASE_INSENSITIVE);
+      java.util.regex.Pattern hostPattern = java.util.regex.Pattern.compile("https?://([^/:\\s]+)", java.util.regex.Pattern.CASE_INSENSITIVE);
+      while (System.currentTimeMillis() < deadline)
+      {
+        try
+        {
+          java.net.DatagramPacket resp = new java.net.DatagramPacket(buf, buf.length);
+          socket.receive(resp);
+          String xml = new String(resp.getData(), resp.getOffset(), resp.getLength(), "UTF-8");
+          java.util.regex.Matcher xaddrsMatcher = xaddrsPattern.matcher(xml);
+          while (xaddrsMatcher.find())
+          {
+            String xaddrs = xaddrsMatcher.group(1);
+            java.util.regex.Matcher hostMatcher = hostPattern.matcher(xaddrs);
+            while (hostMatcher.find())
+            {
+              String host = hostMatcher.group(1);
+              if (seenHosts.add(host.toLowerCase(java.util.Locale.ROOT)))
+                addSmbHostCandidate(hostMap, smbContext, host);
+            }
+          }
+        }
+        catch (java.net.SocketTimeoutException ste)
+        {
+          break;
+        }
+      }
+      System.out.println("[SMB] WS-Discovery found " + hostMap.size() + " hosts so far");
+    }
+    catch (Exception e)
+    {
+      System.out.println("[SMB] WS-Discovery failed: " + e.getMessage());
+      if (Sage.DBG) e.printStackTrace();
+    }
+    finally
+    {
+      if (socket != null)
+        socket.close();
+    }
+  }
+
+  private static void discoverSmbHostsViaWorkgroups(java.util.Map<String, SmbFile> hostMap, CIFSContext smbContext)
+  {
+    try
+    {
+      SmbFile root = new SmbFile("smb://", smbContext);
+      SmbFile[] workgroups = listSmbFilesWithTimeout(root, 4000, "smb://");
+      for (int i = 0; workgroups != null && i < workgroups.length; i++)
+      {
+        SmbFile workgroup = workgroups[i];
+        String wgPath = normalizeSmbPath(workgroup.toString());
+        if (!wgPath.endsWith("/"))
+          wgPath += "/";
+        System.out.println("[SMB] Enumerating workgroup path=" + wgPath);
+        try
+        {
+          SmbFile[] hosts = listSmbFilesWithTimeout(new SmbFile(wgPath, smbContext), 5000, wgPath);
+          for (int j = 0; hosts != null && j < hosts.length; j++)
+            addSmbHostCandidate(hostMap, smbContext, hosts[j].getName());
+        }
+        catch (Exception wgErr)
+        {
+          System.out.println("[SMB] Workgroup enumeration failed for path=" + wgPath + " err=" + wgErr.getMessage());
+        }
+      }
+    }
+    catch (Exception e)
+    {
+      System.out.println("[SMB] Workgroup enumeration failed: " + e.getMessage());
+      if (Sage.DBG) e.printStackTrace();
+    }
+  }
+
+  private static void discoverSmbHostsViaSubnetScan(java.util.Map<String, SmbFile> hostMap, final CIFSContext smbContext)
+  {
+    try
+    {
+      java.util.List<String[]> subnets = new java.util.ArrayList<String[]>();
+      java.util.Enumeration<java.net.NetworkInterface> ifaces = java.net.NetworkInterface.getNetworkInterfaces();
+      while (ifaces != null && ifaces.hasMoreElements())
+      {
+        java.net.NetworkInterface iface = ifaces.nextElement();
+        if (!iface.isUp() || iface.isLoopback() || iface.isVirtual()) continue;
+        String name = iface.getName();
+        if (name.startsWith("br-") || name.startsWith("docker") || name.startsWith("veth") || name.startsWith("virbr")) continue;
+        for (java.net.InterfaceAddress ia : iface.getInterfaceAddresses())
+        {
+          java.net.InetAddress addr = ia.getAddress();
+          if (!(addr instanceof java.net.Inet4Address)) continue;
+          int prefix = ia.getNetworkPrefixLength();
+          if (prefix < 16 || prefix > 30) continue;
+          int mask = 0xFFFFFFFF << (32 - prefix);
+          byte[] raw = addr.getAddress();
+          int ipInt = ((raw[0] & 0xFF) << 24) | ((raw[1] & 0xFF) << 16) | ((raw[2] & 0xFF) << 8) | (raw[3] & 0xFF);
+          int networkInt = ipInt & mask;
+          int hostCount = Math.min((1 << (32 - prefix)) - 2, 254);
+          String network = ((networkInt >> 24) & 0xFF) + "." + ((networkInt >> 16) & 0xFF) + "." + ((networkInt >> 8) & 0xFF) + ".";
+          subnets.add(new String[]{network, String.valueOf(hostCount), name, String.valueOf(prefix)});
+          System.out.println("[SMB] Scanning subnet " + network + "0/" + prefix + " (" + hostCount + " hosts) via " + name);
+        }
+      }
+
+      java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(64);
+      try
+      {
+        for (String[] subnet : subnets)
+        {
+          final String networkPrefix = subnet[0];
+          final int hostCount = Integer.parseInt(subnet[1]);
+          for (int i = 1; i <= hostCount; i++)
+          {
+            final String candidate = networkPrefix + i;
+            pool.submit(new Runnable() {
+              public void run()
+              {
+                try
+                {
+                  java.net.Socket sock = new java.net.Socket();
+                  sock.connect(new java.net.InetSocketAddress(candidate, 445), 150);
+                  sock.close();
+                  if (probeSmbHostCapability(candidate, smbContext))
+                    addSmbHostCandidate(hostMap, smbContext, candidate);
+                  else if (Sage.DBG)
+                    System.out.println("[SMB] Skipping non-SMB 445 responder: " + candidate);
+                }
+                catch (Exception ignored) {}
+              }
+            });
+          }
+        }
+      }
+      finally
+      {
+        pool.shutdown();
+      }
+
+      boolean finished = pool.awaitTermination(6, java.util.concurrent.TimeUnit.SECONDS);
+      if (!finished)
+      {
+        System.out.println("[SMB] Scan timeout; stopping remaining probes");
+        pool.shutdownNow();
+      }
+    }
+    catch (Exception e)
+    {
+      System.out.println("[SMB] Subnet scan failed: " + e.getMessage());
+      if (Sage.DBG) e.printStackTrace();
+    }
+  }
+
+  private static SmbFile[] getSmbNetworkHostsInternal()
+  {
+    // Return cached results if fresh
+    long now = System.currentTimeMillis();
+    if (smbHostCache != null)
+    {
+      long cacheTtl = (smbHostCache.length == 0) ? SMB_EMPTY_CACHE_TTL_MS : SMB_CACHE_TTL_MS;
+      if ((now - smbHostCacheTime) < cacheTtl)
+      {
+        System.out.println("[SMB] Returning " + smbHostCache.length + " cached hosts");
+        return smbHostCache;
+      }
+    }
+    // If a scan is already running, return stale cache or empty
+    if (smbScanInProgress)
+    {
+      System.out.println("[SMB] Scan in progress, returning stale cache");
+      return smbHostCache != null ? smbHostCache : new SmbFile[0];
+    }
+    // Discovery runs synchronously and prefers real SMB discovery mechanisms.
+    smbScanInProgress = true;
+    final java.util.concurrent.ConcurrentHashMap<String, SmbFile> hostMap =
+        new java.util.concurrent.ConcurrentHashMap<String, SmbFile>();
+    final CIFSContext smbContext = getConfiguredSmbContext();
+    System.out.println("[SMB] GetSMBNetworkHosts() called - starting discovery...");
+    try
+    {
+      java.util.concurrent.ExecutorService discoveryPool = java.util.concurrent.Executors.newFixedThreadPool(3);
+      try
+      {
+        java.util.List<java.util.concurrent.Callable<Void>> discoveryTasks = new java.util.ArrayList<java.util.concurrent.Callable<Void>>();
+        discoveryTasks.add(new java.util.concurrent.Callable<Void>() {
+          public Void call()
+          {
+            discoverSmbHostsViaWsDiscovery(hostMap, smbContext);
+            return null;
+          }
+        });
+        discoveryTasks.add(new java.util.concurrent.Callable<Void>() {
+          public Void call()
+          {
+            discoverSmbHostsViaWorkgroups(hostMap, smbContext);
+            return null;
+          }
+        });
+        discoveryTasks.add(new java.util.concurrent.Callable<Void>() {
+          public Void call()
+          {
+            discoverSmbHostsViaSubnetScan(hostMap, smbContext);
+            return null;
+          }
+        });
+
+        discoveryPool.invokeAll(discoveryTasks, 9, java.util.concurrent.TimeUnit.SECONDS);
+      }
+      finally
+      {
+        discoveryPool.shutdownNow();
+      }
+
+      enrichSmbHostDisplayNames(hostMap, smbContext);
+    }
+    catch (Exception e)
+    {
+      System.err.println("[SMB] ERROR: Host scan failed: " + e.getMessage());
+      if (Sage.DBG) e.printStackTrace();
+    }
+    finally
+    {
+      smbScanInProgress = false;
+    }
+    java.util.ArrayList<SmbFile> sortedHosts = new java.util.ArrayList<SmbFile>(hostMap.values());
+    java.util.Collections.sort(sortedHosts, new java.util.Comparator<SmbFile>() {
+      public int compare(SmbFile a, SmbFile b)
+      {
+        return a.toString().compareToIgnoreCase(b.toString());
+      }
+    });
+    smbHostCache = sortedHosts.toArray(new SmbFile[sortedHosts.size()]);
+    smbHostCacheTime = System.currentTimeMillis();
+    System.out.println("[SMB] Discovered " + smbHostCache.length + " hosts");
+    return smbHostCache;
+  }
+
+  private static SmbFile[] getSmbBrowseEntriesInternal(String smbPath)
+  {
+    String normalized = normalizeSmbPath(smbPath);
+    System.out.println("[SMB] GetSMBBrowseEntries() called with path: " + smbPath + " -> normalized: " + normalized);
+    if ("smb://".equals(normalized))
+    {
+      System.out.println("[SMB] Root level browse, calling GetSMBNetworkHosts()");
+      return getSmbNetworkHostsInternal();
+    }
+
+    java.util.Map<String, SmbFile> entryMap = new java.util.TreeMap<String, SmbFile>(String.CASE_INSENSITIVE_ORDER);
+    try
+    {
+      SmbFile root = new SmbFile(normalized, getConfiguredSmbContext());
+      SmbFile[] kids = listSmbFilesWithTimeout(root, 6000, normalized);
+      boolean hostLevel = normalized.indexOf('/', "smb://".length()) == normalized.length() - 1;
+      for (int i = 0; kids != null && i < kids.length; i++)
+      {
+        SmbFile child = kids[i];
+        String name = child.getName();
+        if (hostLevel && (name.endsWith("$") || name.endsWith("$/")))
+          continue;
+        if (!child.canRead())
+          continue;
+        boolean addEntry = false;
+        try
+        {
+          int type = child.getType();
+          addEntry = child.isDirectory() || type == SmbFile.TYPE_SHARE || type == SmbFile.TYPE_FILESYSTEM;
+        }
+        catch (Exception e)
+        {
+          addEntry = child.isDirectory();
+        }
+        if (addEntry)
+          entryMap.put(normalizeSmbPath(child.toString()), child);
+      }
+    }
+    catch (Exception e)
+    {
+      if ((e instanceof SmbAuthException) || (e.getClass().getName().indexOf("SmbAuthException") != -1))
+        System.out.println("[SMB] Auth required for path=" + normalized + " (open host in UI and apply SMB credentials)");
+      if (Sage.DBG) System.out.println("SMB browse failed for path=" + normalized + " err=" + e);
+    }
+    return entryMap.values().toArray(new SmbFile[entryMap.size()]);
+  }
+
+  private static SmbFile[] listSmbFilesWithTimeout(final SmbFile smbFile, long timeoutMs, String pathForLog) throws Exception
+  {
+    java.util.concurrent.ExecutorService es = java.util.concurrent.Executors.newSingleThreadExecutor();
+    try
+    {
+      java.util.concurrent.Future<SmbFile[]> fut = es.submit(new java.util.concurrent.Callable<SmbFile[]>() {
+        public SmbFile[] call() throws Exception
+        {
+          return smbFile.listFiles();
+        }
+      });
+      try
+      {
+        return fut.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+      }
+      catch (java.util.concurrent.TimeoutException te)
+      {
+        fut.cancel(true);
+        System.out.println("[SMB] Timeout listing path=" + pathForLog + " after " + timeoutMs + "ms");
+        throw te;
+      }
+      catch (java.util.concurrent.ExecutionException ee)
+      {
+        Throwable cause = ee.getCause();
+        if (cause instanceof Exception)
+          throw (Exception) cause;
+        throw new RuntimeException(cause);
+      }
+    }
+    finally
+    {
+      es.shutdownNow();
+    }
+  }
+
+  private static String getSmbParentPathInternal(String smbPath)
+  {
+    String normalized = normalizeSmbPath(smbPath);
+    if ("smb://".equals(normalized))
+      return normalized;
+    String trimmed = normalized.endsWith("/") ? normalized.substring(0, normalized.length() - 1) : normalized;
+    int lastSlash = trimmed.lastIndexOf('/');
+    if (lastSlash <= "smb://".length())
+      return "smb://";
+    return trimmed.substring(0, lastSlash + 1);
+  }
+
+  private static String getSmbHostDisplayLabelInternal(String smbPath)
+  {
+    String normalized = normalizeSmbPath(smbPath);
+    if ("smb://".equals(normalized))
+      return "smb://";
+
+    String trimmed = normalized.endsWith("/") ? normalized.substring(0, normalized.length() - 1) : normalized;
+    int slashPos = trimmed.lastIndexOf('/');
+    String leaf = (slashPos >= 0 && slashPos < trimmed.length() - 1) ? trimmed.substring(slashPos + 1) : trimmed;
+    if (leaf.length() == 0)
+      return normalized;
+
+    String host = extractSmbHost(normalized);
+    if (host == null || host.length() == 0)
+      return leaf;
+    if (!leaf.equalsIgnoreCase(host))
+      return leaf;
+    if (!isIpv4Literal(host))
+      return leaf;
+
+    String cached = smbHostDisplayNameCache.get(host);
+    if (cached != null)
+      return cached;
+
+    String resolved = resolveHostDisplayName(host);
+    String label = (resolved != null && resolved.length() > 0 && !host.equalsIgnoreCase(resolved))
+        ? (host + " (" + resolved + ")")
+        : host;
+    smbHostDisplayNameCache.putIfAbsent(host, label);
+    return label;
+  }
+
+  private static String extractSmbHost(String smbPath)
+  {
+    if (smbPath == null)
+      return "";
+    String normalized = normalizeSmbPath(smbPath);
+    if (!normalized.startsWith("smb://"))
+      return "";
+    String rest = normalized.substring("smb://".length());
+    int slash = rest.indexOf('/');
+    if (slash == -1)
+      return rest;
+    return rest.substring(0, slash);
+  }
+
+  private static boolean isIpv4Literal(String host)
+  {
+    if (host == null || host.length() == 0)
+      return false;
+    String[] parts = host.split("\\.");
+    if (parts.length != 4)
+      return false;
+    for (int i = 0; i < parts.length; i++)
+    {
+      try
+      {
+        int v = Integer.parseInt(parts[i]);
+        if (v < 0 || v > 255)
+          return false;
+      }
+      catch (Exception e)
+      {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static String resolveHostDisplayName(String host)
+  {
+    try
+    {
+      java.net.InetAddress ia = java.net.InetAddress.getByName(host);
+      String cname = ia.getCanonicalHostName();
+      if (cname != null)
+      {
+        cname = cname.trim();
+        if (cname.endsWith("."))
+          cname = cname.substring(0, cname.length() - 1);
+        if (cname.length() > 0 && !host.equalsIgnoreCase(cname))
+          return cname;
+      }
+    }
+    catch (Exception e)
+    {
+      // Fall back to plain host/IP.
+    }
+    return host;
+  }
+
+  private static boolean isSmbAuthRequiredInternal(String smbPath)
+  {
+    String normalized = normalizeSmbPath(smbPath);
+    if ("smb://".equals(normalized))
+      return false;
+    try
+    {
+      SmbFile probe = new SmbFile(normalized, getConfiguredSmbContext());
+      listSmbFilesWithTimeout(probe, 3500, normalized);
+      return false;
+    }
+    catch (java.util.concurrent.TimeoutException te)
+    {
+      // Prefer prompting for credentials quickly rather than hanging on slow/blocked hosts.
+      return true;
+    }
+    catch (SmbAuthException sae)
+    {
+      return true;
+    }
+    catch (Exception e)
+    {
+      String errType = e.getClass().getName();
+      return errType != null && errType.indexOf("SmbAuthException") != -1;
+    }
+  }
+
+  private static int buildImportMask(boolean includeVideos, boolean includeMusic, boolean includePictures)
+  {
+    int rv = 0;
+    if (includeVideos)
+      rv |= Seeker.VIDEO_DIR_MASK;
+    if (includeMusic)
+      rv |= Seeker.MUSIC_DIR_MASK;
+    if (includePictures)
+      rv |= Seeker.PICTURE_DIR_MASK;
+    return rv;
   }
 }
