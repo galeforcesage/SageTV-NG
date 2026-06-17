@@ -2724,293 +2724,6 @@
         </Attribute>
         <Action Ref="963" Name="&quot;REM Start a library i..."/>
        </Item>
-       <Item Name="Download Queue Management" Sym="NGDLQ-1100">
-        <Attribute Name="ButtonText" Sym="NGDLQ-1101">
-         <Value>"Download Queue Management"</Value>
-        </Attribute>
-        <Attribute Name="ThisItem" Sym="NGDLQ-1102">
-         <Value>"xItemSetupDownloadQueue"</Value>
-        </Attribute>
-        <Attribute Name="SubMenuType" Sym="NGDLQ-1103">
-         <Value>null</Value>
-        </Attribute>
-        <Action Name="&quot;Server download queue management.&quot;" Sym="NGDLQ-1104">
-         <OptionsMenu Name="DownloadQueueManagement" Sym="NGDLQ-1105">
-          <IgnoreThemeProps>false</IgnoreThemeProps>
-          <Action Name="&quot;Recording Copy Transfer Queue:\n \n&quot;" Sym="NGDLQ-1106">
-           <Text Name="" Sym="NGDLQ-1107"/>
-          </Action>
-          <Conditional Name="GetRecordingCopyTransferQueueItemCount() == 0" Sym="NGDLQ-1500">
-           <Panel Name="QueueEmpty" Sym="NGDLQ-1501">
-            <FixedWidth>1.0</FixedWidth>
-            <PadX>.02</PadX>
-            <PadY>.02</PadY>
-            <Insets>.02</Insets>
-            <WrapHNav>false</WrapHNav>
-            <WrapVNav>false</WrapVNav>
-            <IgnoreThemeProps>false</IgnoreThemeProps>
-            <Text Name="Queue:" Sym="NGDLQ-1502">
-             <AnchorX>0.0</AnchorX>
-             <FixedWidth>0.7</FixedWidth>
-             <AutosizeText>false</AutosizeText>
-             <WrapText>true</WrapText>
-             <TextShadow>true</TextShadow>
-             <DisableFontScaling>false</DisableFontScaling>
-             <IgnoreThemeProps>false</IgnoreThemeProps>
-            </Text>
-            <Action Name="&quot;No items in queue.&quot;" Sym="NGDLQ-1503">
-             <Text Name="(No queued recordings)" Sym="NGDLQ-1504"/>
-            </Action>
-            <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
-           </Panel>
-          </Conditional>
-          <Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 1" Sym="NGDLQ-1510">
-           <Item Name="QueueItem1" Sym="NGDLQ-1511">
-            <Action Name="&quot;Manage queue item #1.&quot;" Sym="NGDLQ-1512">
-             <OptionsMenu Name="DownloadQueueItem1" Sym="NGDLQ-1513">
-              <Action Name="GetRecordingCopyTransferQueueItemLabel(1)" Sym="NGDLQ-1514">
-               <Text Name="" Sym="NGDLQ-1515"/>
-              </Action>
-              <Panel Name="QueueItem1Progress" Sym="NGDLQ-1516">
-               <FixedWidth>1.0</FixedWidth>
-               <PadX>.02</PadX>
-               <PadY>.02</PadY>
-               <Insets>.02</Insets>
-               <WrapHNav>false</WrapHNav>
-               <WrapVNav>false</WrapVNav>
-               <IgnoreThemeProps>false</IgnoreThemeProps>
-               <Text Name="Progress:" Sym="NGDLQ-1517">
-                <AnchorX>0.0</AnchorX>
-                <FixedWidth>0.45</FixedWidth>
-                <AutosizeText>false</AutosizeText>
-                <WrapText>true</WrapText>
-                <TextShadow>true</TextShadow>
-                <DisableFontScaling>false</DisableFontScaling>
-                <IgnoreThemeProps>false</IgnoreThemeProps>
-               </Text>
-               <Action Name="GetRecordingCopyTransferQueueItemProgressText(1)" Sym="NGDLQ-1518">
-                <Text Name="" Sym="NGDLQ-1519"/>
-               </Action>
-               <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
-              </Panel>
-              <Panel Name="QueueItem1Pause" Sym="NGDLQ-1520">
-               <FixedWidth>1.0</FixedWidth>
-               <PadX>.02</PadX>
-               <PadY>.02</PadY>
-               <Insets>.02</Insets>
-               <WrapHNav>false</WrapHNav>
-               <WrapVNav>false</WrapVNav>
-               <IgnoreThemeProps>false</IgnoreThemeProps>
-               <Text Name="Pause:" Sym="NGDLQ-1521">
-                <AnchorX>0.0</AnchorX>
-                <FixedWidth>0.7</FixedWidth>
-                <AutosizeText>false</AutosizeText>
-                <WrapText>true</WrapText>
-                <TextShadow>true</TextShadow>
-                <DisableFontScaling>false</DisableFontScaling>
-                <IgnoreThemeProps>false</IgnoreThemeProps>
-               </Text>
-               <Item Name="QueueItem1PauseBtn" Sym="NGDLQ-1522">
-                <IgnoreThemeProps>false</IgnoreThemeProps>
-                <BackgroundComponent>false</BackgroundComponent>
-                <Action Name="PauseRecordingCopyTransferQueueItem(1)" Sym="NGDLQ-1523">
-                 <Action Name="Refresh()" Sym="NGDLQ-1524"/>
-                </Action>
-                <Text Name="Pause" Sym="NGDLQ-1525"/>
-               </Item>
-               <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
-              </Panel>
-              <Panel Name="QueueItem1Cancel" Sym="NGDLQ-1526">
-               <FixedWidth>1.0</FixedWidth>
-               <PadX>.02</PadX>
-               <PadY>.02</PadY>
-               <Insets>.02</Insets>
-               <WrapHNav>false</WrapHNav>
-               <WrapVNav>false</WrapVNav>
-               <IgnoreThemeProps>false</IgnoreThemeProps>
-               <Text Name="Cancel:" Sym="NGDLQ-1527">
-                <AnchorX>0.0</AnchorX>
-                <FixedWidth>0.7</FixedWidth>
-                <AutosizeText>false</AutosizeText>
-                <WrapText>true</WrapText>
-                <TextShadow>true</TextShadow>
-                <DisableFontScaling>false</DisableFontScaling>
-                <IgnoreThemeProps>false</IgnoreThemeProps>
-               </Text>
-               <Item Name="QueueItem1CancelBtn" Sym="NGDLQ-1528">
-                <IgnoreThemeProps>false</IgnoreThemeProps>
-                <BackgroundComponent>false</BackgroundComponent>
-                <Action Name="CancelRecordingCopyTransferQueueItem(1)" Sym="NGDLQ-1529">
-                 <Action Name="Refresh()" Sym="NGDLQ-1530"/>
-                </Action>
-                <Text Name="Cancel" Sym="NGDLQ-1531"/>
-               </Item>
-               <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
-              </Panel>
-              <Item Name="Close" Sym="NGDLQ-1532">
-               <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1533"/>
-              </Item>
-              <Theme Ref="2131" Name="MutliSelectOptionsTheme"/>
-             </OptionsMenu>
-            </Action>
-            <Action Name="GetRecordingCopyTransferQueueItemLabel(1)" Sym="NGDLQ-1534">
-             <Text Name="" Sym="NGDLQ-1535"/>
-            </Action>
-           </Item>
-          </Conditional>
-          <Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 2" Sym="NGDLQ-1540">
-           <Item Name="QueueItem2" Sym="NGDLQ-1541">
-            <Action Name="&quot;Manage queue item #2.&quot;" Sym="NGDLQ-1542">
-             <OptionsMenu Name="DownloadQueueItem2" Sym="NGDLQ-1543">
-              <Action Name="GetRecordingCopyTransferQueueItemLabel(2)" Sym="NGDLQ-1544">
-               <Text Name="" Sym="NGDLQ-1545"/>
-              </Action>
-              <Action Name="GetRecordingCopyTransferQueueItemProgressText(2)" Sym="NGDLQ-1546">
-               <Text Name="" Sym="NGDLQ-1547"/>
-              </Action>
-              <Item Name="Pause" Sym="NGDLQ-1548">
-               <Action Name="PauseRecordingCopyTransferQueueItem(2)" Sym="NGDLQ-1549">
-                <Action Name="Refresh()" Sym="NGDLQ-1550"/>
-               </Action>
-              </Item>
-              <Item Name="Cancel" Sym="NGDLQ-1551">
-               <Action Name="CancelRecordingCopyTransferQueueItem(2)" Sym="NGDLQ-1552">
-                <Action Name="Refresh()" Sym="NGDLQ-1553"/>
-               </Action>
-              </Item>
-              <Item Name="Close" Sym="NGDLQ-1554">
-               <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1555"/>
-              </Item>
-              <Theme Ref="2131" Name="MutliSelectOptionsTheme"/>
-             </OptionsMenu>
-            </Action>
-            <Action Name="GetRecordingCopyTransferQueueItemLabel(2)" Sym="NGDLQ-1556">
-             <Text Name="" Sym="NGDLQ-1557"/>
-            </Action>
-           </Item>
-          </Conditional>
-          <Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 3" Sym="NGDLQ-1560">
-           <Item Name="QueueItem3" Sym="NGDLQ-1561">
-            <Action Name="&quot;Manage queue item #3.&quot;" Sym="NGDLQ-1562">
-             <OptionsMenu Name="DownloadQueueItem3" Sym="NGDLQ-1563">
-              <Action Name="GetRecordingCopyTransferQueueItemLabel(3)" Sym="NGDLQ-1564">
-               <Text Name="" Sym="NGDLQ-1565"/>
-              </Action>
-              <Action Name="GetRecordingCopyTransferQueueItemProgressText(3)" Sym="NGDLQ-1566">
-               <Text Name="" Sym="NGDLQ-1567"/>
-              </Action>
-              <Item Name="Pause" Sym="NGDLQ-1568">
-               <Action Name="PauseRecordingCopyTransferQueueItem(3)" Sym="NGDLQ-1569">
-                <Action Name="Refresh()" Sym="NGDLQ-1570"/>
-               </Action>
-              </Item>
-              <Item Name="Cancel" Sym="NGDLQ-1571">
-               <Action Name="CancelRecordingCopyTransferQueueItem(3)" Sym="NGDLQ-1572">
-                <Action Name="Refresh()" Sym="NGDLQ-1573"/>
-               </Action>
-              </Item>
-              <Item Name="Close" Sym="NGDLQ-1574">
-               <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1575"/>
-              </Item>
-              <Theme Ref="2131" Name="MutliSelectOptionsTheme"/>
-             </OptionsMenu>
-            </Action>
-            <Action Name="GetRecordingCopyTransferQueueItemLabel(3)" Sym="NGDLQ-1576">
-             <Text Name="" Sym="NGDLQ-1577"/>
-            </Action>
-           </Item>
-          </Conditional>
-          <Panel Name="PauseAll" Sym="NGDLQ-1114">
-           <FixedWidth>1.0</FixedWidth>
-           <PadX>.02</PadX>
-           <PadY>.02</PadY>
-           <Insets>.02</Insets>
-           <WrapHNav>false</WrapHNav>
-           <WrapVNav>false</WrapVNav>
-           <IgnoreThemeProps>false</IgnoreThemeProps>
-           <Text Name="Pause Active/Queued:" Sym="NGDLQ-1115">
-            <AnchorX>0.0</AnchorX>
-            <FixedWidth>0.7</FixedWidth>
-            <AutosizeText>false</AutosizeText>
-            <WrapText>true</WrapText>
-            <TextShadow>true</TextShadow>
-            <DisableFontScaling>false</DisableFontScaling>
-            <IgnoreThemeProps>false</IgnoreThemeProps>
-           </Text>
-           <Item Name="PauseAllBtn" Sym="NGDLQ-1116">
-            <IgnoreThemeProps>false</IgnoreThemeProps>
-            <BackgroundComponent>false</BackgroundComponent>
-            <Action Name="PauseAllRecordingCopyTransfers()" Sym="NGDLQ-1117">
-             <Action Name="Refresh()" Sym="NGDLQ-1118"/>
-            </Action>
-            <Text Name="Pause All" Sym="NGDLQ-1119"/>
-           </Item>
-           <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
-          </Panel>
-          <Panel Name="ResumeAll" Sym="NGDLQ-1120">
-           <FixedWidth>1.0</FixedWidth>
-           <PadX>.02</PadX>
-           <PadY>.02</PadY>
-           <Insets>.02</Insets>
-           <WrapHNav>false</WrapHNav>
-           <WrapVNav>false</WrapVNav>
-           <IgnoreThemeProps>false</IgnoreThemeProps>
-           <Text Name="Resume Paused:" Sym="NGDLQ-1121">
-            <AnchorX>0.0</AnchorX>
-            <FixedWidth>0.7</FixedWidth>
-            <AutosizeText>false</AutosizeText>
-            <WrapText>true</WrapText>
-            <TextShadow>true</TextShadow>
-            <DisableFontScaling>false</DisableFontScaling>
-            <IgnoreThemeProps>false</IgnoreThemeProps>
-           </Text>
-           <Item Name="ResumeAllBtn" Sym="NGDLQ-1122">
-            <IgnoreThemeProps>false</IgnoreThemeProps>
-            <BackgroundComponent>false</BackgroundComponent>
-            <Action Name="ResumeAllRecordingCopyTransfers()" Sym="NGDLQ-1123">
-             <Action Name="Refresh()" Sym="NGDLQ-1124"/>
-            </Action>
-            <Text Name="Resume All" Sym="NGDLQ-1125"/>
-           </Item>
-           <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
-          </Panel>
-          <Panel Name="ClearCompleted" Sym="NGDLQ-1126">
-           <FixedWidth>1.0</FixedWidth>
-           <PadX>.02</PadX>
-           <PadY>.02</PadY>
-           <Insets>.02</Insets>
-           <WrapHNav>false</WrapHNav>
-           <WrapVNav>false</WrapVNav>
-           <IgnoreThemeProps>false</IgnoreThemeProps>
-           <Text Name="Clear Completed:" Sym="NGDLQ-1127">
-            <AnchorX>0.0</AnchorX>
-            <FixedWidth>0.7</FixedWidth>
-            <AutosizeText>false</AutosizeText>
-            <WrapText>true</WrapText>
-            <TextShadow>true</TextShadow>
-            <DisableFontScaling>false</DisableFontScaling>
-            <IgnoreThemeProps>false</IgnoreThemeProps>
-           </Text>
-           <Item Name="ClearCompletedBtn" Sym="NGDLQ-1128">
-            <IgnoreThemeProps>false</IgnoreThemeProps>
-            <BackgroundComponent>false</BackgroundComponent>
-            <Action Name="ClearCompletedRecordingCopyTransfers()" Sym="NGDLQ-1129">
-             <Action Name="Refresh()" Sym="NGDLQ-1130"/>
-            </Action>
-            <Text Name="Clear Completed" Sym="NGDLQ-1131"/>
-           </Item>
-           <Theme Ref="23248" Name="WideLeftRowPanelTheme2..."/>
-          </Panel>
-          <Action Name="&quot;\n \n&quot;" Sym="NGDLQ-1132">
-           <Text Name="" Sym="NGDLQ-1133"/>
-          </Action>
-          <Item Name="Close" Sym="NGDLQ-1134">
-           <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1135"/>
-          </Item>
-          <Theme Ref="2131" Name="MutliSelectOptionsTheme"/>
-         </OptionsMenu>
-        </Action>
-       </Item>
        <Item Name="System Information" Sym="OPUS4A-174739">
         <Attribute Name="ButtonText" Sym="OPUS4A-174740">
          <Value>"System Information"</Value>
@@ -82724,46 +82437,6 @@
            </Item>
            <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
           </Panel>
-          <Panel Name="CaptionExtractionEnabled" Sym="CAP-1">
-           <Text Name="Caption Sidecar Extraction" Sym="CAP-2"/>
-           <Item Name="Toggle" Sym="CAP-3">
-            <Action Name="IsCaptionExtractionEnabled()" Sym="CAP-4">
-             <Action Name="SetCaptionExtractionEnabled(!this)" Sym="CAP-5">
-              <Action Name="Refresh()" Sym="CAP-6"/>
-             </Action>
-            </Action>
-            <Conditional Name="IsCaptionExtractionEnabled()" Sym="CAP-7">
-             <Branch Name="true" Sym="CAP-8">
-              <Text Name="Enabled" Sym="CAP-9"/>
-             </Branch>
-             <Branch Name="false" Sym="CAP-10">
-              <Text Name="Disabled" Sym="CAP-11"/>
-             </Branch>
-            </Conditional>
-            <Attribute Name="HelpText" Sym="CAP-12">
-             <Value>"Enable or disable automatic closed-caption sidecar (.srt) extraction at the end of each new recording."</Value>
-            </Attribute>
-           </Item>
-           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
-          </Panel>
-          <Panel Name="CaptionBackfill" Sym="CAP-20">
-           <Text Name="Backfill Caption Sidecars" Sym="CAP-21"/>
-           <Item Name="Run" Sym="CAP-22">
-            <Action Name="&quot;Scan all recordings now&quot;" Sym="CAP-23">
-             <Text Name="" Sym="CAP-24"/>
-            </Action>
-            <Listener Name="Select" Sym="CAP-25">
-             <ListenerEvent>Select</ListenerEvent>
-             <Action Name="BackfillCaptions(false)" Sym="CAP-26">
-              <Action Name="Refresh()" Sym="CAP-27"/>
-             </Action>
-            </Listener>
-            <Attribute Name="HelpText" Sym="CAP-28">
-             <Value>"Queue caption extraction for every recording that does not already have a sidecar file."</Value>
-            </Attribute>
-           </Item>
-           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
-          </Panel>
           <Panel Name="ComskipPath" Sym="COMSKIP-50">
            <Text Name="Comskip Binary Path" Sym="COMSKIP-51"/>
            <Item Name="Modify" Sym="COMSKIP-52">
@@ -106242,68 +105915,6 @@
                                  <Action Ref="38516" Name="&quot;REM Dialog transition..."/>
                                  <Action Ref="8177" Name="&quot;REM Play all videos w..."/>
                                 </Action>
-                               </Item>
-                              </Conditional>
-                              <Conditional Name="FileListIsRecordings &amp;&amp; IsNgClientSession() &amp;&amp; HasClientCapability(&quot;DOWNLOAD&quot;)" Sym="NGDLQ-1200">
-                               <Item Name="Download all Recordings" Sym="NGDLQ-1201">
-                                <OptionsMenu Name="Download all Recordings Menu" Sym="NGDLQ-1217">
-                                 <IgnoreThemeProps>false</IgnoreThemeProps>
-                                 <Conditional Name="GetRecordingCopyTransferUiModeForMediaFiles(MediaFiles) == &quot;idle&quot;" Sym="NGDLQ-1218">
-                                  <Item Name="Download all now" Sym="NGDLQ-1219">
-                                   <Action Name="SendDownloadCommandsToClient(MediaFiles, &quot;foreground&quot;)" Sym="NGDLQ-1220">
-                                    <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1221">
-                                     <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1222"/>
-                                    </Action>
-                                   </Action>
-                                  </Item>
-                                  <Item Name="Queue all now" Sym="NGDLQ-1223">
-                                   <Action Name="SendDownloadCommandsToClient(MediaFiles, &quot;background&quot;)" Sym="NGDLQ-1224">
-                                    <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1225">
-                                     <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1226"/>
-                                    </Action>
-                                   </Action>
-                                  </Item>
-                                 </Conditional>
-                                 <Conditional Name="GetRecordingCopyTransferUiModeForMediaFiles(MediaFiles) == &quot;active&quot;" Sym="NGDLQ-1227">
-                                  <Item Name="Pause downloads" Sym="NGDLQ-1228">
-                                   <Action Name="PauseRecordingCopyTransfersForMediaFiles(MediaFiles)" Sym="NGDLQ-1229">
-                                    <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1230">
-                                     <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1231"/>
-                                    </Action>
-                                   </Action>
-                                  </Item>
-                                  <Item Name="Resume downloads" Sym="NGDLQ-1232">
-                                   <Action Name="ResumeRecordingCopyTransfersForMediaFiles(MediaFiles)" Sym="NGDLQ-1233">
-                                    <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1234">
-                                     <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1235"/>
-                                    </Action>
-                                   </Action>
-                                  </Item>
-                                  <Item Name="Remove downloads" Sym="NGDLQ-1236">
-                                   <Action Name="CancelRecordingCopyTransfersForMediaFiles(MediaFiles)" Sym="NGDLQ-1237">
-                                    <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1238">
-                                     <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1239"/>
-                                    </Action>
-                                   </Action>
-                                  </Item>
-                                  <Item Name="Queue snapshot" Sym="NGDLQ-1240">
-                                   <OptionsMenu Name="Download Queue Snapshot" Sym="NGDLQ-1241">
-                                    <IgnoreThemeProps>false</IgnoreThemeProps>
-                                    <Action Name="GetRecordingCopyTransferQueueSummaryText()" Sym="NGDLQ-1242">
-                                     <Text Name="" Sym="NGDLQ-1243"/>
-                                    </Action>
-                                    <Item Name="Close" Sym="NGDLQ-1244">
-                                     <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1245"/>
-                                    </Item>
-                                    <Theme Ref="954" Name="OptionsConfirmTheme"/>
-                                   </OptionsMenu>
-                                  </Item>
-                                 </Conditional>
-                                 <Item Name="Close" Sym="NGDLQ-1246">
-                                  <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1247"/>
-                                 </Item>
-                                 <Theme Ref="954" Name="OptionsConfirmTheme"/>
-                                </OptionsMenu>
                                </Item>
                               </Conditional>
                               <Conditional Name="(Size(SubDirMediaFiles) &gt; 0) &amp;&amp; (Size(SubDirMediaFiles) != Size(MediaFiles)) &amp;&amp; (Size(SubDirMediaFiles) &lt;= GetServerProperty(&quot;music/max_playlist_grouped_add&quot;,500))" Sym="BASE-58965">
@@ -131128,6 +130739,17 @@
                      </Action>
                     </Item>
                    </Conditional>
+                   <Conditional Name="HasCommercialMarkers(MediaFile) &amp;&amp; !IsCommercialDetectRunning(MediaFile)" Sym="COMSKIP-630">
+                    <Item Name="Re-run Comskip" Sym="COMSKIP-631">
+                     <FixedWidth>0.5</FixedWidth>
+                     <Insets>10</Insets>
+                     <Action Name="ClearCommercialMarkers(MediaFile)" Sym="COMSKIP-632">
+                      <Action Name="RunCommercialDetect(MediaFile)" Sym="COMSKIP-633">
+                       <Action Name="CloseOptionsMenu()" Sym="COMSKIP-634"/>
+                      </Action>
+                     </Action>
+                    </Item>
+                   </Conditional>
                    <Conditional Name="IsCommercialDetectRunning(MediaFile)" Sym="COMSKIP-635">
                     <Item Name="Stop Comskip" Sym="COMSKIP-636">
                      <FixedWidth>0.5</FixedWidth>
@@ -131144,181 +130766,6 @@
                      <Action Name="ClearCommercialMarkers(MediaFile)" Sym="COMSKIP-232">
                       <Action Name="Refresh()" Sym="COMSKIP-233"/>
                      </Action>
-                    </Item>
-                   </Conditional>
-                   <Conditional Name="IsCaptionExtractionEnabled() &amp;&amp; !HasCaptionSidecar(MediaFile)" Sym="CAP-100">
-                    <Item Name="Extract Captions" Sym="CAP-101">
-                     <FixedWidth>0.5</FixedWidth>
-                     <Insets>10</Insets>
-                     <Action Name="ExtractCaptions(MediaFile)" Sym="CAP-102">
-                      <Action Name="Refresh()" Sym="CAP-103"/>
-                     </Action>
-                    </Item>
-                   </Conditional>
-                   <Conditional Name="HasCaptionSidecar(MediaFile)" Sym="CAP-110">
-                    <Item Name="Delete Captions" Sym="CAP-111">
-                     <FixedWidth>0.5</FixedWidth>
-                     <Insets>10</Insets>
-                     <Action Name="ClearCaptionSidecar(MediaFile)" Sym="CAP-112">
-                      <Action Name="Refresh()" Sym="CAP-113"/>
-                     </Action>
-                    </Item>
-                   </Conditional>
-                   <Conditional Name="IsNgClientSession() &amp;&amp; HasClientCapability(&quot;DOWNLOAD&quot;)" Sym="NGDLQ-1000">
-                    <Item Name="Download Recording" Sym="NGDLQ-1001">
-                     <FixedWidth>0.5</FixedWidth>
-                     <Insets>10</Insets>
-                     <OptionsMenu Name="Download Recording Menu" Sym="NGDLQ-1022">
-                      <IgnoreThemeProps>false</IgnoreThemeProps>
-                      <Conditional Name="GetRecordingCopyTransferUiModeForMediaFile(MediaFile) == &quot;idle&quot;" Sym="NGDLQ-1023">
-                       <Item Name="Download now" Sym="NGDLQ-1024">
-                        <Action Name="TransferCreateResult = CreateRecordingCopyTransferSession(MediaFile, &quot;foreground&quot;, &quot;balanced&quot;, 0, 1, false, true)" Sym="NGDLQ-1025">
-                         <Conditional Name="StringIndex(TransferCreateResult, &quot;TRANSFER_SESSION_ACK&quot;) &gt;= 0" Sym="NGDLQ-1600">
-                          <Branch Name="true" Sym="NGDLQ-1601">
-                           <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1026">
-                            <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1027"/>
-                           </Action>
-                          </Branch>
-                          <Branch Name="else" Sym="NGDLQ-1602">
-                           <OptionsMenu Name="Download Request Result" Sym="NGDLQ-1603">
-                            <Action Name="TransferCreateResult" Sym="NGDLQ-1604">
-                             <Text Name="" Sym="NGDLQ-1605"/>
-                            </Action>
-                            <Item Name="Close" Sym="NGDLQ-1606">
-                             <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1607"/>
-                            </Item>
-                            <Theme Ref="954" Name="OptionsConfirmTheme"/>
-                           </OptionsMenu>
-                          </Branch>
-                         </Conditional>
-                        </Action>
-                       </Item>
-                       <Item Name="Queue recording download" Sym="NGDLQ-1028">
-                        <Action Name="TransferCreateResult = CreateRecordingCopyTransferSession(MediaFile, &quot;background&quot;, &quot;balanced&quot;, 0, 1, false, true)" Sym="NGDLQ-1029">
-                         <Conditional Name="StringIndex(TransferCreateResult, &quot;TRANSFER_SESSION_ACK&quot;) &gt;= 0" Sym="NGDLQ-1610">
-                          <Branch Name="true" Sym="NGDLQ-1611">
-                           <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1030">
-                            <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1031"/>
-                           </Action>
-                          </Branch>
-                          <Branch Name="else" Sym="NGDLQ-1612">
-                           <OptionsMenu Name="Queue Request Result" Sym="NGDLQ-1613">
-                            <Action Name="TransferCreateResult" Sym="NGDLQ-1614">
-                             <Text Name="" Sym="NGDLQ-1615"/>
-                            </Action>
-                            <Item Name="Close" Sym="NGDLQ-1616">
-                             <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1617"/>
-                            </Item>
-                            <Theme Ref="954" Name="OptionsConfirmTheme"/>
-                           </OptionsMenu>
-                          </Branch>
-                         </Conditional>
-                        </Action>
-                       </Item>
-                      </Conditional>
-                      <Conditional Name="GetRecordingCopyTransferUiModeForMediaFile(MediaFile) == &quot;active&quot;" Sym="NGDLQ-1032">
-                       <Conditional Name="GetLatestRecordingCopyTransferStateForMediaFile(MediaFile) != &quot;paused_by_client&quot; &amp;&amp; GetLatestRecordingCopyTransferStateForMediaFile(MediaFile) != &quot;paused_by_server&quot;" Sym="NGDLQ-1033">
-                        <Item Name="Pause recording download" Sym="NGDLQ-1034">
-                         <Action Name="PauseLatestRecordingCopyTransferForMediaFile(MediaFile)" Sym="NGDLQ-1035">
-                          <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1036">
-                           <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1037"/>
-                          </Action>
-                         </Action>
-                        </Item>
-                       </Conditional>
-                       <Conditional Name="GetLatestRecordingCopyTransferStateForMediaFile(MediaFile) == &quot;paused_by_client&quot; || GetLatestRecordingCopyTransferStateForMediaFile(MediaFile) == &quot;paused_by_server&quot;" Sym="NGDLQ-1038">
-                        <Item Name="Resume recording download" Sym="NGDLQ-1039">
-                         <Action Name="ResumeLatestRecordingCopyTransferForMediaFile(MediaFile)" Sym="NGDLQ-1040">
-                          <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1041">
-                           <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1042"/>
-                          </Action>
-                         </Action>
-                        </Item>
-                       </Conditional>
-                       <Item Name="Remove recording download" Sym="NGDLQ-1043">
-                        <Action Name="CancelLatestRecordingCopyTransferForMediaFile(MediaFile)" Sym="NGDLQ-1044">
-                         <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1045">
-                          <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1046"/>
-                         </Action>
-                        </Action>
-                       </Item>
-                       <Item Name="Show transfer status (JSON)" Sym="NGDLQ-1700">
-                        <OptionsMenu Name="Transfer Status" Sym="NGDLQ-1701">
-                         <IgnoreThemeProps>false</IgnoreThemeProps>
-                         <Action Name="GetLatestRecordingCopyTransferStatusForMediaFile(MediaFile)" Sym="NGDLQ-1702">
-                          <Text Name="" Sym="NGDLQ-1703"/>
-                         </Action>
-                         <Item Name="Close" Sym="NGDLQ-1704">
-                          <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1705"/>
-                         </Item>
-                         <Theme Ref="954" Name="OptionsConfirmTheme"/>
-                        </OptionsMenu>
-                       </Item>
-                       <Item Name="Queue snapshot" Sym="NGDLQ-1047">
-                        <OptionsMenu Name="Download Queue Snapshot" Sym="NGDLQ-1048">
-                         <IgnoreThemeProps>false</IgnoreThemeProps>
-                         <Action Name="&quot;Server caps:&quot;" Sym="NGDLQ-1710">
-                          <Text Name="" Sym="NGDLQ-1711"/>
-                         </Action>
-                         <Action Name="GetRecordingCopyTransferCapsAck()" Sym="NGDLQ-1712">
-                          <Text Name="" Sym="NGDLQ-1713"/>
-                         </Action>
-                         <Action Name="GetRecordingCopyTransferQueueSummaryText()" Sym="NGDLQ-1049">
-                          <Text Name="" Sym="NGDLQ-1050"/>
-                         </Action>
-                         <Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 1" Sym="NGDLQ-1720">
-                          <Action Name="&quot;\nItem 1:&quot;" Sym="NGDLQ-1721">
-                           <Text Name="" Sym="NGDLQ-1722"/>
-                          </Action>
-                          <Action Name="GetRecordingCopyTransferQueueItemDetailText(1)" Sym="NGDLQ-1723">
-                           <Text Name="" Sym="NGDLQ-1724"/>
-                          </Action>
-                         </Conditional>
-                         <Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 2" Sym="NGDLQ-1725">
-                          <Action Name="&quot;\nItem 2:&quot;" Sym="NGDLQ-1726">
-                           <Text Name="" Sym="NGDLQ-1727"/>
-                          </Action>
-                          <Action Name="GetRecordingCopyTransferQueueItemDetailText(2)" Sym="NGDLQ-1728">
-                           <Text Name="" Sym="NGDLQ-1729"/>
-                          </Action>
-                         </Conditional>
-                         <Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 3" Sym="NGDLQ-1730">
-                          <Action Name="&quot;\nItem 3:&quot;" Sym="NGDLQ-1731">
-                           <Text Name="" Sym="NGDLQ-1732"/>
-                          </Action>
-                          <Action Name="GetRecordingCopyTransferQueueItemDetailText(3)" Sym="NGDLQ-1733">
-                           <Text Name="" Sym="NGDLQ-1734"/>
-                          </Action>
-                         </Conditional>
-                         <Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 4" Sym="NGDLQ-1740">
-                          <Action Name="&quot;\n(&quot; + (GetRecordingCopyTransferQueueItemCount() - 3) + &quot; more queued, see Raw JSON)&quot;" Sym="NGDLQ-1741">
-                           <Text Name="" Sym="NGDLQ-1742"/>
-                          </Action>
-                         </Conditional>
-                         <Item Name="Show raw snapshot JSON" Sym="NGDLQ-1750">
-                          <OptionsMenu Name="Raw Queue Snapshot" Sym="NGDLQ-1751">
-                           <IgnoreThemeProps>false</IgnoreThemeProps>
-                           <Action Name="GetRecordingCopyTransferQueueSnapshot()" Sym="NGDLQ-1752">
-                            <Text Name="" Sym="NGDLQ-1753"/>
-                           </Action>
-                           <Item Name="Close" Sym="NGDLQ-1754">
-                            <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1755"/>
-                           </Item>
-                           <Theme Ref="954" Name="OptionsConfirmTheme"/>
-                          </OptionsMenu>
-                         </Item>
-                         <Item Name="Close" Sym="NGDLQ-1051">
-                          <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1052"/>
-                         </Item>
-                         <Theme Ref="954" Name="OptionsConfirmTheme"/>
-                        </OptionsMenu>
-                       </Item>
-                      </Conditional>
-                      <Item Name="Close" Sym="NGDLQ-1053">
-                       <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1054"/>
-                      </Item>
-                      <Theme Ref="954" Name="OptionsConfirmTheme"/>
-                     </OptionsMenu>
                     </Item>
                    </Conditional>
                   </Branch>
@@ -131411,17 +130858,6 @@
                <IgnoreThemeProps>false</IgnoreThemeProps>
                <BackgroundComponent>false</BackgroundComponent>
                <MouseTransparency>false</MouseTransparency>
-               <Conditional Name="HasCommercialMarkers(MediaFile) &amp;&amp; !IsCommercialDetectRunning(MediaFile)" Sym="COMSKIP-630">
-                <Item Name="Re-run Comskip" Sym="COMSKIP-631">
-                 <FixedWidth>0.5</FixedWidth>
-                 <Insets>10</Insets>
-                 <Action Name="ClearCommercialMarkers(MediaFile)" Sym="COMSKIP-632">
-                  <Action Name="RunCommercialDetect(MediaFile)" Sym="COMSKIP-633">
-                   <Action Name="CloseOptionsMenu()" Sym="COMSKIP-634"/>
-                  </Action>
-                 </Action>
-                </Item>
-               </Conditional>
                <Conditional Name="((MediaFile == null) || IsTVFile(Airing)) &amp;&amp; IsPVR()" Sym="BASE-50065">
                 <Conditional Name="GetAiringTitle(Airing) != LocalizeString(&quot;EPG_Cell_No_Data&quot;)" Sym="BASE-50066">
                  <Panel Name="Future/Past Airings" Sym="BASE-50101">
@@ -148629,18 +148065,9 @@
            </Conditional>
            <Conditional Name="CurrentDirPath == null" Sym="BASE-46064">
             <Branch Name="false" Sym="BASE-46065">
-             <Conditional Name="StringIndexOf(java_lang_Object_toString(CurrentDirPath), &quot;@&quot;) &gt; 0" Sym="BASE-46066-COND">
-              <Branch Name="true" Sym="BASE-46066-STRIP">
-               <Action Name="&quot;Current: smb://&quot; + Substring(java_lang_Object_toString(CurrentDirPath), StringIndexOf(java_lang_Object_toString(CurrentDirPath), &quot;@&quot;) + 1, -1)" Sym="BASE-46066">
-                <Text Ref="52920" Name=""/>
-               </Action>
-              </Branch>
-              <Branch Name="false" Sym="BASE-46066-PLAIN">
-               <Action Name="&quot;Current: &quot; + CurrentDirPath" Sym="BASE-46066-PLAIN-ACT">
-                <Text Ref="52920" Name=""/>
-               </Action>
-              </Branch>
-             </Conditional>
+             <Action Name="&quot;Current: &quot; + CurrentDirPath" Sym="BASE-46066">
+              <Text Ref="52920" Name=""/>
+             </Action>
             </Branch>
             <Branch Name="true" Sym="BASE-46068">
              <Conditional Name="RootDirPathStyle" Sym="BASE-46069">
@@ -149389,19 +148816,14 @@
                           </Action>
                          </Branch>
                          <Branch Name="false" Sym="BASE-47324">
-                          <Conditional Name="StringStartsWith(FolderCell + &quot;&quot;, &quot;smb://&quot;) &amp;&amp; (StringIndexOf(java_lang_Object_toString(FolderCell), &quot;@&quot;) == -1)" Sym="BASE-47324-AUTH-CHECK">
+                          <Conditional Name="StringStartsWith(FolderCell + &quot;&quot;, &quot;smb://&quot;) &amp;&amp; IsSMBAuthRequired(FolderCell)" Sym="BASE-47324-AUTH-CHECK">
                            <Branch Name="true" Sym="BASE-47324-AUTH-NEEDED">
-                            <Conditional Name="NetworkPathPwdCache == null" Sym="BASE-47324-AUTH-CACHE-INIT-COND">
-                             <Action Name="AddGlobalContext(&quot;NetworkPathPwdCache&quot;, new_java_util_HashMap())" Sym="BASE-47324-AUTH-CACHE-INIT"/>
-                            </Conditional>
                             <Action Name="SMBAuthHost = FolderCell" Sym="BASE-47324-AUTH-HOST-SAVE">
                              <Action Name="SMBAuthUsername = &quot;&quot;" Sym="BASE-47324-AUTH-USER-INIT">
                               <Action Name="SMBAuthPassword = &quot;&quot;" Sym="BASE-47324-AUTH-PASS-INIT">
-                               <Action Name="SMBAuthDomain = &quot;&quot;" Sym="BASE-47324-AUTH-DOMAIN-INIT">
+                               <Action Name="SMBAuthDomain = &quot;MicrosoftAccount&quot;" Sym="BASE-47324-AUTH-DOMAIN-INIT">
                                 <Action Name="SMBAuthShowPassword = false" Sym="BASE-47324-AUTH-SHOW-INIT">
-                                 <Action Name="SMBAuthField = 0" Sym="BASE-47324-AUTH-FIELD-INIT">
-                                  <Action Name="SMBAuthPendingChar = &quot;&quot;" Sym="BASE-47324-AUTH-PENDING-INIT">
-                                   <Action Name="KeyboardMode = 0" Sym="BASE-47324-KEYBOARD-MODE-INIT-OPEN">
+                                 <Action Name="KeyboardMode = 0" Sym="BASE-47324-KEYBOARD-MODE-INIT-OPEN">
                                   <OptionsMenu Name="SMBAuthPrompt_CenteredChooser" Sym="BASE-47324-AUTH-MENU">
                                    <Text Name="SMB Authentication Required" Sym="BASE-47324-AUTH-TITLE">
                                     <TextAlignment>0.5</TextAlignment>
@@ -149416,127 +148838,56 @@
                                     <IgnoreThemeProps>true</IgnoreThemeProps>
                                     <BackgroundComponent>false</BackgroundComponent>
                                     <MouseTransparency>false</MouseTransparency>
-                                    <Panel Name="UserRow" Sym="BASE-47324-AUTH-USER-ROW">
-                                     <Layout>Horizontal</Layout>
-                                     <FixedWidth>1.0</FixedWidth>
-                                     <FixedHeight>0.10</FixedHeight>
-                                     <PadX>0.01</PadX>
+                                    <Text Name="Username:" Sym="BASE-47324-AUTH-USER-LABEL">
                                      <IgnoreThemeProps>true</IgnoreThemeProps>
+                                     <TextShadow>false</TextShadow>
+                                    </Text>
+                                    <TextInput Name="SMBAuthUsername" Sym="BASE-47324-AUTH-USER-INPUT">
+                                     <HideText>false</HideText>
+                                     <IgnoreThemeProps>false</IgnoreThemeProps>
                                      <BackgroundComponent>false</BackgroundComponent>
-                                     <Text Name="Username:" Sym="BASE-47324-AUTH-USER-LABEL">
-                                      <FixedWidth>0.28</FixedWidth>
-                                      <TextAlignment>0.0</TextAlignment>
-                                      <VerticalAlignment>0.5</VerticalAlignment>
-                                      <IgnoreThemeProps>true</IgnoreThemeProps>
-                                      <TextShadow>false</TextShadow>
-                                     </Text>
-                                     <TextInput Name="SMBAuthUsername" Sym="BASE-47324-AUTH-USER-INPUT">
-                                      <FixedWidth>0.72</FixedWidth>
-                                      <FixedHeight>1.0</FixedHeight>
-                                      <Insets>0.01</Insets>
-                                      <VerticalAlignment>0.5</VerticalAlignment>
-                                      <AutosizeText>false</AutosizeText>
-                                      <WrapText>false</WrapText>
-                                      <HideText>false</HideText>
-                                      <TextShadow>false</TextShadow>
-                                      <IgnoreThemeProps>true</IgnoreThemeProps>
-                                      <BackgroundComponent>false</BackgroundComponent>
-                                      <FocusableCondition>true</FocusableCondition>
-                                      <Shape Ref="941" Name="InputBorder"/>
-                                      <Listener Ref="17240" Name="Stop - Backspace"/>
-                                      <Listener Ref="17209" Name="Play - Accept current ..."/>
-                                      <Listener Ref="17214" Name="RawKeyboard"/>
-                                      <Hook Name="FocusGained" Sym="BASE-47324-AUTH-USER-FOCUS"><Action Name="SMBAuthField = 0" Sym="BASE-47324-AUTH-USER-FOCUS-SET"/></Hook>
-                                     </TextInput>
-                                    </Panel>
-                                    <Panel Name="PassRow" Sym="BASE-47324-AUTH-PASS-ROW">
-                                     <Layout>Horizontal</Layout>
-                                     <FixedWidth>1.0</FixedWidth>
-                                     <FixedHeight>0.10</FixedHeight>
-                                     <PadX>0.01</PadX>
+                                    </TextInput>
+                                    <Text Name="Password:" Sym="BASE-47324-AUTH-PASS-LABEL">
                                      <IgnoreThemeProps>true</IgnoreThemeProps>
-                                     <BackgroundComponent>false</BackgroundComponent>
-                                     <Text Name="Password:" Sym="BASE-47324-AUTH-PASS-LABEL">
-                                      <FixedWidth>0.28</FixedWidth>
-                                      <TextAlignment>0.0</TextAlignment>
-                                      <VerticalAlignment>0.5</VerticalAlignment>
-                                      <IgnoreThemeProps>true</IgnoreThemeProps>
-                                      <TextShadow>false</TextShadow>
-                                     </Text>
-                                     <Conditional Name="SMBAuthShowPassword" Sym="BASE-47324-AUTH-SHOW-COND">
-                                      <Branch Name="true" Sym="BASE-47324-AUTH-SHOW-TRUE">
-                                       <TextInput ID="53230" Name="SMBAuthPassword" Sym="BASE-47324-AUTH-PASS-SHOW">
-                                        <FixedWidth>0.72</FixedWidth>
-                                        <FixedHeight>1.0</FixedHeight>
-                                        <Insets>0.01</Insets>
-                                        <VerticalAlignment>0.5</VerticalAlignment>
-                                        <AutosizeText>false</AutosizeText>
-                                        <WrapText>false</WrapText>
-                                        <HideText>false</HideText>
-                                        <TextShadow>false</TextShadow>
-                                        <IgnoreThemeProps>true</IgnoreThemeProps>
-                                        <BackgroundComponent>false</BackgroundComponent>
-                                        <FocusableCondition>true</FocusableCondition>
-                                        <Shape Ref="941" Name="InputBorder"/>
-                                        <Listener Ref="17240" Name="Stop - Backspace"/>
-                                        <Listener Ref="17209" Name="Play - Accept current ..."/>
-                                        <Listener Ref="17214" Name="RawKeyboard"/>
-                                        <Hook Name="FocusGained" Sym="BASE-47324-AUTH-PASS-FOCUS"><Action Name="SMBAuthField = 1" Sym="BASE-47324-AUTH-PASS-FOCUS-SET"/></Hook>
-                                       </TextInput>
-                                      </Branch>
-                                      <Branch Name="false" Sym="BASE-47324-AUTH-SHOW-FALSE">
-                                       <TextInput Ref="53230" Name="SMBAuthPassword" Sym="BASE-47324-AUTH-PASS-HIDE">
-                                        <HideText>true</HideText>
-                                       </TextInput>
-                                      </Branch>
-                                     </Conditional>
-                                    </Panel>
-                                    <Panel Name="DomainRow" Sym="BASE-47324-AUTH-DOMAIN-ROW">
-                                     <Layout>Horizontal</Layout>
-                                     <FixedWidth>1.0</FixedWidth>
-                                     <FixedHeight>0.10</FixedHeight>
-                                     <PadX>0.01</PadX>
+                                     <TextShadow>false</TextShadow>
+                                    </Text>
+                                    <Conditional Name="SMBAuthShowPassword" Sym="BASE-47324-AUTH-SHOW-COND">
+                                     <Branch Name="true" Sym="BASE-47324-AUTH-SHOW-TRUE">
+                                      <TextInput ID="53230" Name="SMBAuthPassword" Sym="BASE-47324-AUTH-PASS-SHOW">
+                                       <HideText>false</HideText>
+                                       <IgnoreThemeProps>false</IgnoreThemeProps>
+                                       <BackgroundComponent>false</BackgroundComponent>
+                                      </TextInput>
+                                     </Branch>
+                                     <Branch Name="false" Sym="BASE-47324-AUTH-SHOW-FALSE">
+                                      <TextInput Ref="53230" Name="SMBAuthPassword" Sym="BASE-47324-AUTH-PASS-HIDE">
+                                       <HideText>true</HideText>
+                                       <IgnoreThemeProps>false</IgnoreThemeProps>
+                                       <BackgroundComponent>false</BackgroundComponent>
+                                      </TextInput>
+                                     </Branch>
+                                    </Conditional>
+                                    <Text Name="Domain (optional):" Sym="BASE-47324-AUTH-DOMAIN-LABEL">
                                      <IgnoreThemeProps>true</IgnoreThemeProps>
+                                     <TextShadow>false</TextShadow>
+                                    </Text>
+                                    <TextInput Name="SMBAuthDomain" Sym="BASE-47324-AUTH-DOMAIN-INPUT">
+                                     <HideText>false</HideText>
+                                     <IgnoreThemeProps>false</IgnoreThemeProps>
                                      <BackgroundComponent>false</BackgroundComponent>
-                                     <Text Name="Domain (optional):" Sym="BASE-47324-AUTH-DOMAIN-LABEL">
-                                      <FixedWidth>0.28</FixedWidth>
-                                      <TextAlignment>0.0</TextAlignment>
-                                      <VerticalAlignment>0.5</VerticalAlignment>
-                                      <IgnoreThemeProps>true</IgnoreThemeProps>
-                                      <TextShadow>false</TextShadow>
-                                     </Text>
-                                     <TextInput Name="SMBAuthDomain" Sym="BASE-47324-AUTH-DOMAIN-INPUT">
-                                      <FixedWidth>0.72</FixedWidth>
-                                      <FixedHeight>1.0</FixedHeight>
-                                      <Insets>0.01</Insets>
-                                      <VerticalAlignment>0.5</VerticalAlignment>
-                                      <AutosizeText>false</AutosizeText>
-                                      <WrapText>false</WrapText>
-                                      <HideText>false</HideText>
-                                      <TextShadow>false</TextShadow>
-                                      <IgnoreThemeProps>true</IgnoreThemeProps>
-                                      <BackgroundComponent>false</BackgroundComponent>
-                                      <FocusableCondition>true</FocusableCondition>
-                                      <Shape Ref="941" Name="InputBorder"/>
-                                      <Listener Ref="17240" Name="Stop - Backspace"/>
-                                      <Listener Ref="17209" Name="Play - Accept current ..."/>
-                                      <Listener Ref="17214" Name="RawKeyboard"/>
-                                      <Hook Name="FocusGained" Sym="BASE-47324-AUTH-DOMAIN-FOCUS"><Action Name="SMBAuthField = 2" Sym="BASE-47324-AUTH-DOMAIN-FOCUS-SET"/></Hook>
-                                     </TextInput>
-                                    </Panel>
+                                    </TextInput>
                                     <Panel Name="ShowPasswordRow" Sym="BASE-47324-AUTH-TOGGLE-PANEL">
                                      <Text Name="Show Password" Sym="BASE-47324-AUTH-TOGGLE-LABEL"/>
                                      <Item Name="Toggle" Sym="BASE-47324-AUTH-TOGGLE-BTN">
-                                      <FixedWidth>0.30</FixedWidth>
                                       <Action Name="SMBAuthShowPassword = !SMBAuthShowPassword" Sym="BASE-47324-AUTH-TOGGLE-ACTION">
                                        <Action Name="Refresh()" Sym="BASE-47324-AUTH-TOGGLE-REFRESH"/>
                                       </Action>
                                       <Conditional Name="SMBAuthShowPassword" Sym="BASE-47324-AUTH-TOGGLE-STATE">
                                        <Branch Name="true" Sym="BASE-47324-AUTH-TOGGLE-ON">
-                                        <Text Name="On" Sym="BASE-47324-AUTH-TOGGLE-TEXT-ON"/>
+                                        <Text Name="Enabled" Sym="BASE-47324-AUTH-TOGGLE-TEXT-ON"/>
                                        </Branch>
                                        <Branch Name="false" Sym="BASE-47324-AUTH-TOGGLE-OFF">
-                                        <Text Name="Off" Sym="BASE-47324-AUTH-TOGGLE-TEXT-OFF"/>
+                                        <Text Name="Disabled" Sym="BASE-47324-AUTH-TOGGLE-TEXT-OFF"/>
                                        </Branch>
                                       </Conditional>
                                       <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
@@ -149552,280 +148903,112 @@
                                      <BackgroundComponent>false</BackgroundComponent>
                                      <MouseTransparency>false</MouseTransparency>
                                      <Panel Name="KeyboardModeRow" Sym="BASE-47324-KEYBOARD-MODE">
-                                      <Text Name="Mode:" Sym="BASE-47324-KEYBOARD-MODE-LABEL"/>
-                                      <Item Name="NextMode" Sym="BASE-47324-KEYBOARD-MODE-BTN">
-                                       <FixedWidth>0.30</FixedWidth>
+                                      <Text Name="Keyboard Mode:" Sym="BASE-47324-KEYBOARD-MODE-LABEL"/>
+                                      <Item Name="Next Mode" Sym="BASE-47324-KEYBOARD-MODE-BTN">
                                        <Action Name="KeyboardMode = (KeyboardMode + 1) % 3" Sym="BASE-47324-KEYBOARD-MODE-TOGGLE">
                                         <Action Name="Refresh()" Sym="BASE-47324-KEYBOARD-MODE-REFRESH"/>
                                        </Action>
                                        <Conditional Name="KeyboardMode == 0" Sym="BASE-47324-MODE-DISPLAY-CAPS">
-                                        <Branch Name="true" Sym="BASE-47324-MODE-DISPLAY-CAPS-TRUE"><Text Name="ABC" Sym="BASE-47324-MODE-CAPS-TEXT"/></Branch>
+                                        <Branch Name="true" Sym="BASE-47324-MODE-DISPLAY-CAPS-TRUE">
+                                         <Text Name="A (Caps)" Sym="BASE-47324-MODE-CAPS-TEXT"/>
+                                        </Branch>
                                        </Conditional>
                                        <Conditional Name="KeyboardMode == 1" Sym="BASE-47324-MODE-DISPLAY-LOWER">
-                                        <Branch Name="true" Sym="BASE-47324-MODE-DISPLAY-LOWER-TRUE"><Text Name="abc" Sym="BASE-47324-MODE-LOWER-TEXT"/></Branch>
+                                        <Branch Name="true" Sym="BASE-47324-MODE-DISPLAY-LOWER-TRUE">
+                                         <Text Name="a (Lower)" Sym="BASE-47324-MODE-LOWER-TEXT"/>
+                                        </Branch>
                                        </Conditional>
                                        <Conditional Name="KeyboardMode == 2" Sym="BASE-47324-MODE-DISPLAY-SYM">
-                                        <Branch Name="true" Sym="BASE-47324-MODE-DISPLAY-SYM-TRUE"><Text Name="!@#" Sym="BASE-47324-MODE-SYM-TEXT"/></Branch>
+                                        <Branch Name="true" Sym="BASE-47324-MODE-DISPLAY-SYM-TRUE">
+                                         <Text Name="Symbols" Sym="BASE-47324-MODE-SYM-TEXT"/>
+                                        </Branch>
                                        </Conditional>
                                        <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
                                       </Item>
                                      </Panel>
-                                     <Panel Name="DigitRow" Sym="BASE-47324-DIGIT-ROW">
-                                      <Layout>HorizontalGrid</Layout>
-                                      <FixedWidth>1.0</FixedWidth>
-                                      <NumCols>10</NumCols>
-                                      <PadX>0.005</PadX>
-                                      <PadY>0.003</PadY>
-                                      <WrapHNav>true</WrapHNav>
-                                      <WrapVNav>false</WrapVNav>
-                                      <IgnoreThemeProps>true</IgnoreThemeProps>
-                                      <BackgroundComponent>false</BackgroundComponent>
-                                       <Item Name="0" Sym="BASE-47324-K-DIG-30-0">
-                                        <Action Name="SMBAuthPendingChar = &quot;0&quot;" Sym="BASE-47324-K-DIG-30-0-SET">
-                                         <Conditional ID="73990" Name="SMBAuthField == 0" Sym="BASE-47324-ROUTE-COND0">
-                                          <Branch Name="true" Sym="BASE-47324-ROUTE-USER">
-                                           <Action Name="SMBAuthUsername = SMBAuthUsername + SMBAuthPendingChar" Sym="BASE-47324-ROUTE-USER-ACT"/>
-                                          </Branch>
-                                          <Branch Name="false" Sym="BASE-47324-ROUTE-NOT-USER">
-                                           <Conditional Name="SMBAuthField == 1" Sym="BASE-47324-ROUTE-COND1">
-                                            <Branch Name="true" Sym="BASE-47324-ROUTE-PASS">
-                                             <Action Name="SMBAuthPassword = SMBAuthPassword + SMBAuthPendingChar" Sym="BASE-47324-ROUTE-PASS-ACT"/>
-                                            </Branch>
-                                            <Branch Name="false" Sym="BASE-47324-ROUTE-DOMAIN">
-                                             <Action Name="SMBAuthDomain = SMBAuthDomain + SMBAuthPendingChar" Sym="BASE-47324-ROUTE-DOMAIN-ACT"/>
-                                            </Branch>
-                                           </Conditional>
-                                          </Branch>
-                                         </Conditional>
-                                        </Action>
-                                       </Item>
-                                       <Item Name="1" Sym="BASE-47324-K-DIG-31-1"><Action Name="SMBAuthPendingChar = &quot;1&quot;" Sym="BASE-47324-K-DIG-31-1-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                       <Item Name="2" Sym="BASE-47324-K-DIG-32-2"><Action Name="SMBAuthPendingChar = &quot;2&quot;" Sym="BASE-47324-K-DIG-32-2-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                       <Item Name="3" Sym="BASE-47324-K-DIG-33-3"><Action Name="SMBAuthPendingChar = &quot;3&quot;" Sym="BASE-47324-K-DIG-33-3-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                       <Item Name="4" Sym="BASE-47324-K-DIG-34-4"><Action Name="SMBAuthPendingChar = &quot;4&quot;" Sym="BASE-47324-K-DIG-34-4-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                       <Item Name="5" Sym="BASE-47324-K-DIG-35-5"><Action Name="SMBAuthPendingChar = &quot;5&quot;" Sym="BASE-47324-K-DIG-35-5-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                       <Item Name="6" Sym="BASE-47324-K-DIG-36-6"><Action Name="SMBAuthPendingChar = &quot;6&quot;" Sym="BASE-47324-K-DIG-36-6-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                       <Item Name="7" Sym="BASE-47324-K-DIG-37-7"><Action Name="SMBAuthPendingChar = &quot;7&quot;" Sym="BASE-47324-K-DIG-37-7-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                       <Item Name="8" Sym="BASE-47324-K-DIG-38-8"><Action Name="SMBAuthPendingChar = &quot;8&quot;" Sym="BASE-47324-K-DIG-38-8-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                       <Item Name="9" Sym="BASE-47324-K-DIG-39-9"><Action Name="SMBAuthPendingChar = &quot;9&quot;" Sym="BASE-47324-K-DIG-39-9-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                     </Panel>
                                      <Conditional Name="KeyboardMode == 0" Sym="BASE-47324-KEYBOARD-CAPS">
                                       <Branch Name="true" Sym="BASE-47324-KEYBOARD-CAPS-TRUE">
-                                       <Panel Name="KeyboardCaps" Sym="BASE-47324-KEYBOARD-CAPS-GRID">
-                                        <Layout>Vertical</Layout>
+                                       <Panel Name="KeyboardGridCaps" Sym="BASE-47324-KEYBOARD-GRID-CAPS">
+                                        <Layout>HorizontalGrid</Layout>
                                         <FixedWidth>1.0</FixedWidth>
-                                        <PadY>0.002</PadY>
-                                        <WrapHNav>false</WrapHNav>
-                                        <WrapVNav>false</WrapVNav>
+                                        <NumCols>10</NumCols>
+                                        <PadX>0.005</PadX>
+                                        <PadY>0.003</PadY>
+                                        <WrapHNav>true</WrapHNav>
+                                        <WrapVNav>true</WrapVNav>
                                         <IgnoreThemeProps>true</IgnoreThemeProps>
                                         <BackgroundComponent>false</BackgroundComponent>
-                                        <Panel Name="Caps-Row0" Sym="BASE-47324-KEYBOARD-CAPS-R0">
-                                         <Layout>HorizontalGrid</Layout>
-                                         <FixedWidth>1.0</FixedWidth>
-                                         <NumCols>10</NumCols>
-                                         <PadX>0.005</PadX>
-                                         <PadY>0.003</PadY>
-                                         <WrapHNav>true</WrapHNav>
-                                         <WrapVNav>false</WrapVNav>
-                                         <IgnoreThemeProps>true</IgnoreThemeProps>
-                                         <BackgroundComponent>false</BackgroundComponent>
-                                         <Item Name="Q" Sym="BASE-47324-K-Caps-51-0"><Action Name="SMBAuthPendingChar = &quot;Q&quot;" Sym="BASE-47324-K-Caps-51-0-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="W" Sym="BASE-47324-K-Caps-57-1"><Action Name="SMBAuthPendingChar = &quot;W&quot;" Sym="BASE-47324-K-Caps-57-1-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="E" Sym="BASE-47324-K-Caps-45-2"><Action Name="SMBAuthPendingChar = &quot;E&quot;" Sym="BASE-47324-K-Caps-45-2-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="R" Sym="BASE-47324-K-Caps-52-3"><Action Name="SMBAuthPendingChar = &quot;R&quot;" Sym="BASE-47324-K-Caps-52-3-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="T" Sym="BASE-47324-K-Caps-54-4"><Action Name="SMBAuthPendingChar = &quot;T&quot;" Sym="BASE-47324-K-Caps-54-4-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="Y" Sym="BASE-47324-K-Caps-59-5"><Action Name="SMBAuthPendingChar = &quot;Y&quot;" Sym="BASE-47324-K-Caps-59-5-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="U" Sym="BASE-47324-K-Caps-55-6"><Action Name="SMBAuthPendingChar = &quot;U&quot;" Sym="BASE-47324-K-Caps-55-6-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="I" Sym="BASE-47324-K-Caps-49-7"><Action Name="SMBAuthPendingChar = &quot;I&quot;" Sym="BASE-47324-K-Caps-49-7-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="O" Sym="BASE-47324-K-Caps-4F-8"><Action Name="SMBAuthPendingChar = &quot;O&quot;" Sym="BASE-47324-K-Caps-4F-8-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="P" Sym="BASE-47324-K-Caps-50-9"><Action Name="SMBAuthPendingChar = &quot;P&quot;" Sym="BASE-47324-K-Caps-50-9-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                        </Panel>
-                                        <Panel Name="Caps-Row1" Sym="BASE-47324-KEYBOARD-CAPS-R1">
-                                         <Layout>HorizontalGrid</Layout>
-                                         <FixedWidth>1.0</FixedWidth>
-                                         <NumCols>9</NumCols>
-                                         <PadX>0.005</PadX>
-                                         <PadY>0.003</PadY>
-                                         <WrapHNav>true</WrapHNav>
-                                         <WrapVNav>false</WrapVNav>
-                                         <IgnoreThemeProps>true</IgnoreThemeProps>
-                                         <BackgroundComponent>false</BackgroundComponent>
-                                         <Item Name="A" Sym="BASE-47324-K-Caps-41-10"><Action Name="SMBAuthPendingChar = &quot;A&quot;" Sym="BASE-47324-K-Caps-41-10-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="S" Sym="BASE-47324-K-Caps-53-11"><Action Name="SMBAuthPendingChar = &quot;S&quot;" Sym="BASE-47324-K-Caps-53-11-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="D" Sym="BASE-47324-K-Caps-44-12"><Action Name="SMBAuthPendingChar = &quot;D&quot;" Sym="BASE-47324-K-Caps-44-12-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="F" Sym="BASE-47324-K-Caps-46-13"><Action Name="SMBAuthPendingChar = &quot;F&quot;" Sym="BASE-47324-K-Caps-46-13-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="G" Sym="BASE-47324-K-Caps-47-14"><Action Name="SMBAuthPendingChar = &quot;G&quot;" Sym="BASE-47324-K-Caps-47-14-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="H" Sym="BASE-47324-K-Caps-48-15"><Action Name="SMBAuthPendingChar = &quot;H&quot;" Sym="BASE-47324-K-Caps-48-15-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="J" Sym="BASE-47324-K-Caps-4A-16"><Action Name="SMBAuthPendingChar = &quot;J&quot;" Sym="BASE-47324-K-Caps-4A-16-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="K" Sym="BASE-47324-K-Caps-4B-17"><Action Name="SMBAuthPendingChar = &quot;K&quot;" Sym="BASE-47324-K-Caps-4B-17-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="L" Sym="BASE-47324-K-Caps-4C-18"><Action Name="SMBAuthPendingChar = &quot;L&quot;" Sym="BASE-47324-K-Caps-4C-18-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                        </Panel>
-                                        <Panel Name="Caps-Row2" Sym="BASE-47324-KEYBOARD-CAPS-R2">
-                                         <Layout>HorizontalGrid</Layout>
-                                         <FixedWidth>1.0</FixedWidth>
-                                         <NumCols>7</NumCols>
-                                         <PadX>0.005</PadX>
-                                         <PadY>0.003</PadY>
-                                         <WrapHNav>true</WrapHNav>
-                                         <WrapVNav>false</WrapVNav>
-                                         <IgnoreThemeProps>true</IgnoreThemeProps>
-                                         <BackgroundComponent>false</BackgroundComponent>
-                                         <Item Name="Z" Sym="BASE-47324-K-Caps-5A-20"><Action Name="SMBAuthPendingChar = &quot;Z&quot;" Sym="BASE-47324-K-Caps-5A-20-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="X" Sym="BASE-47324-K-Caps-58-21"><Action Name="SMBAuthPendingChar = &quot;X&quot;" Sym="BASE-47324-K-Caps-58-21-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="C" Sym="BASE-47324-K-Caps-43-22"><Action Name="SMBAuthPendingChar = &quot;C&quot;" Sym="BASE-47324-K-Caps-43-22-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="V" Sym="BASE-47324-K-Caps-56-23"><Action Name="SMBAuthPendingChar = &quot;V&quot;" Sym="BASE-47324-K-Caps-56-23-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="B" Sym="BASE-47324-K-Caps-42-24"><Action Name="SMBAuthPendingChar = &quot;B&quot;" Sym="BASE-47324-K-Caps-42-24-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="N" Sym="BASE-47324-K-Caps-4E-25"><Action Name="SMBAuthPendingChar = &quot;N&quot;" Sym="BASE-47324-K-Caps-4E-25-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="M" Sym="BASE-47324-K-Caps-4D-26"><Action Name="SMBAuthPendingChar = &quot;M&quot;" Sym="BASE-47324-K-Caps-4D-26-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                        </Panel>
+                                        <Item Name="A" Sym="BASE-47324-KEY-A-CAPS"><Action Name="SMBAuthUsername = If(SMBAuthShowPassword == false &amp;&amp; Size(SMBAuthPassword) == 0, SMBAuthUsername + &quot;A&quot;, If(SMBAuthShowPassword == false, SMBAuthPassword + &quot;A&quot;, SMBAuthUsername + &quot;A&quot;))" Sym="BASE-47324-KEY-A-CAPS-ACT"/></Item>
+                                        <Item Name="B" Sym="BASE-47324-KEY-B-CAPS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;B&quot;" Sym="BASE-47324-KEY-B-CAPS-ACT"/></Item>
+                                        <Item Name="C" Sym="BASE-47324-KEY-C-CAPS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;C&quot;" Sym="BASE-47324-KEY-C-CAPS-ACT"/></Item>
+                                        <Item Name="D" Sym="BASE-47324-KEY-D-CAPS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;D&quot;" Sym="BASE-47324-KEY-D-CAPS-ACT"/></Item>
+                                        <Item Name="E" Sym="BASE-47324-KEY-E-CAPS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;E&quot;" Sym="BASE-47324-KEY-E-CAPS-ACT"/></Item>
+                                        <Item Name="F" Sym="BASE-47324-KEY-F-CAPS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;F&quot;" Sym="BASE-47324-KEY-F-CAPS-ACT"/></Item>
+                                        <Item Name="G" Sym="BASE-47324-KEY-G-CAPS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;G&quot;" Sym="BASE-47324-KEY-G-CAPS-ACT"/></Item>
+                                        <Item Name="H" Sym="BASE-47324-KEY-H-CAPS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;H&quot;" Sym="BASE-47324-KEY-H-CAPS-ACT"/></Item>
+                                        <Item Name="I" Sym="BASE-47324-KEY-I-CAPS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;I&quot;" Sym="BASE-47324-KEY-I-CAPS-ACT"/></Item>
+                                        <Item Name="J" Sym="BASE-47324-KEY-J-CAPS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;J&quot;" Sym="BASE-47324-KEY-J-CAPS-ACT"/></Item>
                                        </Panel>
                                       </Branch>
                                      </Conditional>
                                      <Conditional Name="KeyboardMode == 1" Sym="BASE-47324-KEYBOARD-LOWER">
                                       <Branch Name="true" Sym="BASE-47324-KEYBOARD-LOWER-TRUE">
-                                       <Panel Name="KeyboardLower" Sym="BASE-47324-KEYBOARD-LOWER-GRID">
-                                        <Layout>Vertical</Layout>
+                                       <Panel Name="KeyboardGridLower" Sym="BASE-47324-KEYBOARD-GRID-LOWER">
+                                        <Layout>HorizontalGrid</Layout>
                                         <FixedWidth>1.0</FixedWidth>
-                                        <PadY>0.002</PadY>
-                                        <WrapHNav>false</WrapHNav>
-                                        <WrapVNav>false</WrapVNav>
+                                        <NumCols>10</NumCols>
+                                        <PadX>0.005</PadX>
+                                        <PadY>0.003</PadY>
+                                        <WrapHNav>true</WrapHNav>
+                                        <WrapVNav>true</WrapVNav>
                                         <IgnoreThemeProps>true</IgnoreThemeProps>
                                         <BackgroundComponent>false</BackgroundComponent>
-                                        <Panel Name="Lower-Row0" Sym="BASE-47324-KEYBOARD-LOWER-R0">
-                                         <Layout>HorizontalGrid</Layout>
-                                         <FixedWidth>1.0</FixedWidth>
-                                         <NumCols>10</NumCols>
-                                         <PadX>0.005</PadX>
-                                         <PadY>0.003</PadY>
-                                         <WrapHNav>true</WrapHNav>
-                                         <WrapVNav>false</WrapVNav>
-                                         <IgnoreThemeProps>true</IgnoreThemeProps>
-                                         <BackgroundComponent>false</BackgroundComponent>
-                                         <Item Name="q" Sym="BASE-47324-K-Lower-71-0"><Action Name="SMBAuthPendingChar = &quot;q&quot;" Sym="BASE-47324-K-Lower-71-0-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="w" Sym="BASE-47324-K-Lower-77-1"><Action Name="SMBAuthPendingChar = &quot;w&quot;" Sym="BASE-47324-K-Lower-77-1-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="e" Sym="BASE-47324-K-Lower-65-2"><Action Name="SMBAuthPendingChar = &quot;e&quot;" Sym="BASE-47324-K-Lower-65-2-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="r" Sym="BASE-47324-K-Lower-72-3"><Action Name="SMBAuthPendingChar = &quot;r&quot;" Sym="BASE-47324-K-Lower-72-3-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="t" Sym="BASE-47324-K-Lower-74-4"><Action Name="SMBAuthPendingChar = &quot;t&quot;" Sym="BASE-47324-K-Lower-74-4-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="y" Sym="BASE-47324-K-Lower-79-5"><Action Name="SMBAuthPendingChar = &quot;y&quot;" Sym="BASE-47324-K-Lower-79-5-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="u" Sym="BASE-47324-K-Lower-75-6"><Action Name="SMBAuthPendingChar = &quot;u&quot;" Sym="BASE-47324-K-Lower-75-6-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="i" Sym="BASE-47324-K-Lower-69-7"><Action Name="SMBAuthPendingChar = &quot;i&quot;" Sym="BASE-47324-K-Lower-69-7-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="o" Sym="BASE-47324-K-Lower-6F-8"><Action Name="SMBAuthPendingChar = &quot;o&quot;" Sym="BASE-47324-K-Lower-6F-8-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="p" Sym="BASE-47324-K-Lower-70-9"><Action Name="SMBAuthPendingChar = &quot;p&quot;" Sym="BASE-47324-K-Lower-70-9-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                        </Panel>
-                                        <Panel Name="Lower-Row1" Sym="BASE-47324-KEYBOARD-LOWER-R1">
-                                         <Layout>HorizontalGrid</Layout>
-                                         <FixedWidth>1.0</FixedWidth>
-                                         <NumCols>9</NumCols>
-                                         <PadX>0.005</PadX>
-                                         <PadY>0.003</PadY>
-                                         <WrapHNav>true</WrapHNav>
-                                         <WrapVNav>false</WrapVNav>
-                                         <IgnoreThemeProps>true</IgnoreThemeProps>
-                                         <BackgroundComponent>false</BackgroundComponent>
-                                         <Item Name="a" Sym="BASE-47324-K-Lower-61-10"><Action Name="SMBAuthPendingChar = &quot;a&quot;" Sym="BASE-47324-K-Lower-61-10-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="s" Sym="BASE-47324-K-Lower-73-11"><Action Name="SMBAuthPendingChar = &quot;s&quot;" Sym="BASE-47324-K-Lower-73-11-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="d" Sym="BASE-47324-K-Lower-64-12"><Action Name="SMBAuthPendingChar = &quot;d&quot;" Sym="BASE-47324-K-Lower-64-12-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="f" Sym="BASE-47324-K-Lower-66-13"><Action Name="SMBAuthPendingChar = &quot;f&quot;" Sym="BASE-47324-K-Lower-66-13-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="g" Sym="BASE-47324-K-Lower-67-14"><Action Name="SMBAuthPendingChar = &quot;g&quot;" Sym="BASE-47324-K-Lower-67-14-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="h" Sym="BASE-47324-K-Lower-68-15"><Action Name="SMBAuthPendingChar = &quot;h&quot;" Sym="BASE-47324-K-Lower-68-15-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="j" Sym="BASE-47324-K-Lower-6A-16"><Action Name="SMBAuthPendingChar = &quot;j&quot;" Sym="BASE-47324-K-Lower-6A-16-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="k" Sym="BASE-47324-K-Lower-6B-17"><Action Name="SMBAuthPendingChar = &quot;k&quot;" Sym="BASE-47324-K-Lower-6B-17-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="l" Sym="BASE-47324-K-Lower-6C-18"><Action Name="SMBAuthPendingChar = &quot;l&quot;" Sym="BASE-47324-K-Lower-6C-18-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                        </Panel>
-                                        <Panel Name="Lower-Row2" Sym="BASE-47324-KEYBOARD-LOWER-R2">
-                                         <Layout>HorizontalGrid</Layout>
-                                         <FixedWidth>1.0</FixedWidth>
-                                         <NumCols>7</NumCols>
-                                         <PadX>0.005</PadX>
-                                         <PadY>0.003</PadY>
-                                         <WrapHNav>true</WrapHNav>
-                                         <WrapVNav>false</WrapVNav>
-                                         <IgnoreThemeProps>true</IgnoreThemeProps>
-                                         <BackgroundComponent>false</BackgroundComponent>
-                                         <Item Name="z" Sym="BASE-47324-K-Lower-7A-20"><Action Name="SMBAuthPendingChar = &quot;z&quot;" Sym="BASE-47324-K-Lower-7A-20-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="x" Sym="BASE-47324-K-Lower-78-21"><Action Name="SMBAuthPendingChar = &quot;x&quot;" Sym="BASE-47324-K-Lower-78-21-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="c" Sym="BASE-47324-K-Lower-63-22"><Action Name="SMBAuthPendingChar = &quot;c&quot;" Sym="BASE-47324-K-Lower-63-22-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="v" Sym="BASE-47324-K-Lower-76-23"><Action Name="SMBAuthPendingChar = &quot;v&quot;" Sym="BASE-47324-K-Lower-76-23-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="b" Sym="BASE-47324-K-Lower-62-24"><Action Name="SMBAuthPendingChar = &quot;b&quot;" Sym="BASE-47324-K-Lower-62-24-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="n" Sym="BASE-47324-K-Lower-6E-25"><Action Name="SMBAuthPendingChar = &quot;n&quot;" Sym="BASE-47324-K-Lower-6E-25-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="m" Sym="BASE-47324-K-Lower-6D-26"><Action Name="SMBAuthPendingChar = &quot;m&quot;" Sym="BASE-47324-K-Lower-6D-26-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                        </Panel>
+                                        <Item Name="a" Sym="BASE-47324-KEY-a-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;a&quot;" Sym="BASE-47324-KEY-a-LOWER-ACT"/></Item>
+                                        <Item Name="b" Sym="BASE-47324-KEY-b-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;b&quot;" Sym="BASE-47324-KEY-b-LOWER-ACT"/></Item>
+                                        <Item Name="c" Sym="BASE-47324-KEY-c-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;c&quot;" Sym="BASE-47324-KEY-c-LOWER-ACT"/></Item>
+                                        <Item Name="d" Sym="BASE-47324-KEY-d-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;d&quot;" Sym="BASE-47324-KEY-d-LOWER-ACT"/></Item>
+                                        <Item Name="e" Sym="BASE-47324-KEY-e-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;e&quot;" Sym="BASE-47324-KEY-e-LOWER-ACT"/></Item>
+                                        <Item Name="f" Sym="BASE-47324-KEY-f-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;f&quot;" Sym="BASE-47324-KEY-f-LOWER-ACT"/></Item>
+                                        <Item Name="g" Sym="BASE-47324-KEY-g-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;g&quot;" Sym="BASE-47324-KEY-g-LOWER-ACT"/></Item>
+                                        <Item Name="h" Sym="BASE-47324-KEY-h-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;h&quot;" Sym="BASE-47324-KEY-h-LOWER-ACT"/></Item>
+                                        <Item Name="i" Sym="BASE-47324-KEY-i-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;i&quot;" Sym="BASE-47324-KEY-i-LOWER-ACT"/></Item>
+                                        <Item Name="j" Sym="BASE-47324-KEY-j-LOWER"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;j&quot;" Sym="BASE-47324-KEY-j-LOWER-ACT"/></Item>
                                        </Panel>
                                       </Branch>
                                      </Conditional>
                                      <Conditional Name="KeyboardMode == 2" Sym="BASE-47324-KEYBOARD-SYMBOLS">
                                       <Branch Name="true" Sym="BASE-47324-KEYBOARD-SYMBOLS-TRUE">
-                                       <Panel Name="KeyboardSyms" Sym="BASE-47324-KEYBOARD-SYMBOLS-GRID">
-                                        <Layout>Vertical</Layout>
+                                       <Panel Name="KeyboardGridSymbols" Sym="BASE-47324-KEYBOARD-GRID-SYMBOLS">
+                                        <Layout>HorizontalGrid</Layout>
                                         <FixedWidth>1.0</FixedWidth>
-                                        <PadY>0.002</PadY>
-                                        <WrapHNav>false</WrapHNav>
-                                        <WrapVNav>false</WrapVNav>
+                                        <NumCols>10</NumCols>
+                                        <PadX>0.005</PadX>
+                                        <PadY>0.003</PadY>
+                                        <WrapHNav>true</WrapHNav>
+                                        <WrapVNav>true</WrapVNav>
                                         <IgnoreThemeProps>true</IgnoreThemeProps>
                                         <BackgroundComponent>false</BackgroundComponent>
-                                        <Panel Name="Syms-Row0" Sym="BASE-47324-KEYBOARD-SYMBOLS-R0">
-                                         <Layout>HorizontalGrid</Layout>
-                                         <FixedWidth>1.0</FixedWidth>
-                                         <NumCols>10</NumCols>
-                                         <PadX>0.005</PadX>
-                                         <PadY>0.003</PadY>
-                                         <WrapHNav>true</WrapHNav>
-                                         <WrapVNav>false</WrapVNav>
-                                         <IgnoreThemeProps>true</IgnoreThemeProps>
-                                         <BackgroundComponent>false</BackgroundComponent>
-                                         <Item Name="!" Sym="BASE-47324-K-Syms-21-0"><Action Name="SMBAuthPendingChar = &quot;!&quot;" Sym="BASE-47324-K-Syms-21-0-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="@" Sym="BASE-47324-K-Syms-40-1"><Action Name="SMBAuthPendingChar = &quot;@&quot;" Sym="BASE-47324-K-Syms-40-1-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="#" Sym="BASE-47324-K-Syms-23-2"><Action Name="SMBAuthPendingChar = &quot;#&quot;" Sym="BASE-47324-K-Syms-23-2-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="$" Sym="BASE-47324-K-Syms-24-3"><Action Name="SMBAuthPendingChar = &quot;$&quot;" Sym="BASE-47324-K-Syms-24-3-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="%" Sym="BASE-47324-K-Syms-25-4"><Action Name="SMBAuthPendingChar = &quot;%&quot;" Sym="BASE-47324-K-Syms-25-4-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="^" Sym="BASE-47324-K-Syms-5E-5"><Action Name="SMBAuthPendingChar = &quot;^&quot;" Sym="BASE-47324-K-Syms-5E-5-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="&amp;" Sym="BASE-47324-K-Syms-26-6"><Action Name="SMBAuthPendingChar = &quot;&amp;&quot;" Sym="BASE-47324-K-Syms-26-6-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="*" Sym="BASE-47324-K-Syms-2A-7"><Action Name="SMBAuthPendingChar = &quot;*&quot;" Sym="BASE-47324-K-Syms-2A-7-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="(" Sym="BASE-47324-K-Syms-28-8"><Action Name="SMBAuthPendingChar = &quot;(&quot;" Sym="BASE-47324-K-Syms-28-8-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name=")" Sym="BASE-47324-K-Syms-29-9"><Action Name="SMBAuthPendingChar = &quot;)&quot;" Sym="BASE-47324-K-Syms-29-9-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                        </Panel>
-                                        <Panel Name="Syms-Row1" Sym="BASE-47324-KEYBOARD-SYMBOLS-R1">
-                                         <Layout>HorizontalGrid</Layout>
-                                         <FixedWidth>1.0</FixedWidth>
-                                         <NumCols>10</NumCols>
-                                         <PadX>0.005</PadX>
-                                         <PadY>0.003</PadY>
-                                         <WrapHNav>true</WrapHNav>
-                                         <WrapVNav>false</WrapVNav>
-                                         <IgnoreThemeProps>true</IgnoreThemeProps>
-                                         <BackgroundComponent>false</BackgroundComponent>
-                                         <Item Name="-" Sym="BASE-47324-K-Syms-2D-10"><Action Name="SMBAuthPendingChar = &quot;-&quot;" Sym="BASE-47324-K-Syms-2D-10-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="_" Sym="BASE-47324-K-Syms-5F-11"><Action Name="SMBAuthPendingChar = &quot;_&quot;" Sym="BASE-47324-K-Syms-5F-11-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="+" Sym="BASE-47324-K-Syms-2B-12"><Action Name="SMBAuthPendingChar = &quot;+&quot;" Sym="BASE-47324-K-Syms-2B-12-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="=" Sym="BASE-47324-K-Syms-3D-13"><Action Name="SMBAuthPendingChar = &quot;=&quot;" Sym="BASE-47324-K-Syms-3D-13-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="[" Sym="BASE-47324-K-Syms-5B-14"><Action Name="SMBAuthPendingChar = &quot;[&quot;" Sym="BASE-47324-K-Syms-5B-14-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="]" Sym="BASE-47324-K-Syms-5D-15"><Action Name="SMBAuthPendingChar = &quot;]&quot;" Sym="BASE-47324-K-Syms-5D-15-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="{" Sym="BASE-47324-K-Syms-7B-16"><Action Name="SMBAuthPendingChar = &quot;{&quot;" Sym="BASE-47324-K-Syms-7B-16-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="}" Sym="BASE-47324-K-Syms-7D-17"><Action Name="SMBAuthPendingChar = &quot;}&quot;" Sym="BASE-47324-K-Syms-7D-17-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="|" Sym="BASE-47324-K-Syms-7C-18"><Action Name="SMBAuthPendingChar = &quot;|&quot;" Sym="BASE-47324-K-Syms-7C-18-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="~" Sym="BASE-47324-K-Syms-7E-19"><Action Name="SMBAuthPendingChar = &quot;~&quot;" Sym="BASE-47324-K-Syms-7E-19-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                        </Panel>
-                                        <Panel Name="Syms-Row2" Sym="BASE-47324-KEYBOARD-SYMBOLS-R2">
-                                         <Layout>HorizontalGrid</Layout>
-                                         <FixedWidth>1.0</FixedWidth>
-                                         <NumCols>10</NumCols>
-                                         <PadX>0.005</PadX>
-                                         <PadY>0.003</PadY>
-                                         <WrapHNav>true</WrapHNav>
-                                         <WrapVNav>false</WrapVNav>
-                                         <IgnoreThemeProps>true</IgnoreThemeProps>
-                                         <BackgroundComponent>false</BackgroundComponent>
-                                         <Item Name=";" Sym="BASE-47324-K-Syms-3B-20"><Action Name="SMBAuthPendingChar = &quot;;&quot;" Sym="BASE-47324-K-Syms-3B-20-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name=":" Sym="BASE-47324-K-Syms-3A-21"><Action Name="SMBAuthPendingChar = &quot;:&quot;" Sym="BASE-47324-K-Syms-3A-21-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="&apos;" Sym="BASE-47324-K-Syms-27-22"><Action Name="SMBAuthPendingChar = &quot;&apos;&quot;" Sym="BASE-47324-K-Syms-27-22-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="&quot;" Sym="BASE-47324-K-Syms-22-23"><Action Name="SMBAuthPendingChar = &quot;&quot;&quot;" Sym="BASE-47324-K-Syms-22-23-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="," Sym="BASE-47324-K-Syms-2C-24"><Action Name="SMBAuthPendingChar = &quot;,&quot;" Sym="BASE-47324-K-Syms-2C-24-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="." Sym="BASE-47324-K-Syms-2E-25"><Action Name="SMBAuthPendingChar = &quot;.&quot;" Sym="BASE-47324-K-Syms-2E-25-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="/" Sym="BASE-47324-K-Syms-2F-26"><Action Name="SMBAuthPendingChar = &quot;/&quot;" Sym="BASE-47324-K-Syms-2F-26-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="\" Sym="BASE-47324-K-Syms-5C-27"><Action Name="SMBAuthPendingChar = &quot;\&quot;" Sym="BASE-47324-K-Syms-5C-27-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="&lt;" Sym="BASE-47324-K-Syms-3C-28"><Action Name="SMBAuthPendingChar = &quot;&lt;&quot;" Sym="BASE-47324-K-Syms-3C-28-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="&gt;" Sym="BASE-47324-K-Syms-3E-29"><Action Name="SMBAuthPendingChar = &quot;&gt;&quot;" Sym="BASE-47324-K-Syms-3E-29-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                        </Panel>
+                                        <Item Name="0" Sym="BASE-47324-KEY-0"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;0&quot;" Sym="BASE-47324-KEY-0-ACT"/></Item>
+                                        <Item Name="1" Sym="BASE-47324-KEY-1"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;1&quot;" Sym="BASE-47324-KEY-1-ACT"/></Item>
+                                        <Item Name="2" Sym="BASE-47324-KEY-2"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;2&quot;" Sym="BASE-47324-KEY-2-ACT"/></Item>
+                                        <Item Name="3" Sym="BASE-47324-KEY-3"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;3&quot;" Sym="BASE-47324-KEY-3-ACT"/></Item>
+                                        <Item Name="4" Sym="BASE-47324-KEY-4"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;4&quot;" Sym="BASE-47324-KEY-4-ACT"/></Item>
+                                        <Item Name="5" Sym="BASE-47324-KEY-5"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;5&quot;" Sym="BASE-47324-KEY-5-ACT"/></Item>
+                                        <Item Name="6" Sym="BASE-47324-KEY-6"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;6&quot;" Sym="BASE-47324-KEY-6-ACT"/></Item>
+                                        <Item Name="7" Sym="BASE-47324-KEY-7"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;7&quot;" Sym="BASE-47324-KEY-7-ACT"/></Item>
+                                        <Item Name="8" Sym="BASE-47324-KEY-8"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;8&quot;" Sym="BASE-47324-KEY-8-ACT"/></Item>
+                                        <Item Name="9" Sym="BASE-47324-KEY-9"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;9&quot;" Sym="BASE-47324-KEY-9-ACT"/></Item>
+                                        <Item Name="!" Sym="BASE-47324-KEY-EXCLAIM"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;!&quot;" Sym="BASE-47324-KEY-EXCLAIM-ACT"/></Item>
+                                        <Item Name="@" Sym="BASE-47324-KEY-AT"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;@&quot;" Sym="BASE-47324-KEY-AT-ACT"/></Item>
+                                        <Item Name="#" Sym="BASE-47324-KEY-HASH"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;#&quot;" Sym="BASE-47324-KEY-HASH-ACT"/></Item>
+                                        <Item Name="$" Sym="BASE-47324-KEY-DOLLAR"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;$&quot;" Sym="BASE-47324-KEY-DOLLAR-ACT"/></Item>
+                                        <Item Name="%" Sym="BASE-47324-KEY-PERCENT"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;%&quot;" Sym="BASE-47324-KEY-PERCENT-ACT"/></Item>
+                                        <Item Name="&amp;" Sym="BASE-47324-KEY-AMP"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;&amp;&quot;" Sym="BASE-47324-KEY-AMP-ACT"/></Item>
+                                        <Item Name="*" Sym="BASE-47324-KEY-STAR"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;*&quot;" Sym="BASE-47324-KEY-STAR-ACT"/></Item>
+                                        <Item Name="-" Sym="BASE-47324-KEY-MINUS"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;-&quot;" Sym="BASE-47324-KEY-MINUS-ACT"/></Item>
+                                        <Item Name="_" Sym="BASE-47324-KEY-UNDERSCORE"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;_&quot;" Sym="BASE-47324-KEY-UNDERSCORE-ACT"/></Item>
+                                        <Item Name="." Sym="BASE-47324-KEY-DOT"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;.&quot;" Sym="BASE-47324-KEY-DOT-ACT"/></Item>
+                                        <Item Name=":" Sym="BASE-47324-KEY-COLON"><Action Name="SMBAuthUsername = SMBAuthUsername + &quot;:&quot;" Sym="BASE-47324-KEY-COLON-ACT"/></Item>
                                        </Panel>
                                       </Branch>
                                      </Conditional>
@@ -149838,80 +149021,18 @@
                                       <WrapVNav>false</WrapVNav>
                                       <IgnoreThemeProps>true</IgnoreThemeProps>
                                       <BackgroundComponent>false</BackgroundComponent>
-                                      <Item Name="&#x232B; Backspace" Sym="BASE-47324-KEY-BACKSPACE">
-                                       <FixedWidth>0.30</FixedWidth>
-                                       <Conditional Name="SMBAuthField == 0" Sym="BASE-47324-BS-COND0">
-                                        <Branch Name="true" Sym="BASE-47324-BS-USER"><Action Name="SMBAuthUsername = If(Size(SMBAuthUsername) &gt; 0, Substring(SMBAuthUsername, 0, Size(SMBAuthUsername) - 1), SMBAuthUsername)" Sym="BASE-47324-BS-USER-ACT"/></Branch>
-                                        <Branch Name="false" Sym="BASE-47324-BS-NOT-USER">
-                                         <Conditional Name="SMBAuthField == 1" Sym="BASE-47324-BS-COND1">
-                                          <Branch Name="true" Sym="BASE-47324-BS-PASS"><Action Name="SMBAuthPassword = If(Size(SMBAuthPassword) &gt; 0, Substring(SMBAuthPassword, 0, Size(SMBAuthPassword) - 1), SMBAuthPassword)" Sym="BASE-47324-BS-PASS-ACT"/></Branch>
-                                          <Branch Name="false" Sym="BASE-47324-BS-DOM"><Action Name="SMBAuthDomain = If(Size(SMBAuthDomain) &gt; 0, Substring(SMBAuthDomain, 0, Size(SMBAuthDomain) - 1), SMBAuthDomain)" Sym="BASE-47324-BS-DOM-ACT"/></Branch>
-                                         </Conditional>
-                                        </Branch>
-                                       </Conditional>
-                                      </Item>
-                                      <Item Name="&#x23B5; Space" Sym="BASE-47324-KEY-SPACE">
-                                       <FixedWidth>0.30</FixedWidth>
-                                       <Action Name="SMBAuthPendingChar = &quot; &quot;" Sym="BASE-47324-KEY-SPACE-SET">
-                                        <Conditional Ref="73990" Name="SMBAuthField == 0"/>
-                                       </Action>
-                                      </Item>
-                                      <Item Name="&#x21B5; Enter" Sym="BASE-47324-KEY-ENTER">
-                                       <FixedWidth>0.30</FixedWidth>
-                                       <Action Name="SMBAuthUserPart = If(Size(SMBAuthDomain) &gt; 0, SMBAuthDomain + &quot;;&quot; + SMBAuthUsername, SMBAuthUsername)" Sym="BASE-47324-KEY-ENTER-USERPART">
-                                        <Action Name="SMBAuthHostPath = Substring(java_lang_Object_toString(SMBAuthHost), 6, -1)" Sym="BASE-47324-KEY-ENTER-HOSTPATH">
-                                         <Action Name="SMBAuthHostKey = java_lang_Object_toString(SMBAuthHost)" Sym="BASE-47324-KEY-ENTER-HOSTKEY">
-                                          <Action Name="PrevSubgroup = GetSubgroup(NetworkPathPwdCache, SMBAuthHostKey)" Sym="BASE-47324-KEY-ENTER-LOOKUP">
-                                           <Conditional Name="PrevSubgroup != null" Sym="BASE-47324-KEY-ENTER-DROP-COND">
-                                            <Action Name="java_util_Map_remove(NetworkPathPwdCache, SMBAuthHostKey)" Sym="BASE-47324-KEY-ENTER-DROP"/>
-                                           </Conditional>
-                                           <Action Name="AddToGrouping(NetworkPathPwdCache, SMBAuthHostKey, DataUnion(SMBAuthUserPart, SMBAuthPassword))" Sym="BASE-47324-KEY-ENTER-CACHE">
-                                            <Action Name="CurrentDirPath = new_jcifs_smb_SmbFile(&quot;smb://&quot; + SMBAuthUserPart + &quot;:&quot; + SMBAuthPassword + &quot;@&quot; + SMBAuthHostPath)" Sym="BASE-47324-KEY-ENTER-NAV">
-                                             <Action Ref="53218" Name="IsValidDirBrowserDir = true"/>
-                                             <Action Name="SortedDirFiles = null" Sym="BASE-47324-KEY-ENTER-CLEAR">
-                                              <Action Name="Refresh()" Sym="BASE-47324-KEY-ENTER-REFRESH">
-                                               <Action Name="CloseOptionsMenu()" Sym="BASE-47324-KEY-ENTER-CLOSE"/>
-                                              </Action>
-                                             </Action>
-                                            </Action>
-                                           </Action>
-                                          </Action>
-                                         </Action>
-                                        </Action>
-                                       </Action>
-                                      </Item>
                                       <Item Name="Clear All" Sym="BASE-47324-KEY-CLEAR">
-                                       <FixedWidth>0.30</FixedWidth>
-                                       <Action Name="SMBAuthUsername = &quot;&quot;" Sym="BASE-47324-CLEAR-USER">
-                                        <Action Name="SMBAuthPassword = &quot;&quot;" Sym="BASE-47324-CLEAR-PASS">
-                                         <Action Name="SMBAuthDomain = &quot;&quot;" Sym="BASE-47324-CLEAR-DOMAIN">
-                                          <Action Name="Refresh()" Sym="BASE-47324-CLEAR-REFRESH"/>
-                                         </Action>
-                                        </Action>
-                                       </Action>
+                                       <FixedWidth>0.34</FixedWidth>
+                                       <Action Name="SMBAuthUsername = &quot;&quot;" Sym="BASE-47324-CLEAR-USER"><Action Name="SMBAuthPassword = &quot;&quot;" Sym="BASE-47324-CLEAR-PASS"><Action Name="SMBAuthDomain = &quot;&quot;" Sym="BASE-47324-CLEAR-DOMAIN"><Action Name="Refresh()" Sym="BASE-47324-CLEAR-REFRESH"/></Action></Action></Action>
                                       </Item>
                                      </Panel>
                                     </Panel>
                                    </Panel>
                                    <Item Name="Send" Sym="BASE-47324-AUTH-SEND">
-                                    <Action Name="SMBAuthUserPart = If(Size(SMBAuthDomain) &gt; 0, SMBAuthDomain + &quot;;&quot; + SMBAuthUsername, SMBAuthUsername)" Sym="BASE-47324-AUTH-USERPART">
-                                     <Action Name="SMBAuthHostPath = Substring(java_lang_Object_toString(SMBAuthHost), 6, -1)" Sym="BASE-47324-AUTH-HOSTPATH">
-                                      <Action Name="SMBAuthHostKey = java_lang_Object_toString(SMBAuthHost)" Sym="BASE-47324-AUTH-HOSTKEY">
-                                       <Action Name="PrevSubgroup = GetSubgroup(NetworkPathPwdCache, SMBAuthHostKey)" Sym="BASE-47324-AUTH-LOOKUP">
-                                        <Conditional Name="PrevSubgroup != null" Sym="BASE-47324-AUTH-DROP-COND">
-                                         <Action Name="java_util_Map_remove(NetworkPathPwdCache, SMBAuthHostKey)" Sym="BASE-47324-AUTH-DROP"/>
-                                        </Conditional>
-                                        <Action Name="AddToGrouping(NetworkPathPwdCache, SMBAuthHostKey, DataUnion(SMBAuthUserPart, SMBAuthPassword))" Sym="BASE-47324-AUTH-CACHE">
-                                         <Action Name="CurrentDirPath = new_jcifs_smb_SmbFile(&quot;smb://&quot; + SMBAuthUserPart + &quot;:&quot; + SMBAuthPassword + &quot;@&quot; + SMBAuthHostPath)" Sym="BASE-47324-AUTH-NAVIGATE">
-                                          <Action Ref="53218" Name="IsValidDirBrowserDir = true"/>
-                                          <Action Name="SortedDirFiles = null" Sym="BASE-47324-AUTH-CLEAR-FILES">
-                                           <Action Name="Refresh()" Sym="BASE-47324-AUTH-REFRESH">
-                                            <Action Name="CloseOptionsMenu()" Sym="BASE-47324-AUTH-CLOSE-MENU"/>
-                                           </Action>
-                                          </Action>
-                                         </Action>
-                                        </Action>
-                                       </Action>
+                                    <Action Name="SetSMBBrowseCredentials(SMBAuthUsername, SMBAuthPassword, SMBAuthDomain, false)" Sym="BASE-47324-AUTH-SET-CREDS">
+                                     <Action Name="CurrentDirPath = SMBAuthHost" Sym="BASE-47324-AUTH-NAVIGATE">
+                                      <Action Name="SortedDirFiles = null" Sym="BASE-47324-AUTH-CLEAR-FILES">
+                                       <Action Name="CloseOptionsMenu()" Sym="BASE-47324-AUTH-CLOSE-MENU"/>
                                       </Action>
                                      </Action>
                                     </Action>
@@ -149920,8 +149041,6 @@
                                     <Action Name="CloseOptionsMenu()" Sym="BASE-47324-AUTH-CANCEL-CLOSE"/>
                                    </Item>
                                   </OptionsMenu>
-                                 </Action>
-                                  </Action>
                                  </Action>
                                 </Action>
                                </Action>
@@ -216014,5 +215133,3 @@
   <Item Ref="73982" Name="Games Mode"/>
  </Panel>
 </Module>
-
-
