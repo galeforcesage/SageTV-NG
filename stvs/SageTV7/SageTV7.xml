@@ -82724,6 +82724,46 @@
            </Item>
            <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
           </Panel>
+          <Panel Name="CaptionExtractionEnabled" Sym="CAP-1">
+           <Text Name="Caption Sidecar Extraction" Sym="CAP-2"/>
+           <Item Name="Toggle" Sym="CAP-3">
+            <Action Name="IsCaptionExtractionEnabled()" Sym="CAP-4">
+             <Action Name="SetCaptionExtractionEnabled(!this)" Sym="CAP-5">
+              <Action Name="Refresh()" Sym="CAP-6"/>
+             </Action>
+            </Action>
+            <Conditional Name="IsCaptionExtractionEnabled()" Sym="CAP-7">
+             <Branch Name="true" Sym="CAP-8">
+              <Text Name="Enabled" Sym="CAP-9"/>
+             </Branch>
+             <Branch Name="false" Sym="CAP-10">
+              <Text Name="Disabled" Sym="CAP-11"/>
+             </Branch>
+            </Conditional>
+            <Attribute Name="HelpText" Sym="CAP-12">
+             <Value>"Enable or disable automatic closed-caption sidecar (.srt) extraction at the end of each new recording."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
+          <Panel Name="CaptionBackfill" Sym="CAP-20">
+           <Text Name="Backfill Caption Sidecars" Sym="CAP-21"/>
+           <Item Name="Run" Sym="CAP-22">
+            <Action Name="&quot;Scan all recordings now&quot;" Sym="CAP-23">
+             <Text Name="" Sym="CAP-24"/>
+            </Action>
+            <Listener Name="Select" Sym="CAP-25">
+             <ListenerEvent>Select</ListenerEvent>
+             <Action Name="BackfillCaptions(false)" Sym="CAP-26">
+              <Action Name="Refresh()" Sym="CAP-27"/>
+             </Action>
+            </Listener>
+            <Attribute Name="HelpText" Sym="CAP-28">
+             <Value>"Queue caption extraction for every recording that does not already have a sidecar file."</Value>
+            </Attribute>
+           </Item>
+           <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
+          </Panel>
           <Panel Name="ComskipPath" Sym="COMSKIP-50">
            <Text Name="Comskip Binary Path" Sym="COMSKIP-51"/>
            <Item Name="Modify" Sym="COMSKIP-52">
@@ -131103,6 +131143,24 @@
                      <Insets>10</Insets>
                      <Action Name="ClearCommercialMarkers(MediaFile)" Sym="COMSKIP-232">
                       <Action Name="Refresh()" Sym="COMSKIP-233"/>
+                     </Action>
+                    </Item>
+                   </Conditional>
+                   <Conditional Name="IsCaptionExtractionEnabled() &amp;&amp; !HasCaptionSidecar(MediaFile)" Sym="CAP-100">
+                    <Item Name="Extract Captions" Sym="CAP-101">
+                     <FixedWidth>0.5</FixedWidth>
+                     <Insets>10</Insets>
+                     <Action Name="ExtractCaptions(MediaFile)" Sym="CAP-102">
+                      <Action Name="Refresh()" Sym="CAP-103"/>
+                     </Action>
+                    </Item>
+                   </Conditional>
+                   <Conditional Name="HasCaptionSidecar(MediaFile)" Sym="CAP-110">
+                    <Item Name="Delete Captions" Sym="CAP-111">
+                     <FixedWidth>0.5</FixedWidth>
+                     <Insets>10</Insets>
+                     <Action Name="ClearCaptionSidecar(MediaFile)" Sym="CAP-112">
+                      <Action Name="Refresh()" Sym="CAP-113"/>
                      </Action>
                     </Item>
                    </Conditional>
