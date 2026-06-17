@@ -341,6 +341,30 @@ two shipped presets + container/runtime plumbing + validation).
   forward. Likely regressions from recent VideoFrame.java churn —
   add an integration test that loads a known `.edl` and asserts
   segment count + auto-skip behavior.
+- **Container/host TZ-mismatch resilience.** Today Sage relies on the
+  `time_zone=` property to call `TimeZone.setDefault()` (`Sage.java`
+  ~line 1078). When that property is unset OR the container OS clock
+  is in UTC while the property is local, the JVM default ends up UTC
+  and any subprocess (ffmpeg, comskip) inherits the bad `TZ` env —
+  log timestamps drift, EPG math gets edge-case wrong, and child
+  process output (mux metadata, comskip log lines) gets stamped UTC.
+  Harden in three places:
+  1. `Sage.java` startup — if `time_zone` is unset, fall back to
+     reading `/etc/timezone`, then `$TZ`, then JVM default; log the
+     resolved zone once at INFO so misconfigs are visible.
+  2. After `TimeZone.setDefault()`, also push the resolved zone into
+     `System.setProperty("user.timezone", ...)` and re-export `TZ`
+     in the env passed to `ProcessBuilder` for ffmpeg/comskip
+     (`FFMPEGTranscoder`, `CommercialDetectionJob`) so children agree
+     with the parent.
+  3. Add a startup self-check that compares `ZoneId.systemDefault()`
+     against `TimeZone.getDefault()` and warns if the OS clock offset
+     (`new Date().getTime() % 86400000`) disagrees with wall-clock
+     local time by more than a few seconds — catches host/container
+     clock drift before it manifests as recording-time bugs.
+  Goal: a container running in UTC with `time_zone=America/Chicago`
+  should be fully self-consistent end-to-end without the operator
+  also having to set `TZ` and `/etc/localtime`.
 
 ---
 
@@ -407,10 +431,20 @@ Per-item compatibility plan is called out inline below.
   *Plugin compat:* keep emitting the same fat `Sage.jar` so plugin
   classpath assumptions hold; thin-jar + `libs/` layout is a dev-only
   variant.
-- **SBBI UPnP → JUPnP.** SBBI is 2005-era and has known IPv6 /
-  multi-NIC bugs. JUPnP is maintained, OpenHAB-backed. Fixes DLNA on
-  multi-homed servers (relevant to dual-subnet host setups).
-  *Plugin compat:* internal; no plugin exposes SBBI types.
+- **JCIFS 1.1.6 → jcifs-ng (SMB2/SMB3)**, *should upgrade eventually but
+  not now*. SMB1 has been disabled by default on every Windows release
+  since 2017 and on most modern NAS firmware; the bundled JCIFS 1.1.6
+  speaks only SMB1, so any SageTV mount of a current Windows / Synology /
+  QNAP / TrueNAS share fails until the admin re-enables SMB1. Modern
+  `jcifs-ng` (`org.codelibs:jcifs:2.x`) supports SMB2/3 and is actively
+  maintained, but it is an API rewrite — package moves from `jcifs.smb`
+  to `jcifs.smb` v2 layout (or a `jcifs.smb1` shim), and `SmbFile`
+  constructor signatures change. Worth a follow-up if SageTV is doing
+  SMB to your shares; if you are not mounting any SMB shares from SageTV,
+  just leave it.
+  *Plugin compat:* a few plugins reference `jcifs.smb.SmbFile` directly;
+  ship the legacy 1.1.6 jar alongside the new one (or via the `jcifs.smb1`
+  compat package) so plugin classpaths still resolve.
 - **GSON (sun.misc.Unsafe path) → Jackson.** Removes the
   `sun.misc.Unsafe` reflective warnings on Java 17+, futures JDK
   upgrades to 25 LTS+, ~2× JSON parse throughput on large EPG payloads.
@@ -586,6 +620,32 @@ useful):
 
 ## Done
 
+- **SBBI UPnP → JUPnP migration complete.** `PlaceshifterNATManager`
+  fully ported to `org.jupnp:org.jupnp:3.0.3` + `org.jupnp.support:3.0.3`
+  (Maven dependencies); all behaviour and Sage.properties keys preserved.
+  Vendored `third_party/UPnPLib/sbbi-upnplib-1.0.3.jar` removed and
+  `build/copyserverfiles.sh` no longer copies it into
+  `serverrelease/JARs/`. Fixes long-standing IPv6 / multi-NIC bugs on
+  multi-homed servers.
+- **Build system: Maven runtime deps now actually shipped to `JARs/`.**
+  `Sage.jar` is a *thin* jar (project classes + resources only), so the
+  Maven-resolved `org.jupnp`, `slf4j-api`, `logback-*`, JOGL/GlueGen, etc.
+  must live as sidecar jars in `/opt/sagetv/server/JARs/` to satisfy the
+  `Sage.jar:JARs/*` runtime classpath. Before this change `copyserverfiles.sh`
+  only copied the four hand-vendored `third_party/*/*.jar` trees, so any
+  Maven-only dep (including the new JUPnP migration) silently failed at
+  runtime with `NoClassDefFoundError`. Added a Gradle `copyRuntimeJars`
+  task (`build.gradle`) that exports `configurations.runtimeClasspath`
+  to `buildoutput/runtime-jars/`, wired `sageJar.dependsOn copyRuntimeJars`,
+  and extended `build/copyserverfiles.sh` to cp those jars into
+  `serverrelease/JARs/` after the third_party trees. This also fixes the
+  parallel SLF4J 2.x / Logback gap that was about to bite the logging
+  modernization.
+- **`commons-jxpath` 1.1 → 1.4.0.** Vendored
+  `third_party/Apache/commons-jxpath-1.1.jar` (2008) replaced with the
+  Apache-reactivated `commons-jxpath-1.4.0.jar` (2025-04 Maven Central
+  release). Wire-compatible API; SageTV core does not call it directly
+  but plugins (Phoenix etc.) link against it at runtime.
 - **Dual-stack host:port handling hardening (IPv4 + IPv6 literals).**
   Added `java/sage/NetworkAddressUtils.java` and integrated it where
   host:port text is constructed/parsing is performed:
