@@ -148,3 +148,9 @@ Build an STV Analyzer to inspect and explain UI graphs.
 | Logic | Catbert expressions |
 | Execution | Process chains |
 | Studio | Graph editor |
+
+## Safe Editing Workflow
+
+For practical large-file edits, use the guarded workflow in:
+
+- [docs/SageTV_menus_safe_edit_workflow.md](docs/SageTV_menus_safe_edit_workflow.md)
