@@ -41,16 +41,20 @@ public class MiniClientSageRenderer extends SageRenderer
 
   private static final int NUM_SAMPLES_BANDWIDTH_ESTIMATE = 5;
 
-  // Server-side active-window bandwidth tracking.
-  private static final Object activeBwLock = new Object();
-  private static long activeBwWindowStartMs = 0L;
-  private static long activeBwBytesInWindow = 0L;
-  private static long activeBwLastUpdateMs = 0L;
-  private static final int[] activeBwPeakHistoryKbps = new int[60];
-  private static int activeBwPeakHistoryIdx = 0;
-  private static int activeBwPeakHistoryCount = 0;
-
   private static final int MAX_WINDOW_SIZE = 3000;
+
+  // Active-window throughput sampler fed by server-side socket writes.
+  // We keep a short history of 1s windows that had meaningful transfer volume.
+  private static final int ACTIVE_BW_WINDOW_MS = 1000;
+  private static final long ACTIVE_BW_MIN_WINDOW_BYTES = 32L * 1024L;
+  private static final int ACTIVE_BW_HISTORY_SIZE = 60;
+  private static final Object activeBwLock = new Object();
+  private static long activeBwWindowStartMs;
+  private static long activeBwBytesInWindow;
+  private static long activeBwLastUpdateMs;
+  private static final int[] activeBwPeakHistoryKbps = new int[ACTIVE_BW_HISTORY_SIZE];
+  private static int activeBwPeakHistoryIdx;
+  private static int activeBwPeakHistoryCount;
 
   private static final int HI_RES_SURFACE_SIZE_LIMIT = 2048;
 
@@ -477,66 +481,6 @@ public class MiniClientSageRenderer extends SageRenderer
     }
   }
 
-  public static void recordServerActiveWindowWrite(long numBytes)
-  {
-    if (numBytes <= 0)
-      return;
-
-    long now = Sage.eventTime();
-    synchronized (activeBwLock)
-    {
-      if (Sage.getBoolean("miniplayer/log_bw_estimator_diagnostics", false))
-        System.out.println("Server active window write bytes=" + numBytes + " windowBytes=" + activeBwBytesInWindow);
-
-      if (activeBwWindowStartMs <= 0)
-        activeBwWindowStartMs = now;
-
-      activeBwBytesInWindow += numBytes;
-      activeBwLastUpdateMs = now;
-
-      long windowElapsed = now - activeBwWindowStartMs;
-      if (windowElapsed < 1000)
-        return;
-
-      if (activeBwBytesInWindow >= 32768)
-      {
-        int sampleKbps = (int) ((activeBwBytesInWindow * 8) / Math.max(1L, windowElapsed));
-        activeBwPeakHistoryKbps[activeBwPeakHistoryIdx] = Math.max(0, sampleKbps);
-        activeBwPeakHistoryIdx = (activeBwPeakHistoryIdx + 1) % 60;
-        if (activeBwPeakHistoryCount < 60)
-          activeBwPeakHistoryCount++;
-      }
-
-      activeBwBytesInWindow = 0;
-      activeBwWindowStartMs = now;
-    }
-  }
-
-  public int getServerActiveWindowPeakKbps()
-  {
-    synchronized (activeBwLock)
-    {
-      int peak = 0;
-      for (int i = 0; i < activeBwPeakHistoryCount; i++)
-      {
-        if (activeBwPeakHistoryKbps[i] > peak)
-          peak = activeBwPeakHistoryKbps[i];
-      }
-      return peak;
-    }
-  }
-
-  public long getServerActiveWindowSampleAgeMs()
-  {
-    synchronized (activeBwLock)
-    {
-      if (activeBwLastUpdateMs <= 0)
-        return -1L;
-      long age = Sage.eventTime() - activeBwLastUpdateMs;
-      return age < 0 ? 0 : age;
-    }
-  }
-
   public static boolean isClientLocalhost(String clientName)
   {
     java.nio.channels.SocketChannel sake = (java.nio.channels.SocketChannel) clientSocketMap.get(clientName);
@@ -742,7 +686,15 @@ public class MiniClientSageRenderer extends SageRenderer
         // Now pass this off to the HTTPLSServer and it will handle everything from there.
         if (Sage.DBG) System.out.println("Received GET request on MiniClient channel");
         TimeoutHandler.clearTimeout(sake);
-        new HTTPLSServer(bb, sake);
+        new HTTPLSServer(bb, sake, "GET");
+        return true;
+      }
+      else if (ver == 'P' && bb.get() == 'O' && bb.get() == 'S' && bb.get() == 'T' && bb.get() == ' ')
+      {
+        // Route HTTP POST requests through HTTPLSServer as well.
+        if (Sage.DBG) System.out.println("Received POST request on MiniClient channel");
+        TimeoutHandler.clearTimeout(sake);
+        new HTTPLSServer(bb, sake, "POST");
         return true;
       }
     }
@@ -4599,6 +4551,8 @@ public class MiniClientSageRenderer extends SageRenderer
 
         // NG capability-protocol version. Empty on stock 9.x miniclients that don't
         // implement the SAGETV_NG_VERSION GetProperty handler.
+        String prevNgVersion = ngVersion == null ? "" : ngVersion;
+        java.util.Set<String> prevNgCapabilities = new java.util.LinkedHashSet<String>(ngCapabilities);
         ngVersion = recvr.getStringReply();
         if (ngVersion != null) ngVersion = ngVersion.trim();
         else ngVersion = "";
@@ -4610,10 +4564,29 @@ public class MiniClientSageRenderer extends SageRenderer
         if (Sage.DBG) System.out.println("MiniClient SAGETV_NG_CLIENT_ID=" + ngClientId);
 
         String ngCapsProp = recvr.getStringReply();
-        ngCapabilities.clear();
-        if (ngVersion.length() > 0)
-          ngCapabilities.add("NG");
-        ngCapabilities.addAll(parseNgCapabilities(ngCapsProp));
+        java.util.Set<String> parsedNgCapabilities = parseNgCapabilities(ngCapsProp);
+        boolean parsedNgData = ngVersion.length() > 0 || !parsedNgCapabilities.isEmpty();
+        if (!parsedNgData && !prevNgCapabilities.isEmpty())
+        {
+          // Reconnect/property races can temporarily return empty NG capability
+          // responses; preserve last known-good values so STV capability gates don't
+          // flicker off and hide download menu options.
+          java.util.LinkedHashSet<String> retainedCaps = new java.util.LinkedHashSet<String>(prevNgCapabilities);
+          ngCapabilities = java.util.Collections.unmodifiableSet(retainedCaps);
+          if (ngVersion.length() == 0)
+            ngVersion = prevNgVersion;
+          if (Sage.DBG)
+            System.out.println("MiniClient NG capability reply empty; retaining previous capabilities=" + ngCapabilities +
+                " version=" + ngVersion);
+        }
+        else
+        {
+          java.util.LinkedHashSet<String> nextCaps = new java.util.LinkedHashSet<String>();
+          if (ngVersion.length() > 0)
+            nextCaps.add("NG");
+          nextCaps.addAll(parsedNgCapabilities);
+          ngCapabilities = java.util.Collections.unmodifiableSet(nextCaps);
+        }
         if (Sage.DBG) System.out.println("MiniClient SAGETV_NG_CAPABILITIES=" + ngCapsProp + " parsed=" + ngCapabilities);
 
         // --- Per-player capability bias (Android NG miniclient) ---
@@ -4933,6 +4906,9 @@ public class MiniClientSageRenderer extends SageRenderer
         // miniclient that doesn't recognize the property) simply ignore it.
         if (Sage.DBG) System.out.println("MiniClient sending SAGETV_NG_SERVER=1");
         sendSetProperty("SAGETV_NG_SERVER", "1");
+        // Advertise NG server-side capability flags for optional features that
+        // are negotiated outside the legacy fixed property list.
+        sendSetProperty("SAGETV_NG_SERVER_CAPS", "BANDWIDTH_FEEDBACK_V1");
 
         if (zipSocks && textureBatchLimit == 0)
         {
@@ -6836,8 +6812,38 @@ public class MiniClientSageRenderer extends SageRenderer
   private boolean startedReconnectDaemon = false;
   private boolean reconnectCompleted = false;
   private Object reconnectLock = new Object();
+
+  private synchronized void closeMiniUITransportForReconnect()
+  {
+    if (zout != null)
+    {
+      try
+      {
+        zout.close();
+      }
+      catch (Exception e)
+      {
+      }
+      zout = null;
+    }
+    if (clientSocket != null)
+    {
+      try
+      {
+        clientSocket.close();
+      }
+      catch (Exception e)
+      {
+      }
+    }
+  }
+
   public boolean connectionError() // returns true if we should just die
   {
+    // Close the active transport immediately so FIN'd peers don't linger in CLOSE_WAIT
+    // while we wait for a reconnect attempt.
+    closeMiniUITransportForReconnect();
+
     // When an error occurs on the connection we don't immediately destroy everything since the client may try to reconnect.
     // A normal reconnect would kill their old session; so if they don't support the new logic then we're fine.
     // We also don't allow reconnects if the event channel is encrypted or we haven't started the first frame of rendering.
@@ -6886,6 +6892,16 @@ public class MiniClientSageRenderer extends SageRenderer
       startedReconnectDaemon = true;
     }
     if (Sage.DBG) System.out.println("MCSR is setting up the reconnection for the client w/ a new socket...");
+    if (clientSocket != null && clientSocket != newChan)
+    {
+      try
+      {
+        clientSocket.close();
+      }
+      catch (Exception e)
+      {
+      }
+    }
     sockBuf.clear();
     clientSocket = newChan;
     // Do the zip socket if we're in that mode
@@ -7111,22 +7127,69 @@ public class MiniClientSageRenderer extends SageRenderer
     return (estimatedBandwidthTime == 0) ? 0 : estimatedBandwidthBytes*8000/estimatedBandwidthTime;
   }
 
-  // If something else external does a calc cause we don't know, it should update us with what it found
-  public void addDataToBandwidthCalc(long bytes, long time)
+  public static void recordServerActiveWindowWrite(long bytesWritten)
   {
-    estimatedBandwidthTime += time;
-    estimatedBandwidthBytes += bytes;
-    // Track sample age for stale detection
-    estimatedBandwidthLastUpdateTime = Sage.eventTime();
-    estimatedBandwidthSampleCount++;
+    if (bytesWritten <= 0)
+      return;
+    long nowMs = Sage.eventTime();
+    synchronized (activeBwLock)
+    {
+      if (Sage.DBG && Sage.getBoolean("miniplayer/log_bw_estimator_diagnostics", false))
+        System.out.println("ServerActiveWindow: recording bytes=" + bytesWritten + " window=" + activeBwBytesInWindow);
+      if (activeBwWindowStartMs <= 0)
+        activeBwWindowStartMs = nowMs;
+      activeBwBytesInWindow += bytesWritten;
+      activeBwLastUpdateMs = nowMs;
+
+      long elapsedMs = nowMs - activeBwWindowStartMs;
+      if (elapsedMs < ACTIVE_BW_WINDOW_MS)
+        return;
+
+      if (activeBwBytesInWindow >= ACTIVE_BW_MIN_WINDOW_BYTES)
+      {
+        int instantKbps = (int) ((activeBwBytesInWindow * 8L) / Math.max(1L, elapsedMs));
+        activeBwPeakHistoryKbps[activeBwPeakHistoryIdx] = Math.max(0, instantKbps);
+        activeBwPeakHistoryIdx = (activeBwPeakHistoryIdx + 1) % ACTIVE_BW_HISTORY_SIZE;
+        if (activeBwPeakHistoryCount < ACTIVE_BW_HISTORY_SIZE)
+          activeBwPeakHistoryCount++;
+      }
+
+      activeBwBytesInWindow = 0;
+      activeBwWindowStartMs = nowMs;
+    }
+  }
+
+  public int getServerActiveWindowPeakKbps()
+  {
+    synchronized (activeBwLock)
+    {
+      int max = 0;
+      for (int i = 0; i < activeBwPeakHistoryCount; i++)
+      {
+        if (activeBwPeakHistoryKbps[i] > max)
+          max = activeBwPeakHistoryKbps[i];
+      }
+      return max;
+    }
+  }
+
+  public long getServerActiveWindowSampleAgeMs()
+  {
+    synchronized (activeBwLock)
+    {
+      if (activeBwLastUpdateMs <= 0)
+        return -1;
+      long age = Sage.eventTime() - activeBwLastUpdateMs;
+      return age < 0 ? 0 : age;
+    }
   }
 
   public long getEstimatedBandwidthSampleAgeMs()
   {
     if (estimatedBandwidthLastUpdateTime <= 0)
       return -1;
-    long ageMs = Sage.eventTime() - estimatedBandwidthLastUpdateTime;
-    return (ageMs < 0) ? 0 : ageMs;
+    long age = Sage.eventTime() - estimatedBandwidthLastUpdateTime;
+    return (age < 0) ? 0 : age;
   }
 
   public long getEstimatedBandwidthSampleCount()
@@ -7134,49 +7197,15 @@ public class MiniClientSageRenderer extends SageRenderer
     return estimatedBandwidthSampleCount;
   }
 
-  public String getEstimatedBandwidthDiagnostics()
+  public boolean resetEstimatedBandwidthIfStale(long staleMs, String reason)
   {
-    long kbps = (estimatedBandwidthTime == 0) ? 0 : (estimatedBandwidthBytes * 8000 / estimatedBandwidthTime);
-    long sampleAgeMs = getEstimatedBandwidthSampleAgeMs();
-    return String.format("kbps=%d bytes=%d time=%d count=%d ageMs=%d local=%s loopback=%s",
-        kbps, estimatedBandwidthBytes, estimatedBandwidthTime, estimatedBandwidthSampleCount,
-        sampleAgeMs, localConnection, loopbackConnection);
-  }
-
-  public boolean supportsNgBandwidthFeedbackV1()
-  {
-    return hasClientCapability("BANDWIDTH_FEEDBACK_V1");
-  }
-
-  public synchronized String pollNgBandwidthFeedbackPayload()
-  {
-    if (!supportsNgBandwidthFeedbackV1())
-      return "";
-    try
-    {
-      String result = sendGetProperty("SAGETV_NG_BANDWIDTH_FEEDBACK_V1");
-      if (result == null || result.trim().length() == 0)
-      {
-        result = sendGetProperty("SAGETV_NG_BW_FEEDBACK_V1");
-      }
-      return (result != null) ? result.trim() : "";
-    }
-    catch (java.io.IOException e)
-    {
-      System.out.println("Error polling NG bandwidth feedback: " + e);
-      return "";
-    }
-  }
-
-  public boolean resetEstimatedBandwidthIfStale(long thresholdMs, String reason)
-  {
-    if (thresholdMs <= 0)
+    if (staleMs <= 0)
       return false;
     long ageMs = getEstimatedBandwidthSampleAgeMs();
-    if (ageMs < 0 || ageMs <= thresholdMs)
+    if (ageMs < 0 || ageMs <= staleMs)
       return false;
-    String resetReason = (reason == null || reason.length() == 0) ? "stale" : reason;
-    resetEstimatedBandwidthCalc(resetReason + "_ageMs=" + ageMs + "_thresholdMs=" + thresholdMs);
+    resetEstimatedBandwidthCalc((reason == null || reason.length() == 0 ? "stale" : reason)
+        + " ageMs=" + ageMs + " staleMs=" + staleMs);
     return true;
   }
 
@@ -7186,11 +7215,27 @@ public class MiniClientSageRenderer extends SageRenderer
     estimatedBandwidthTime = 0;
     estimatedBandwidthLastUpdateTime = 0;
     estimatedBandwidthSampleCount = 0;
-    if (Sage.getBoolean("miniplayer/log_bw_estimator_resets", false))
-    {
-      String logMsg = (reason == null || reason.length() == 0) ? "" : reason;
-      System.out.println("Bandwidth reset: " + logMsg);
-    }
+    if (Sage.DBG && Sage.getBoolean("miniplayer/log_bw_estimator_resets", false))
+      System.out.println("MiniClientSageRenderer: reset bandwidth estimator"
+          + (reason == null || reason.length() == 0 ? "" : " reason=" + reason));
+  }
+
+  public String getEstimatedBandwidthDiagnostics()
+  {
+    long bps = (estimatedBandwidthTime == 0) ? 0 : estimatedBandwidthBytes * 8000 / estimatedBandwidthTime;
+    long ageMs = getEstimatedBandwidthSampleAgeMs();
+    return "bwBps=" + bps + " bwBytes=" + estimatedBandwidthBytes + " bwTimeMs=" + estimatedBandwidthTime
+        + " bwSamples=" + estimatedBandwidthSampleCount + " bwAgeMs=" + ageMs
+        + " local=" + localConnection + " loopback=" + loopbackConnection;
+  }
+
+  // If something else external does a calc cause we don't know, it should update us with what it found
+  public void addDataToBandwidthCalc(long bytes, long time)
+  {
+    estimatedBandwidthTime += time;
+    estimatedBandwidthBytes += bytes;
+    estimatedBandwidthLastUpdateTime = Sage.eventTime();
+    estimatedBandwidthSampleCount++;
   }
 
   public void cacheAuthenticationNow()
@@ -7674,31 +7719,84 @@ public class MiniClientSageRenderer extends SageRenderer
   {
     if (capability == null || capability.length() == 0)
       return false;
-    if (ngCapabilities == null || ngCapabilities.isEmpty())
-      return false;
     String normCap = normalizeCapabilityToken(capability);
     if (normCap.length() == 0)
       return false;
-    if (ngCapabilities.contains(normCap))
+    java.util.Set<String> capsSnapshot = ngCapabilities;
+
+    // DOWNLOAD is a first-class NG feature in the active client line; during
+    // reconnect churn capability snapshots can be briefly sparse even though NG
+    // negotiation succeeded. Keep the menu/action gates stable for NG sessions.
+    if ("DOWNLOAD".equals(normCap))
+    {
+      if (capsSnapshot != null)
+      {
+        if (capsSnapshot.contains("DOWNLOAD") || capsSnapshot.contains("OFFLINE_DOWNLOAD"))
+          return true;
+        // DOWNLOAD_REFRESH is only negotiated by clients that participate in
+        // the NG download/session flow.
+        if (capsSnapshot.contains("DOWNLOAD_REFRESH"))
+          return true;
+      }
+      return isNgCapableSession();
+    }
+
+    if (capsSnapshot == null || capsSnapshot.isEmpty())
+      return false;
+    if (capsSnapshot.contains(normCap))
       return true;
 
-    if ("DOWNLOAD".equals(normCap))
-      return ngCapabilities.contains("DOWNLOAD") || ngCapabilities.contains("OFFLINE_DOWNLOAD");
     if ("OFFLINE_METADATA".equals(normCap))
-      return ngCapabilities.contains("OFFLINE_METADATA") || ngCapabilities.contains("OFFLINE_WIZ");
+      return capsSnapshot.contains("OFFLINE_METADATA") || capsSnapshot.contains("OFFLINE_WIZ");
     if ("OFFLINE_GUIDE".equals(normCap))
-      return ngCapabilities.contains("OFFLINE_GUIDE") || ngCapabilities.contains("GUIDE_SNAPSHOT");
+      return capsSnapshot.contains("OFFLINE_GUIDE") || capsSnapshot.contains("GUIDE_SNAPSHOT");
     if ("OFFLINE_SCHEDULED".equals(normCap))
-      return ngCapabilities.contains("OFFLINE_SCHEDULED") || ngCapabilities.contains("SCHEDULED_SNAPSHOT");
+      return capsSnapshot.contains("OFFLINE_SCHEDULED") || capsSnapshot.contains("SCHEDULED_SNAPSHOT");
     if ("SUBTITLE_SIDECAR".equals(normCap))
-      return ngCapabilities.contains("SUBTITLE_SIDECAR") || ngCapabilities.contains("SIDECAR_SUBTITLE");
+      return capsSnapshot.contains("SUBTITLE_SIDECAR") || capsSnapshot.contains("SIDECAR_SUBTITLE");
+    if ("BANDWIDTH_FEEDBACK_V1".equals(normCap))
+      return capsSnapshot.contains("BANDWIDTH_FEEDBACK_V1") || capsSnapshot.contains("BW_FEEDBACK_V1");
 
     return false;
   }
 
+  public boolean supportsNgBandwidthFeedbackV1()
+  {
+    return hasClientCapability("BANDWIDTH_FEEDBACK_V1");
+  }
+
+  /**
+   * Poll an optional NG bandwidth feedback payload from the client.
+   *
+   * Returns an empty string when unsupported/unavailable so callers can safely
+   * fall back to legacy estimation logic.
+   */
+  public synchronized String pollNgBandwidthFeedbackPayload()
+  {
+    // Explicit gating: only poll clients that advertised bandwidth-feedback support.
+    if (!supportsNgBandwidthFeedbackV1())
+      return "";
+    try
+    {
+      String rv = sendGetProperty("SAGETV_NG_BANDWIDTH_FEEDBACK_V1");
+      if (rv == null || rv.trim().length() == 0)
+      {
+        // Compatibility alias accepted by current NG client implementations.
+        rv = sendGetProperty("SAGETV_NG_BW_FEEDBACK_V1");
+      }
+      return rv == null ? "" : rv.trim();
+    }
+    catch (java.io.IOException ioe)
+    {
+      if (Sage.DBG)
+        System.out.println("MiniClient NG bandwidth feedback poll error: " + ioe);
+      return "";
+    }
+  }
+
   public java.util.Set<String> getClientCapabilities()
   {
-    return java.util.Collections.unmodifiableSet(ngCapabilities);
+    return ngCapabilities;
   }
 
   public String getRecordingCopyTransferCapsAckJson()
@@ -7760,55 +7858,88 @@ public class MiniClientSageRenderer extends SageRenderer
       System.out.println("MiniClient transfer session created queueItem=" + session.queueItemId +
           " recordingId=" + session.recordingId + " state=" + session.sessionState +
           " client=" + session.clientName + " downloadCap=" + hasDownloadCapability);
-    try
+    if (sendTransferSessionAckWithRetry(mgr, session, ackJson))
     {
-      int rv = sendSetProperty("CMD_DOWNLOAD_REQUEST", ackJson);
-      if (rv != 0)
-      {
-        if (Sage.DBG)
-          System.out.println("MiniClient transfer dispatch failed rv=" + rv +
-              " queueItem=" + session.queueItemId + " recordingId=" + session.recordingId);
-        mgr.markDispatchFailure(session.sessionToken, "SET_PROPERTY rv=" + rv);
-        return mgr.buildErrorJson("TRANSFER_SESSION_ERROR",
-            sage.client.NgClientRecordingCopyTransferManager.CODE_DISPATCH_FAILED,
-            "Failed dispatching transfer session to client.");
-      }
       if (Sage.DBG)
         System.out.println("MiniClient transfer dispatch success queueItem=" + session.queueItemId +
             " recordingId=" + session.recordingId + " state=" + session.sessionState);
-      return ackJson;
+      return buildTransferSessionAckResultJson(session);
     }
-    catch (Throwable t)
+
+    return mgr.buildErrorJson("TRANSFER_SESSION_ERROR",
+        sage.client.NgClientRecordingCopyTransferManager.CODE_DISPATCH_FAILED,
+        "Unable to notify the client that the transfer started.");
+  }
+
+  private boolean sendTransferSessionAckWithRetry(
+      sage.client.NgClientRecordingCopyTransferManager mgr,
+      sage.client.NgClientRecordingCopyTransferManager.TransferSession session,
+      String ackJson)
+  {
+    String slimAckJson = null;
+    Throwable lastDispatchError = null;
+    long dispatchDeadlineMs = Sage.time() + 2000L;
+    while (Sage.time() <= dispatchDeadlineMs)
     {
-      if (isTransferAckPayloadException(t))
+      String dispatchJson = slimAckJson != null ? slimAckJson : ackJson;
+      try
       {
-        String slimAck = mgr.buildSessionAckJsonWithoutOffline(session);
-        if (Sage.DBG)
-          System.out.println("MiniClient transfer create retrying with slim ACK queueItem=" + session.queueItemId +
-              " recordingId=" + session.recordingId + " cause=" + t);
-        try
-        {
-          int rv = sendSetProperty("CMD_DOWNLOAD_REQUEST", slimAck);
-          if (rv == 0)
-          {
-            if (Sage.DBG)
-              System.out.println("MiniClient transfer dispatch success with slim ACK queueItem=" + session.queueItemId +
-                  " recordingId=" + session.recordingId);
-            return slimAck;
-          }
-          t = new java.io.IOException("SET_PROPERTY rv=" + rv + " while sending slim ACK");
-        }
-        catch (Throwable t2)
-        {
-          t = t2;
-        }
+        int rv = sendSetProperty("CMD_DOWNLOAD_REQUEST", dispatchJson);
+        if (rv == 0)
+          return true;
+        lastDispatchError = new java.io.IOException("SET_PROPERTY rv=" + rv);
       }
-      mgr.markDispatchFailure(session.sessionToken, "exception=" + t);
-      if (Sage.DBG) System.out.println("MiniClient transfer create failed: " + t);
-      return mgr.buildErrorJson("TRANSFER_SESSION_ERROR",
-          sage.client.NgClientRecordingCopyTransferManager.CODE_DISPATCH_FAILED,
-          "Exception dispatching transfer session.");
+      catch (Throwable t)
+      {
+        lastDispatchError = t;
+        if (slimAckJson == null)
+          slimAckJson = mgr.buildSessionAckJsonWithoutOffline(session);
+        if (Sage.DBG)
+          System.out.println("MiniClient transfer dispatch attempt failed queueItem=" + session.queueItemId +
+              " recordingId=" + session.recordingId + " payload=" +
+              (dispatchJson == ackJson ? "full" : "slim") +
+              " bytes=" + dispatchJson.length() + " cause=" + t);
+      }
+
+      if (slimAckJson == null)
+        slimAckJson = mgr.buildSessionAckJsonWithoutOffline(session);
+      try
+      {
+        Thread.sleep(200L);
+      }
+      catch (InterruptedException ie)
+      {
+        Thread.currentThread().interrupt();
+        break;
+      }
     }
+
+    mgr.markDispatchFailure(session.sessionToken,
+        lastDispatchError == null ? "dispatch retry timeout" : "exception=" + lastDispatchError);
+    if (Sage.DBG)
+      System.out.println("MiniClient transfer dispatch failed after retry queueItem=" + session.queueItemId +
+          " recordingId=" + session.recordingId + " cause=" + lastDispatchError);
+    return false;
+  }
+
+  // Keep STV action return payload compact; full URLs/metadata are sent via CMD_DOWNLOAD_REQUEST.
+  private String buildTransferSessionAckResultJson(
+      sage.client.NgClientRecordingCopyTransferManager.TransferSession session)
+  {
+    if (session == null)
+      return "{\"type\":\"TRANSFER_SESSION_ERROR\",\"message\":\"No transfer session.\"}";
+    StringBuilder sb = new StringBuilder(192);
+    sb.append('{');
+    sb.append("\"type\":\"TRANSFER_SESSION_ACK\"");
+    sb.append(',').append("\"queue_item_id\":").append(session.queueItemId);
+    sb.append(',').append("\"session_token\":\"")
+        .append(escapeJsonString(session.sessionToken == null ? "" : session.sessionToken)).append('\"');
+    sb.append(',').append("\"recording_id\":\"")
+        .append(escapeJsonString(String.valueOf(session.recordingId))).append('\"');
+    sb.append(',').append("\"session_state\":\"")
+        .append(escapeJsonString(session.sessionState == null ? "" : session.sessionState)).append('\"');
+    sb.append('}');
+    return sb.toString();
   }
 
   public String getRecordingCopyTransferStatus(String sessionToken)
@@ -8156,100 +8287,181 @@ public class MiniClientSageRenderer extends SageRenderer
       return;
     }
 
-    if (isDownloadRefreshRateLimited(mediaFileId, requesterClientId))
-    {
-      logDownloadRefreshAudit("COALESCED", mediaFileId, req, sessionByToken, null);
-      if (Sage.DBG)
-        System.out.println("MiniClient DOWNLOAD_REFRESH_REQUEST coalesced mediaFileID=" + mediaFileId +
-            " clientId=" + requesterClientId);
-      return;
-    }
+    if (req.correlationId == null || req.correlationId.length() == 0)
+      req.correlationId = java.util.UUID.randomUUID().toString();
 
+    int coalescedWaitMs = Math.max(0,
+        Sage.getInt("miniclient/transfer/refresh_coalesced_wait_ms", 5000));
+    long coalescedWaitDeadline = Sage.time() + coalescedWaitMs;
+    sage.client.NgClientRecordingCopyTransferManager.RefreshAttemptPermit refreshPermit;
+    while (true)
+    {
+      refreshPermit = mgr.beginRefreshAttempt(mediaFileId, req.correlationId, "command_channel");
+      if (refreshPermit.allowed)
+        break;
+
+      if (!"COALESCED_ACTIVE".equals(refreshPermit.blockCode) || coalescedWaitMs <= 0)
+      {
+        logDownloadRefreshAudit(refreshPermit.blockCode, mediaFileId, req, sessionByToken, null);
+        sendDownloadRefreshError("TRANSFER_REFRESH_THROTTLED",
+            "Refresh request deferred by guardrail: " + refreshPermit.blockCode + ".",
+            refreshPermit.retriable, refreshPermit.correlationId);
+        return;
+      }
+
+      long remainingMs = coalescedWaitDeadline - Sage.time();
+      if (remainingMs <= 0)
+      {
+        logDownloadRefreshAudit("COALESCED_WAIT_TIMEOUT", mediaFileId, req, sessionByToken, null);
+        sendDownloadRefreshError("TRANSFER_REFRESH_THROTTLED",
+            "Refresh request coalesced while another refresh was active.", true,
+            refreshPermit.correlationId);
+        return;
+      }
+
+      try
+      {
+        Thread.sleep(Math.min(150L, remainingMs));
+      }
+      catch (InterruptedException ie)
+      {
+        Thread.currentThread().interrupt();
+        logDownloadRefreshAudit("COALESCED_WAIT_INTERRUPTED", mediaFileId, req, sessionByToken, null);
+        sendDownloadRefreshError("TRANSFER_REFRESH_THROTTLED",
+            "Refresh request wait was interrupted.", true, refreshPermit.correlationId);
+        return;
+      }
+    }
+    req.correlationId = refreshPermit.correlationId;
+
+    String finalResultType = "ERROR";
+    String finalErrorCode = "UNKNOWN";
+    boolean finalRetriable = false;
+    int finalAttemptCount = 1;
+    int laneFallbackCount = 0;
+
+    try
+    {
     MediaFile mf = Wizard.getInstance().getFileForID(mediaFileId);
-    if (mf == null)
-    {
-      logDownloadRefreshAudit("MEDIA_NOT_FOUND", mediaFileId, req, sessionByToken, null);
-      sendDownloadRefreshError("MEDIA_NOT_FOUND",
-          "MediaFile not found for ID " + mediaFileId + ".", false, req.correlationId);
-      return;
-    }
+      if (mf == null)
+      {
+        logDownloadRefreshAudit("MEDIA_NOT_FOUND", mediaFileId, req, sessionByToken, null);
+        sendDownloadRefreshError("MEDIA_NOT_FOUND",
+            "MediaFile not found for ID " + mediaFileId + ".", false, req.correlationId);
+        finalResultType = "ERROR";
+        finalErrorCode = "MEDIA_NOT_FOUND";
+        finalRetriable = false;
+        return;
+      }
 
-    if (sessionByToken != null && !isTransferRequesterBoundToSession(sessionByToken, requesterClientId))
-    {
-      logDownloadRefreshAudit("TRANSFER_CLIENT_MISMATCH", mediaFileId, req, sessionByToken, null);
-      sendDownloadRefreshError("TRANSFER_CLIENT_MISMATCH",
-          "Transfer session belongs to a different client.", false, req.correlationId);
-      return;
-    }
+      if (sessionByToken != null && !isTransferRequesterBoundToSession(sessionByToken, requesterClientId))
+      {
+        logDownloadRefreshAudit("TRANSFER_CLIENT_MISMATCH", mediaFileId, req, sessionByToken, null);
+        sendDownloadRefreshError("TRANSFER_CLIENT_MISMATCH",
+            "Transfer session belongs to a different client.", false, req.correlationId);
+        finalResultType = "ERROR";
+        finalErrorCode = "TRANSFER_CLIENT_MISMATCH";
+        finalRetriable = false;
+        return;
+      }
 
     sage.client.NgClientRecordingCopyTransferManager.TransferSession latestForMedia =
         mgr.getLatestSessionForRecording(mediaFileId, null);
-    if (sessionByToken == null && latestForMedia != null && !latestForMedia.isTerminal() &&
-        !isTransferRequesterBoundToSession(latestForMedia, requesterClientId))
-    {
-      logDownloadRefreshAudit("TRANSFER_CLIENT_MISMATCH", mediaFileId, req, latestForMedia, null);
-      sendDownloadRefreshError("TRANSFER_CLIENT_MISMATCH",
-          "Active transfer session belongs to a different client.", false, req.correlationId);
-      return;
-    }
+      if (sessionByToken == null && latestForMedia != null && !latestForMedia.isTerminal() &&
+          !isTransferRequesterBoundToSession(latestForMedia, requesterClientId))
+      {
+        logDownloadRefreshAudit("TRANSFER_CLIENT_MISMATCH", mediaFileId, req, latestForMedia, null);
+        sendDownloadRefreshError("TRANSFER_CLIENT_MISMATCH",
+            "Active transfer session belongs to a different client.", false, req.correlationId);
+        finalResultType = "ERROR";
+        finalErrorCode = "TRANSFER_CLIENT_MISMATCH";
+        finalRetriable = false;
+        return;
+      }
 
-    sage.client.NgClientRecordingCopyTransferManager.TransferSession responseSession;
-    if (sessionByToken != null && !sessionByToken.isTerminal())
-    {
-      long resumeOffset = req.bytesTransferred >= 0 ? req.bytesTransferred : Math.max(0L, sessionByToken.bytesTransferred);
-      sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy reqPolicy =
-          sessionByToken.acceptedPolicy == null ? null :
-          new sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy(
-              sessionByToken.acceptedPolicy.downloadMode,
-              sessionByToken.acceptedPolicy.rateProfile,
-              sessionByToken.acceptedPolicy.maxRateKbps,
-              sessionByToken.acceptedPolicy.concurrency,
-              sessionByToken.acceptedPolicy.wifiOnly,
-              sessionByToken.acceptedPolicy.allowMetered);
-      responseSession = mgr.resume(sessionByToken.sessionToken,
-          sessionByToken.clientName,
-          resumeOffset,
-          reqPolicy,
-          getEstimatedBandwidth());
-    }
-    else
-    {
-      String clientName = uiMgr != null ? uiMgr.getLocalUIClientName() : "";
-      sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy defaultPolicy =
-          new sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy(
-              "foreground", "balanced", 0L, 1, false, true);
-      responseSession = mgr.createSession(
-          clientName,
-          getSessionClientIp(),
-          getNgClientId(),
-          getNgVersion(),
-          getTransferBaseUrlForClient(),
-          getClientCapabilities(),
-          mf,
-          defaultPolicy,
-          getEstimatedBandwidth());
-    }
+      sage.client.NgClientRecordingCopyTransferManager.TransferSession responseSession = null;
+      int maxAttempts = sage.client.NgClientRecordingCopyTransferManager.getRefreshMaxAttempts();
+      for (int attempt = 1; attempt <= maxAttempts; attempt++)
+      {
+        finalAttemptCount = attempt;
+        if (sessionByToken != null && !sessionByToken.isTerminal())
+        {
+          long resumeOffset = req.bytesTransferred >= 0 ? req.bytesTransferred : Math.max(0L, sessionByToken.bytesTransferred);
+          sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy reqPolicy =
+              sessionByToken.acceptedPolicy == null ? null :
+              new sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy(
+                  sessionByToken.acceptedPolicy.downloadMode,
+                  sessionByToken.acceptedPolicy.rateProfile,
+                  sessionByToken.acceptedPolicy.maxRateKbps,
+                  sessionByToken.acceptedPolicy.concurrency,
+                  sessionByToken.acceptedPolicy.wifiOnly,
+                  sessionByToken.acceptedPolicy.allowMetered);
+          responseSession = mgr.resume(sessionByToken.sessionToken,
+              sessionByToken.clientName,
+              resumeOffset,
+              reqPolicy,
+              getEstimatedBandwidth());
+        }
+        else
+        {
+          String clientName = uiMgr != null ? uiMgr.getLocalUIClientName() : "";
+          sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy defaultPolicy =
+              new sage.client.NgClientRecordingCopyTransferManager.RequestedPolicy(
+                  "foreground", "balanced", 0L, 1, false, true);
+          responseSession = mgr.createSession(
+              clientName,
+              getSessionClientIp(),
+              getNgClientId(),
+              getNgVersion(),
+              getTransferBaseUrlForClient(),
+              getClientCapabilities(),
+              mf,
+              defaultPolicy,
+              getEstimatedBandwidth());
+        }
 
-    if (responseSession == null)
-    {
-      logDownloadRefreshAudit("TRANSFER_BUSY", mediaFileId, req, sessionByToken, null);
-      sendDownloadRefreshError("TRANSFER_BUSY",
-          "Transfer refresh request could not be processed right now.", true, req.correlationId);
-      return;
-    }
+        if (responseSession != null)
+          break;
+        if (attempt < maxAttempts && !sage.client.NgClientRecordingCopyTransferManager.sleepRefreshRetryBackoff(attempt))
+          break;
+      }
 
-    String ackPayload = mgr.buildSessionAckJson(responseSession);
-    ackPayload = appendJsonStringField(ackPayload, "correlationId", req.correlationId);
-    if (!sendDownloadRefreshResponse(ackPayload) && isTransferAckPayloadException(lastDownloadRefreshError))
-    {
-      String slimAck = mgr.buildSessionAckJsonWithoutOffline(responseSession);
-      slimAck = appendJsonStringField(slimAck, "correlationId", req.correlationId);
-      boolean sentSlim = sendDownloadRefreshResponse(slimAck);
-      logDownloadRefreshAudit(sentSlim ? "ACK_SLIM" : "ACK_SEND_FAILED", mediaFileId, req, sessionByToken, responseSession);
-      return;
-    }
+      if (responseSession == null)
+      {
+        logDownloadRefreshAudit("TRANSFER_BUSY", mediaFileId, req, sessionByToken, null);
+        sendDownloadRefreshError("TRANSFER_BUSY",
+            "Transfer refresh request could not be processed right now.", true, req.correlationId);
+        finalResultType = "ERROR";
+        finalErrorCode = "TRANSFER_BUSY";
+        finalRetriable = true;
+        return;
+      }
 
-    logDownloadRefreshAudit("ACK", mediaFileId, req, sessionByToken, responseSession);
+      String ackPayload = mgr.buildSessionAckJson(responseSession);
+      ackPayload = appendJsonStringField(ackPayload, "correlationId", req.correlationId);
+      if (!sendDownloadRefreshResponse(ackPayload) && isTransferAckPayloadException(lastDownloadRefreshError))
+      {
+        String slimAck = mgr.buildSessionAckJsonWithoutOffline(responseSession);
+        slimAck = appendJsonStringField(slimAck, "correlationId", req.correlationId);
+        boolean sentSlim = sendDownloadRefreshResponse(slimAck);
+        laneFallbackCount = 1;
+        logDownloadRefreshAudit(sentSlim ? "ACK_SLIM" : "ACK_SEND_FAILED", mediaFileId, req, sessionByToken, responseSession);
+        finalResultType = sentSlim ? "ACK" : "ERROR";
+        finalErrorCode = sentSlim ? "" : "ACK_SEND_FAILED";
+        finalRetriable = !sentSlim;
+        return;
+      }
+
+      logDownloadRefreshAudit("ACK", mediaFileId, req, sessionByToken, responseSession);
+      finalResultType = "ACK";
+      finalErrorCode = "";
+      finalRetriable = false;
+    }
+    finally
+    {
+      mgr.finishRefreshAttempt(refreshPermit, finalResultType, finalErrorCode,
+          finalRetriable, laneFallbackCount, finalAttemptCount, mediaFileId);
+    }
   }
 
   private volatile Throwable lastDownloadRefreshError;
@@ -8282,7 +8494,7 @@ public class MiniClientSageRenderer extends SageRenderer
   {
     StringBuilder sb = new StringBuilder(320);
     sb.append('{');
-    sb.append("\"type\":\"TRANSFER_SESSION_ERROR\"");
+    sb.append("\"type\":\"TRANSFER_ERROR\"");
     sb.append(',').append("\"error_code\":\"").append(escapeJsonString(errorCode == null ? "INTERNAL_ERROR" : errorCode)).append('\"');
     sb.append(',').append("\"message\":\"").append(escapeJsonString(message == null ? "" : message)).append('\"');
     sb.append(',').append("\"retriable\":").append(retriable ? "true" : "false");
@@ -8369,35 +8581,6 @@ public class MiniClientSageRenderer extends SageRenderer
     if (requesterIp != null)
       requesterIp = requesterIp.trim();
     return expectedIp.equals(requesterIp == null ? "" : requesterIp);
-  }
-
-  private boolean isDownloadRefreshRateLimited(int mediaFileId, String requesterClientId)
-  {
-    String clientKey = requesterClientId == null ? "" : requesterClientId.trim();
-    if (clientKey.length() == 0)
-      clientKey = uiMgr != null ? uiMgr.getLocalUIClientName() : "";
-    String key = clientKey + "|" + mediaFileId;
-    long now = Sage.time();
-    synchronized (recentDownloadRefreshRequests)
-    {
-      Long last = (Long) recentDownloadRefreshRequests.get(key);
-      if (last != null && (now - last.longValue()) < 5000L)
-        return true;
-      recentDownloadRefreshRequests.put(key, new Long(now));
-
-      if (recentDownloadRefreshRequests.size() > 256)
-      {
-        java.util.Iterator<java.util.Map.Entry<String, Long>> walker = recentDownloadRefreshRequests.entrySet().iterator();
-        while (walker.hasNext())
-        {
-          java.util.Map.Entry<String, Long> ent = walker.next();
-          Long ts = ent.getValue();
-          if (ts == null || (now - ts.longValue()) > 120000L)
-            walker.remove();
-        }
-      }
-    }
-    return false;
   }
 
   private static DownloadRefreshRequest parseDownloadRefreshRequest(String payload)
@@ -9156,10 +9339,9 @@ public class MiniClientSageRenderer extends SageRenderer
 
   private String hdmiAutodetectedConnector;
   private String remoteVersion = "";
-  private String ngVersion = "";
+  private volatile String ngVersion = "";
   private String ngClientId = "";
-  private java.util.Set<String> ngCapabilities = new java.util.LinkedHashSet<String>();
-  private final java.util.Map<String, Long> recentDownloadRefreshRequests = new java.util.HashMap<String, Long>();
+  private volatile java.util.Set<String> ngCapabilities = java.util.Collections.emptySet();
   private boolean remoteWindowedSystem;
   private boolean supportsForcedMediaReconnect;
 
@@ -9449,6 +9631,16 @@ public class MiniClientSageRenderer extends SageRenderer
     }
     public void setNewStream(java.nio.channels.ReadableByteChannel inDis)
     {
+      if (dis != null && dis != inDis)
+      {
+        try
+        {
+          dis.close();
+        }
+        catch (Exception e)
+        {
+        }
+      }
       dis = inDis;
     }
     public void run()
@@ -9912,7 +10104,9 @@ public class MiniClientSageRenderer extends SageRenderer
           if (Sage.DBG) System.out.println("ERROR: MiniUIClient receiver timed out waiting for response from the MiniClient!");
         }
         if (DEBUG_NATIVE2D) System.out.println("Returned reply from queue, size before=" + replyQueue.size());
-        return alive ? (ReplyPacket)replyQueue.remove(0) : null;
+        // If the queue is still empty after timeout/discard handling, return null
+        // instead of throwing an ArrayIndexOutOfBoundsException on remove(0).
+        return (alive && !replyQueue.isEmpty()) ? (ReplyPacket) replyQueue.remove(0) : null;
       }
     }
     public int getIntReply()
