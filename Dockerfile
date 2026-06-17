@@ -180,8 +180,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
-# Create sagetv user
-RUN groupadd -r sagetv && useradd -r -g sagetv -d /opt/sagetv sagetv
+# Create sagetv user — uid/gid 1000 to match the host sagetv account on
+# our deploy targets, so bind-mounted host files (Sage.properties, Wiz.bin,
+# /var/media/*, /mnt/*/sagetv*) are owned by the same numeric uid inside
+# and outside the container. Override with --build-arg if your host uses
+# different ids.
+#
+# ubuntu:24.04 ships a default `ubuntu` user at uid 1000; remove it first
+# so the requested SAGETV_UID is free.
+ARG SAGETV_UID=1000
+ARG SAGETV_GID=1000
+RUN if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu 2>/dev/null || userdel ubuntu; fi \
+    && if getent group ubuntu >/dev/null 2>&1; then groupdel ubuntu 2>/dev/null || true; fi \
+    && groupadd -g ${SAGETV_GID} sagetv \
+    && useradd -u ${SAGETV_UID} -g ${SAGETV_GID} -d /opt/sagetv -s /bin/bash sagetv
 
 # Copy the assembled server release from builder
 COPY --from=builder /src/build/serverrelease /opt/sagetv/server
