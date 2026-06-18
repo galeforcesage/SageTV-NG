@@ -411,10 +411,10 @@ task(updateBuildNumber)  {
     def file = new File(projectDir.absolutePath + '/java/sage/SageConstants.java');
     def fileBak = new File(projectDir.absolutePath + '/java/sage/SageConstants.java.bak');
 
-    if (!fileBak.exists()) {
-      fileBak.text = file.text
-      System.out.println("Backed up ${file}")
-    }
+    // Always refresh backup from current source so restoreSageConstants
+    // restores the just-edited value, not stale content from a prior build.
+    fileBak.text = file.text
+    System.out.println("Backed up ${file}")
 
     // update SageConstants.java
     ant.replaceregexp(
