@@ -148629,8 +148629,12 @@
            </Conditional>
            <Conditional Name="CurrentDirPath == null" Sym="BASE-46064">
             <Branch Name="false" Sym="BASE-46065">
-             <Action Name="&quot;Current: &quot; + CurrentDirPath" Sym="BASE-46066">
-              <Text Ref="52920" Name=""/>
+             <Action Name="DirPathStr = java_lang_Object_toString(CurrentDirPath)" Sym="BASE-46066-STR">
+              <Action Name="DirPathAtPos = StringIndexOf(DirPathStr, &quot;@&quot;)" Sym="BASE-46066-AT">
+               <Action Name="&quot;Current: &quot; + If(DirPathAtPos &gt; 0 &amp;&amp; StringStartsWith(DirPathStr, &quot;smb://&quot;), &quot;smb://&quot; + Substring(DirPathStr, DirPathAtPos + 1, -1), DirPathStr)" Sym="BASE-46066">
+                <Text Ref="52920" Name=""/>
+               </Action>
+              </Action>
              </Action>
             </Branch>
             <Branch Name="true" Sym="BASE-46068">
@@ -149388,7 +149392,7 @@
                             <Action Name="SMBAuthHost = FolderCell" Sym="BASE-47324-AUTH-HOST-SAVE">
                              <Action Name="SMBAuthUsername = &quot;&quot;" Sym="BASE-47324-AUTH-USER-INIT">
                               <Action Name="SMBAuthPassword = &quot;&quot;" Sym="BASE-47324-AUTH-PASS-INIT">
-                               <Action Name="SMBAuthDomain = &quot;MicrosoftAccount&quot;" Sym="BASE-47324-AUTH-DOMAIN-INIT">
+                               <Action Name="SMBAuthDomain = &quot;&quot;" Sym="BASE-47324-AUTH-DOMAIN-INIT">
                                 <Action Name="SMBAuthShowPassword = false" Sym="BASE-47324-AUTH-SHOW-INIT">
                                  <Action Name="SMBAuthField = 0" Sym="BASE-47324-AUTH-FIELD-INIT">
                                   <Action Name="SMBAuthPendingChar = &quot;&quot;" Sym="BASE-47324-AUTH-PENDING-INIT">
