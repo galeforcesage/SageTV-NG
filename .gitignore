@@ -1081,3 +1081,23 @@ tools/
 
 # Local deploy/diagnostic helpers (contain hardcoded host/credentials)
 build/*.sh
+
+# Local working / diagnostic / scratch files (root-level only — these are
+# session-scoped helpers, javap dumps, XML rollback siblings, etc., not
+# repository code).
+/_*
+/SageTV7*.xml
+/SageTV7.xml.*
+/SageTV7_rollback.xml
+/*.javap.txt
+/*.ps1
+/*.py
+/repo_vf*.txt
+/build_errors.txt
+/tmp/
+
+# Per-folder STV XML scratch siblings
+/stvs/**/*.xml.backup
+/stvs/**/*.xml.upstream
+/stvs/**/*.xml.current
+

@@ -1,6 +1,12 @@
 # Change Log
 
 ## Next
+* Added [FORK_INVENTORY.md](FORK_INVENTORY.md) — reference catalogue
+  of capabilities the fork adds vs upstream `google/sagetv` (NG
+  protocol, recording-copy transfer queue, BW-aware playback,
+  client profiles, captions, comskip, AI upscale, transcoder
+  safety, ATSC1 EIT, HDHR HTTP-pull, SMB2/3, JUPnP, SLF4J bridge,
+  TZ parser, MiniPlayer hardening, STV UI symbols).
 
 ## Version 10.0.16 (2026-04-28)
 * Version bump to 10.0.16 (fork versioning: galeforcesage/SageTV-mine)

@@ -131242,12 +131242,71 @@
                          </Action>
                         </Action>
                        </Item>
+                       <Item Name="Show transfer status (JSON)" Sym="NGDLQ-1700">
+                        <OptionsMenu Name="Transfer Status" Sym="NGDLQ-1701">
+                         <IgnoreThemeProps>false</IgnoreThemeProps>
+                         <Action Name="GetLatestRecordingCopyTransferStatusForMediaFile(MediaFile)" Sym="NGDLQ-1702">
+                          <Text Name="" Sym="NGDLQ-1703"/>
+                         </Action>
+                         <Item Name="Close" Sym="NGDLQ-1704">
+                          <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1705"/>
+                         </Item>
+                         <Theme Ref="954" Name="OptionsConfirmTheme"/>
+                        </OptionsMenu>
+                       </Item>
                        <Item Name="Queue snapshot" Sym="NGDLQ-1047">
                         <OptionsMenu Name="Download Queue Snapshot" Sym="NGDLQ-1048">
                          <IgnoreThemeProps>false</IgnoreThemeProps>
+                         <Action Name="&quot;Server caps:&quot;" Sym="NGDLQ-1710">
+                          <Text Name="" Sym="NGDLQ-1711"/>
+                         </Action>
+                         <Action Name="GetRecordingCopyTransferCapsAck()" Sym="NGDLQ-1712">
+                          <Text Name="" Sym="NGDLQ-1713"/>
+                         </Action>
                          <Action Name="GetRecordingCopyTransferQueueSummaryText()" Sym="NGDLQ-1049">
                           <Text Name="" Sym="NGDLQ-1050"/>
                          </Action>
+                         <Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 1" Sym="NGDLQ-1720">
+                          <Action Name="&quot;\nItem 1:&quot;" Sym="NGDLQ-1721">
+                           <Text Name="" Sym="NGDLQ-1722"/>
+                          </Action>
+                          <Action Name="GetRecordingCopyTransferQueueItemDetailText(1)" Sym="NGDLQ-1723">
+                           <Text Name="" Sym="NGDLQ-1724"/>
+                          </Action>
+                         </Conditional>
+                         <Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 2" Sym="NGDLQ-1725">
+                          <Action Name="&quot;\nItem 2:&quot;" Sym="NGDLQ-1726">
+                           <Text Name="" Sym="NGDLQ-1727"/>
+                          </Action>
+                          <Action Name="GetRecordingCopyTransferQueueItemDetailText(2)" Sym="NGDLQ-1728">
+                           <Text Name="" Sym="NGDLQ-1729"/>
+                          </Action>
+                         </Conditional>
+                         <Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 3" Sym="NGDLQ-1730">
+                          <Action Name="&quot;\nItem 3:&quot;" Sym="NGDLQ-1731">
+                           <Text Name="" Sym="NGDLQ-1732"/>
+                          </Action>
+                          <Action Name="GetRecordingCopyTransferQueueItemDetailText(3)" Sym="NGDLQ-1733">
+                           <Text Name="" Sym="NGDLQ-1734"/>
+                          </Action>
+                         </Conditional>
+                         <Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 4" Sym="NGDLQ-1740">
+                          <Action Name="&quot;\n(&quot; + (GetRecordingCopyTransferQueueItemCount() - 3) + &quot; more queued, see Raw JSON)&quot;" Sym="NGDLQ-1741">
+                           <Text Name="" Sym="NGDLQ-1742"/>
+                          </Action>
+                         </Conditional>
+                         <Item Name="Show raw snapshot JSON" Sym="NGDLQ-1750">
+                          <OptionsMenu Name="Raw Queue Snapshot" Sym="NGDLQ-1751">
+                           <IgnoreThemeProps>false</IgnoreThemeProps>
+                           <Action Name="GetRecordingCopyTransferQueueSnapshot()" Sym="NGDLQ-1752">
+                            <Text Name="" Sym="NGDLQ-1753"/>
+                           </Action>
+                           <Item Name="Close" Sym="NGDLQ-1754">
+                            <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1755"/>
+                           </Item>
+                           <Theme Ref="954" Name="OptionsConfirmTheme"/>
+                          </OptionsMenu>
+                         </Item>
                          <Item Name="Close" Sym="NGDLQ-1051">
                           <Action Name="CloseOptionsMenu()" Sym="NGDLQ-1052"/>
                          </Item>
