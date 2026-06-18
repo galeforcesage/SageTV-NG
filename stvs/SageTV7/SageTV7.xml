@@ -149404,44 +149404,111 @@
                                     <IgnoreThemeProps>true</IgnoreThemeProps>
                                     <BackgroundComponent>false</BackgroundComponent>
                                     <MouseTransparency>false</MouseTransparency>
-                                    <Text Name="Username:" Sym="BASE-47324-AUTH-USER-LABEL">
+                                    <Panel Name="UserRow" Sym="BASE-47324-AUTH-USER-ROW">
+                                     <Layout>Horizontal</Layout>
+                                     <FixedWidth>1.0</FixedWidth>
+                                     <FixedHeight>0.10</FixedHeight>
+                                     <PadX>0.01</PadX>
                                      <IgnoreThemeProps>true</IgnoreThemeProps>
-                                     <TextShadow>false</TextShadow>
-                                    </Text>
-                                    <TextInput Name="SMBAuthUsername" Sym="BASE-47324-AUTH-USER-INPUT">
-                                     <HideText>false</HideText>
-                                     <IgnoreThemeProps>false</IgnoreThemeProps>
                                      <BackgroundComponent>false</BackgroundComponent>
-                                    </TextInput>
-                                    <Text Name="Password:" Sym="BASE-47324-AUTH-PASS-LABEL">
+                                     <Text Name="Username:" Sym="BASE-47324-AUTH-USER-LABEL">
+                                      <FixedWidth>0.28</FixedWidth>
+                                      <TextAlignment>0.0</TextAlignment>
+                                      <VerticalAlignment>0.5</VerticalAlignment>
+                                      <IgnoreThemeProps>true</IgnoreThemeProps>
+                                      <TextShadow>false</TextShadow>
+                                     </Text>
+                                     <TextInput Name="SMBAuthUsername" Sym="BASE-47324-AUTH-USER-INPUT">
+                                      <FixedWidth>0.72</FixedWidth>
+                                      <FixedHeight>1.0</FixedHeight>
+                                      <Insets>0.01</Insets>
+                                      <VerticalAlignment>0.5</VerticalAlignment>
+                                      <AutosizeText>false</AutosizeText>
+                                      <WrapText>false</WrapText>
+                                      <HideText>false</HideText>
+                                      <TextShadow>false</TextShadow>
+                                      <IgnoreThemeProps>true</IgnoreThemeProps>
+                                      <BackgroundComponent>false</BackgroundComponent>
+                                      <FocusableCondition>true</FocusableCondition>
+                                      <Shape Ref="941" Name="InputBorder"/>
+                                      <Listener Ref="17240" Name="Stop - Backspace"/>
+                                      <Listener Ref="17209" Name="Play - Accept current ..."/>
+                                      <Listener Ref="17214" Name="RawKeyboard"/>
+                                     </TextInput>
+                                    </Panel>
+                                    <Panel Name="PassRow" Sym="BASE-47324-AUTH-PASS-ROW">
+                                     <Layout>Horizontal</Layout>
+                                     <FixedWidth>1.0</FixedWidth>
+                                     <FixedHeight>0.10</FixedHeight>
+                                     <PadX>0.01</PadX>
                                      <IgnoreThemeProps>true</IgnoreThemeProps>
-                                     <TextShadow>false</TextShadow>
-                                    </Text>
-                                    <Conditional Name="SMBAuthShowPassword" Sym="BASE-47324-AUTH-SHOW-COND">
-                                     <Branch Name="true" Sym="BASE-47324-AUTH-SHOW-TRUE">
-                                      <TextInput ID="53230" Name="SMBAuthPassword" Sym="BASE-47324-AUTH-PASS-SHOW">
-                                       <HideText>false</HideText>
-                                       <IgnoreThemeProps>false</IgnoreThemeProps>
-                                       <BackgroundComponent>false</BackgroundComponent>
-                                      </TextInput>
-                                     </Branch>
-                                     <Branch Name="false" Sym="BASE-47324-AUTH-SHOW-FALSE">
-                                      <TextInput Ref="53230" Name="SMBAuthPassword" Sym="BASE-47324-AUTH-PASS-HIDE">
-                                       <HideText>true</HideText>
-                                       <IgnoreThemeProps>false</IgnoreThemeProps>
-                                       <BackgroundComponent>false</BackgroundComponent>
-                                      </TextInput>
-                                     </Branch>
-                                    </Conditional>
-                                    <Text Name="Domain (optional):" Sym="BASE-47324-AUTH-DOMAIN-LABEL">
-                                     <IgnoreThemeProps>true</IgnoreThemeProps>
-                                     <TextShadow>false</TextShadow>
-                                    </Text>
-                                    <TextInput Name="SMBAuthDomain" Sym="BASE-47324-AUTH-DOMAIN-INPUT">
-                                     <HideText>false</HideText>
-                                     <IgnoreThemeProps>false</IgnoreThemeProps>
                                      <BackgroundComponent>false</BackgroundComponent>
-                                    </TextInput>
+                                     <Text Name="Password:" Sym="BASE-47324-AUTH-PASS-LABEL">
+                                      <FixedWidth>0.28</FixedWidth>
+                                      <TextAlignment>0.0</TextAlignment>
+                                      <VerticalAlignment>0.5</VerticalAlignment>
+                                      <IgnoreThemeProps>true</IgnoreThemeProps>
+                                      <TextShadow>false</TextShadow>
+                                     </Text>
+                                     <Conditional Name="SMBAuthShowPassword" Sym="BASE-47324-AUTH-SHOW-COND">
+                                      <Branch Name="true" Sym="BASE-47324-AUTH-SHOW-TRUE">
+                                       <TextInput ID="53230" Name="SMBAuthPassword" Sym="BASE-47324-AUTH-PASS-SHOW">
+                                        <FixedWidth>0.72</FixedWidth>
+                                        <FixedHeight>1.0</FixedHeight>
+                                        <Insets>0.01</Insets>
+                                        <VerticalAlignment>0.5</VerticalAlignment>
+                                        <AutosizeText>false</AutosizeText>
+                                        <WrapText>false</WrapText>
+                                        <HideText>false</HideText>
+                                        <TextShadow>false</TextShadow>
+                                        <IgnoreThemeProps>true</IgnoreThemeProps>
+                                        <BackgroundComponent>false</BackgroundComponent>
+                                        <FocusableCondition>true</FocusableCondition>
+                                        <Shape Ref="941" Name="InputBorder"/>
+                                        <Listener Ref="17240" Name="Stop - Backspace"/>
+                                        <Listener Ref="17209" Name="Play - Accept current ..."/>
+                                        <Listener Ref="17214" Name="RawKeyboard"/>
+                                       </TextInput>
+                                      </Branch>
+                                      <Branch Name="false" Sym="BASE-47324-AUTH-SHOW-FALSE">
+                                       <TextInput Ref="53230" Name="SMBAuthPassword" Sym="BASE-47324-AUTH-PASS-HIDE">
+                                        <HideText>true</HideText>
+                                       </TextInput>
+                                      </Branch>
+                                     </Conditional>
+                                    </Panel>
+                                    <Panel Name="DomainRow" Sym="BASE-47324-AUTH-DOMAIN-ROW">
+                                     <Layout>Horizontal</Layout>
+                                     <FixedWidth>1.0</FixedWidth>
+                                     <FixedHeight>0.10</FixedHeight>
+                                     <PadX>0.01</PadX>
+                                     <IgnoreThemeProps>true</IgnoreThemeProps>
+                                     <BackgroundComponent>false</BackgroundComponent>
+                                     <Text Name="Domain (optional):" Sym="BASE-47324-AUTH-DOMAIN-LABEL">
+                                      <FixedWidth>0.28</FixedWidth>
+                                      <TextAlignment>0.0</TextAlignment>
+                                      <VerticalAlignment>0.5</VerticalAlignment>
+                                      <IgnoreThemeProps>true</IgnoreThemeProps>
+                                      <TextShadow>false</TextShadow>
+                                     </Text>
+                                     <TextInput Name="SMBAuthDomain" Sym="BASE-47324-AUTH-DOMAIN-INPUT">
+                                      <FixedWidth>0.72</FixedWidth>
+                                      <FixedHeight>1.0</FixedHeight>
+                                      <Insets>0.01</Insets>
+                                      <VerticalAlignment>0.5</VerticalAlignment>
+                                      <AutosizeText>false</AutosizeText>
+                                      <WrapText>false</WrapText>
+                                      <HideText>false</HideText>
+                                      <TextShadow>false</TextShadow>
+                                      <IgnoreThemeProps>true</IgnoreThemeProps>
+                                      <BackgroundComponent>false</BackgroundComponent>
+                                      <FocusableCondition>true</FocusableCondition>
+                                      <Shape Ref="941" Name="InputBorder"/>
+                                      <Listener Ref="17240" Name="Stop - Backspace"/>
+                                      <Listener Ref="17209" Name="Play - Accept current ..."/>
+                                      <Listener Ref="17214" Name="RawKeyboard"/>
+                                     </TextInput>
+                                    </Panel>
                                     <Panel Name="ShowPasswordRow" Sym="BASE-47324-AUTH-TOGGLE-PANEL">
                                      <Text Name="Show Password" Sym="BASE-47324-AUTH-TOGGLE-LABEL"/>
                                      <Item Name="Toggle" Sym="BASE-47324-AUTH-TOGGLE-BTN">
@@ -149724,7 +149791,7 @@
                                         <Panel Name="Syms-Row1" Sym="BASE-47324-KEYBOARD-SYMBOLS-R1">
                                          <Layout>HorizontalGrid</Layout>
                                          <FixedWidth>1.0</FixedWidth>
-                                         <NumCols>9</NumCols>
+                                         <NumCols>10</NumCols>
                                          <PadX>0.005</PadX>
                                          <PadY>0.003</PadY>
                                          <WrapHNav>true</WrapHNav>
@@ -149735,29 +149802,33 @@
                                          <Item Name="_" Sym="BASE-47324-K-Syms-5F-11"><Action Name="SMBAuthPendingChar = &quot;_&quot;" Sym="BASE-47324-K-Syms-5F-11-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
                                          <Item Name="+" Sym="BASE-47324-K-Syms-2B-12"><Action Name="SMBAuthPendingChar = &quot;+&quot;" Sym="BASE-47324-K-Syms-2B-12-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
                                          <Item Name="=" Sym="BASE-47324-K-Syms-3D-13"><Action Name="SMBAuthPendingChar = &quot;=&quot;" Sym="BASE-47324-K-Syms-3D-13-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name=";" Sym="BASE-47324-K-Syms-3B-14"><Action Name="SMBAuthPendingChar = &quot;;&quot;" Sym="BASE-47324-K-Syms-3B-14-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name=":" Sym="BASE-47324-K-Syms-3A-15"><Action Name="SMBAuthPendingChar = &quot;:&quot;" Sym="BASE-47324-K-Syms-3A-15-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="&apos;" Sym="BASE-47324-K-Syms-27-16"><Action Name="SMBAuthPendingChar = &quot;&apos;&quot;" Sym="BASE-47324-K-Syms-27-16-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="&quot;" Sym="BASE-47324-K-Syms-22-17"><Action Name="SMBAuthPendingChar = &quot;&quot;&quot;" Sym="BASE-47324-K-Syms-22-17-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="," Sym="BASE-47324-K-Syms-2C-18"><Action Name="SMBAuthPendingChar = &quot;,&quot;" Sym="BASE-47324-K-Syms-2C-18-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
+                                         <Item Name="[" Sym="BASE-47324-K-Syms-5B-14"><Action Name="SMBAuthPendingChar = &quot;[&quot;" Sym="BASE-47324-K-Syms-5B-14-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
+                                         <Item Name="]" Sym="BASE-47324-K-Syms-5D-15"><Action Name="SMBAuthPendingChar = &quot;]&quot;" Sym="BASE-47324-K-Syms-5D-15-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
+                                         <Item Name="{" Sym="BASE-47324-K-Syms-7B-16"><Action Name="SMBAuthPendingChar = &quot;{&quot;" Sym="BASE-47324-K-Syms-7B-16-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
+                                         <Item Name="}" Sym="BASE-47324-K-Syms-7D-17"><Action Name="SMBAuthPendingChar = &quot;}&quot;" Sym="BASE-47324-K-Syms-7D-17-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
+                                         <Item Name="|" Sym="BASE-47324-K-Syms-7C-18"><Action Name="SMBAuthPendingChar = &quot;|&quot;" Sym="BASE-47324-K-Syms-7C-18-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
+                                         <Item Name="~" Sym="BASE-47324-K-Syms-7E-19"><Action Name="SMBAuthPendingChar = &quot;~&quot;" Sym="BASE-47324-K-Syms-7E-19-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
                                         </Panel>
                                         <Panel Name="Syms-Row2" Sym="BASE-47324-KEYBOARD-SYMBOLS-R2">
                                          <Layout>HorizontalGrid</Layout>
                                          <FixedWidth>1.0</FixedWidth>
-                                         <NumCols>7</NumCols>
+                                         <NumCols>10</NumCols>
                                          <PadX>0.005</PadX>
                                          <PadY>0.003</PadY>
                                          <WrapHNav>true</WrapHNav>
                                          <WrapVNav>false</WrapVNav>
                                          <IgnoreThemeProps>true</IgnoreThemeProps>
                                          <BackgroundComponent>false</BackgroundComponent>
-                                         <Item Name="." Sym="BASE-47324-K-Syms-2E-20"><Action Name="SMBAuthPendingChar = &quot;.&quot;" Sym="BASE-47324-K-Syms-2E-20-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="/" Sym="BASE-47324-K-Syms-2F-21"><Action Name="SMBAuthPendingChar = &quot;/&quot;" Sym="BASE-47324-K-Syms-2F-21-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="\" Sym="BASE-47324-K-Syms-5C-22"><Action Name="SMBAuthPendingChar = &quot;\&quot;" Sym="BASE-47324-K-Syms-5C-22-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="?" Sym="BASE-47324-K-Syms-3F-23"><Action Name="SMBAuthPendingChar = &quot;?&quot;" Sym="BASE-47324-K-Syms-3F-23-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="&lt;" Sym="BASE-47324-K-Syms-3C-24"><Action Name="SMBAuthPendingChar = &quot;&lt;&quot;" Sym="BASE-47324-K-Syms-3C-24-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="&gt;" Sym="BASE-47324-K-Syms-3E-25"><Action Name="SMBAuthPendingChar = &quot;&gt;&quot;" Sym="BASE-47324-K-Syms-3E-25-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
-                                         <Item Name="[" Sym="BASE-47324-K-Syms-5B-26"><Action Name="SMBAuthPendingChar = &quot;[&quot;" Sym="BASE-47324-K-Syms-5B-26-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
+                                         <Item Name=";" Sym="BASE-47324-K-Syms-3B-20"><Action Name="SMBAuthPendingChar = &quot;;&quot;" Sym="BASE-47324-K-Syms-3B-20-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
+                                         <Item Name=":" Sym="BASE-47324-K-Syms-3A-21"><Action Name="SMBAuthPendingChar = &quot;:&quot;" Sym="BASE-47324-K-Syms-3A-21-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
+                                         <Item Name="&apos;" Sym="BASE-47324-K-Syms-27-22"><Action Name="SMBAuthPendingChar = &quot;&apos;&quot;" Sym="BASE-47324-K-Syms-27-22-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
+                                         <Item Name="&quot;" Sym="BASE-47324-K-Syms-22-23"><Action Name="SMBAuthPendingChar = &quot;&quot;&quot;" Sym="BASE-47324-K-Syms-22-23-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
+                                         <Item Name="," Sym="BASE-47324-K-Syms-2C-24"><Action Name="SMBAuthPendingChar = &quot;,&quot;" Sym="BASE-47324-K-Syms-2C-24-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
+                                         <Item Name="." Sym="BASE-47324-K-Syms-2E-25"><Action Name="SMBAuthPendingChar = &quot;.&quot;" Sym="BASE-47324-K-Syms-2E-25-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
+                                         <Item Name="/" Sym="BASE-47324-K-Syms-2F-26"><Action Name="SMBAuthPendingChar = &quot;/&quot;" Sym="BASE-47324-K-Syms-2F-26-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
+                                         <Item Name="\" Sym="BASE-47324-K-Syms-5C-27"><Action Name="SMBAuthPendingChar = &quot;\&quot;" Sym="BASE-47324-K-Syms-5C-27-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
+                                         <Item Name="&lt;" Sym="BASE-47324-K-Syms-3C-28"><Action Name="SMBAuthPendingChar = &quot;&lt;&quot;" Sym="BASE-47324-K-Syms-3C-28-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
+                                         <Item Name="&gt;" Sym="BASE-47324-K-Syms-3E-29"><Action Name="SMBAuthPendingChar = &quot;&gt;&quot;" Sym="BASE-47324-K-Syms-3E-29-SET"><Conditional Ref="73990" Name="SMBAuthField == 0"/></Action></Item>
                                         </Panel>
                                        </Panel>
                                       </Branch>
@@ -149771,7 +149842,13 @@
                                       <WrapVNav>false</WrapVNav>
                                       <IgnoreThemeProps>true</IgnoreThemeProps>
                                       <BackgroundComponent>false</BackgroundComponent>
-                                      <Item Name="Backspace" Sym="BASE-47324-KEY-BACKSPACE">
+                                      <Item Name="&#x21B9; Tab" Sym="BASE-47324-KEY-TAB">
+                                       <FixedWidth>0.20</FixedWidth>
+                                       <Action Name="SMBAuthField = (SMBAuthField + 1) % 3" Sym="BASE-47324-KEY-TAB-CYCLE">
+                                        <Action Name="Refresh()" Sym="BASE-47324-KEY-TAB-REFRESH"/>
+                                       </Action>
+                                      </Item>
+                                      <Item Name="&#x232B; Backspace" Sym="BASE-47324-KEY-BACKSPACE">
                                        <FixedWidth>0.30</FixedWidth>
                                        <Conditional Name="SMBAuthField == 0" Sym="BASE-47324-BS-COND0">
                                         <Branch Name="true" Sym="BASE-47324-BS-USER"><Action Name="SMBAuthUsername = If(Size(SMBAuthUsername) &gt; 0, Substring(SMBAuthUsername, 0, Size(SMBAuthUsername) - 1), SMBAuthUsername)" Sym="BASE-47324-BS-USER-ACT"/></Branch>
@@ -149783,10 +149860,20 @@
                                         </Branch>
                                        </Conditional>
                                       </Item>
-                                      <Item Name="Space" Sym="BASE-47324-KEY-SPACE">
+                                      <Item Name="&#x23B5; Space" Sym="BASE-47324-KEY-SPACE">
                                        <FixedWidth>0.30</FixedWidth>
                                        <Action Name="SMBAuthPendingChar = &quot; &quot;" Sym="BASE-47324-KEY-SPACE-SET">
                                         <Conditional Ref="73990" Name="SMBAuthField == 0"/>
+                                       </Action>
+                                      </Item>
+                                      <Item Name="&#x21B5; Enter" Sym="BASE-47324-KEY-ENTER">
+                                       <FixedWidth>0.30</FixedWidth>
+                                       <Action Name="SetSMBBrowseCredentials(SMBAuthUsername, SMBAuthPassword, SMBAuthDomain, false)" Sym="BASE-47324-KEY-ENTER-SET">
+                                        <Action Name="CurrentDirPath = SMBAuthHost" Sym="BASE-47324-KEY-ENTER-NAV">
+                                         <Action Name="SortedDirFiles = null" Sym="BASE-47324-KEY-ENTER-CLEAR">
+                                          <Action Name="CloseOptionsMenu()" Sym="BASE-47324-KEY-ENTER-CLOSE"/>
+                                         </Action>
+                                        </Action>
                                        </Action>
                                       </Item>
                                       <Item Name="Clear All" Sym="BASE-47324-KEY-CLEAR">
