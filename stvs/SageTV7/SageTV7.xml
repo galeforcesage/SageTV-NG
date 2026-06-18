@@ -149380,8 +149380,11 @@
                           </Action>
                          </Branch>
                          <Branch Name="false" Sym="BASE-47324">
-                          <Conditional Name="StringStartsWith(FolderCell + &quot;&quot;, &quot;smb://&quot;) &amp;&amp; !HasSMBCredentials(FolderCell)" Sym="BASE-47324-AUTH-CHECK">
+                          <Conditional Name="StringStartsWith(FolderCell + &quot;&quot;, &quot;smb://&quot;) &amp;&amp; (StringIndexOf(java_lang_Object_toString(FolderCell), &quot;@&quot;) == -1)" Sym="BASE-47324-AUTH-CHECK">
                            <Branch Name="true" Sym="BASE-47324-AUTH-NEEDED">
+                            <Conditional Name="NetworkPathPwdCache == null" Sym="BASE-47324-AUTH-CACHE-INIT-COND">
+                             <Action Name="AddGlobalContext(&quot;NetworkPathPwdCache&quot;, new_java_util_HashMap())" Sym="BASE-47324-AUTH-CACHE-INIT"/>
+                            </Conditional>
                             <Action Name="SMBAuthHost = FolderCell" Sym="BASE-47324-AUTH-HOST-SAVE">
                              <Action Name="SMBAuthUsername = &quot;&quot;" Sym="BASE-47324-AUTH-USER-INIT">
                               <Action Name="SMBAuthPassword = &quot;&quot;" Sym="BASE-47324-AUTH-PASS-INIT">
@@ -149846,12 +149849,23 @@
                                       </Item>
                                       <Item Name="&#x21B5; Enter" Sym="BASE-47324-KEY-ENTER">
                                        <FixedWidth>0.30</FixedWidth>
-                                       <Action Name="SetSMBBrowseCredentials(SMBAuthUsername, SMBAuthPassword, SMBAuthDomain, false)" Sym="BASE-47324-KEY-ENTER-SET">
-                                        <Action Name="CurrentDirPath = ReplaceAll(java_lang_Object_toString(SMBAuthHost), &quot;\\&quot;, &quot;/&quot;)" Sym="BASE-47324-KEY-ENTER-NAV">
-                                         <Action Ref="53218" Name="IsValidDirBrowserDir = true"/>
-                                         <Action Name="SortedDirFiles = null" Sym="BASE-47324-KEY-ENTER-CLEAR">
-                                          <Action Name="Refresh()" Sym="BASE-47324-KEY-ENTER-REFRESH">
-                                           <Action Name="CloseOptionsMenu()" Sym="BASE-47324-KEY-ENTER-CLOSE"/>
+                                       <Action Name="SMBAuthUserPart = If(Size(SMBAuthDomain) &gt; 0, SMBAuthDomain + &quot;;&quot; + SMBAuthUsername, SMBAuthUsername)" Sym="BASE-47324-KEY-ENTER-USERPART">
+                                        <Action Name="SMBAuthHostPath = Substring(java_lang_Object_toString(SMBAuthHost), 6, -1)" Sym="BASE-47324-KEY-ENTER-HOSTPATH">
+                                         <Action Name="SMBAuthHostKey = java_lang_Object_toString(SMBAuthHost)" Sym="BASE-47324-KEY-ENTER-HOSTKEY">
+                                          <Action Name="PrevSubgroup = GetSubgroup(NetworkPathPwdCache, SMBAuthHostKey)" Sym="BASE-47324-KEY-ENTER-LOOKUP">
+                                           <Conditional Name="PrevSubgroup != null" Sym="BASE-47324-KEY-ENTER-DROP-COND">
+                                            <Action Name="java_util_Map_remove(NetworkPathPwdCache, SMBAuthHostKey)" Sym="BASE-47324-KEY-ENTER-DROP"/>
+                                           </Conditional>
+                                           <Action Name="AddToGrouping(NetworkPathPwdCache, SMBAuthHostKey, DataUnion(SMBAuthUserPart, SMBAuthPassword))" Sym="BASE-47324-KEY-ENTER-CACHE">
+                                            <Action Name="CurrentDirPath = new_jcifs_smb_SmbFile(&quot;smb://&quot; + SMBAuthUserPart + &quot;:&quot; + SMBAuthPassword + &quot;@&quot; + SMBAuthHostPath)" Sym="BASE-47324-KEY-ENTER-NAV">
+                                             <Action Ref="53218" Name="IsValidDirBrowserDir = true"/>
+                                             <Action Name="SortedDirFiles = null" Sym="BASE-47324-KEY-ENTER-CLEAR">
+                                              <Action Name="Refresh()" Sym="BASE-47324-KEY-ENTER-REFRESH">
+                                               <Action Name="CloseOptionsMenu()" Sym="BASE-47324-KEY-ENTER-CLOSE"/>
+                                              </Action>
+                                             </Action>
+                                            </Action>
+                                           </Action>
                                           </Action>
                                          </Action>
                                         </Action>
@@ -149871,12 +149885,23 @@
                                     </Panel>
                                    </Panel>
                                    <Item Name="Send" Sym="BASE-47324-AUTH-SEND">
-                                    <Action Name="SetSMBBrowseCredentials(SMBAuthUsername, SMBAuthPassword, SMBAuthDomain, false)" Sym="BASE-47324-AUTH-SET-CREDS">
-                                     <Action Name="CurrentDirPath = ReplaceAll(java_lang_Object_toString(SMBAuthHost), &quot;\\&quot;, &quot;/&quot;)" Sym="BASE-47324-AUTH-NAVIGATE">
-                                      <Action Ref="53218" Name="IsValidDirBrowserDir = true"/>
-                                      <Action Name="SortedDirFiles = null" Sym="BASE-47324-AUTH-CLEAR-FILES">
-                                       <Action Name="Refresh()" Sym="BASE-47324-AUTH-REFRESH">
-                                        <Action Name="CloseOptionsMenu()" Sym="BASE-47324-AUTH-CLOSE-MENU"/>
+                                    <Action Name="SMBAuthUserPart = If(Size(SMBAuthDomain) &gt; 0, SMBAuthDomain + &quot;;&quot; + SMBAuthUsername, SMBAuthUsername)" Sym="BASE-47324-AUTH-USERPART">
+                                     <Action Name="SMBAuthHostPath = Substring(java_lang_Object_toString(SMBAuthHost), 6, -1)" Sym="BASE-47324-AUTH-HOSTPATH">
+                                      <Action Name="SMBAuthHostKey = java_lang_Object_toString(SMBAuthHost)" Sym="BASE-47324-AUTH-HOSTKEY">
+                                       <Action Name="PrevSubgroup = GetSubgroup(NetworkPathPwdCache, SMBAuthHostKey)" Sym="BASE-47324-AUTH-LOOKUP">
+                                        <Conditional Name="PrevSubgroup != null" Sym="BASE-47324-AUTH-DROP-COND">
+                                         <Action Name="java_util_Map_remove(NetworkPathPwdCache, SMBAuthHostKey)" Sym="BASE-47324-AUTH-DROP"/>
+                                        </Conditional>
+                                        <Action Name="AddToGrouping(NetworkPathPwdCache, SMBAuthHostKey, DataUnion(SMBAuthUserPart, SMBAuthPassword))" Sym="BASE-47324-AUTH-CACHE">
+                                         <Action Name="CurrentDirPath = new_jcifs_smb_SmbFile(&quot;smb://&quot; + SMBAuthUserPart + &quot;:&quot; + SMBAuthPassword + &quot;@&quot; + SMBAuthHostPath)" Sym="BASE-47324-AUTH-NAVIGATE">
+                                          <Action Ref="53218" Name="IsValidDirBrowserDir = true"/>
+                                          <Action Name="SortedDirFiles = null" Sym="BASE-47324-AUTH-CLEAR-FILES">
+                                           <Action Name="Refresh()" Sym="BASE-47324-AUTH-REFRESH">
+                                            <Action Name="CloseOptionsMenu()" Sym="BASE-47324-AUTH-CLOSE-MENU"/>
+                                           </Action>
+                                          </Action>
+                                         </Action>
+                                        </Action>
                                        </Action>
                                       </Action>
                                      </Action>
