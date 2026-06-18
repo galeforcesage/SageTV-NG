@@ -149434,6 +149434,7 @@
                                       <Listener Ref="17240" Name="Stop - Backspace"/>
                                       <Listener Ref="17209" Name="Play - Accept current ..."/>
                                       <Listener Ref="17214" Name="RawKeyboard"/>
+                                      <Hook Name="FocusGained" Sym="BASE-47324-AUTH-USER-FOCUS"><Action Name="SMBAuthField = 0" Sym="BASE-47324-AUTH-USER-FOCUS-SET"/></Hook>
                                      </TextInput>
                                     </Panel>
                                     <Panel Name="PassRow" Sym="BASE-47324-AUTH-PASS-ROW">
@@ -149468,6 +149469,7 @@
                                         <Listener Ref="17240" Name="Stop - Backspace"/>
                                         <Listener Ref="17209" Name="Play - Accept current ..."/>
                                         <Listener Ref="17214" Name="RawKeyboard"/>
+                                        <Hook Name="FocusGained" Sym="BASE-47324-AUTH-PASS-FOCUS"><Action Name="SMBAuthField = 1" Sym="BASE-47324-AUTH-PASS-FOCUS-SET"/></Hook>
                                        </TextInput>
                                       </Branch>
                                       <Branch Name="false" Sym="BASE-47324-AUTH-SHOW-FALSE">
@@ -149507,6 +149509,7 @@
                                       <Listener Ref="17240" Name="Stop - Backspace"/>
                                       <Listener Ref="17209" Name="Play - Accept current ..."/>
                                       <Listener Ref="17214" Name="RawKeyboard"/>
+                                      <Hook Name="FocusGained" Sym="BASE-47324-AUTH-DOMAIN-FOCUS"><Action Name="SMBAuthField = 2" Sym="BASE-47324-AUTH-DOMAIN-FOCUS-SET"/></Hook>
                                      </TextInput>
                                     </Panel>
                                     <Panel Name="ShowPasswordRow" Sym="BASE-47324-AUTH-TOGGLE-PANEL">
@@ -149536,25 +149539,6 @@
                                      <IgnoreThemeProps>true</IgnoreThemeProps>
                                      <BackgroundComponent>false</BackgroundComponent>
                                      <MouseTransparency>false</MouseTransparency>
-                                     <Panel Name="FieldRow" Sym="BASE-47324-FIELD-ROW">
-                                      <Text Name="Editing:" Sym="BASE-47324-FIELD-LABEL"/>
-                                      <Item Name="Field" Sym="BASE-47324-FIELD-BTN">
-                                       <FixedWidth>0.30</FixedWidth>
-                                       <Action Name="SMBAuthField = (SMBAuthField + 1) % 3" Sym="BASE-47324-FIELD-CYCLE">
-                                        <Action Name="Refresh()" Sym="BASE-47324-FIELD-REFRESH"/>
-                                       </Action>
-                                       <Conditional Name="SMBAuthField == 0" Sym="BASE-47324-FIELD-DISP-USER">
-                                        <Branch Name="true" Sym="BASE-47324-FIELD-DISP-USER-T"><Text Name="Username" Sym="BASE-47324-FIELD-USER-TEXT"/></Branch>
-                                       </Conditional>
-                                       <Conditional Name="SMBAuthField == 1" Sym="BASE-47324-FIELD-DISP-PASS">
-                                        <Branch Name="true" Sym="BASE-47324-FIELD-DISP-PASS-T"><Text Name="Password" Sym="BASE-47324-FIELD-PASS-TEXT"/></Branch>
-                                       </Conditional>
-                                       <Conditional Name="SMBAuthField == 2" Sym="BASE-47324-FIELD-DISP-DOM">
-                                        <Branch Name="true" Sym="BASE-47324-FIELD-DISP-DOM-T"><Text Name="Domain" Sym="BASE-47324-FIELD-DOM-TEXT"/></Branch>
-                                       </Conditional>
-                                       <Theme Ref="5454" Name="WideLeftRowPanelTheme ..."/>
-                                      </Item>
-                                     </Panel>
                                      <Panel Name="KeyboardModeRow" Sym="BASE-47324-KEYBOARD-MODE">
                                       <Text Name="Mode:" Sym="BASE-47324-KEYBOARD-MODE-LABEL"/>
                                       <Item Name="NextMode" Sym="BASE-47324-KEYBOARD-MODE-BTN">
@@ -149842,12 +149826,6 @@
                                       <WrapVNav>false</WrapVNav>
                                       <IgnoreThemeProps>true</IgnoreThemeProps>
                                       <BackgroundComponent>false</BackgroundComponent>
-                                      <Item Name="&#x21B9; Tab" Sym="BASE-47324-KEY-TAB">
-                                       <FixedWidth>0.20</FixedWidth>
-                                       <Action Name="SMBAuthField = (SMBAuthField + 1) % 3" Sym="BASE-47324-KEY-TAB-CYCLE">
-                                        <Action Name="Refresh()" Sym="BASE-47324-KEY-TAB-REFRESH"/>
-                                       </Action>
-                                      </Item>
                                       <Item Name="&#x232B; Backspace" Sym="BASE-47324-KEY-BACKSPACE">
                                        <FixedWidth>0.30</FixedWidth>
                                        <Conditional Name="SMBAuthField == 0" Sym="BASE-47324-BS-COND0">
@@ -149869,9 +149847,12 @@
                                       <Item Name="&#x21B5; Enter" Sym="BASE-47324-KEY-ENTER">
                                        <FixedWidth>0.30</FixedWidth>
                                        <Action Name="SetSMBBrowseCredentials(SMBAuthUsername, SMBAuthPassword, SMBAuthDomain, false)" Sym="BASE-47324-KEY-ENTER-SET">
-                                        <Action Name="CurrentDirPath = SMBAuthHost" Sym="BASE-47324-KEY-ENTER-NAV">
+                                        <Action Name="CurrentDirPath = ReplaceAll(java_lang_Object_toString(SMBAuthHost), &quot;\\&quot;, &quot;/&quot;)" Sym="BASE-47324-KEY-ENTER-NAV">
+                                         <Action Ref="53218" Name="IsValidDirBrowserDir = true"/>
                                          <Action Name="SortedDirFiles = null" Sym="BASE-47324-KEY-ENTER-CLEAR">
-                                          <Action Name="CloseOptionsMenu()" Sym="BASE-47324-KEY-ENTER-CLOSE"/>
+                                          <Action Name="Refresh()" Sym="BASE-47324-KEY-ENTER-REFRESH">
+                                           <Action Name="CloseOptionsMenu()" Sym="BASE-47324-KEY-ENTER-CLOSE"/>
+                                          </Action>
                                          </Action>
                                         </Action>
                                        </Action>
@@ -149891,9 +149872,12 @@
                                    </Panel>
                                    <Item Name="Send" Sym="BASE-47324-AUTH-SEND">
                                     <Action Name="SetSMBBrowseCredentials(SMBAuthUsername, SMBAuthPassword, SMBAuthDomain, false)" Sym="BASE-47324-AUTH-SET-CREDS">
-                                     <Action Name="CurrentDirPath = SMBAuthHost" Sym="BASE-47324-AUTH-NAVIGATE">
+                                     <Action Name="CurrentDirPath = ReplaceAll(java_lang_Object_toString(SMBAuthHost), &quot;\\&quot;, &quot;/&quot;)" Sym="BASE-47324-AUTH-NAVIGATE">
+                                      <Action Ref="53218" Name="IsValidDirBrowserDir = true"/>
                                       <Action Name="SortedDirFiles = null" Sym="BASE-47324-AUTH-CLEAR-FILES">
-                                       <Action Name="CloseOptionsMenu()" Sym="BASE-47324-AUTH-CLOSE-MENU"/>
+                                       <Action Name="Refresh()" Sym="BASE-47324-AUTH-REFRESH">
+                                        <Action Name="CloseOptionsMenu()" Sym="BASE-47324-AUTH-CLOSE-MENU"/>
+                                       </Action>
                                       </Action>
                                      </Action>
                                     </Action>
