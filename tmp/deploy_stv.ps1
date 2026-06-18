@@ -4,8 +4,8 @@
 param([switch]$Force)
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\_version_gate.ps1"
-$host_addr = '<DEPLOY_HOST>'
-$local = 'C:\Users\ted\SageTV-mine\stvs\SageTV7\SageTV7.xml'
+$host_addr = $script:HostAddr
+$local = Join-Path $script:RepoRoot 'stvs\SageTV7\SageTV7.xml'
 
 # Auto-snapshot working tree (recoverable via refs/wip-safety/*)
 & "$PSScriptRoot\snapshot_safety.ps1" -Message 'pre-deploy_stv' -Quiet

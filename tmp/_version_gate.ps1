@@ -1,8 +1,8 @@
 # _version_gate.ps1 - shared helpers for BUILD_VERSION drift detection.
 # Dot-source from deploy_*.ps1: . "$PSScriptRoot\_version_gate.ps1"
 
-$script:HostAddr = '<DEPLOY_HOST>'
-$script:RepoRoot = 'C:\Users\ted\SageTV-mine'
+$script:HostAddr = if ($env:SAGE_DEPLOY_HOST) { $env:SAGE_DEPLOY_HOST } else { 'sagetv@<HOST>' }
+$script:RepoRoot = if ($env:SAGE_REPO_ROOT)   { $env:SAGE_REPO_ROOT }   else { (Split-Path -Parent $PSScriptRoot) }
 
 function Get-RepoBuildVersion {
     $path = Join-Path $script:RepoRoot 'java\sage\SageConstants.java'
