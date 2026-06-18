@@ -37,7 +37,7 @@ pwsh ./scripts/safe-stv-edit.ps1 \
   -FindText 'res = jcifs_smb_SmbFile_isDirectory(FolderCell)' \
   -ReplaceText 'res = true' \
   -Deploy \
-  -DeployHost <HOST_IP> \
+  -DeployHost <DEPLOY_HOST_IP> \
   -Container sagetv-mine
 ```
 
@@ -47,6 +47,7 @@ pwsh ./scripts/safe-stv-edit.ps1 \
 - Avoid regex mode unless required (`-UseRegex`).
 - Default behavior requires exactly one match for FindText in the bounded block.
 - Use `-AllowMultiple` only when intentionally replacing multiple occurrences.
+- Deploy scripts in `tmp/` read `$env:SAGE_DEPLOY_HOST` (e.g. `user@host`) and `$env:SAGE_REPO_ROOT`. Set these in your PowerShell profile; do not hardcode them.
 
 ---
 

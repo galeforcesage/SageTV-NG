@@ -16,8 +16,8 @@ param(
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\_version_gate.ps1"
 
-$host_addr = '<DEPLOY_HOST>'
-$jar       = 'C:\Users\ted\SageTV-mine\build\release\Sage.jar'
+$host_addr = $script:HostAddr
+$jar       = Join-Path $script:RepoRoot 'build\release\Sage.jar'
 
 # ---- [0/7] Auto-snapshot working tree (recoverable via refs/wip-safety/*) ----
 & "$PSScriptRoot\snapshot_safety.ps1" -Message 'pre-deploy_jar' -Quiet
