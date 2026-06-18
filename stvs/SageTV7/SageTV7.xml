@@ -148629,13 +148629,18 @@
            </Conditional>
            <Conditional Name="CurrentDirPath == null" Sym="BASE-46064">
             <Branch Name="false" Sym="BASE-46065">
-             <Action Name="DirPathStr = java_lang_Object_toString(CurrentDirPath)" Sym="BASE-46066-STR">
-              <Action Name="DirPathAtPos = StringIndexOf(DirPathStr, &quot;@&quot;)" Sym="BASE-46066-AT">
-               <Action Name="&quot;Current: &quot; + If(DirPathAtPos &gt; 0 &amp;&amp; StringStartsWith(DirPathStr, &quot;smb://&quot;), &quot;smb://&quot; + Substring(DirPathStr, DirPathAtPos + 1, -1), DirPathStr)" Sym="BASE-46066">
+             <Conditional Name="StringIndexOf(java_lang_Object_toString(CurrentDirPath), &quot;@&quot;) &gt; 0" Sym="BASE-46066-COND">
+              <Branch Name="true" Sym="BASE-46066-STRIP">
+               <Action Name="&quot;Current: smb://&quot; + Substring(java_lang_Object_toString(CurrentDirPath), StringIndexOf(java_lang_Object_toString(CurrentDirPath), &quot;@&quot;) + 1, -1)" Sym="BASE-46066">
                 <Text Ref="52920" Name=""/>
                </Action>
-              </Action>
-             </Action>
+              </Branch>
+              <Branch Name="false" Sym="BASE-46066-PLAIN">
+               <Action Name="&quot;Current: &quot; + CurrentDirPath" Sym="BASE-46066-PLAIN-ACT">
+                <Text Ref="52920" Name=""/>
+               </Action>
+              </Branch>
+             </Conditional>
             </Branch>
             <Branch Name="true" Sym="BASE-46068">
              <Conditional Name="RootDirPathStyle" Sym="BASE-46069">
