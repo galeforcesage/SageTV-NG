@@ -17,7 +17,7 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\_version_gate.ps1"
 
 $host_addr = '<DEPLOY_HOST>'
-$jar       = 'C:\Users\ted\SageTV-mine\build\libs\Sage.jar'
+$jar       = 'C:\Users\ted\SageTV-mine\build\release\Sage.jar'
 
 # ---- [0/7] Auto-snapshot working tree (recoverable via refs/wip-safety/*) ----
 & "$PSScriptRoot\snapshot_safety.ps1" -Message 'pre-deploy_jar' -Quiet
@@ -28,12 +28,12 @@ if (-not $SkipBuild) {
     Push-Location 'C:\Users\ted\SageTV-mine'
     try {
         $env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.10.7-hotspot'
-        & .\gradlew.bat sageJar
+        & .\gradlew.bat --offline -x test sageJar
         if ($LASTEXITCODE -ne 0) { Write-Host 'gradle build failed' -ForegroundColor Red; exit 1 }
     } finally { Pop-Location }
     Write-Host ''
 } else {
-    Write-Host '=== [0/7] -SkipBuild: reusing existing build/libs/Sage.jar ===' -ForegroundColor Yellow
+    Write-Host '=== [0/7] -SkipBuild: reusing existing build/release/Sage.jar ===' -ForegroundColor Yellow
     Write-Host ''
 }
 
@@ -102,12 +102,23 @@ Write-Host ''
 
 # ---- [6/7] startsage ---------------------------------------------------------
 Write-Host '=== [6/7] startsage ===' -ForegroundColor Cyan
-ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker exec sagetv-mine /opt/sagetv/server/startsage; sleep 4; (docker exec sagetv-mine pgrep -x java >/dev/null && echo "[ok] java is up (pid=$(docker exec sagetv-mine pgrep -x java))") || echo "[warn] java did not come up"'
+ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker exec sagetv-mine /opt/sagetv/server/startsage'
+Start-Sleep -Seconds 4
+$javaPid = ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker exec sagetv-mine pgrep -x java'
+if ($javaPid) {
+    Write-Host "[ok] java is up (pid=$javaPid)" -ForegroundColor Green
+} else {
+    Write-Host '[warn] java did not come up' -ForegroundColor Yellow
+}
 Write-Host ''
 
-# ---- [7/7] post-start sanity -------------------------------------------------
+# ---- [7/7] post-start sanity + stamp DEPLOYED_COMMIT -------------------------
 Write-Host '=== [7/7] post-start sanity ===' -ForegroundColor Cyan
-ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker exec sagetv-mine sh -c "ls -l /opt/sagetv/server/sagetv_0.txt; tail -3 /opt/sagetv/server/sagetv_0.txt 2>/dev/null"'
+ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker exec sagetv-mine ls -l /opt/sagetv/server/sagetv_0.txt'
+ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker exec sagetv-mine tail -3 /opt/sagetv/server/sagetv_0.txt'
+$sha = (git -C 'C:\Users\ted\SageTV-mine' rev-parse HEAD).Trim()
+ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr "docker exec sagetv-mine bash -c 'echo $sha > /opt/sagetv/server/DEPLOYED_COMMIT'"
+Write-Host "[ok] stamped DEPLOYED_COMMIT = $sha" -ForegroundColor Green
 Write-Host ''
 
 Write-Host '=== Deploy complete ===' -ForegroundColor Green
