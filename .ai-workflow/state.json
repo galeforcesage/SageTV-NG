@@ -16,12 +16,12 @@
   "human_gate_files": [],
   "human_gate_required": false,
   "human_gate_type": "",
-  "last_actor": "user",
+  "last_actor": "test_runner",
   "last_runner_step": "",
   "last_stop_timestamp": "2026-06-20T03:14:16Z",
-  "last_test_result": "passed",
+  "last_test_result": "running",
   "last_verified_command": "",
-  "next_actor": "ready_commit",
+  "next_actor": "user",
   "next_instruction": "",
   "phase": "Phase 1",
   "primary_lane": "generic_code",
@@ -38,5 +38,6 @@
   "stv_access_status": "not_started",
   "task": "Improve stv_deduplicator report clarity and dry-run safety",
   "user_entry_points": [],
-  "version": 1
+  "version": 1,
+  "last_deployed_branch": "phase1-harness-milestone1"
 }

@@ -3,6 +3,7 @@ import json
 import subprocess
 import sys
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,8 +27,41 @@ def save_state(state):
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
 def log_session(msg):
+    SESSION_LOG.parent.mkdir(parents=True, exist_ok=True)
     with SESSION_LOG.open("a", encoding="utf-8") as fh:
         fh.write(f"- [{now_iso()}] {msg}\n")
+
+# ---------------- STATUS ----------------
+
+def cmd_status(args):
+    state = load_state()
+
+    print("=== AIWF STATUS ===")
+
+    print(f"Project : {state.get('project', '')}")
+    print(f"Branch  : {state.get('branch', '')}")
+    print(f"Phase   : {state.get('phase', '')}")
+    print(f"Task    : {state.get('task', '')}")
+
+    print("")
+    print(f"Status          : {state.get('status', '')}")
+    print(f"Last actor      : {state.get('last_actor', '')}")
+    print(f"Next actor      : {state.get('next_actor', '')}")
+
+    print("")
+    print(f"Last deployed   : {state.get('last_deployed_branch', '(none)')}")
+    print(f"Safe to commit  : {state.get('safe_to_commit', False)}")
+    print(f"Safe to push    : {state.get('safe_to_push', False)}")
+
+    print("")
+    print(f"Retry count     : {state.get('retry_count', 0)}/{state.get('retry_limit', 0)}")
+
+    # Optional: full debug view
+    if "--json" in args:
+        print("\n--- RAW JSON ---")
+        print(json.dumps(state, indent=2))
+
+    return 0
 
 # ---------------- TEST ----------------
 
@@ -39,8 +73,7 @@ def cmd_test(args):
     print("=== TEST PHASE ===")
     print("- Load STV in SageTV")
     print("- Verify menus, playback, comskip")
-    print("")
-    print("Then run:")
+    print("\nThen run:")
     print("  aiwf pass")
     print("  aiwf fail")
     return 0
@@ -50,10 +83,12 @@ def cmd_pass(args):
     state["status"] = "tests_passed"
     save_state(state)
 
+    log_session("tests passed")
     print("✅ TESTS PASSED")
     return 0
 
 def cmd_fail(args):
+    log_session("tests failed")
     print("❌ TEST FAILED — returning to Aider")
     return 0
 
@@ -64,12 +99,19 @@ def cmd_deploy(args):
 
     print("=== DEPLOY PHASE ===")
 
+    # Detect branch
+    branch_result = subprocess.run(
+        ["git", "branch", "--show-current"],
+        capture_output=True, text=True
+    )
+    current_branch = branch_result.stdout.strip()
+
     server = os.getenv("AIWF_SERVER")
     user = os.getenv("AIWF_USER")
     container = os.getenv("AIWF_CONTAINER")
 
     if not server or not user or not container:
-        print("❌ Missing env vars: AIWF_SERVER, AIWF_USER, AIWF_CONTAINER")
+        print("❌ Missing env vars")
         return 1
 
     local_file = "stvs/SageTV7/SageTV7_dedup.xml"
@@ -89,7 +131,6 @@ def cmd_deploy(args):
         log_session("deploy failed: scp")
         return 1
 
-    # --- SSH deploy ---
     print("Stopping SageTV, backing up, deploying...")
 
     ssh_cmd = (
@@ -101,7 +142,7 @@ def cmd_deploy(args):
     )
 
     ssh = subprocess.run(
-        ["ssh", f"{user}@{server}", ssh_cmd],
+        ["ssh", "-T", f"{user}@{server}", ssh_cmd],
         capture_output=True, text=True
     )
 
@@ -113,21 +154,46 @@ def cmd_deploy(args):
 
     print(ssh.stdout)
 
-    # --- Verify SageTV started ---
+    # --- VERIFY WITH RETRY LOOP (✅ FIXED) ---
     print("Verifying SageTV started...")
 
     check_cmd = f'docker exec {container} bash -c "pgrep -f sagetv"'
-    check = subprocess.run(
-        ["ssh", f"{user}@{server}", check_cmd]
-    )
 
-    if check.returncode != 0:
-        print("❌ SageTV failed to start")
-        log_session("deploy failed: sagetv not running")
+    success = False
+
+    for attempt in range(5):
+        try:
+            check = subprocess.run(
+                ["ssh", "-T", f"{user}@{server}", check_cmd],
+                capture_output=True, text=True,
+                timeout=5
+            )
+        except subprocess.TimeoutExpired:
+            print(f"Retry {attempt+1}/5 (timeout)...")
+            time.sleep(2)
+            continue
+
+        output = check.stdout.strip()
+
+        if check.returncode == 0 and output:
+            print(output)
+            success = True
+            break
+
+        print(f"Retry {attempt+1}/5... waiting for SageTV")
+        time.sleep(2)
+
+    if not success:
+        print("❌ SageTV failed to start after retries")
+        log_session("deploy failed: sagetv not running (retry exhausted)")
         return 1
 
+    # Record state
+    state["last_deployed_branch"] = current_branch
     state["status"] = "deployed"
+
     save_state(state)
+    log_session(f"deployed branch: {current_branch}")
 
     print("✅ DEPLOY COMPLETE")
     print("Run: aiwf test")
@@ -137,12 +203,13 @@ def cmd_deploy(args):
 # ---------------- ROLLBACK ----------------
 
 def cmd_rollback(args):
-    print("Rollback not automated yet (manual backup restore)")
+    print("Rollback not automated yet")
     return 0
 
-# ---------------- MAIN ----------------
+# ---------------- DISPATCH ----------------
 
 DISPATCH = {
+    "status": cmd_status,
     "test": cmd_test,
     "pass": cmd_pass,
     "fail": cmd_fail,
