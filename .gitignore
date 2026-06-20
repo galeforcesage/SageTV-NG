@@ -1069,9 +1069,9 @@ native/SageWorkspace.VC.VC.opendb
 /nbproject/private/
 /nbbuild/
 /dist/
-f i x - s t p - c o n f i g . s h 
- 
- 
+f i x - s t p - c o n f i g . s h 
+ 
+ 
 latest_log.txt
 vf_debug.txt
 .mailmap
@@ -1102,3 +1102,11 @@ build/*.sh
 /stvs/**/*.xml.current
 
 .aider*
+
+
+# SageTV local backups
+*.bak-*
+
+# Word temp/lock files
+docs/~*
+
