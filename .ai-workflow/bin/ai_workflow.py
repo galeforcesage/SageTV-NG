@@ -531,9 +531,9 @@ DISPATCH = {
     "copilot-next": cmd_copilot_next,
     "copilot-done": cmd_copilot_done,
     # Reserved for Milestone 2+.
-    "test": cmd_not_implemented,
-    "fail": cmd_not_implemented,
-    "pass": cmd_not_implemented,
+    "test": cmd_test,
+    "fail": cmd_fail,
+    "pass": cmd_pass,,
     "ready-commit": cmd_not_implemented,
     "pushed": cmd_not_implemented,
     "run-until-human": cmd_not_implemented,
@@ -560,6 +560,68 @@ def main(argv: list) -> int:
         return 2
     return handler(argv[2:])
 
+def cmd_test(args):
+    state = load_state()
+
+    state["status"] = "testing"
+    state["last_actor"] = "test_runner"
+    state["next_actor"] = "user"
+    state["last_test_result"] = "running"
+
+    save_state(state)
+    log_session("test: awaiting human validation")
+
+    print("=== TEST PHASE ===")
+    print("Run your manual validation:")
+    print("- Load STV in SageTV")
+    print("- Verify menus, playback, comskip")
+    print("")
+    print("Then run:")
+    print("  aiwf pass   (if good)")
+    print("  aiwf fail   (if issues)")
+    return 0
+
+
+def cmd_pass(args):
+    state = load_state()
+
+    state["status"] = "tests_passed"
+    state["last_actor"] = "user"
+    state["next_actor"] = "ready_commit"
+    state["last_test_result"] = "passed"
+    state["safe_to_commit"] = True
+    state["safe_to_push"] = True
+
+    save_state(state)
+    log_session("pass: tests passed")
+
+    print("✅ TESTS PASSED")
+    print("Safe to commit and push.")
+    return 0
+
+
+def cmd_fail(args):
+    state = load_state()
+
+    retry = state.get("retry_count", 0) + 1
+    state["retry_count"] = retry
+    state["status"] = "tests_failed"
+    state["last_actor"] = "user"
+
+    if retry >= state.get("retry_limit", 3):
+        state["next_actor"] = "user"
+        state["human_gate_required"] = True
+        state["stop_reason"] = "retry_limit_exceeded"
+    else:
+        state["next_actor"] = "aider"
+        state["status"] = "aider_prompt_ready"
+
+    save_state(state)
+    log_session("fail: tests failed, retry={0}".format(retry))
+
+    print("❌ TEST FAILED")
+    print("Returning to Aider.")
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv))
