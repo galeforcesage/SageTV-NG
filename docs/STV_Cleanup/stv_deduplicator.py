@@ -99,14 +99,18 @@ def deduplicate(input_path: str, output_path: str,
 
         if dry_run:
             total_removed += savings
+            for i, inst in enumerate(instances[1:], start=1):
+                print(f"[DRY-RUN] Would replace duplicate widget '{name}' at index {i} with Ref={next_id}")
             continue
 
         # Keep first instance, give it an ID
         canonical_elem = instances[0]["element"]
-        canonical_elem.set("ID", str(next_id))
+        if "ID" not in canonical_elem.attrib:
+            canonical_elem.set("ID", str(next_id))
+            print(f"Assigned new ID {next_id} to widget '{name}'")
 
         # Replace remaining instances with lightweight Ref elements
-        for inst in instances[1:]:
+        for i, inst in enumerate(instances[1:], start=1):
             parent = inst["parent"]
             elem = inst["element"]
             if parent is None:
@@ -118,8 +122,9 @@ def deduplicate(input_path: str, output_path: str,
             idx = children.index(elem)
 
             ref_elem = ET.Element(f"{ns_prefix}{tag}")
-            ref_elem.set("Ref", str(next_id))
+            ref_elem.set("Ref", canonical_elem.attrib["ID"])
             ref_elem.set("Name", name)
+            print(f"Replacing duplicate widget '{name}' at index {i} with Ref={canonical_elem.attrib['ID']}")
 
             parent.remove(elem)
             parent.insert(idx, ref_elem)
