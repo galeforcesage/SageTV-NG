@@ -16,3 +16,12 @@
 - [2026-06-20T14:43:02Z] copilot-done: review complete
 - [2026-06-20T15:17:10Z] test: awaiting human validation
 - [2026-06-20T15:17:58Z] pass: tests passed
+- [2026-06-20T15:27:22Z] deploy completed
+- [2026-06-20T15:30:15Z] deploy completed
+- [2026-06-20T16:06:33Z] deploy completed
+- [2026-06-20T16:07:08Z] test: awaiting human validation
+- [2026-06-20T16:21:14Z] deploy failed: ssh
+- [2026-06-20T16:42:57Z] deployed branch: phase1-harness-milestone1
+- [2026-06-20T16:53:32Z] deploy failed: verification timeout
+- [2026-06-20T16:55:41Z] deployed branch: phase1-harness-milestone1
+- [2026-06-20T16:56:28Z] tests passed
