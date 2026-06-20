@@ -1,3 +1,0 @@
-[submodule "third_party/comskip"]
-	path = third_party/comskip
-	url = https://github.com/erikkaashoek/Comskip.git
