@@ -1,7 +1,7 @@
 # Handoff: Copilot -> Test Runner
 
-- Timestamp: 2026-06-20T03:05:30Z
+- Timestamp: 2026-06-20T14:43:02Z
 - Branch   : `phase1-harness-milestone1`
-- Task     : `Milestone 1 baton handoff loop`
+- Task     : `Improve stv_deduplicator report clarity and dry-run safety`
 
 Review complete. Tests are next.

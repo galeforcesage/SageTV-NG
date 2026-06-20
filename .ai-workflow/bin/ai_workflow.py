@@ -517,49 +517,6 @@ def cmd_not_implemented(args: list) -> int:
     print("Not implemented in Milestone 1", file=sys.stderr)
     return 1
 
-
-# ---------------------------------------------------------------------------
-# Dispatch
-# ---------------------------------------------------------------------------
-
-DISPATCH = {
-    "init": cmd_init,
-    "status": cmd_status,
-    "start": cmd_start,
-    "aider-next": cmd_aider_next,
-    "aider-done": cmd_aider_done,
-    "copilot-next": cmd_copilot_next,
-    "copilot-done": cmd_copilot_done,
-    # Reserved for Milestone 2+.
-    "test": cmd_test,
-    "fail": cmd_fail,
-    "pass": cmd_pass,,
-    "ready-commit": cmd_not_implemented,
-    "pushed": cmd_not_implemented,
-    "run-until-human": cmd_not_implemented,
-}
-
-
-def usage() -> str:
-    cmds = " ".join(sorted(DISPATCH.keys()))
-    return (
-        "usage: ai_workflow.py <command> [args...]\n"
-        "commands: " + cmds + "\n"
-    )
-
-
-def main(argv: list) -> int:
-    if len(argv) < 2:
-        sys.stderr.write(usage())
-        return 2
-    cmd = argv[1]
-    handler = DISPATCH.get(cmd)
-    if handler is None:
-        sys.stderr.write("unknown command: {0}\n".format(cmd))
-        sys.stderr.write(usage())
-        return 2
-    return handler(argv[2:])
-
 def cmd_test(args):
     state = load_state()
 
@@ -622,6 +579,48 @@ def cmd_fail(args):
     print("❌ TEST FAILED")
     print("Returning to Aider.")
     return 0
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+
+DISPATCH = {
+    "init": cmd_init,
+    "status": cmd_status,
+    "start": cmd_start,
+    "aider-next": cmd_aider_next,
+    "aider-done": cmd_aider_done,
+    "copilot-next": cmd_copilot_next,
+    "copilot-done": cmd_copilot_done,
+    # Reserved for Milestone 2+.
+    "test": cmd_test,
+    "fail": cmd_fail,
+    "pass": cmd_pass,
+    "ready-commit": cmd_not_implemented,
+    "pushed": cmd_not_implemented,
+    "run-until-human": cmd_not_implemented,
+}
+
+
+def usage() -> str:
+    cmds = " ".join(sorted(DISPATCH.keys()))
+    return (
+        "usage: ai_workflow.py <command> [args...]\n"
+        "commands: " + cmds + "\n"
+    )
+
+
+def main(argv: list) -> int:
+    if len(argv) < 2:
+        sys.stderr.write(usage())
+        return 2
+    cmd = argv[1]
+    handler = DISPATCH.get(cmd)
+    if handler is None:
+        sys.stderr.write("unknown command: {0}\n".format(cmd))
+        sys.stderr.write(usage())
+        return 2
+    return handler(argv[2:])
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv))

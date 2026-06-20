@@ -6,6 +6,7 @@ Aider has handed off. Review the following files and verify the patch is correct
 
 - `.ai-workflow/current_task.md`
 - `.ai-workflow/next_aider_prompt.md`
+- `.ai-workflow/next_human_action.md`
 - `.ai-workflow/session_log.md`
 - `.ai-workflow/state.json`
 
