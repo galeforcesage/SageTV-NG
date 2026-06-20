@@ -578,6 +578,54 @@ def cmd_fail(args):
 
     print("❌ TEST FAILED")
     print("Returning to Aider.")
+    return 0def cmd_deploy(args):
+    state = load_state()
+
+    print("=== DEPLOY PHASE ===")
+    print("Copying deduplicated STV to server...")
+
+    # CONFIG — adjust once, then leave it
+    server = "192.168.0.x"
+    user = "user"  # ← change this
+    container = "16ca591833e5"
+    local_file = "stvs/SageTV7/SageTV7_dedup.xml"
+    remote_tmp = "/tmp/SageTV7_dedup.xml"
+    container_path = "/opt/sagetv/server/STVs/SageTV7/SageTV7.xml"
+
+    # Step 1: copy to server
+    subprocess.run([
+        "scp",
+        local_file,
+        f"{user}@{server}:{remote_tmp}"
+    ])
+
+    # Step 2: backup + deploy + restart
+    ssh_cmd = f"""
+docker exec {container} bash -c '
+cd /opt/sagetv/server/STVs/SageTV7 &&
+cp SageTV7.xml SageTV7_backup_$(date +%Y%m%d_%H%M%S).xml'
+docker cp {remote_tmp} {container}:{container_path}
+docker restart {container}
+"""
+
+    subprocess.run(["ssh", f"{user}@{server}", ssh_cmd])
+
+    state["status"] = "deployed"
+    state["last_actor"] = "test_runner"
+    state["next_actor"] = "test_runner"
+
+    save_state(state)
+    log_session("deploy completed")
+
+    print("✅ DEPLOY COMPLETE")
+    print("Now run: aiwf test")
+    return 0
+
+
+def cmd_rollback(args):
+    print("=== ROLLBACK ===")
+    print("You must manually restore backup for now.")
+    print("Future version can auto-select latest backup.")
     return 0
 
 # ---------------------------------------------------------------------------
@@ -596,6 +644,8 @@ DISPATCH = {
     "test": cmd_test,
     "fail": cmd_fail,
     "pass": cmd_pass,
+    "deploy": cmd_deploy,
+    "rollback": cmd_rollback,
     "ready-commit": cmd_not_implemented,
     "pushed": cmd_not_implemented,
     "run-until-human": cmd_not_implemented,
