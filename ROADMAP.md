@@ -627,11 +627,29 @@ Estimated effort: 2–3 days  •  Risk: Low  •  Expected gain: 10–20% file 
 
 Implemented in `docs/STV_Cleanup/stv_deduplicator.py`. Already run against `stvs/SageTV7/SageTV7.xml` — removed 6,715 redundant definitions per `docs/STV_Cleanup/PHASE1_RESULTS.md`.
 
-### Phase 2 — Expression Caching  *(in progress)*
+### Phase 2 — Expression Caching  *(in progress — build-time layer complete)*
 
 Estimated effort: 1–2 weeks  •  Risk: Medium  •  Expected gain: 60–80% selection lag reduction
 
-Identify expensive expressions within the same screen subtree and generate `SetLocal`/`GetLocal` patches to cache them. Implemented in `docs/STV_Cleanup/stv_cache_patcher.py` (`apply_patches`). Cache-invalidation triggers across state changes (settings change, screen navigation, focus change) still need to be verified and possibly extended.
+Phase 2 is a two-layer system. The **build-time layer** — implemented
+in `docs/STV_Cleanup/stv_cache_patcher.py` (`apply_patches`,
+`scan_screen`, `find_before_menu_load`) — identifies expensive Catbert
+expressions repeated within a screen subtree and emits
+`SetLocal`/`GetLocal` patch plans. This layer is complete and usable
+today (`--report` for dry-run, `--apply` for output).
+
+The **runtime layer** is a separate concern: STV XML hooks and Java
+callbacks must invalidate or refresh cached locals when state changes
+(focus move, selection change, setting change). This layer is not in the
+Python patcher — it belongs in SageTV7.xml event Actions and optionally
+in Java property-change listeners. PRD AC-2.5 (state-change correctness)
+depends on this runtime layer being present.
+
+Current status: **patch generation complete; runtime invalidation hooks
+pending.** See `docs/STV_Cleanup/PHASE2_NOTES.md` for the full
+architecture breakdown and AC mapping, and
+`docs/STV_Cleanup/PHASE2_RUNTIME_DESIGN.md` for the runtime-layer
+investigation plan.
 
 ### Phase 3 — Theme Chain Flattening
 
