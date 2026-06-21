@@ -120,6 +120,21 @@ When opening this repo for an AI-assisted task:
 
 ---
 
+## Phase 2 - Expression Caching
+
+Phase 2 is split into two layers. The build-time layer lives in
+`docs/STV_Cleanup/stv_cache_patcher.py` and is responsible for finding
+repeated expensive Catbert expressions and emitting `SetLocal`/
+`GetLocal` patch plans. The runtime layer is separate and still pending;
+it must live in STV XML hooks and Java callbacks that invalidate cached
+values on focus, selection, or setting changes.
+
+AC-2.5 depends on that runtime layer, so patch generation alone is not
+the finish line. Current status: build-time patch generation complete;
+runtime invalidation hooks pending.
+
+---
+
 ## Current Work Area
 
 ### SMB Keyboard System
