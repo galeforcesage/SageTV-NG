@@ -1110,3 +1110,8 @@ build/*.sh
 # Word temp/lock files
 docs/~*
 
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
