@@ -10,6 +10,11 @@ Two modes:
 Usage:
     python stv_cache_patcher.py SageTV7.xml --report
     python stv_cache_patcher.py SageTV7.xml --apply SageTV7_cached.xml
+
+Architecture note:
+    This module handles build-time patch generation only.
+    Runtime cache invalidation belongs in STV XML hooks and Java callbacks.
+    See PHASE2_NOTES.md for the two-layer design and acceptance mapping.
 """
 
 import xml.etree.ElementTree as ET
