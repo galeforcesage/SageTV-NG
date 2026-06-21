@@ -617,6 +617,60 @@ useful):
 8. Production multi-site deployment
 
 ---
+## STV Optimization track
+
+The STV (UI definition) optimization toolkit lives in `docs/STV_Cleanup/`. Phases 1–3 are largely shipped (script-driven; see `docs/STV_Cleanup/PHASE1_RESULTS.md`). Phase 4 is long-term scope.
+
+### Phase 1 — Widget Deduplication  *(shipped)*
+
+Estimated effort: 2–3 days  •  Risk: Low  •  Expected gain: 10–20% file size reduction
+
+Implemented in `docs/STV_Cleanup/stv_deduplicator.py`. Already run against `stvs/SageTV7/SageTV7.xml` — removed 6,715 redundant definitions per `docs/STV_Cleanup/PHASE1_RESULTS.md`.
+
+### Phase 2 — Expression Caching  *(in progress)*
+
+Estimated effort: 1–2 weeks  •  Risk: Medium  •  Expected gain: 60–80% selection lag reduction
+
+Identify expensive expressions within the same screen subtree and generate `SetLocal`/`GetLocal` patches to cache them. Implemented in `docs/STV_Cleanup/stv_cache_patcher.py` (`apply_patches`). Cache-invalidation triggers across state changes (settings change, screen navigation, focus change) still need to be verified and possibly extended.
+
+### Phase 3 — Theme Chain Flattening
+
+Estimated effort: 2–3 weeks  •  Risk: Medium  •  Expected gain: O(depth)→O(1) per property lookup at paint time
+
+Pre-resolve theme inheritance chains and write final property values directly onto each theme widget, eliminating ancestor traversal at paint time. Implemented in `docs/STV_Cleanup/stv_theme_flattener.py` (`flatten`). Script is functional; awaiting integration into a full Phase 1 → 2 → 3 pipeline run.
+
+### Phase 4 — Screen Isolation & Modularization  *(long-term)*
+
+Estimated effort: 1–3 months  •  Risk: High  •  Expected gain: Catbert skips inactive screens (large paint-time reduction)
+
+**Description.** Split the monolith `stvs/SageTV7/SageTV7.xml` into per-Sym-prefix module files and add `IsCurrentMenu()` guards to every screen subtree so Catbert can short-circuit evaluation of inactive screens. Compose modules back into a canonical STV at build/deploy time, with optional plugin injections via `.stvi` ImportSTV hooks. Implemented in `docs/STV_Cleanup/stv_modularizer.py` (`split` and `compose` subcommands).
+
+**Sub-commands.**
+
+1. **split** — Split the monolith into per-prefix module files:
+
+       python docs/STV_Cleanup/stv_modularizer.py split stvs/SageTV7/SageTV7.xml ./modules/
+
+   Optional flags: `--no-guards` (skip `IsCurrentMenu()` injection — debug only; defeats the optimization), `--dry-run` (report without writing).
+
+2. **compose** — Merge modules back into a canonical STV with optional plugin injections:
+
+       python docs/STV_Cleanup/stv_modularizer.py compose ./modules/ stvs/SageTV7/SageTV7_composed.xml --plugins ./plugins/ --hooks hooks.json --order BASE OPUS4 OPUS4A NFLX1 COMSKIP XHDFU
+
+   The `--plugins`, `--hooks`, and `--order` flags are all optional (hooks defaults to `hooks.json` in the current directory). On PowerShell, run on one line — the multi-line `\` continuation style is bash/zsh only.
+
+**Acceptance Criteria.**
+
+- AC-4.1 All screens guarded — `grep -c 'IsCurrentMenu' output.xml` ≥ 619
+- AC-4.2 Module files produced — `ls modules/*.stv` shows one file per Sym prefix
+- AC-4.3 Compose round-trip — `compose(split(original)) == original` (modulo whitespace)
+- AC-4.4 No ID conflicts — `compose` reports 0 duplicate IDs
+- AC-4.5 Plugin hooks applied — Each `.stvi` ImportSTV block injects into its correct target
+- AC-4.6 All 619 screens pass — Full regression test of every Menu screen passes
+
+**Source:** `docs/SageTV_STV_Optimization_PRD.md`, Phase 4
+
+---
 
 ## Done
 
