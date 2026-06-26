@@ -83,7 +83,12 @@ RUN make -C ../third_party/jtux/native/so && cp ../third_party/jtux/native/so/*.
 RUN make -C ../native/so/PVR150Input && cp ../native/so/PVR150Input/*.so so/ || true
 RUN make -C ../native/so/DVBCapture2.0 && cp ../native/so/DVBCapture2.0/*.so so/ || true
 RUN make -C ../native/so/FirewireCapture && cp ../native/so/FirewireCapture/*.so so/ || true
-RUN make -C ../native/so/MPEGParser2.0 && cp ../native/so/MPEGParser2.0/*.so so/ || true
+RUN make -C ../native/so/MPEGParser2.0 clean \
+    && make -C ../native/so/MPEGParser2.0 JDK_HOME=${JDK_HOME} \
+    && cp ../native/so/MPEGParser2.0/libMPEGParser.so so/ \
+    && cp ../native/so/MPEGParser2.0/libNativeCore.so so/ \
+    && test -s so/libMPEGParser.so \
+    && test -s so/libNativeCore.so
 RUN make -C ../native/so/HDHomeRun2.0 && cp ../native/so/HDHomeRun2.0/*.so so/ || true
 RUN make -C ../native/dll/JavaRemuxer2 && cp ../native/dll/JavaRemuxer2/*.so so/ || true
 RUN make -C ../native/so/PVR150Tuning && cp ../native/so/PVR150Tuning/*.so so/irtunerplugins/ || true
@@ -142,6 +147,11 @@ RUN ./copyserverfiles.sh || echo "WARN: copyserverfiles had errors"
 # ---- 6. Copy any .so files that copyserverfiles may have missed ----
 RUN cp -n so/*.so serverrelease/ 2>/dev/null || true \
     && cp -rn so/irtunerplugins/*.so serverrelease/irtunerplugins/ 2>/dev/null || true
+
+# Ensure the MPEG parser JNI libs in the release are freshly built from source.
+RUN install -m 755 so/libMPEGParser.so serverrelease/libMPEGParser.so \
+    && install -m 755 so/libNativeCore.so serverrelease/libNativeCore.so \
+    && strings serverrelease/libMPEGParser.so | grep -E 'HEVC|AC4' >/tmp/mpegparser-codec-tags.txt
 
 # ---- 7. Remove old Lucene 3.6 JAR (conflicts with 4.10.4 on classpath) ----
 RUN rm -f serverrelease/JARs/lucene-core-3.6.0.jar
