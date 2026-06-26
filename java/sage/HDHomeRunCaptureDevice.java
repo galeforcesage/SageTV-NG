@@ -201,87 +201,90 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
                   VideoFrame.kickAll();
                 }
 
-                // ---- Phase G+: deferred ffmpeg re-probe ----
-                // Once the on-disk capture has enough bytes for ffmpeg to
-                // identify width/height/fps/pixel-format/language tags/CC,
-                // re-run FormatParser and merge the richer info into the
-                // MediaFile. This is the equivalent of the ATSC1 native
-                // path receiving a richer AV-INF after demuxer lock-in.
-                // Audio codec identity (AC-4) is preserved even if ffprobe
-                // can't determine sample rate / channels (which is normal
-                // for AC-4 in current ffmpeg builds).
-                final java.io.File reprobeFile = new java.io.File(encodeFile);
-                final MediaFile reprobeMf = mf;
-                Thread t = new Thread(new Runnable() {
-                  @Override public void run()
-                  {
-                    long deadline = Sage.time() + 60000L; // 60s budget
-                    long minBytes = Sage.getLong("hdhr/atsc3_reprobe_min_bytes", 4L * 1024 * 1024);
-                    while (Sage.time() < deadline)
+                // ---- Optional ffprobe enrichment fallback ----
+                // Native MPEG parsing now identifies HEVC/AC-4 directly; keep
+                // this richer metadata pass behind a property for edge streams.
+                final boolean useFfprobeAc4Fallback =
+                    Sage.getBoolean("hdhr/use_ffprobe_ac4_fallback", false);
+                if (useFfprobeAc4Fallback)
+                {
+                  final java.io.File reprobeFile = new java.io.File(encodeFile);
+                  final MediaFile reprobeMf = mf;
+                  Thread t = new Thread(new Runnable() {
+                    @Override public void run()
                     {
-                      if (reprobeFile.length() >= minBytes) break;
-                      try { Thread.sleep(500); } catch (InterruptedException ie) { return; }
-                    }
-                    if (reprobeFile.length() < 64 * 1024) return; // never grew
-                    try
-                    {
-                      sage.media.format.ContainerFormat probed =
-                          probeAtsc3FileWithFFMPEG(reprobeFile.toString());
-                      if (probed == null) return;
-                      sage.media.format.ContainerFormat current = reprobeMf.getFileFormat();
-                      java.util.List<VideoFrame> active;
-                      try { active = VideoFrame.getVFsUsingMediaFile(reprobeMf); }
-                      catch (Throwable ignore) { active = java.util.Collections.emptyList(); }
-                      boolean hasActive = active != null && !active.isEmpty();
-
-                      // If a player is currently using this MediaFile, mutate the
-                      // existing stream objects in-place so we don't trigger
-                      // MediaFile.setMediafileFormat()'s majorChange path (which
-                      // would call reloadFile() on every active VideoFrame and
-                      // yank live HEVC playback). UI displays will pick up the
-                      // richer info on next refresh; players keep playing.
-                      // Extra streams (e.g. 2nd-language AC-4) cannot be added
-                      // without a reload -- they appear on the next start of the
-                      // file. This mirrors the ATSC1 behavior where the native
-                      // demuxer issues a single AV-INF after PMT lock-in.
-                      if (hasActive && current != null)
+                      long deadline = Sage.time() + 60000L; // 60s budget
+                      long minBytes = Sage.getLong("hdhr/atsc3_reprobe_min_bytes", 4L * 1024 * 1024);
+                      while (Sage.time() < deadline)
                       {
-                        enrichInPlace(current, probed);
-                        if (Sage.DBG) System.out.println("ATSC3 HTTP-pull: enriched format in-place ("
-                            + active.size() + " active VF) format=" + current + " mf=" + reprobeMf);
-                        return;
+                        if (reprobeFile.length() >= minBytes) break;
+                        try { Thread.sleep(500); } catch (InterruptedException ie) { return; }
                       }
-
-                      // No active player: safe to swap in the full probe (may
-                      // declare majorChange and reload, but nothing is playing).
-                      sage.media.format.BitstreamFormat[] probedStreams = probed.getStreamFormats();
-                      if (probedStreams != null && current != null)
+                      if (reprobeFile.length() < 64 * 1024) return; // never grew
+                      try
                       {
-                        for (int i = 0; i < probedStreams.length; i++)
+                        sage.media.format.ContainerFormat probed =
+                            probeAtsc3FileWithFFMPEG(reprobeFile.toString());
+                        if (probed == null) return;
+                        sage.media.format.ContainerFormat current = reprobeMf.getFileFormat();
+                        java.util.List<VideoFrame> active;
+                        try { active = VideoFrame.getVFsUsingMediaFile(reprobeMf); }
+                        catch (Throwable ignore) { active = java.util.Collections.emptyList(); }
+                        boolean hasActive = active != null && !active.isEmpty();
+
+                        // If a player is currently using this MediaFile, mutate the
+                        // existing stream objects in-place so we don't trigger
+                        // MediaFile.setMediafileFormat()'s majorChange path (which
+                        // would call reloadFile() on every active VideoFrame and
+                        // yank live HEVC playback). UI displays will pick up the
+                        // richer info on next refresh; players keep playing.
+                        // Extra streams (e.g. 2nd-language AC-4) cannot be added
+                        // without a reload -- they appear on the next start of the
+                        // file. This mirrors the ATSC1 behavior where the native
+                        // demuxer issues a single AV-INF after PMT lock-in.
+                        if (hasActive && current != null)
                         {
-                          sage.media.format.BitstreamFormat ps = probedStreams[i];
-                          if (ps != null && (ps.getFormatName() == null || ps.getFormatName().length() == 0))
+                          enrichInPlace(current, probed);
+                          if (Sage.DBG) System.out.println("ATSC3 HTTP-pull: enriched format in-place ("
+                              + active.size() + " active VF) format=" + current + " mf=" + reprobeMf);
+                          return;
+                        }
+
+                        // No active player: safe to swap in the full probe (may
+                        // declare majorChange and reload, but nothing is playing).
+                        sage.media.format.BitstreamFormat[] probedStreams = probed.getStreamFormats();
+                        if (probedStreams != null && current != null)
+                        {
+                          for (int i = 0; i < probedStreams.length; i++)
                           {
-                            sage.media.format.BitstreamFormat cs = current.getStreamFormat(i);
-                            if (cs != null && cs.getFormatName() != null)
-                              ps.setFormatName(cs.getFormatName());
+                            sage.media.format.BitstreamFormat ps = probedStreams[i];
+                            if (ps != null && (ps.getFormatName() == null || ps.getFormatName().length() == 0))
+                            {
+                              sage.media.format.BitstreamFormat cs = current.getStreamFormat(i);
+                              if (cs != null && cs.getFormatName() != null)
+                                ps.setFormatName(cs.getFormatName());
+                            }
                           }
                         }
+                        if (probed.getFormatName() == null || probed.getFormatName().length() == 0)
+                          probed.setFormatName(sage.media.format.MediaFormat.MPEG2_TS);
+                        reprobeMf.setMediafileFormat(probed);
+                        if (Sage.DBG) System.out.println("ATSC3 HTTP-pull: re-probed format="
+                            + probed + " mf=" + reprobeMf);
                       }
-                      if (probed.getFormatName() == null || probed.getFormatName().length() == 0)
-                        probed.setFormatName(sage.media.format.MediaFormat.MPEG2_TS);
-                      reprobeMf.setMediafileFormat(probed);
-                      if (Sage.DBG) System.out.println("ATSC3 HTTP-pull: re-probed format="
-                          + probed + " mf=" + reprobeMf);
+                      catch (Throwable th)
+                      {
+                        if (Sage.DBG) System.out.println("ATSC3 HTTP-pull: re-probe failed: " + th);
+                      }
                     }
-                    catch (Throwable th)
-                    {
-                      if (Sage.DBG) System.out.println("ATSC3 HTTP-pull: re-probe failed: " + th);
-                    }
-                  }
-                }, getName() + "-FormatReprobe");
-                t.setDaemon(true);
-                t.start();
+                  }, getName() + "-FormatReprobe");
+                  t.setDaemon(true);
+                  t.start();
+                }
+                else if (Sage.DBG)
+                {
+                  System.out.println("ATSC3 HTTP-pull: ffprobe fallback disabled; using native parser path");
+                }
               }
               else if (Sage.DBG)
               {
