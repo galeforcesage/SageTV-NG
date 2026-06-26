@@ -169,7 +169,7 @@ def print_report(patches: list[dict]) -> None:
             print(f"    {sl}")
         print(f"  Replace in subtree:")
         for r in p["replacements"]:
-            print(f"    {r['expr'][:60]}  →  GetLocal(\"{r['var']}\")  "
+            print(f"    {r['expr'][:60]}  ->  GetLocal(\"{r['var']}\")  "
                   f"[{r['occurrences']} occurrences]")
         print()
 
