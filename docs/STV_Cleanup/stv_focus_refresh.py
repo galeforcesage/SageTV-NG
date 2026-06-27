@@ -1,29 +1,54 @@
 """
-stv_focus_refresh.py — Phase 2 AC-2.4/AC-2.5 Simplified: Focus-Based Cache Refresh
+stv_focus_refresh.py — Phase 2 AC-2.5 Targeted Cache Invalidation
 
-Pragmatic approach: Rather than event-driven invalidation for every state change,
-implement a "refresh on focus" pattern:
-  - When a screen regains focus (FocusGained), re-SetLocal all cached values
-  - This covers the primary use case: user navigates away/back
+The first AC-2.5 pass refreshed all cached locals on FocusGained for every
+screen. That preserved correctness but reduced perceived speed in hot paths.
 
-Benefits:
-  - AC-2.4: SetLocal/GetLocal caching itself provides 50%+ lag reduction
-  - AC-2.5: Focus-refresh ensures state-correctness for most workflows
-  - Simple to implement: one refresh hook per screen
-  - No new event infrastructure needed
+This targeted pass keeps AC-2.3 as the speed baseline and only refreshes cache
+on selected screens where stale state is more likely than focus-loop churn.
 
-Implementation:
-  1. Find each screen's FocusGained hook (or create one)
-  2. Append Actions that re-execute each cached SetLocal
-  3. Keep original SetLocal calls in BeforeMenuLoad (first-load optimization)
+Strategy:
+    1. Read SetLocal calls from BeforeMenuLoad (AC-2.3 output)
+    2. Only select correctness-sensitive variable classes:
+             - _c_GetProperty_*
+             - _c_GetServerProperty_*
+             - _c_GetFavorites*
+    3. Skip known hot-path menus (Main Menu, MediaPlayer OSD)
+    4. Add/update FocusGained hooks only on selected menus
 """
 
 import xml.etree.ElementTree as ET
 import re
-from collections import defaultdict
+
+# Menus where targeted FocusGained refresh is acceptable and helps correctness.
+TARGET_MENU_NAMES = {
+        "Configuration Wizard - Network Configuration",
+        "Configuration Wizard - Ask Display Videos on Menus",
+        "Theme Header & Footer only with Content BG",
+        "Theme Preview and Info Top",
+        "VideoBG THEME",
+        "THEME ORGANIZER 3",
+        "Theme Preview Top Right with Info Below",
+        "Theme Preview Top Right with Music Info Below",
+        "Theme Preview Top Right with Thumb Below for Info Menus ",
+        "Online Services Menu",
+        "Browser - Photos",
+        "Picture Slideshow",
+        "Placeshifter",
+        "Embedded - Network Config",
+        "Favorites Manager",
+}
+
+# Menus explicitly excluded due to high-frequency focus churn.
+EXCLUDED_MENU_NAMES = {
+        "Main Menu",
+        "MediaPlayer OSD",
+}
+
+TARGET_VAR_RE = re.compile(r'^SetLocal\("(_c_[^\"]+)"')
 
 
-def extract_beformeenuload_actions(screen: ET.Element) -> list[str]:
+def extract_before_menu_load_actions(screen: ET.Element) -> list[str]:
     """
     Extract all SetLocal calls from BeforeMenuLoad hook.
     Returns: [SetLocal("_c_var", ...), ...]
@@ -43,6 +68,19 @@ def extract_beformeenuload_actions(screen: ET.Element) -> list[str]:
     return actions
 
 
+def should_refresh_var(setlocal_call: str) -> bool:
+    """Only refresh property/server-property/favorites derived cache entries."""
+    m = TARGET_VAR_RE.search(setlocal_call)
+    if not m:
+        return False
+    var_name = m.group(1)
+    return (
+        var_name.startswith("_c_GetProperty_")
+        or var_name.startswith("_c_GetServerProperty_")
+        or var_name.startswith("_c_GetFavorites")
+    )
+
+
 def find_or_create_focusgained(screen: ET.Element, ns_prefix: str) -> ET.Element:
     """
     Find existing FocusGained hook or create a new one.
@@ -55,7 +93,9 @@ def find_or_create_focusgained(screen: ET.Element, ns_prefix: str) -> ET.Element
     # Create new FocusGained hook
     hook = ET.Element(f"{ns_prefix}Hook" if ns_prefix else "Hook")
     hook.set("Name", "FocusGained")
-    hook.set("Sym", f"REFRESH-FG-{id(hook)}")
+    screen_name = screen.attrib.get("Name", "Menu")
+    safe = re.sub(r'[^A-Za-z0-9]+', '_', screen_name).strip('_')[:24] or "Menu"
+    hook.set("Sym", f"REFRESH-FG-TGT-{safe}")
     screen.append(hook)
     return hook
 
@@ -73,6 +113,7 @@ def embed_focus_refresh(xml_path: str, output_path: str) -> int:
         ns_prefix = root.tag.split("}")[0] + "}"
 
     screens_modified = 0
+    total_actions_added = 0
 
     for elem in root.iter():
         tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
@@ -80,25 +121,49 @@ def embed_focus_refresh(xml_path: str, output_path: str) -> int:
             continue
 
         screen_name = elem.attrib.get("Name", "Unknown")
-        cached_locals = extract_beformeenuload_actions(elem)
+        if screen_name in EXCLUDED_MENU_NAMES:
+            continue
+        if screen_name not in TARGET_MENU_NAMES:
+            continue
+
+        cached_locals = extract_before_menu_load_actions(elem)
 
         if not cached_locals:
             continue  # Screen has no cached locals, skip
 
+        targeted_calls = [call for call in cached_locals if should_refresh_var(call)]
+        if not targeted_calls:
+            continue
+
         # Find or create FocusGained hook
         focus_gained = find_or_create_focusgained(elem, ns_prefix)
 
+        existing = {
+            child.attrib.get("Name", "")
+            for child in focus_gained
+            if (child.tag.split("}")[-1] if "}" in child.tag else child.tag) == "Action"
+        }
+
         # Add Actions to re-execute each SetLocal on focus
-        for setlocal_call in cached_locals:
+        added_here = 0
+        for setlocal_call in targeted_calls:
+            if setlocal_call in existing:
+                continue
             action = ET.SubElement(focus_gained, f"{ns_prefix}Action" if ns_prefix else "Action")
             action.set("Name", setlocal_call)
+            added_here += 1
+
+        if added_here == 0:
+            continue
 
         screens_modified += 1
+        total_actions_added += added_here
 
     ET.indent(tree, space=" ")
     tree.write(output_path, encoding="UTF-8", xml_declaration=True)
 
-    print(f"Embedded focus-refresh hooks into {screens_modified} screens")
+    print(f"Embedded targeted refresh hooks into {screens_modified} screens")
+    print(f"Added {total_actions_added} FocusGained refresh actions")
     print(f"Wrote to {output_path}")
 
     return screens_modified
@@ -106,23 +171,23 @@ def embed_focus_refresh(xml_path: str, output_path: str) -> int:
 
 def run(xml_path: str, output_path: str) -> None:
     print(f"Parsing {xml_path} (AC-2.3 cached STV) ...")
-    print("Adding AC-2.4/AC-2.5 focus-refresh hooks...\n")
+    print("Adding AC-2.5 targeted refresh hooks...\n")
 
     screens_modified = embed_focus_refresh(xml_path, output_path)
 
-    print(f"\n=== AC-2.4/AC-2.5 Focus-Refresh Embedding Complete ===")
+    print(f"\n=== AC-2.5 Targeted Refresh Embedding Complete ===")
     print(f"Screens enhanced: {screens_modified}")
-    print(f"Strategy: Re-SetLocal all cached values on FocusGained")
-    print(f"Impact: Ensures state-correctness after user navigation")
+    print("Strategy: targeted FocusGained refresh for property/server/favorites caches")
+    print("Impact: correctness where needed without blanket hot-path refresh")
 
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(
-        description="Phase 2 AC-2.4/AC-2.5 Focus-Based Cache Refresh Embedding"
+        description="Phase 2 AC-2.5 Targeted Cache Invalidation Embedding"
     )
     parser.add_argument("input", help="AC-2.3 patched STV (SageTV7_cached_ac23.xml)")
-    parser.add_argument("output", help="Output file with focus-refresh hooks")
+    parser.add_argument("output", help="Output file with targeted refresh hooks")
     args = parser.parse_args()
 
     run(args.input, args.output)
