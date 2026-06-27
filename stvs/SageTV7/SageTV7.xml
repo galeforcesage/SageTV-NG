@@ -2724,6 +2724,7 @@
         </ns0:Attribute>
         <ns0:Action Ref="963" Name="&quot;REM Start a library i..." />
        </ns0:Item>
+        <ns0:Item Name="Download Queue Management" Sym="NGDLQ-1100" xmlns="urn:tv.sage/stv"><ns0:Attribute Name="ButtonText" Sym="NGDLQ-1101"><ns0:Value>"Download Queue Management"</ns0:Value></ns0:Attribute><ns0:Attribute Name="ThisItem" Sym="NGDLQ-1102"><ns0:Value>"xItemSetupDownloadQueue"</ns0:Value></ns0:Attribute><ns0:Attribute Name="SubMenuType" Sym="NGDLQ-1103"><ns0:Value>null</ns0:Value></ns0:Attribute><ns0:Action Name="&quot;Server download queue management.&quot;" Sym="NGDLQ-1104"><ns0:OptionsMenu Name="DownloadQueueManagement" Sym="NGDLQ-1105"><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:Action Name="&quot;Recording Copy Transfer Queue:\n \n&quot;" Sym="NGDLQ-1106"><ns0:Text Name="" Sym="NGDLQ-1107" /></ns0:Action><ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() == 0" Sym="NGDLQ-1500"><ns0:Panel Name="QueueEmpty" Sym="NGDLQ-1501"><ns0:FixedWidth>1.0</ns0:FixedWidth><ns0:PadX>.02</ns0:PadX><ns0:PadY>.02</ns0:PadY><ns0:Insets>.02</ns0:Insets><ns0:WrapHNav>false</ns0:WrapHNav><ns0:WrapVNav>false</ns0:WrapVNav><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:Text Name="Queue:" Sym="NGDLQ-1502"><ns0:AnchorX>0.0</ns0:AnchorX><ns0:FixedWidth>0.7</ns0:FixedWidth><ns0:AutosizeText>false</ns0:AutosizeText><ns0:WrapText>true</ns0:WrapText><ns0:TextShadow>true</ns0:TextShadow><ns0:DisableFontScaling>false</ns0:DisableFontScaling><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps></ns0:Text><ns0:Action Name="&quot;No items in queue.&quot;" Sym="NGDLQ-1503"><ns0:Text Name="(No queued recordings)" Sym="NGDLQ-1504" /></ns0:Action><ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." /></ns0:Panel></ns0:Conditional><ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 1" Sym="NGDLQ-1510"><ns0:Item Name="QueueItem1" Sym="NGDLQ-1511"><ns0:Action Name="&quot;Manage queue item #1.&quot;" Sym="NGDLQ-1512"><ns0:OptionsMenu Name="DownloadQueueItem1" Sym="NGDLQ-1513"><ns0:Action Name="GetRecordingCopyTransferQueueItemLabel(1)" Sym="NGDLQ-1514"><ns0:Text Name="" Sym="NGDLQ-1515" /></ns0:Action><ns0:Panel Name="QueueItem1Progress" Sym="NGDLQ-1516"><ns0:FixedWidth>1.0</ns0:FixedWidth><ns0:PadX>.02</ns0:PadX><ns0:PadY>.02</ns0:PadY><ns0:Insets>.02</ns0:Insets><ns0:WrapHNav>false</ns0:WrapHNav><ns0:WrapVNav>false</ns0:WrapVNav><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:Text Name="Progress:" Sym="NGDLQ-1517"><ns0:AnchorX>0.0</ns0:AnchorX><ns0:FixedWidth>0.45</ns0:FixedWidth><ns0:AutosizeText>false</ns0:AutosizeText><ns0:WrapText>true</ns0:WrapText><ns0:TextShadow>true</ns0:TextShadow><ns0:DisableFontScaling>false</ns0:DisableFontScaling><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps></ns0:Text><ns0:Action Name="GetRecordingCopyTransferQueueItemProgressText(1)" Sym="NGDLQ-1518"><ns0:Text Name="" Sym="NGDLQ-1519" /></ns0:Action><ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." /></ns0:Panel><ns0:Panel Name="QueueItem1Pause" Sym="NGDLQ-1520"><ns0:FixedWidth>1.0</ns0:FixedWidth><ns0:PadX>.02</ns0:PadX><ns0:PadY>.02</ns0:PadY><ns0:Insets>.02</ns0:Insets><ns0:WrapHNav>false</ns0:WrapHNav><ns0:WrapVNav>false</ns0:WrapVNav><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:Text Name="Pause:" Sym="NGDLQ-1521"><ns0:AnchorX>0.0</ns0:AnchorX><ns0:FixedWidth>0.7</ns0:FixedWidth><ns0:AutosizeText>false</ns0:AutosizeText><ns0:WrapText>true</ns0:WrapText><ns0:TextShadow>true</ns0:TextShadow><ns0:DisableFontScaling>false</ns0:DisableFontScaling><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps></ns0:Text><ns0:Item Name="QueueItem1PauseBtn" Sym="NGDLQ-1522"><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:BackgroundComponent>false</ns0:BackgroundComponent><ns0:Action Name="PauseRecordingCopyTransferQueueItem(1)" Sym="NGDLQ-1523"><ns0:Action Name="Refresh()" Sym="NGDLQ-1524" /></ns0:Action><ns0:Text Name="Pause" Sym="NGDLQ-1525" /></ns0:Item><ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." /></ns0:Panel><ns0:Panel Name="QueueItem1Cancel" Sym="NGDLQ-1526"><ns0:FixedWidth>1.0</ns0:FixedWidth><ns0:PadX>.02</ns0:PadX><ns0:PadY>.02</ns0:PadY><ns0:Insets>.02</ns0:Insets><ns0:WrapHNav>false</ns0:WrapHNav><ns0:WrapVNav>false</ns0:WrapVNav><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:Text Name="Cancel:" Sym="NGDLQ-1527"><ns0:AnchorX>0.0</ns0:AnchorX><ns0:FixedWidth>0.7</ns0:FixedWidth><ns0:AutosizeText>false</ns0:AutosizeText><ns0:WrapText>true</ns0:WrapText><ns0:TextShadow>true</ns0:TextShadow><ns0:DisableFontScaling>false</ns0:DisableFontScaling><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps></ns0:Text><ns0:Item Name="QueueItem1CancelBtn" Sym="NGDLQ-1528"><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:BackgroundComponent>false</ns0:BackgroundComponent><ns0:Action Name="CancelRecordingCopyTransferQueueItem(1)" Sym="NGDLQ-1529"><ns0:Action Name="Refresh()" Sym="NGDLQ-1530" /></ns0:Action><ns0:Text Name="Cancel" Sym="NGDLQ-1531" /></ns0:Item><ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." /></ns0:Panel><ns0:Item Name="Close" Sym="NGDLQ-1532"><ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1533" /></ns0:Item><ns0:Theme Ref="2131" Name="MutliSelectOptionsTheme" /></ns0:OptionsMenu></ns0:Action><ns0:Action Name="GetRecordingCopyTransferQueueItemLabel(1)" Sym="NGDLQ-1534"><ns0:Text Name="" Sym="NGDLQ-1535" /></ns0:Action></ns0:Item></ns0:Conditional><ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 2" Sym="NGDLQ-1540"><ns0:Item Name="QueueItem2" Sym="NGDLQ-1541"><ns0:Action Name="&quot;Manage queue item #2.&quot;" Sym="NGDLQ-1542"><ns0:OptionsMenu Name="DownloadQueueItem2" Sym="NGDLQ-1543"><ns0:Action Name="GetRecordingCopyTransferQueueItemLabel(2)" Sym="NGDLQ-1544"><ns0:Text Name="" Sym="NGDLQ-1545" /></ns0:Action><ns0:Action Name="GetRecordingCopyTransferQueueItemProgressText(2)" Sym="NGDLQ-1546"><ns0:Text Name="" Sym="NGDLQ-1547" /></ns0:Action><ns0:Item Name="Pause" Sym="NGDLQ-1548"><ns0:Action Name="PauseRecordingCopyTransferQueueItem(2)" Sym="NGDLQ-1549"><ns0:Action Name="Refresh()" Sym="NGDLQ-1550" /></ns0:Action></ns0:Item><ns0:Item Name="Cancel" Sym="NGDLQ-1551"><ns0:Action Name="CancelRecordingCopyTransferQueueItem(2)" Sym="NGDLQ-1552"><ns0:Action Name="Refresh()" Sym="NGDLQ-1553" /></ns0:Action></ns0:Item><ns0:Item Name="Close" Sym="NGDLQ-1554"><ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1555" /></ns0:Item><ns0:Theme Ref="2131" Name="MutliSelectOptionsTheme" /></ns0:OptionsMenu></ns0:Action><ns0:Action Name="GetRecordingCopyTransferQueueItemLabel(2)" Sym="NGDLQ-1556"><ns0:Text Name="" Sym="NGDLQ-1557" /></ns0:Action></ns0:Item></ns0:Conditional><ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 3" Sym="NGDLQ-1560"><ns0:Item Name="QueueItem3" Sym="NGDLQ-1561"><ns0:Action Name="&quot;Manage queue item #3.&quot;" Sym="NGDLQ-1562"><ns0:OptionsMenu Name="DownloadQueueItem3" Sym="NGDLQ-1563"><ns0:Action Name="GetRecordingCopyTransferQueueItemLabel(3)" Sym="NGDLQ-1564"><ns0:Text Name="" Sym="NGDLQ-1565" /></ns0:Action><ns0:Action Name="GetRecordingCopyTransferQueueItemProgressText(3)" Sym="NGDLQ-1566"><ns0:Text Name="" Sym="NGDLQ-1567" /></ns0:Action><ns0:Item Name="Pause" Sym="NGDLQ-1568"><ns0:Action Name="PauseRecordingCopyTransferQueueItem(3)" Sym="NGDLQ-1569"><ns0:Action Name="Refresh()" Sym="NGDLQ-1570" /></ns0:Action></ns0:Item><ns0:Item Name="Cancel" Sym="NGDLQ-1571"><ns0:Action Name="CancelRecordingCopyTransferQueueItem(3)" Sym="NGDLQ-1572"><ns0:Action Name="Refresh()" Sym="NGDLQ-1573" /></ns0:Action></ns0:Item><ns0:Item Name="Close" Sym="NGDLQ-1574"><ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1575" /></ns0:Item><ns0:Theme Ref="2131" Name="MutliSelectOptionsTheme" /></ns0:OptionsMenu></ns0:Action><ns0:Action Name="GetRecordingCopyTransferQueueItemLabel(3)" Sym="NGDLQ-1576"><ns0:Text Name="" Sym="NGDLQ-1577" /></ns0:Action></ns0:Item></ns0:Conditional><ns0:Panel Name="PauseAll" Sym="NGDLQ-1114"><ns0:FixedWidth>1.0</ns0:FixedWidth><ns0:PadX>.02</ns0:PadX><ns0:PadY>.02</ns0:PadY><ns0:Insets>.02</ns0:Insets><ns0:WrapHNav>false</ns0:WrapHNav><ns0:WrapVNav>false</ns0:WrapVNav><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:Text Name="Pause Active/Queued:" Sym="NGDLQ-1115"><ns0:AnchorX>0.0</ns0:AnchorX><ns0:FixedWidth>0.7</ns0:FixedWidth><ns0:AutosizeText>false</ns0:AutosizeText><ns0:WrapText>true</ns0:WrapText><ns0:TextShadow>true</ns0:TextShadow><ns0:DisableFontScaling>false</ns0:DisableFontScaling><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps></ns0:Text><ns0:Item Name="PauseAllBtn" Sym="NGDLQ-1116"><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:BackgroundComponent>false</ns0:BackgroundComponent><ns0:Action Name="PauseAllRecordingCopyTransfers()" Sym="NGDLQ-1117"><ns0:Action Name="Refresh()" Sym="NGDLQ-1118" /></ns0:Action><ns0:Text Name="Pause All" Sym="NGDLQ-1119" /></ns0:Item><ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." /></ns0:Panel><ns0:Panel Name="ResumeAll" Sym="NGDLQ-1120"><ns0:FixedWidth>1.0</ns0:FixedWidth><ns0:PadX>.02</ns0:PadX><ns0:PadY>.02</ns0:PadY><ns0:Insets>.02</ns0:Insets><ns0:WrapHNav>false</ns0:WrapHNav><ns0:WrapVNav>false</ns0:WrapVNav><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:Text Name="Resume Paused:" Sym="NGDLQ-1121"><ns0:AnchorX>0.0</ns0:AnchorX><ns0:FixedWidth>0.7</ns0:FixedWidth><ns0:AutosizeText>false</ns0:AutosizeText><ns0:WrapText>true</ns0:WrapText><ns0:TextShadow>true</ns0:TextShadow><ns0:DisableFontScaling>false</ns0:DisableFontScaling><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps></ns0:Text><ns0:Item Name="ResumeAllBtn" Sym="NGDLQ-1122"><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:BackgroundComponent>false</ns0:BackgroundComponent><ns0:Action Name="ResumeAllRecordingCopyTransfers()" Sym="NGDLQ-1123"><ns0:Action Name="Refresh()" Sym="NGDLQ-1124" /></ns0:Action><ns0:Text Name="Resume All" Sym="NGDLQ-1125" /></ns0:Item><ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." /></ns0:Panel><ns0:Panel Name="ClearCompleted" Sym="NGDLQ-1126"><ns0:FixedWidth>1.0</ns0:FixedWidth><ns0:PadX>.02</ns0:PadX><ns0:PadY>.02</ns0:PadY><ns0:Insets>.02</ns0:Insets><ns0:WrapHNav>false</ns0:WrapHNav><ns0:WrapVNav>false</ns0:WrapVNav><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:Text Name="Clear Completed:" Sym="NGDLQ-1127"><ns0:AnchorX>0.0</ns0:AnchorX><ns0:FixedWidth>0.7</ns0:FixedWidth><ns0:AutosizeText>false</ns0:AutosizeText><ns0:WrapText>true</ns0:WrapText><ns0:TextShadow>true</ns0:TextShadow><ns0:DisableFontScaling>false</ns0:DisableFontScaling><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps></ns0:Text><ns0:Item Name="ClearCompletedBtn" Sym="NGDLQ-1128"><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:BackgroundComponent>false</ns0:BackgroundComponent><ns0:Action Name="ClearCompletedRecordingCopyTransfers()" Sym="NGDLQ-1129"><ns0:Action Name="Refresh()" Sym="NGDLQ-1130" /></ns0:Action><ns0:Text Name="Clear Completed" Sym="NGDLQ-1131" /></ns0:Item><ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." /></ns0:Panel><ns0:Action Name="&quot;\n \n&quot;" Sym="NGDLQ-1132"><ns0:Text Name="" Sym="NGDLQ-1133" /></ns0:Action><ns0:Item Name="Close" Sym="NGDLQ-1134"><ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1135" /></ns0:Item><ns0:Theme Ref="2131" Name="MutliSelectOptionsTheme" /></ns0:OptionsMenu></ns0:Action></ns0:Item>
        <ns0:Item Name="System Information" Sym="OPUS4A-174739">
         <ns0:Attribute Name="ButtonText" Sym="OPUS4A-174740">
          <ns0:Value>"System Information"</ns0:Value>
@@ -2785,7 +2786,7 @@
       <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
       <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
       <ns0:MouseTransparency>false</ns0:MouseTransparency>
-      <ns0:Theme Ref="316" Name="SecondaryMenuContentAr..." />
+      <ns0:Theme Ref="316" Name="SecondaryMenuContentAr..."/>
       <ns0:Panel Name="Secondary Menu Items Area" Sym="OPUS4A-125869">
        <ns0:WrapHNav>false</ns0:WrapHNav>
        <ns0:WrapVNav>false</ns0:WrapVNav>
@@ -2795,7 +2796,7 @@
        <ns0:Attribute Name="SubMenuPanel" Sym="OPUS4A-126110">
         <ns0:Value>"xSubmenuExit"</ns0:Value>
        </ns0:Attribute>
-       <ns0:Theme Ref="323" Name="SecondaryMenuItemAreaT..." />
+       <ns0:Theme Ref="323" Name="SecondaryMenuItemAreaT..."/>
        <ns0:Item Name="Standby" Sym="OPUS4A-125870">
         <ns0:Attribute Name="ButtonText" Sym="OPUS4A-174788">
          <ns0:Value>"Standby"</ns0:Value>
@@ -2803,9 +2804,10 @@
         <ns0:Attribute Name="ThisItem" Sym="OPUS4A-125872">
          <ns0:Value>"xItemStandby"</ns0:Value>
         </ns0:Attribute>
-        <ns0:Attribute Ref="485" Name="SubItemDefaultFocus" />
-        <ns0:Action Ref="993" Name="SageCommand(&quot;Power Off&quot;)" />
+        <ns0:Attribute Ref="485" Name="SubItemDefaultFocus"/>
+        <ns0:Action Ref="993" Name="SageCommand(&quot;Power Off&quot;)"/>
        </ns0:Item>
+       
        <ns0:Action Name="&quot;REM Add Exit options depending on whether it is an embedded system or not.&quot;" Sym="OPUS4A-212030">
         <ns0:Conditional Name="IsEmbeddedSystem()" Sym="OPUS4A-212031">
          <ns0:Branch Name="true" Sym="OPUS4A-212032">
@@ -85966,7 +85968,7 @@
                     </ns0:Branch>
                     <ns0:Branch Name="else" Sym="BASE-54571">
                      <ns0:Action Name="&quot;REM This recording is in an import dir or a rec dir that was removed from use, so just skip it.&quot;" Sym="BASE-54572">
-                      <ns0:Conditional Name="true" Sym="OPUS4A-338822">
+                      <ns0:Conditional Name="GetProperty(&quot;ui/log_orphan_recordings&quot;, false)" Sym="OPUS4A-338822">
                        <ns0:Action Name="DebugLog( &quot;System Info: recording not in rec dir: &quot; + ThisRec )" Sym="OPUS4A-338823" />
                       </ns0:Conditional>
                      </ns0:Action>
@@ -105959,6 +105961,69 @@
                                 </ns0:Action>
                                </ns0:Item>
                               </ns0:Conditional>
+                              <ns0:Conditional Name="FileListIsRecordings &amp;&amp; IsNgClientSession() &amp;&amp; HasClientCapability(&quot;DOWNLOAD&quot;)" Sym="NGDLQ-1200">
+                               <ns0:Item Name="Download all Recordings" Sym="NGDLQ-1201">
+                                <ns0:OptionsMenu Name="Download all Recordings Menu" Sym="NGDLQ-1217">
+                                 <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+                                 <ns0:Conditional Name="GetRecordingCopyTransferUiModeForMediaFiles(MediaFiles) == &quot;idle&quot;" Sym="NGDLQ-1218">
+                                  <ns0:Item Name="Download all now" Sym="NGDLQ-1219">
+                                   <ns0:Action Name="SendDownloadCommandsToClient(MediaFiles, &quot;foreground&quot;)" Sym="NGDLQ-1220">
+                                    <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1221">
+                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1222"/>
+                                    </ns0:Action>
+                                   </ns0:Action>
+                                  </ns0:Item>
+                                  <ns0:Item Name="Queue all now" Sym="NGDLQ-1223">
+                                   <ns0:Action Name="SendDownloadCommandsToClient(MediaFiles, &quot;background&quot;)" Sym="NGDLQ-1224">
+                                    <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1225">
+                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1226"/>
+                                    </ns0:Action>
+                                   </ns0:Action>
+                                  </ns0:Item>
+                                 </ns0:Conditional>
+                                 <ns0:Conditional Name="GetRecordingCopyTransferUiModeForMediaFiles(MediaFiles) == &quot;active&quot;" Sym="NGDLQ-1227">
+                                  <ns0:Item Name="Pause downloads" Sym="NGDLQ-1228">
+                                   <ns0:Action Name="PauseRecordingCopyTransfersForMediaFiles(MediaFiles)" Sym="NGDLQ-1229">
+                                    <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1230">
+                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1231"/>
+                                    </ns0:Action>
+                                   </ns0:Action>
+                                  </ns0:Item>
+                                  <ns0:Item Name="Resume downloads" Sym="NGDLQ-1232">
+                                   <ns0:Action Name="ResumeRecordingCopyTransfersForMediaFiles(MediaFiles)" Sym="NGDLQ-1233">
+                                    <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1234">
+                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1235"/>
+                                    </ns0:Action>
+                                   </ns0:Action>
+                                  </ns0:Item>
+                                  <ns0:Item Name="Remove downloads" Sym="NGDLQ-1236">
+                                   <ns0:Action Name="CancelRecordingCopyTransfersForMediaFiles(MediaFiles)" Sym="NGDLQ-1237">
+                                    <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1238">
+                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1239"/>
+                                    </ns0:Action>
+                                   </ns0:Action>
+                                  </ns0:Item>
+                                  <ns0:Item Name="Queue snapshot" Sym="NGDLQ-1240">
+                                   <ns0:OptionsMenu Name="Download Queue Snapshot" Sym="NGDLQ-1241">
+                                    <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+                                    <ns0:Action Name="GetRecordingCopyTransferQueueSummaryText()" Sym="NGDLQ-1242">
+                                     <ns0:Text Name="" Sym="NGDLQ-1243"/>
+                                    </ns0:Action>
+                                    <ns0:Item Name="Close" Sym="NGDLQ-1244">
+                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1245"/>
+                                    </ns0:Item>
+                                    <ns0:Theme Ref="954" Name="OptionsConfirmTheme"/>
+                                   </ns0:OptionsMenu>
+                                  </ns0:Item>
+                                 </ns0:Conditional>
+                                 <ns0:Item Name="Close" Sym="NGDLQ-1246">
+                                  <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1247"/>
+                                 </ns0:Item>
+                                 <ns0:Theme Ref="954" Name="OptionsConfirmTheme"/>
+                                </ns0:OptionsMenu>
+                               </ns0:Item>
+                              </ns0:Conditional>
+                              
                               <ns0:Conditional Name="(Size(SubDirMediaFiles) &gt; 0) &amp;&amp; (Size(SubDirMediaFiles) != Size(MediaFiles)) &amp;&amp; (Size(SubDirMediaFiles) &lt;= GetServerProperty(&quot;music/max_playlist_grouped_add&quot;,500))" Sym="BASE-58965">
                                <ns0:Item Name="Play all Videos in this folder" Sym="BASE-58966">
                                 <ns0:Conditional Name="FileListIsVideoGrouping" Sym="BASE-58967">
@@ -130829,7 +130894,176 @@
                      </ns0:Action>
                     </ns0:Item>
                    </ns0:Conditional>
+                  <ns0:Conditional Name="IsCaptionExtractionEnabled() &amp;&amp; !HasCaptionSidecar(MediaFile)" Sym="CAP-100">
+                    <ns0:Item Name="Extract Captions" Sym="CAP-101">
+                     <ns0:FixedWidth>0.5</ns0:FixedWidth>
+                     <ns0:Insets>10</ns0:Insets>
+                     <ns0:Action Name="ExtractCaptions(MediaFile)" Sym="CAP-102">
+                      <ns0:Action Name="Refresh()" Sym="CAP-103"/>
+                     </ns0:Action>
+                    </ns0:Item>
+                   </ns0:Conditional>
+                   <ns0:Conditional Name="HasCaptionSidecar(MediaFile)" Sym="CAP-110">
+                    <ns0:Item Name="Delete Captions" Sym="CAP-111">
+                     <ns0:FixedWidth>0.5</ns0:FixedWidth>
+                     <ns0:Insets>10</ns0:Insets>
+                     <ns0:Action Name="ClearCaptionSidecar(MediaFile)" Sym="CAP-112">
+                      <ns0:Action Name="Refresh()" Sym="CAP-113"/>
+                     </ns0:Action>
+                    </ns0:Item>
+                   </ns0:Conditional>
+                   
+                  <ns0:Conditional Name="IsNgClientSession() &amp;&amp; HasClientCapability(&quot;DOWNLOAD&quot;)" Sym="NGDLQ-1000">
+                    <ns0:Item Name="Download Recording" Sym="NGDLQ-1001">
+                     <ns0:FixedWidth>0.5</ns0:FixedWidth>
+                     <ns0:Insets>10</ns0:Insets>
+                     <ns0:OptionsMenu Name="Download Recording Menu" Sym="NGDLQ-1022">
+                      <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+                      <ns0:Conditional Name="GetRecordingCopyTransferUiModeForMediaFile(MediaFile) == &quot;idle&quot;" Sym="NGDLQ-1023">
+                       <ns0:Item Name="Download now" Sym="NGDLQ-1024">
+                        <ns0:Action Name="TransferCreateResult = CreateRecordingCopyTransferSession(MediaFile, &quot;foreground&quot;, &quot;balanced&quot;, 0, 1, false, true)" Sym="NGDLQ-1025">
+                         <ns0:OptionsMenu Name="Download Request Result" Sym="NGDLQ-1603">
+                          <ns0:Action Name="If(StringIndexOf(TransferCreateResult, &quot;TRANSFER_SESSION_ACK&quot;) &gt;= 0, &quot;Download started.&quot;, &quot;Could not start download.&quot;)" Sym="NGDLQ-1604">
+                           <ns0:Text Name="" Sym="NGDLQ-1605"/>
+                          </ns0:Action>
+                          <ns0:Action Name="GetRecordingCopyTransferQueueSummaryText()" Sym="NGDLQ-1620">
+                           <ns0:Text Name="" Sym="NGDLQ-1621"/>
+                          </ns0:Action>
+                          <ns0:Item Name="Close" Sym="NGDLQ-1606">
+                           <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1607"/>
+                          </ns0:Item>
+                          <ns0:Theme Ref="954" Name="OptionsConfirmTheme"/>
+                         </ns0:OptionsMenu>
+                        </ns0:Action>
+                       </ns0:Item>
+                       <ns0:Item Name="Queue recording download" Sym="NGDLQ-1028">
+                        <ns0:Action Name="TransferCreateResult = CreateRecordingCopyTransferSession(MediaFile, &quot;background&quot;, &quot;balanced&quot;, 0, 1, false, true)" Sym="NGDLQ-1029">
+                         <ns0:OptionsMenu Name="Queue Request Result" Sym="NGDLQ-1613">
+                          <ns0:Action Name="If(StringIndexOf(TransferCreateResult, &quot;TRANSFER_SESSION_ACK&quot;) &gt;= 0, &quot;Download queued.&quot;, &quot;Could not queue download.&quot;)" Sym="NGDLQ-1614">
+                           <ns0:Text Name="" Sym="NGDLQ-1615"/>
+                          </ns0:Action>
+                          <ns0:Action Name="GetRecordingCopyTransferQueueSummaryText()" Sym="NGDLQ-1622">
+                           <ns0:Text Name="" Sym="NGDLQ-1623"/>
+                          </ns0:Action>
+                          <ns0:Item Name="Close" Sym="NGDLQ-1616">
+                           <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1617"/>
+                          </ns0:Item>
+                          <ns0:Theme Ref="954" Name="OptionsConfirmTheme"/>
+                         </ns0:OptionsMenu>
+                        </ns0:Action>
+                       </ns0:Item>
+                      </ns0:Conditional>
+                      <ns0:Conditional Name="GetRecordingCopyTransferUiModeForMediaFile(MediaFile) == &quot;active&quot;" Sym="NGDLQ-1032">
+                       <ns0:Conditional Name="GetLatestRecordingCopyTransferStateForMediaFile(MediaFile) != &quot;paused_by_client&quot; &amp;&amp; GetLatestRecordingCopyTransferStateForMediaFile(MediaFile) != &quot;paused_by_server&quot;" Sym="NGDLQ-1033">
+                        <ns0:Item Name="Pause recording download" Sym="NGDLQ-1034">
+                         <ns0:Action Name="PauseLatestRecordingCopyTransferForMediaFile(MediaFile)" Sym="NGDLQ-1035">
+                          <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1036">
+                           <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1037"/>
+                          </ns0:Action>
+                         </ns0:Action>
+                        </ns0:Item>
+                       </ns0:Conditional>
+                       <ns0:Conditional Name="GetLatestRecordingCopyTransferStateForMediaFile(MediaFile) == &quot;paused_by_client&quot; || GetLatestRecordingCopyTransferStateForMediaFile(MediaFile) == &quot;paused_by_server&quot;" Sym="NGDLQ-1038">
+                        <ns0:Item Name="Resume recording download" Sym="NGDLQ-1039">
+                         <ns0:Action Name="ResumeLatestRecordingCopyTransferForMediaFile(MediaFile)" Sym="NGDLQ-1040">
+                          <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1041">
+                           <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1042"/>
+                          </ns0:Action>
+                         </ns0:Action>
+                        </ns0:Item>
+                       </ns0:Conditional>
+                       <ns0:Item Name="Remove recording download" Sym="NGDLQ-1043">
+                        <ns0:Action Name="CancelLatestRecordingCopyTransferForMediaFile(MediaFile)" Sym="NGDLQ-1044">
+                         <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1045">
+                          <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1046"/>
+                         </ns0:Action>
+                        </ns0:Action>
+                       </ns0:Item>
+                       <ns0:Conditional Name="GetProperty(&quot;developer/show_raw_transfer_json&quot;, false)" Sym="NGDLQ-1706">
+                        <ns0:Item Name="Show transfer status (raw JSON)" Sym="NGDLQ-1700">
+                         <ns0:OptionsMenu Name="Transfer Status" Sym="NGDLQ-1701">
+                          <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+                          <ns0:Action Name="GetLatestRecordingCopyTransferStatusForMediaFile(MediaFile)" Sym="NGDLQ-1702">
+                           <ns0:Text Name="" Sym="NGDLQ-1703"/>
+                          </ns0:Action>
+                          <ns0:Item Name="Close" Sym="NGDLQ-1704">
+                           <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1705"/>
+                          </ns0:Item>
+                          <ns0:Theme Ref="954" Name="OptionsConfirmTheme"/>
+                         </ns0:OptionsMenu>
+                        </ns0:Item>
+                       </ns0:Conditional>
+                       <ns0:Item Name="Queue snapshot" Sym="NGDLQ-1047">
+                        <ns0:OptionsMenu Name="Download Queue Snapshot" Sym="NGDLQ-1048">
+                         <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+                         <ns0:Action Name="GetRecordingCopyTransferQueueSummaryText()" Sym="NGDLQ-1049">
+                          <ns0:Text Name="" Sym="NGDLQ-1050"/>
+                         </ns0:Action>
+                         <ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 1" Sym="NGDLQ-1720">
+                          <ns0:Action Name="&quot;\nItem 1:&quot;" Sym="NGDLQ-1721">
+                           <ns0:Text Name="" Sym="NGDLQ-1722"/>
+                          </ns0:Action>
+                          <ns0:Action Name="GetRecordingCopyTransferQueueItemDetailText(1)" Sym="NGDLQ-1723">
+                           <ns0:Text Name="" Sym="NGDLQ-1724"/>
+                          </ns0:Action>
+                         </ns0:Conditional>
+                         <ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 2" Sym="NGDLQ-1725">
+                          <ns0:Action Name="&quot;\nItem 2:&quot;" Sym="NGDLQ-1726">
+                           <ns0:Text Name="" Sym="NGDLQ-1727"/>
+                          </ns0:Action>
+                          <ns0:Action Name="GetRecordingCopyTransferQueueItemDetailText(2)" Sym="NGDLQ-1728">
+                           <ns0:Text Name="" Sym="NGDLQ-1729"/>
+                          </ns0:Action>
+                         </ns0:Conditional>
+                         <ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 3" Sym="NGDLQ-1730">
+                          <ns0:Action Name="&quot;\nItem 3:&quot;" Sym="NGDLQ-1731">
+                           <ns0:Text Name="" Sym="NGDLQ-1732"/>
+                          </ns0:Action>
+                          <ns0:Action Name="GetRecordingCopyTransferQueueItemDetailText(3)" Sym="NGDLQ-1733">
+                           <ns0:Text Name="" Sym="NGDLQ-1734"/>
+                          </ns0:Action>
+                         </ns0:Conditional>
+                         <ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 4" Sym="NGDLQ-1740">
+                          <ns0:Action Name="&quot;\n(&quot; + (GetRecordingCopyTransferQueueItemCount() - 3) + &quot; more queued)&quot;" Sym="NGDLQ-1741">
+                           <ns0:Text Name="" Sym="NGDLQ-1742"/>
+                          </ns0:Action>
+                         </ns0:Conditional>
+                         <ns0:Conditional Name="GetProperty(&quot;developer/show_raw_transfer_json&quot;, false)" Sym="NGDLQ-1756">
+                          <ns0:Item Name="Show raw snapshot JSON" Sym="NGDLQ-1750">
+                           <ns0:OptionsMenu Name="Raw Queue Snapshot" Sym="NGDLQ-1751">
+                            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+                            <ns0:Action Name="GetRecordingCopyTransferQueueSnapshot()" Sym="NGDLQ-1752">
+                             <ns0:Text Name="" Sym="NGDLQ-1753"/>
+                            </ns0:Action>
+                            <ns0:Action Name="&quot;\n--- Server caps ---&quot;" Sym="NGDLQ-1714">
+                             <ns0:Text Name="" Sym="NGDLQ-1715"/>
+                            </ns0:Action>
+                            <ns0:Action Name="GetRecordingCopyTransferCapsAck()" Sym="NGDLQ-1716">
+                             <ns0:Text Name="" Sym="NGDLQ-1717"/>
+                            </ns0:Action>
+                            <ns0:Item Name="Close" Sym="NGDLQ-1754">
+                             <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1755"/>
+                            </ns0:Item>
+                            <ns0:Theme Ref="954" Name="OptionsConfirmTheme"/>
+                           </ns0:OptionsMenu>
+                          </ns0:Item>
+                         </ns0:Conditional>
+                         <ns0:Item Name="Close" Sym="NGDLQ-1051">
+                          <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1052"/>
+                         </ns0:Item>
+                         <ns0:Theme Ref="954" Name="OptionsConfirmTheme"/>
+                        </ns0:OptionsMenu>
+                       </ns0:Item>
+                      </ns0:Conditional>
+                      <ns0:Item Name="Close" Sym="NGDLQ-1053">
+                       <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1054"/>
+                      </ns0:Item>
+                      <ns0:Theme Ref="954" Name="OptionsConfirmTheme"/>
+                     </ns0:OptionsMenu>
+                    </ns0:Item>
+                   </ns0:Conditional>
                   </ns0:Branch>
+                  
                   <ns0:Branch Name="else" Sym="BASE-49834">
                    <ns0:Conditional Name="!GetProperty(&quot;video_lib_hide_delete&quot;, false)" Sym="BASE-49835">
                     <ns0:Conditional Name="IsDVD(MediaFile)" Sym="BASE-49836">
@@ -147430,7 +147664,7 @@
      <ns0:WrapVNav>false</ns0:WrapVNav>
      <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
      <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
-     <ns0:Action Name="&quot;SageTV™ SOFTWARE LICENSE AGREEMENT\n\nPLEASE READ THIS SageTV™ SOFTWARE LICENSE AGREEMENT (\&quot;Agreement\&quot;) CAREFULLY BEFORE PRESSING THE \&quot;I ACCEPT\&quot; BUTTON BELOW INSTALLING THE SageTV™ SOFTWARE OR USING THE SageTV™ SOFTWARE.  BY PRESSING \&quot;I ACCEPT\&quot;, INSTALLING THE SOFTWARE OR USING THE SOFTWARE YOU (\&quot;Licensee\&quot;) ARE CONFIRMING YOUR AGREEMENT TO BE BOUND BY THE TERMS OF THIS AGREEMENT AND ANY OTHER ASSOCIATED DOCUMENTATION.  IF YOU DO NOT AGREE TO THE TERMS OF THIS AGREEMENT PRESS \&quot;I DO NOT ACCEPT\&quot; AND DELETE ALL COPIES OF THE SOFTWARE AND RETURN THE CD-ROM, IF APPLICABLE, AND ALL ACCOMPANYING DOCUMENTATION AND OTHER MATERIALS TO SAGETV, LLC (\&quot;SageTV\&quot;) WITHIN THIRTY (30) DAYS OF YOUR RECEIPT OF THE SOFTWARE FOR A FULL REFUND OF THE LICENSE FEE, IF ANY, THAT YOU HAVE PAID.\n\nIMPORTANT:  THE SageTV™ SOFTWARE IS A PROPRIETARY PRODUCT AND IS PROTECTED BY COPYRIGHT AND OTHER INTELLECTUAL PROPERTY LAWS.  IT IS LICENSED (NOT SOLD) FOR USE SUBJECT TO THE CONDITION THAT LICENSEE AGREES TO THE TERMS OF THIS AGREEMENT.  \n\nBackground\n\nSageTV has developed a proprietary software program called SageTV that allows a home computer to record a television signal.  Licensee wishes to use the Product (as defined in Section 1 below) on Licensee's home computer for non-commercial purposes.\n\nLicensee and SageTV agree as follows:\n\nThe Agreement\n\n1. License Grant.  SageTV hereby grants Licensee a limited, non-exclusive, non-transferable, revocable license to make one copy of the SageTV™ software, and any fixes, releases, updates, modifications or additions (collectively, the \&quot;Software\&quot;) provided to Licensee by SageTV, for Licensee's personal use, performance and display on Licensee's home personal computer under the terms and conditions of this Agreement.  The Software is in \&quot;use\&quot; on a computer when it is loaded into temporary memory (i.e. RAM) or installed into permanent memory (e.g., hard disk, CD-ROM, or other storage device) of that computer.  The Software may be used on a single personal computer only and may only be networked or used on a server for access by multiple computers if those individual computers have a licensed version of the SageTV Client™ or SageTV Recorder™ installed.  SageTV also grants Licensee a limited, non-exclusive, non-transferable revocable license to use all media and documentation related to the Software at home, for non-commercial purposes.  \&quot;Product\&quot; in this Agreement means the Software and all media and documentation related to the Software.\n\n2. Restrictions.  The Product is comprised of proprietary software and materials and is protected by the laws of the United States, including but not limited to its copyright and patent laws.  Licensee may not:\n(a) copy, distribute, sublicense, transfer, modify, or assign the Product or any portion or copy of the Product, to any third party;\n(b) copy, use or exploit the Product other than in accordance with this Agreement;\n(c) resell, rent, use in a service bureau environment, sublicense or otherwise transfer rights to the Product to any third party;\n(d) reverse engineer, disassemble, or decompile the Product or assist any other entity in doing so except to the extent required by third party licenses included with the Product;\n(e) remove or obscure any proprietary notices on the Product.\n\n3. Ownership.  The Product (including any images, \&quot;applets\&quot;, plug-ins, photographs, animations, video, audio, music and text incorporated into the Product) is owned by SageTV or it licensors and is protected by United States copyright and patent laws and international treaty provisions and all other applicable national laws.  All rights are reserved.  Licensee must treat the Software like any other copyrighted material (e.g., a book or musical recording) except that if the Software is not copy protected Licensee may either (a) make one copy of the Software solely for backup or archival purposes, or (b) transfer the Software to a single hard disk provided Licensee keeps the original solely for backup or archival purposes.  Licensee may not copy the user documentation accompanying the Software.  The trademarks contained in the Product are owned by their respective owners.  No right, license or interest to any trademark is granted by this Agreement and Licensee agrees that no right, license or interest will be asserted by Licensee with respect to the trademarks contained in the Product.\n\n4. U.S. Government Restricted Rights.  The Product is provided with restricted rights.  Use, duplication, or disclosure by the United States Government is subject to restrictions as set forth in this Agreement and at DFARS 227.7202-1(a) and 227.7202-3(a) (1995), DFARs 252.227-7013 (c)(1)(ii) (OCT 1988), FAR 12.212(a) (1995), FAR 52.227-19 (June 1987), or FAR 52.227-14 (ALT III), as applicable.  Manufacturer is SageTV, LLC.\n\n5. Term/Termination.  This Agreement is effective from the date of Licensee's acceptance.  This Agreement will automatically terminate upon any breach of its terms by Licensee.\n\n6. Licensee Obligations.  Licensee will:\nA. provide a proper operating environment for the Product including, at a minimum, the specifications set forth at SageTV's Internet Site, www.sagetv.com;\nB. promptly install all fixes, releases, updates, modifications and additions to the Product delivered to Licensee by SageTV and destroy all copies of previous versions of the Product;\nC. use the Product only as authorized in this Agreement;\nD. use the Product in compliance with all applicable laws including, without limitation, United States copyright laws; and\nE. preserve all proprietary notices in any copy of the Product in the same manner those notices appear in the original.\n\n7. Limited Warranty and Disclaimers.  SageTV warrants that the media containing the Product is free from defects in materials and workmanship for a period of sixty (60) days after receipt by Licensee.  SageTV will replace any defective or malfunctioning media at no charge during the warranty period.  For warranty service, Licensee may contact SageTV at: SageTV, LLC, Two Mid America Plaza, Suite 800 Oakbrook Terrace, IL 60181.  Any hardware accompanying the Product (including Optional Equipment, as defined in Section 9 below) will be warranted pursuant to the manufacturer's warranty only.  Except as explicitly set forth in this Section 7, The Product is distributed and licensed \&quot;as-is\&quot;, with no warranties whatsoever, express or implied, including, without limitation, warranties of merchantability, fitness for any particular purpose or non-infringement of patents, copyrights or other proprietary rights of others.  Some states and jurisdictions do not allow limitations on implied warranties, so the above limitations may not apply to Licensee.  When the implied warranties are not allowed to be excluded in their entirety, they will be limited to the duration of the limited warranty above.  This limited warranty grants Licensee specific legal rights and Licensee may also have other rights which vary from state to state.\n\nDue to the complex nature of computer software, SageTV and its licensors do not warrant that the Product is completely error free, will operate without interruption, or is compatible with all equipment and software configurations.  Licensee expressly assumes all risk for use of the Product.\n\n8. Limitation Of Liability.  To the maximum extent permitted by law, SageTV will not have any liability or responsibility to Licensee for damages of any kind, including special, indirect or consequential damages (including, without limitation, damages for loss of data), arising out of or resulting from the Product, any component, documentation, services or materials made available to Licensee under this Agreement or the use or modification of any of them, even if SageTV has been advised of the possibility of the damages.  In any case, SageTV's and its licensors' entire liability under any provision of this Agreement will be limited to the amount actually paid by Licensee to SageTV for the Product or ten dollars ($10.00), whichever is greater.  Some states do not allow the limitation or exclusion of liability for incidental or consequential damages, or have legislation which restricts the limitation or exclusion of liability, so the above limitation may not apply to Licensee in those states.  \n\n9. Optional Equipment / EPG Service.  SageTV may provide Licensee with a capture card or other hardware enabling Licensee to use the Product (the \&quot;Optional Equipment\&quot;).  If Licensee received Optional Equipment, Licensee agrees to pay SageTV for the Optional Equipment.  Licensee will be responsible for all shipping, handling and taxes related to the sale of the Optional Equipment.  Title to the Optional Equipment will pass from SageTV to Licensee upon payment in full from Licensee to SageTV of all amounts related to the Optional Equipment.  Licensee acknowledges and agrees that the Optional Equipment is provided to Licensee by SageTV as a convenience, \&quot;as is\&quot; and subject only to any warranty offered by the original manufacturer of the Optional Equipment.  Currently, SageTV provides electronic programming guide service (the \&quot;EPG Service\&quot;) to End Users at no charge.  End User acknowledges that SageTV reserves the right to discontinue provision of the EPG Services and to separately charge End Users for provision of the EPG Service.\n\n10. Indemnification.  Licensee agrees to defend, indemnify and hold harmless SageTV, its officers, directors and employees from and against any claims, suits, losses, damages, fines and expenses (including attorneys' fees and costs) arising out of or in any way related to Licensee's use of the Product: (i) in violation of any law; and (ii) resulting in any actual or alleged infringement, misappropriation or violation of any third party's rights.\n\n11. Survival.  The terms and conditions of Sections 8 and 10 through 16 will survive the termination or expiration of this Agreement.\n\n12. Injunctive Relief.  SageTV has and may cumulatively exercise all rights it might have at law or in equity for the protection of the Product, including, without limitation, injunctive relief enjoining the breach or threatened breach of this Agreement.  In the event Licensee breaches or threatens a breach of this Agreement, Licensee agrees that SageTV will be entitled to injunction and other temporary and permanent equitable relief without requirement of posting bond and without the necessity of showing actual money damages.\n\n13. Governing Law.  So far as may be permitted by the laws of their respective jurisdictions, SageTV and Licensee expressly agree that this Agreement is governed by and construed in accordance with the laws of the State of Illinois, United States of America, without regard to its conflict of law principles.  Except where SageTV seeks equitable relief, the parties agree that the state and federal courts located in Cook County, Illinois will be the sole and exclusive venue and jurisdiction for any litigation arising from this Agreement.  PURSUANT TO ARTICLE 6 OF THE UNITED NATIONS CONVENTION ON CONTRACTS FOR THE INTERNATIONAL SALE OF GOODS (\&quot;UN CONVENTION\&quot;), LICENSEE AND SAGETV AGREE THAT THE UN CONVENTION WILL NOT APPLY TO THIS AGREEMENT.\n\n14. Export Law Assurances.  Licensee may not use or otherwise export or re-export the Product except as authorized by United States law and the laws of the jurisdiction in which the Product were obtained.  In particular, but without limitation, the Product may not be exported or re-exported (including, without limitation, any download or delivery): (i) into (or to a national or resident of) any U.S. embargoed country or (ii) to anyone on the U.S. Treasury Department's list of Specially Designated Nationals or the U.S. Department of Commerce's Table of Denial Orders.  By downloading or using the Product, Licensee represents and warrants that Licensee is not located in, under control of, or a national or resident of any country to which export is prohibited or on any list maintained by the U.S. government prohibiting delivery of the Product to Licensee.\n\n15. Waiver.  SageTV's failure to exercise, or delay in exercising, any of its rights under this Agreement will not constitute or be deemed a waiver or forfeiture of those rights. \n\n16. English Language.  SageTV and Licensee have required that this Agreement and all documents related to this Agreement be drawn up in English.  For Licensees resident in Quebec, France and other francophone jurisdictions: SageTV et Licensee ont demandé expressément qua la présente entente et tous les document et avis connexes soient rédigés en anglais.\n\n17. Entire Agreement.  This Agreement is the entire agreement between the parties concerning the Product and it supersedes any prior or contemporaneous written or oral agreements with respect to the subject matter, and may not be amended or modified except by subsequent agreement in writing by Licensee and an officer of SageTV.\n\nSageTV, LLC, Two Mid America Plaza, Suite 800 Oakbrook Terrace, IL 60181\n&quot;" Sym="BASE-76833">
+     <ns0:Action Name="&quot;SageTVâ„¢ SOFTWARE LICENSE AGREEMENT\n\nPLEASE READ THIS SageTVâ„¢ SOFTWARE LICENSE AGREEMENT (\&quot;Agreement\&quot;) CAREFULLY BEFORE PRESSING THE \&quot;I ACCEPT\&quot; BUTTON BELOW INSTALLING THE SageTVâ„¢ SOFTWARE OR USING THE SageTVâ„¢ SOFTWARE.  BY PRESSING \&quot;I ACCEPT\&quot;, INSTALLING THE SOFTWARE OR USING THE SOFTWARE YOU (\&quot;Licensee\&quot;) ARE CONFIRMING YOUR AGREEMENT TO BE BOUND BY THE TERMS OF THIS AGREEMENT AND ANY OTHER ASSOCIATED DOCUMENTATION.  IF YOU DO NOT AGREE TO THE TERMS OF THIS AGREEMENT PRESS \&quot;I DO NOT ACCEPT\&quot; AND DELETE ALL COPIES OF THE SOFTWARE AND RETURN THE CD-ROM, IF APPLICABLE, AND ALL ACCOMPANYING DOCUMENTATION AND OTHER MATERIALS TO SAGETV, LLC (\&quot;SageTV\&quot;) WITHIN THIRTY (30) DAYS OF YOUR RECEIPT OF THE SOFTWARE FOR A FULL REFUND OF THE LICENSE FEE, IF ANY, THAT YOU HAVE PAID.\n\nIMPORTANT:  THE SageTVâ„¢ SOFTWARE IS A PROPRIETARY PRODUCT AND IS PROTECTED BY COPYRIGHT AND OTHER INTELLECTUAL PROPERTY LAWS.  IT IS LICENSED (NOT SOLD) FOR USE SUBJECT TO THE CONDITION THAT LICENSEE AGREES TO THE TERMS OF THIS AGREEMENT.  \n\nBackground\n\nSageTV has developed a proprietary software program called SageTV that allows a home computer to record a television signal.  Licensee wishes to use the Product (as defined in Section 1 below) on Licensee's home computer for non-commercial purposes.\n\nLicensee and SageTV agree as follows:\n\nThe Agreement\n\n1. License Grant.  SageTV hereby grants Licensee a limited, non-exclusive, non-transferable, revocable license to make one copy of the SageTVâ„¢ software, and any fixes, releases, updates, modifications or additions (collectively, the \&quot;Software\&quot;) provided to Licensee by SageTV, for Licensee's personal use, performance and display on Licensee's home personal computer under the terms and conditions of this Agreement.  The Software is in \&quot;use\&quot; on a computer when it is loaded into temporary memory (i.e. RAM) or installed into permanent memory (e.g., hard disk, CD-ROM, or other storage device) of that computer.  The Software may be used on a single personal computer only and may only be networked or used on a server for access by multiple computers if those individual computers have a licensed version of the SageTV Clientâ„¢ or SageTV Recorderâ„¢ installed.  SageTV also grants Licensee a limited, non-exclusive, non-transferable revocable license to use all media and documentation related to the Software at home, for non-commercial purposes.  \&quot;Product\&quot; in this Agreement means the Software and all media and documentation related to the Software.\n\n2. Restrictions.  The Product is comprised of proprietary software and materials and is protected by the laws of the United States, including but not limited to its copyright and patent laws.  Licensee may not:\n(a) copy, distribute, sublicense, transfer, modify, or assign the Product or any portion or copy of the Product, to any third party;\n(b) copy, use or exploit the Product other than in accordance with this Agreement;\n(c) resell, rent, use in a service bureau environment, sublicense or otherwise transfer rights to the Product to any third party;\n(d) reverse engineer, disassemble, or decompile the Product or assist any other entity in doing so except to the extent required by third party licenses included with the Product;\n(e) remove or obscure any proprietary notices on the Product.\n\n3. Ownership.  The Product (including any images, \&quot;applets\&quot;, plug-ins, photographs, animations, video, audio, music and text incorporated into the Product) is owned by SageTV or it licensors and is protected by United States copyright and patent laws and international treaty provisions and all other applicable national laws.  All rights are reserved.  Licensee must treat the Software like any other copyrighted material (e.g., a book or musical recording) except that if the Software is not copy protected Licensee may either (a) make one copy of the Software solely for backup or archival purposes, or (b) transfer the Software to a single hard disk provided Licensee keeps the original solely for backup or archival purposes.  Licensee may not copy the user documentation accompanying the Software.  The trademarks contained in the Product are owned by their respective owners.  No right, license or interest to any trademark is granted by this Agreement and Licensee agrees that no right, license or interest will be asserted by Licensee with respect to the trademarks contained in the Product.\n\n4. U.S. Government Restricted Rights.  The Product is provided with restricted rights.  Use, duplication, or disclosure by the United States Government is subject to restrictions as set forth in this Agreement and at DFARS 227.7202-1(a) and 227.7202-3(a) (1995), DFARs 252.227-7013 (c)(1)(ii) (OCT 1988), FAR 12.212(a) (1995), FAR 52.227-19 (June 1987), or FAR 52.227-14 (ALT III), as applicable.  Manufacturer is SageTV, LLC.\n\n5. Term/Termination.  This Agreement is effective from the date of Licensee's acceptance.  This Agreement will automatically terminate upon any breach of its terms by Licensee.\n\n6. Licensee Obligations.  Licensee will:\nA. provide a proper operating environment for the Product including, at a minimum, the specifications set forth at SageTV's Internet Site, www.sagetv.com;\nB. promptly install all fixes, releases, updates, modifications and additions to the Product delivered to Licensee by SageTV and destroy all copies of previous versions of the Product;\nC. use the Product only as authorized in this Agreement;\nD. use the Product in compliance with all applicable laws including, without limitation, United States copyright laws; and\nE. preserve all proprietary notices in any copy of the Product in the same manner those notices appear in the original.\n\n7. Limited Warranty and Disclaimers.  SageTV warrants that the media containing the Product is free from defects in materials and workmanship for a period of sixty (60) days after receipt by Licensee.  SageTV will replace any defective or malfunctioning media at no charge during the warranty period.  For warranty service, Licensee may contact SageTV at: SageTV, LLC, Two Mid America Plaza, Suite 800 Oakbrook Terrace, IL 60181.  Any hardware accompanying the Product (including Optional Equipment, as defined in Section 9 below) will be warranted pursuant to the manufacturer's warranty only.  Except as explicitly set forth in this Section 7, The Product is distributed and licensed \&quot;as-is\&quot;, with no warranties whatsoever, express or implied, including, without limitation, warranties of merchantability, fitness for any particular purpose or non-infringement of patents, copyrights or other proprietary rights of others.  Some states and jurisdictions do not allow limitations on implied warranties, so the above limitations may not apply to Licensee.  When the implied warranties are not allowed to be excluded in their entirety, they will be limited to the duration of the limited warranty above.  This limited warranty grants Licensee specific legal rights and Licensee may also have other rights which vary from state to state.\n\nDue to the complex nature of computer software, SageTV and its licensors do not warrant that the Product is completely error free, will operate without interruption, or is compatible with all equipment and software configurations.  Licensee expressly assumes all risk for use of the Product.\n\n8. Limitation Of Liability.  To the maximum extent permitted by law, SageTV will not have any liability or responsibility to Licensee for damages of any kind, including special, indirect or consequential damages (including, without limitation, damages for loss of data), arising out of or resulting from the Product, any component, documentation, services or materials made available to Licensee under this Agreement or the use or modification of any of them, even if SageTV has been advised of the possibility of the damages.  In any case, SageTV's and its licensors' entire liability under any provision of this Agreement will be limited to the amount actually paid by Licensee to SageTV for the Product or ten dollars ($10.00), whichever is greater.  Some states do not allow the limitation or exclusion of liability for incidental or consequential damages, or have legislation which restricts the limitation or exclusion of liability, so the above limitation may not apply to Licensee in those states.  \n\n9. Optional Equipment / EPG Service.  SageTV may provide Licensee with a capture card or other hardware enabling Licensee to use the Product (the \&quot;Optional Equipment\&quot;).  If Licensee received Optional Equipment, Licensee agrees to pay SageTV for the Optional Equipment.  Licensee will be responsible for all shipping, handling and taxes related to the sale of the Optional Equipment.  Title to the Optional Equipment will pass from SageTV to Licensee upon payment in full from Licensee to SageTV of all amounts related to the Optional Equipment.  Licensee acknowledges and agrees that the Optional Equipment is provided to Licensee by SageTV as a convenience, \&quot;as is\&quot; and subject only to any warranty offered by the original manufacturer of the Optional Equipment.  Currently, SageTV provides electronic programming guide service (the \&quot;EPG Service\&quot;) to End Users at no charge.  End User acknowledges that SageTV reserves the right to discontinue provision of the EPG Services and to separately charge End Users for provision of the EPG Service.\n\n10. Indemnification.  Licensee agrees to defend, indemnify and hold harmless SageTV, its officers, directors and employees from and against any claims, suits, losses, damages, fines and expenses (including attorneys' fees and costs) arising out of or in any way related to Licensee's use of the Product: (i) in violation of any law; and (ii) resulting in any actual or alleged infringement, misappropriation or violation of any third party's rights.\n\n11. Survival.  The terms and conditions of Sections 8 and 10 through 16 will survive the termination or expiration of this Agreement.\n\n12. Injunctive Relief.  SageTV has and may cumulatively exercise all rights it might have at law or in equity for the protection of the Product, including, without limitation, injunctive relief enjoining the breach or threatened breach of this Agreement.  In the event Licensee breaches or threatens a breach of this Agreement, Licensee agrees that SageTV will be entitled to injunction and other temporary and permanent equitable relief without requirement of posting bond and without the necessity of showing actual money damages.\n\n13. Governing Law.  So far as may be permitted by the laws of their respective jurisdictions, SageTV and Licensee expressly agree that this Agreement is governed by and construed in accordance with the laws of the State of Illinois, United States of America, without regard to its conflict of law principles.  Except where SageTV seeks equitable relief, the parties agree that the state and federal courts located in Cook County, Illinois will be the sole and exclusive venue and jurisdiction for any litigation arising from this Agreement.  PURSUANT TO ARTICLE 6 OF THE UNITED NATIONS CONVENTION ON CONTRACTS FOR THE INTERNATIONAL SALE OF GOODS (\&quot;UN CONVENTION\&quot;), LICENSEE AND SAGETV AGREE THAT THE UN CONVENTION WILL NOT APPLY TO THIS AGREEMENT.\n\n14. Export Law Assurances.  Licensee may not use or otherwise export or re-export the Product except as authorized by United States law and the laws of the jurisdiction in which the Product were obtained.  In particular, but without limitation, the Product may not be exported or re-exported (including, without limitation, any download or delivery): (i) into (or to a national or resident of) any U.S. embargoed country or (ii) to anyone on the U.S. Treasury Department's list of Specially Designated Nationals or the U.S. Department of Commerce's Table of Denial Orders.  By downloading or using the Product, Licensee represents and warrants that Licensee is not located in, under control of, or a national or resident of any country to which export is prohibited or on any list maintained by the U.S. government prohibiting delivery of the Product to Licensee.\n\n15. Waiver.  SageTV's failure to exercise, or delay in exercising, any of its rights under this Agreement will not constitute or be deemed a waiver or forfeiture of those rights. \n\n16. English Language.  SageTV and Licensee have required that this Agreement and all documents related to this Agreement be drawn up in English.  For Licensees resident in Quebec, France and other francophone jurisdictions: SageTV et Licensee ont demandÃ© expressÃ©ment qua la prÃ©sente entente et tous les document et avis connexes soient rÃ©digÃ©s en anglais.\n\n17. Entire Agreement.  This Agreement is the entire agreement between the parties concerning the Product and it supersedes any prior or contemporaneous written or oral agreements with respect to the subject matter, and may not be amended or modified except by subsequent agreement in writing by Licensee and an officer of SageTV.\n\nSageTV, LLC, Two Mid America Plaza, Suite 800 Oakbrook Terrace, IL 60181\n&quot;" Sym="BASE-76833">
       <ns0:Text Name="" Sym="BASE-76834">
        <ns0:AnchorX>0.0</ns0:AnchorX>
        <ns0:AnchorPointX>0.0</ns0:AnchorPointX>
@@ -149736,13 +149970,13 @@
                                         <ns0:WrapVNav>false</ns0:WrapVNav>
                                         <ns0:IgnoreThemeProps>true</ns0:IgnoreThemeProps>
                                         <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
-                                        <ns0:Item Name="↹ Tab" Sym="BASE-47324-KEY-TAB">
+                                        <ns0:Item Name="â†¹ Tab" Sym="BASE-47324-KEY-TAB">
                                          <ns0:FixedWidth>0.20</ns0:FixedWidth>
                                          <ns0:Action Name="SMBAuthField = (SMBAuthField + 1) % 3" Sym="BASE-47324-KEY-TAB-CYCLE">
                                           <ns0:Action Name="Refresh()" Sym="BASE-47324-KEY-TAB-REFRESH" />
                                          </ns0:Action>
                                         </ns0:Item>
-                                        <ns0:Item Name="⌫ Backspace" Sym="BASE-47324-KEY-BACKSPACE">
+                                        <ns0:Item Name="âŒ« Backspace" Sym="BASE-47324-KEY-BACKSPACE">
                                          <ns0:FixedWidth>0.30</ns0:FixedWidth>
                                          <ns0:Conditional Name="SMBAuthField == 0" Sym="BASE-47324-BS-COND0">
                                           <ns0:Branch Name="true" Sym="BASE-47324-BS-USER">
@@ -149760,13 +149994,13 @@
                                           </ns0:Branch>
                                          </ns0:Conditional>
                                         </ns0:Item>
-                                        <ns0:Item Name="⎵ Space" Sym="BASE-47324-KEY-SPACE">
+                                        <ns0:Item Name="âŽµ Space" Sym="BASE-47324-KEY-SPACE">
                                          <ns0:FixedWidth>0.30</ns0:FixedWidth>
                                          <ns0:Action Name="SMBAuthPendingChar = &quot; &quot;" Sym="BASE-47324-KEY-SPACE-SET">
                                           <ns0:Conditional Ref="73990" Name="SMBAuthField == 0" />
                                          </ns0:Action>
                                         </ns0:Item>
-                                        <ns0:Item Name="↵ Enter" Sym="BASE-47324-KEY-ENTER">
+                                        <ns0:Item Name="â†µ Enter" Sym="BASE-47324-KEY-ENTER">
                                          <ns0:FixedWidth>0.30</ns0:FixedWidth>
                                          <ns0:Action Name="SetSMBBrowseCredentials(SMBAuthUsername, SMBAuthPassword, SMBAuthDomain, false)" Sym="BASE-47324-KEY-ENTER-SET">
                                           <ns0:Action Name="CurrentDirPath = SMBAuthHost" Sym="BASE-47324-KEY-ENTER-NAV">
