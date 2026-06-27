@@ -1,0 +1,327 @@
+{
+  "input": "..\\..\\stvs\\SageTV7\\SageTV7_cached_ac25_targeted.xml",
+  "menus_analyzed": 101,
+  "focused_menus": {
+    "Main Menu": {
+      "focus_gained_hooks": 2,
+      "needrefresh_true": 9,
+      "refresh_calls": 13,
+      "ref75_calls": 13
+    },
+    "MediaPlayer OSD": {
+      "focus_gained_hooks": 3,
+      "needrefresh_true": 0,
+      "refresh_calls": 52,
+      "ref75_calls": 0
+    },
+    "Theme Preview Top Right with Info Below": {
+      "focus_gained_hooks": 1,
+      "needrefresh_true": 0,
+      "refresh_calls": 0,
+      "ref75_calls": 0
+    }
+  },
+  "ref75": {
+    "definition": {
+      "name": "\"REM If refresh is needed, do so.\"",
+      "menu": "Main Menu"
+    },
+    "count": 13,
+    "sample_callers": [
+      {
+        "menu": "Main Menu",
+        "name": "\"REM If refresh is nee..."
+      },
+      {
+        "menu": "Main Menu",
+        "name": "\"REM If refresh is nee..."
+      },
+      {
+        "menu": "Main Menu",
+        "name": "\"REM If refresh is nee..."
+      },
+      {
+        "menu": "Main Menu",
+        "name": "\"REM If refresh is nee..."
+      },
+      {
+        "menu": "Main Menu",
+        "name": "\"REM If refresh is nee..."
+      },
+      {
+        "menu": "Main Menu",
+        "name": "\"REM If refresh is nee..."
+      },
+      {
+        "menu": "Main Menu",
+        "name": "\"REM If refresh is nee..."
+      },
+      {
+        "menu": "Main Menu",
+        "name": "\"REM If refresh is nee..."
+      },
+      {
+        "menu": "Main Menu",
+        "name": "\"REM If refresh is nee..."
+      },
+      {
+        "menu": "Main Menu",
+        "name": "\"REM If refresh is nee..."
+      },
+      {
+        "menu": "Main Menu",
+        "name": "\"REM If refresh is nee..."
+      },
+      {
+        "menu": "Main Menu",
+        "name": "\"REM If refresh is nee..."
+      },
+      {
+        "menu": "Main Menu",
+        "name": "\"REM If refresh is nee..."
+      }
+    ]
+  },
+  "top_action_refs": [
+    {
+      "ref": "2677",
+      "count": 145,
+      "definition": {
+        "name": "IsChecked = setting==SettingValue",
+        "menu": "Xtra: Multimenu by malore"
+      }
+    },
+    {
+      "ref": "32",
+      "count": 89,
+      "definition": {
+        "name": "\"REM Handle Menu content Animation IN/OUT effects\"",
+        "menu": "THEME ORGANIZER 3"
+      }
+    },
+    {
+      "ref": "2640",
+      "count": 53,
+      "definition": {
+        "name": "\"REM Reset reverse animation variable.\"",
+        "menu": "VideoBG THEME"
+      }
+    },
+    {
+      "ref": "62488",
+      "count": 47,
+      "definition": {
+        "name": "IsChecked = FindElementIndex( FavTimeList, TimePeriod ) != -1",
+        "menu": "Favorite Details"
+      }
+    },
+    {
+      "ref": "22661",
+      "count": 39,
+      "definition": {
+        "name": "\"REM Update 'setting' to 'SettingValue' and show updated choice before closing the dialog.\"",
+        "menu": "Detailed Setup"
+      }
+    },
+    {
+      "ref": "19990",
+      "count": 38,
+      "definition": {
+        "name": "\"REM Draw separator line at bottom of panel.\"",
+        "menu": "Configuration Wizard - Ask For Weather Setup"
+      }
+    },
+    {
+      "ref": "5365",
+      "count": 31,
+      "definition": {
+        "name": "Title = Title + FontSizeLimitText",
+        "menu": "Browser - Files"
+      }
+    },
+    {
+      "ref": "7478",
+      "count": 30,
+      "definition": {
+        "name": "\"REM Show/Hide cross fade effect for thumbs & text\"",
+        "menu": "Browser - Photos"
+      }
+    },
+    {
+      "ref": "5949",
+      "count": 25,
+      "definition": {
+        "name": "\"REM If Stopping a downloaded video, cancel its download & stop tracking the bandwidth info.\"",
+        "menu": "MediaPlayer OSD"
+      }
+    },
+    {
+      "ref": "51331",
+      "count": 22,
+      "definition": {
+        "name": "\"REM Effects for showing/hiding the icon.\"",
+        "menu": "Browser - Videos, Playlist Details"
+      }
+    },
+    {
+      "ref": "35446",
+      "count": 21,
+      "definition": {
+        "name": "\"REM Show/Hide fade effect for icons\"",
+        "menu": "THEME ORGANIZER 7"
+      }
+    },
+    {
+      "ref": "55595",
+      "count": 21,
+      "definition": {
+        "name": "IsRatingUnderParentalLock(Rating)",
+        "menu": "Parental Controls Restrictions"
+      }
+    },
+    {
+      "ref": "48074",
+      "count": 20,
+      "definition": {
+        "name": "\"REM Add grouped names for RoleList + RoleText to PeopleListGrouping; remove used roles from AllRoles. Group by NameGroupCount.\"",
+        "menu": "Detailed Info - Recording"
+      }
+    },
+    {
+      "ref": "2684",
+      "count": 19,
+      "definition": {
+        "name": "\"REM Show refreshed RefreshDialogName dialog with updated choice before closing the dialog.\"",
+        "menu": "Channel Setup"
+      }
+    },
+    {
+      "ref": "2564",
+      "count": 18,
+      "definition": {
+        "name": "MenuIsActive = true",
+        "menu": "SageRecordings w/ Optional Preview & AutoCategories"
+      }
+    },
+    {
+      "ref": "2920",
+      "count": 18,
+      "definition": {
+        "name": "MenuIsActive = false",
+        "menu": "SageRecordings w/ Optional Preview & AutoCategories"
+      }
+    },
+    {
+      "ref": "11029",
+      "count": 18,
+      "definition": {
+        "name": "\"REM FX to handle delayed display after table transition.\"",
+        "menu": "Theme Preview Top Right with Music Info Below"
+      }
+    },
+    {
+      "ref": "1697",
+      "count": 17,
+      "definition": {
+        "name": "\"REM Dialog show/hide effects\"",
+        "menu": "THEME ORGANIZER 3"
+      }
+    },
+    {
+      "ref": "6454",
+      "count": 17,
+      "definition": {
+        "name": "\"REM Draw the table's Vertical scroll bar BG.\"",
+        "menu": "zzzz Feature Test Menu"
+      }
+    },
+    {
+      "ref": "6455",
+      "count": 17,
+      "definition": {
+        "name": "\"REM Draw the table's Up arrow.\"",
+        "menu": "zzzz Feature Test Menu"
+      }
+    },
+    {
+      "ref": "6456",
+      "count": 17,
+      "definition": {
+        "name": "\"REM Draw the table's Down arrow.\"",
+        "menu": "zzzz Feature Test Menu"
+      }
+    },
+    {
+      "ref": "6457",
+      "count": 17,
+      "definition": {
+        "name": "\"REM Draw the table's Vertical scroll bar content area.\"",
+        "menu": "zzzz Feature Test Menu"
+      }
+    },
+    {
+      "ref": "14297",
+      "count": 17,
+      "definition": {
+        "name": "\"REM Update the menu display\"",
+        "menu": "Browser - Music"
+      }
+    },
+    {
+      "ref": "26276",
+      "count": 16,
+      "definition": {
+        "name": "IsChecked = HasPermission( PermissionName, UserProfileName )",
+        "menu": "Detailed Setup"
+      }
+    },
+    {
+      "ref": "7501",
+      "count": 15,
+      "definition": {
+        "name": "\"REM Use Back to return to the previous menu.\"",
+        "menu": "Favorites Manager"
+      }
+    },
+    {
+      "ref": "8123",
+      "count": 15,
+      "definition": {
+        "name": "\"REM Clear the regex filtering string.\"",
+        "menu": "Browser - Music"
+      }
+    },
+    {
+      "ref": "740",
+      "count": 14,
+      "definition": {
+        "name": "\"REM Ask for parental code; 'PCCodeOK' will be true if passed.\"",
+        "menu": "Main Menu"
+      }
+    },
+    {
+      "ref": "1523",
+      "count": 14,
+      "definition": {
+        "name": "\"REM Draw the Dialog BG\"",
+        "menu": "THEME ORGANIZER 3"
+      }
+    },
+    {
+      "ref": "7949",
+      "count": 14,
+      "definition": {
+        "name": "\"REM Mark that this item has focus\"",
+        "menu": "THEME ORGANIZER 7"
+      }
+    },
+    {
+      "ref": "7953",
+      "count": 14,
+      "definition": {
+        "name": "\"REM Mark that this item does not have focus\"",
+        "menu": "Browser - Music"
+      }
+    }
+  ]
+}
