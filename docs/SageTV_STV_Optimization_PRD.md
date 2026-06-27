@@ -9,9 +9,30 @@ File Size	13.7 MB  •  215,701 lines
 Total Widgets	66,870
 Mod Layers	18 Sym prefixes (BASE, OPUS4A, OPUS4, NFLX1, COMSKIP …)
 Author	Ted Carlus
-Version	0.1 — Draft
-Date	June 18, 2026
+Version	0.2 — Draft + Implementation Status
+Date	June 26, 2026
 Destination	VSCode + GitHub Copilot
+
+Implementation Status — June 26, 2026
+
+This document still describes the original four-phase roadmap, but the current
+repository and production-safe outcome are narrower than the original Phase 3
+plan.
+
+Current approved state:
+
+- Canonical repo STV: `stvs/SageTV7/SageTV7.xml`
+- Approved Phase 3 result: MediaPlayer OSD-only refresh deduplication
+- Rejected Phase 3 experiment: Main Menu refresh deduplication
+- Canonical analyzer: `docs/STV_Cleanup/stv_expression_analyzer_fast.py`
+- Compatibility analyzer: `docs/STV_Cleanup/stv_expression_analyzer.py`
+
+Validated findings from June 26, 2026:
+
+- Main Menu refresh deduplication regressed intended submenu expansion behavior and was rolled back.
+- MediaPlayer OSD refresh deduplication was retained and promoted as the safe Phase 3 result.
+- Expression-overhead analysis on the approved Phase 3 STV reported LOW high-cost concentration.
+- Current analyzer result on the approved STV: 28,926 total function calls, 527 high-cost calls, 1.8% high-cost ratio.
 
  Table of Contents
 1.  Executive Summary	3
@@ -68,6 +89,16 @@ Phase	Name	Primary Fix	Effort	Risk	Expected Gain
 2	Expression Caching	Add SetLocal/GetLocal in BeforeMenuLoad	1–2 weeks	Medium	60–80% less lag
 3	Theme Flattening	Pre-resolve inheritance chains	2–3 weeks	Medium	Paint O(1) vs O(depth)
 4	Modularization	IsCurrentMenu guards + module split + composer	1–3 months	High	Screen-level isolation
+
+Executive Summary Addendum — Actual Phase 3 Outcome
+
+The original roadmap expected a broader structural Phase 3. The implemented and
+validated repository outcome is narrower:
+
+- MediaPlayer OSD refresh calls were deduplicated successfully.
+- Main Menu refresh deduplication was attempted, caused navigation regression, and was rolled back.
+- The canonical `SageTV7.xml` now represents the approved OSD-only Phase 3 result.
+- Theme flattening remains a design-phase item in this PRD, not a completed repository state.
 2. Problem Statement
 2.1  Background
 SageTV uses a directed widget graph (the STV) to define its entire UI. The file is loaded at startup and Catbert — the runtime expression engine — traverses widget subtrees on every repaint and input event. The STV has been extended by stacking 18 distinct modification layers (identified by Sym prefix) directly into the monolith without consolidation.
@@ -216,9 +247,37 @@ GitHub Copilot prompts for extending this tool:
 •	"Add support for SetGlobal/GetGlobal for expressions shared across multiple screens"
 •	"Add a --threshold flag to require N occurrences instead of 2"
 •	"Generate a JSON map of var_name -> invalidation trigger for manual review"
+
+Phase 2 Implementation Notes — June 26, 2026
+
+- AC-2.3 expression caching was validated as beneficial when applied without broad refresh invalidation.
+- Targeted AC-2.5 invalidation remained acceptable when constrained away from hot Main Menu focus paths.
+- Intermediate artifacts such as `SageTV7_cached_ac25_targeted.xml` remain useful for analysis, but the canonical file is now `stvs/SageTV7/SageTV7.xml`.
+- For current analysis work, prefer the streaming analyzers over older ad hoc expression scanners.
+
 5. Phase 3 — Theme Chain Flattening
 Phase 3: Theme Chain Flattening
 Estimated effort: 2–3 weeks  •  Risk: Medium  •  Expected gain: O(depth)→O(1) per property lookup
+
+Phase 3 Status Note — June 26, 2026
+
+The section below describes the original Phase 3 roadmap item. It is not the same as the validated Phase 3 implementation now present in the repo.
+
+What actually shipped as Phase 3:
+
+- OSD-only refresh deduplication inside `MediaPlayer OSD`
+- Canonical artifact promoted to `stvs/SageTV7/SageTV7.xml`
+- No Main Menu deduplication in the approved build
+
+What did not ship:
+
+- Main Menu refresh deduplication
+- Theme flattening
+
+Reason:
+
+- Main Menu deduplication regressed intended submenu expansion behavior.
+- Expression analysis showed low high-cost-call concentration, so refresh-path work remained the better near-term tradeoff.
 
 5.1  Problem
 The STV has 3,328 theme widgets, of which 2,876 (87%) inherit from a parent theme via a <Theme Ref="N"/> child. When Catbert resolves a widget’s visual property at paint time it must walk the full ancestor chain to find the first definition. With maximum nesting at 99 levels and 30,176 lines of code at 40+ spaces of indent, theme property resolution is a significant contributor to paint lag.
@@ -391,6 +450,14 @@ SageTV7_phase3_flat.xml       <- after Phase 3
 SageTV7_phase4_modular.xml    <- after Phase 4 (compose output)
 
 Use git for all STV files. Each phase commit message should include the stv_analyzer.py widget count so the history self-documents the improvement.
+
+Current analyzer guidance:
+
+- Canonical analyzer: `docs/STV_Cleanup/stv_expression_analyzer_fast.py`
+- Compatibility analyzer for large STV/STVi workflows: `docs/STV_Cleanup/stv_expression_analyzer.py`
+
+The current `stv_expression_analyzer.py` has been rewritten to use a streaming linear-time parse so it is safe to use on larger plugin STVi files. Prefer the fast analyzer for routine repo analysis and use the compatibility analyzer when you need the richer JSON structure or sample locations.
+
 8. Appendix — Raw Analysis Data
 8.1  Widget Type Distribution
 Widget Type	Count	Percent of Total
