@@ -1359,6 +1359,7 @@ public class MiniPlayer implements DVDMediaPlayer
         if (profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.DIRECT_PLAY
             && transcoded
             && pushMode && mcsr != null
+          && mcsr.isNgCapableSession()
             && majorTypeHint == MediaFile.MEDIATYPE_VIDEO)
         {
           if (Sage.DBG) System.out.println("MiniPlayer: profile-authoritative override forces DIRECT_PLAY"
