@@ -733,6 +733,9 @@ public final class NgClientRecordingCopyTransferManager
           + " rec_id=" + session.recordingId
           + " state=" + safe(session.sessionState)
           + " inline=" + (includeOffline ? "full" : "core")
+          + " download_url=" + safe(downloadUrl)
+          + " download_path=" + safe(downloadPath)
+          + " download_creds=" + (session.downloadUsername != null && session.downloadUsername.length() > 0 ? "set" : "none")
           + " offline_url=" + safe(offlineMetadataUrl)
           + " offline_path=" + safe(offlineMetadataPath)
           + " artwork_refs=" + artworkRefs
@@ -740,7 +743,13 @@ public final class NgClientRecordingCopyTransferManager
     }
 
     closeObject(sb);
-    return sb.toString();
+    String fullJson = sb.toString();
+    if (Sage.getBoolean("miniclient/transfer/log_ack_full_json", false))
+    {
+      System.out.println("NG_TRANSFER_ACK_JSON token_prefix=" + shortTokenPrefix(session.sessionToken)
+          + " bytes=" + fullJson.length() + " payload=" + fullJson);
+    }
+    return fullJson;
   }
 
   private static int countOccurrences(String text, String needle)
