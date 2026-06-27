@@ -307,6 +307,7 @@ public final class NgClientOfflineCompanionBuilder
     appendObjectStart(sb, "video");
     appendFileArray(sb, "recording_files", mf.getFile(0));
     append(sb, "recording_file_size", Math.max(0L, mf.getSize()));
+    append(sb, "url", "/api/transfers/" + escape(session.sessionToken) + "/content");
     closeObject(sb);
     closeObject(sb);
     sb.append('}');
@@ -491,6 +492,8 @@ public final class NgClientOfflineCompanionBuilder
     appendObjectStart(sb, "video");
     appendFileArray(sb, "recording_files", mf == null ? null : mf.getFile(0));
     append(sb, "recording_file_size", mf == null ? 0L : Math.max(0L, mf.getSize()));
+    if (session != null)
+      append(sb, "url", "/api/transfers/" + escape(session.sessionToken) + "/content");
     closeObject(sb);
 
     if (captions != null && !captions.isEmpty())
