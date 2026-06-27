@@ -1,5 +1,13 @@
 # Safe Workflow For Editing SageTV7.xml
 
+## Current Approved State — June 26, 2026
+
+- Canonical STV file in the repo: `stvs/SageTV7/SageTV7.xml`
+- Approved Phase 3 result: MediaPlayer OSD-only refresh deduplication
+- Main Menu refresh deduplication is not approved and should not be reintroduced casually
+- Canonical analyzer: `docs/STV_Cleanup/stv_expression_analyzer_fast.py`
+- Compatibility analyzer for larger STV/STVi files: `docs/STV_Cleanup/stv_expression_analyzer.py`
+
 Use this helper for bounded, low-risk changes in the large STV XML graph:
 
 - Script: scripts/safe-stv-edit.ps1
@@ -117,38 +125,37 @@ follow the `_c_` naming prefix.
   calls `SetLocal` to refresh that cache slot. Stale caches cause the UI to
   display outdated values until the next screen entry.
 
+- **Current repository state:** targeted invalidation was retained only where it
+  did not harm hot navigation paths. Be especially careful around Main Menu
+  focus, submenu expansion, and selection chains.
+
 ---
 
-### After Phase 3 — Theme Chain Flattening
+### After Phase 3 — Approved OSD-Only Refresh Deduplication
 
-Theme inheritance chains have been pre-resolved. All theme property values are
-written **directly on each theme widget** — no `<Theme Ref="N"/>` children exist.
+The approved Phase 3 result is **not** theme flattening. The safe shipped change
+is OSD-only refresh deduplication inside `MediaPlayer OSD`.
 
 **Rules:**
 
-- **To change a theme property**: edit the leaf theme widget directly using
-  `safe-stv-edit.ps1`, using the theme widget's Sym as the marker boundary:
+- **Do not reintroduce Main Menu refresh deduplication** without isolated A/B
+  validation. The earlier attempt changed intended submenu expansion behavior.
+
+- **When editing MediaPlayer OSD**, preserve the `AC3-OSD-*` guard markers and
+  the `SetLocal("_OSDRefreshCycle", GetSystemTime())` initialization unless you
+  are deliberately replacing the OSD deduplication mechanism.
+
+- **When adding new direct `Refresh()` calls inside MediaPlayer OSD**, review
+  whether they should also participate in the OSD dedup guard pattern.
+
+- **Theme flattening has not been applied** in the approved repo state. If you
+  plan to work on theme inheritance, treat that as a future design-phase task,
+  not an assumption about the current `SageTV7.xml`.
+
+- **Before large STV or STVi analysis passes**, use the streaming analyzers:
   ```powershell
-  pwsh ./scripts/safe-stv-edit.ps1 \
-    -StartMarker 'Sym="OPUS4A-VideoItemTheme"' \
-    -EndMarker 'Sym="OPUS4A-VideoItemTheme-END"' \
-    -FindText '<TextColor>CCCCCC</TextColor>' \
-    -ReplaceText '<TextColor>FFFFFF</TextColor>'
-  ```
-
-- **Do NOT add a `<Theme Ref="N"/>` child** to any theme widget. The flattened
-  structure assumes no inheritance. Adding a Ref child creates a mixed state
-  (some properties pre-resolved, some inherited) that produces unpredictable
-  paint results.
-
-- **To add a new theme**: define all properties inline with no `Ref=` child.
-  Copy the values you need from an existing similar theme rather than
-  referencing it.
-
-- **To restructure theme inheritance** (e.g. change which theme a widget
-  inherits from): modify the source `.stv` module file and re-run the flattener:
-  ```powershell
-  python stv_theme_flattener.py SageTV7.xml SageTV7_reflat.xml
+  python docs/STV_Cleanup/stv_expression_analyzer_fast.py SageTV7.xml phase3_expression_analysis_fast.json
+  python docs/STV_Cleanup/stv_expression_analyzer.py plugin.stvi plugin_analysis.json
   ```
 
 ---
