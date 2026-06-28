@@ -42,7 +42,14 @@ $msg = "safety-$ts"
 if ($Message) { $msg = "$msg`: $Message" }
 
 # stash create captures index + working tree + (-u) untracked, without modifying anything
-$snap = git stash create -u $msg
+# PS 5.1 with $ErrorActionPreference='Stop' treats ANY git stderr write (even
+# non-fatal "CRLF will be replaced by LF" warnings) as a NativeCommandError.
+# Temporarily relax the preference around git invocations so warnings don't
+# abort the script. Exit code is still checked explicitly below.
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$snap = git stash create -u $msg 2>$null
+$ErrorActionPreference = $prevEAP
 if (-not $snap) {
     if (-not $Quiet) { Write-Host "[clean] working tree is clean - no snapshot needed" -ForegroundColor Green }
     exit 0

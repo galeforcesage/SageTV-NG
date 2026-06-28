@@ -3,8 +3,9 @@
 ## Current Approved State — June 26, 2026
 
 - Canonical STV file in the repo: `stvs/SageTV7/SageTV7.xml`
-- Approved Phase 3 result: MediaPlayer OSD-only refresh deduplication
+- Current approved baseline: known-good targeted AC-2.5 build
 - Main Menu refresh deduplication is not approved and should not be reintroduced casually
+- MediaPlayer OSD refresh deduplication is not approved and should not be reintroduced casually
 - Canonical analyzer: `docs/STV_Cleanup/stv_expression_analyzer_fast.py`
 - Compatibility analyzer for larger STV/STVi files: `docs/STV_Cleanup/stv_expression_analyzer.py`
 
@@ -131,22 +132,22 @@ follow the `_c_` naming prefix.
 
 ---
 
-### After Phase 3 — Approved OSD-Only Refresh Deduplication
+### After Phase 3 — Rolled Back Refresh Deduplication Experiments
 
-The approved Phase 3 result is **not** theme flattening. The safe shipped change
-is OSD-only refresh deduplication inside `MediaPlayer OSD`.
+Phase 3 deduplication experiments are **not** part of the current approved
+baseline. Both Main Menu and OSD refresh deduplication were rolled back.
 
 **Rules:**
 
 - **Do not reintroduce Main Menu refresh deduplication** without isolated A/B
   validation. The earlier attempt changed intended submenu expansion behavior.
 
-- **When editing MediaPlayer OSD**, preserve the `AC3-OSD-*` guard markers and
-  the `SetLocal("_OSDRefreshCycle", GetSystemTime())` initialization unless you
-  are deliberately replacing the OSD deduplication mechanism.
+- **Do not reintroduce MediaPlayer OSD refresh deduplication** without a design
+  that explicitly resets any per-session guard state. The earlier OSD attempt
+  suppressed later caption/subtitle refreshes during the same open OSD session.
 
-- **When adding new direct `Refresh()` calls inside MediaPlayer OSD**, review
-  whether they should also participate in the OSD dedup guard pattern.
+- **When editing MediaPlayer OSD**, treat direct `Refresh()` behavior as
+  correctness-sensitive until a safer narrower optimization is proven.
 
 - **Theme flattening has not been applied** in the approved repo state. If you
   plan to work on theme inheritance, treat that as a future design-phase task,

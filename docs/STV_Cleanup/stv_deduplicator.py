@@ -69,6 +69,40 @@ def get_max_id(root: ET.Element) -> int:
     return max_id
 
 
+def analyze_expressions(root):
+    """
+    Single-pass expression analysis: collect normalized expressions and their locations.
+    Tracks both attribute values and element.text.
+    Returns: (expression_counts, expression_locations)
+    """
+    expression_counts = defaultdict(int)
+    expression_locations = defaultdict(lambda: defaultdict(int))
+    
+    def walk(elem):
+        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+        
+        # Track attribute values
+        for attr, val in elem.attrib.items():
+            if val and "(" in val:  # Only count expressions
+                norm = " ".join(val.strip().split())
+                expression_counts[norm] += 1
+                expression_locations[norm][tag] += 1
+        
+        # Track element.text
+        if elem.text and "(" in elem.text:
+            text_norm = " ".join(elem.text.strip().split())
+            if text_norm:  # Skip whitespace-only text
+                expression_counts[text_norm] += 1
+                expression_locations[text_norm][tag] += 1
+        
+        # Recurse
+        for child in elem:
+            walk(child)
+    
+    walk(root)
+    return expression_counts, expression_locations
+
+
 def deduplicate(input_path: str, output_path: str,
                 min_copies: int = 2, dry_run: bool = False) -> int:
     print(f"Parsing {input_path} ...")
@@ -95,7 +129,7 @@ def deduplicate(input_path: str, output_path: str,
                                              key=lambda x: -len(x[1])):
         count = len(instances)
         savings = count - 1
-        report_lines.append(f"  {tag} '{name[:55]}': {count} copies → save {savings} defs")
+        report_lines.append(f"  {tag} '{name[:55]}': {count} copies -> save {savings} defs")
 
         if dry_run:
             total_removed += savings
@@ -132,6 +166,19 @@ def deduplicate(input_path: str, output_path: str,
 
         next_id += 1
 
+    # SAFE Phase 2 test: exact ZOffset replacement only
+    target_expr = "=If(Focused, 0, 1)"
+    replacement_value = "0"
+    zoffset_replacements = 0
+
+    for elem in root.iter():
+        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+        if tag == "ZOffset" and (elem.text or "").strip() == target_expr:
+            elem.text = replacement_value
+            zoffset_replacements += 1
+
+    print(f"ZOffset exact replacements made: {zoffset_replacements}")
+
     # Print report
     print("=== Deduplication Report ===")
     for line in report_lines[:25]:
@@ -140,6 +187,17 @@ def deduplicate(input_path: str, output_path: str,
         print(f"  ... and {len(report_lines) - 25} more groups")
     print(f"\nTotal redundant definitions removed: {total_removed:,}")
 
+    # Analyze expressions in a single independent pass
+    expression_counts, expression_locations = analyze_expressions(root)
+    
+    # Print expression report
+    top_expressions = sorted(expression_counts.items(), key=lambda x: -x[1])[:25]
+    print("\n=== Expression Location Report ===")
+    for expr, count in top_expressions:
+        print(f"\n{expr}")
+        for tag, tag_count in sorted(expression_locations[expr].items(), key=lambda x: -x[1]):
+            print(f"  {tag} : {tag_count}")
+
     if not dry_run:
         print(f"\nWriting to {output_path} ...")
         ET.indent(tree, space=" ")
@@ -147,7 +205,7 @@ def deduplicate(input_path: str, output_path: str,
         orig_size = Path(input_path).stat().st_size
         new_size = Path(output_path).stat().st_size
         saved_kb = (orig_size - new_size) / 1024
-        print(f"Done.  {orig_size/1024:.0f} KB → {new_size/1024:.0f} KB  (saved {saved_kb:.0f} KB)")
+        print(f"Done.  {orig_size/1024:.0f} KB -> {new_size/1024:.0f} KB  (saved {saved_kb:.0f} KB)")
 
     return total_removed
 

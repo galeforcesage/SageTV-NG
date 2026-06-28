@@ -22,17 +22,17 @@ plan.
 Current approved state:
 
 - Canonical repo STV: `stvs/SageTV7/SageTV7.xml`
-- Approved Phase 3 result: MediaPlayer OSD-only refresh deduplication
-- Rejected Phase 3 experiment: Main Menu refresh deduplication
+- Current production-safe result: targeted AC-2.5 build with no OSD/Main Menu deduplication
+- Rejected Phase 3 experiments: Main Menu refresh deduplication and OSD-only refresh deduplication
 - Canonical analyzer: `docs/STV_Cleanup/stv_expression_analyzer_fast.py`
 - Compatibility analyzer: `docs/STV_Cleanup/stv_expression_analyzer.py`
 
 Validated findings from June 26, 2026:
 
 - Main Menu refresh deduplication regressed intended submenu expansion behavior and was rolled back.
-- MediaPlayer OSD refresh deduplication was retained and promoted as the safe Phase 3 result.
+- MediaPlayer OSD refresh deduplication later regressed closed-caption menu interaction and was also rolled back.
 - Expression-overhead analysis on the approved Phase 3 STV reported LOW high-cost concentration.
-- Current analyzer result on the approved STV: 28,926 total function calls, 527 high-cost calls, 1.8% high-cost ratio.
+- Current analyzer result on the rollback-safe STV: 28,926 total function calls, 527 high-cost calls, 1.8% high-cost ratio.
 
  Table of Contents
 1.  Executive Summary	3
@@ -95,9 +95,9 @@ Executive Summary Addendum — Actual Phase 3 Outcome
 The original roadmap expected a broader structural Phase 3. The implemented and
 validated repository outcome is narrower:
 
-- MediaPlayer OSD refresh calls were deduplicated successfully.
+- MediaPlayer OSD refresh deduplication was attempted but later rolled back after closed-caption menu regression.
 - Main Menu refresh deduplication was attempted, caused navigation regression, and was rolled back.
-- The canonical `SageTV7.xml` now represents the approved OSD-only Phase 3 result.
+- The canonical `SageTV7.xml` now represents the rollback-safe targeted AC-2.5 result.
 - Theme flattening remains a design-phase item in this PRD, not a completed repository state.
 2. Problem Statement
 2.1  Background
@@ -263,11 +263,16 @@ Phase 3 Status Note — June 26, 2026
 
 The section below describes the original Phase 3 roadmap item. It is not the same as the validated Phase 3 implementation now present in the repo.
 
-What actually shipped as Phase 3:
+What was attempted as Phase 3:
 
 - OSD-only refresh deduplication inside `MediaPlayer OSD`
-- Canonical artifact promoted to `stvs/SageTV7/SageTV7.xml`
+- Main Menu refresh deduplication
+
+Current final state:
+
+- Canonical artifact reverted to the known-good targeted AC-2.5 build in `stvs/SageTV7/SageTV7.xml`
 - No Main Menu deduplication in the approved build
+- No OSD-only deduplication in the approved build
 
 What did not ship:
 
@@ -277,7 +282,8 @@ What did not ship:
 Reason:
 
 - Main Menu deduplication regressed intended submenu expansion behavior.
-- Expression analysis showed low high-cost-call concentration, so refresh-path work remained the better near-term tradeoff.
+- OSD-only deduplication regressed closed-caption interaction because the guard suppressed later refreshes in the same open OSD session.
+- Expression analysis showed low high-cost-call concentration, so refresh-path work remains secondary to correctness unless a safer narrower refresh strategy is developed.
 
 5.1  Problem
 The STV has 3,328 theme widgets, of which 2,876 (87%) inherit from a parent theme via a <Theme Ref="N"/> child. When Catbert resolves a widget’s visual property at paint time it must walk the full ancestor chain to find the first definition. With maximum nesting at 99 levels and 30,176 lines of code at 40+ spaces of indent, theme property resolution is a significant contributor to paint lag.

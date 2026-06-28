@@ -28,8 +28,15 @@ if (-not $SkipBuild) {
     Push-Location 'C:\Users\ted\SageTV-mine'
     try {
         $env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.10.7-hotspot'
-        & .\gradlew.bat --offline -x test sageJar
-        if ($LASTEXITCODE -ne 0) { Write-Host 'gradle build failed' -ForegroundColor Red; exit 1 }
+        # PS 5.1 with $ErrorActionPreference='Stop' treats any javac/gradle stderr
+        # write (e.g. "Note: Some input files use deprecated API") as fatal.
+        # Relax around gradle; rely on $LASTEXITCODE for the real success check.
+        $prevEAP = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        & .\gradlew.bat --offline -x test sageJar 2>&1 | ForEach-Object { "$_" }
+        $gradleExit = $LASTEXITCODE
+        $ErrorActionPreference = $prevEAP
+        if ($gradleExit -ne 0) { Write-Host 'gradle build failed' -ForegroundColor Red; exit 1 }
     } finally { Pop-Location }
     Write-Host ''
 } else {

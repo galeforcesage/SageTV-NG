@@ -258,13 +258,12 @@ public final class NgClientOfflineCompanionBuilder
 
     appendCoreObject(sb, mf, airing, show);
     appendMetadataObject(sb, mf, airing, show);
+    appendPlaybackObject(sb, airing);
     appendCreditsArray(sb, show);
 
-    ArrayList<OfflineAsset> artwork = isEnabled("miniclient/transfer/offline_artwork_enabled", true)
+    ArrayList<OfflineAsset> images = isEnabled("miniclient/transfer/offline_artwork_enabled", true)
         ? buildArtworkAssets(session, mf, show)
         : new ArrayList<OfflineAsset>();
-    appendArtworkArray(sb, "artwork", session, artwork);
-
     ArrayList<OfflineAsset> captions = isEnabled("miniclient/transfer/offline_captions_enabled", true)
         ? buildCaptionAssets(mf)
         : new ArrayList<OfflineAsset>();
@@ -274,7 +273,7 @@ public final class NgClientOfflineCompanionBuilder
     OfflineAsset transcript = isEnabled("miniclient/transfer/offline_transcript_enabled", true)
         ? buildTranscriptAsset(mf)
         : null;
-    appendAssetsObject(sb, session, mf, captions, comskip, transcript);
+    appendAssetsObject(sb, session, mf, images, captions, comskip, transcript);
 
     sb.append('}');
     return sb.toString();
@@ -299,15 +298,16 @@ public final class NgClientOfflineCompanionBuilder
     append(sb, "generated_at", formatIsoUtc(Sage.time()));
     appendCoreObject(sb, mf, airing, show);
     appendMetadataObject(sb, mf, airing, show);
+    appendPlaybackObject(sb, airing);
     appendArrayStart(sb, "credits");
-    sb.append(']');
-    appendArrayStart(sb, "artwork");
     sb.append(']');
     appendObjectStart(sb, "assets");
     appendObjectStart(sb, "video");
     appendFileArray(sb, "recording_files", mf.getFile(0));
     append(sb, "recording_file_size", Math.max(0L, mf.getSize()));
     closeObject(sb);
+    appendArrayStart(sb, "images");
+    sb.append(']');
     closeObject(sb);
     sb.append('}');
     return sb.toString();
@@ -425,19 +425,8 @@ public final class NgClientOfflineCompanionBuilder
       append(sb, "hdtv", airing.isHDTV());
       append(sb, "surround", airing.isSurround());
       append(sb, "cc", airing.isCC());
-      append(sb, "watched", airing.isWatched());
-      append(sb, "first_run", airing.isFirstRun());
     }
     append(sb, "subtitles_available", hasSubtitles(mf, airing));
-
-    long resumeMs = 0L;
-    if (airing != null)
-    {
-      Watched w = Wizard.getInstance().getWatch(airing);
-      if (w != null)
-        resumeMs = Math.max(0L, w.getWatchEnd() - airing.getStartTime());
-    }
-    append(sb, "resume_position_ms", resumeMs);
 
     boolean isFavorite = airing != null && Carny.getInstance().isLoveAir(airing);
     ManualRecord mr = airing == null ? null : Wizard.getInstance().getManualRecord(airing);
@@ -445,13 +434,36 @@ public final class NgClientOfflineCompanionBuilder
     append(sb, "manual", mr != null);
     append(sb, "epg_scheduled", mr == null);
 
+    // Display-mirror of assets.video facts; schema v1 §5 explicitly permits this for first-client UI.
+    if (mf != null)
+    {
+      appendFileArray(sb, "recording_files", mf.getFile(0));
+      append(sb, "recording_file_size", Math.max(0L, mf.getSize()));
+    }
+
+    closeObject(sb);
+  }
+
+  private static void appendPlaybackObject(StringBuilder sb, Airing airing)
+  {
+    appendObjectStart(sb, "playback");
+    long resumeMs = 0L;
+    boolean watched = false;
+    if (airing != null)
+    {
+      watched = airing.isWatched();
+      Watched w = Wizard.getInstance().getWatch(airing);
+      if (w != null)
+        resumeMs = Math.max(0L, w.getWatchEnd() - airing.getStartTime());
+    }
+    append(sb, "resume_position_ms", resumeMs);
+    append(sb, "watched", watched);
     closeObject(sb);
   }
 
   private static void appendCreditsArray(StringBuilder sb, Show show)
   {
-    appendArrayStart(sb, "credits");
-    boolean first = true;
+    ArrayList<CreditEntry> entries = new ArrayList<CreditEntry>();
     LinkedHashSet<String> seen = new LinkedHashSet<String>();
     if (show != null)
     {
@@ -466,23 +478,63 @@ public final class NgClientOfflineCompanionBuilder
         String dedupeKey = personId + "|" + roleCode;
         if (!seen.add(dedupeKey))
           continue;
-        if (!first)
-          sb.append(',');
-        first = false;
-        sb.append('{');
-        append(sb, "person_id", personId);
-        append(sb, "person_name", p.getName());
-        append(sb, "role_code", roleCode);
-        append(sb, "role_name", Show.getRoleString(roleCode));
-        closeObject(sb);
+        CreditEntry ce = new CreditEntry();
+        ce.sourceOrder = entries.size();
+        ce.personId = personId;
+        ce.personName = safe(p.getName());
+        ce.roleCode = roleCode;
+        ce.roleName = safe(Show.getRoleString(roleCode));
+        String img = p.getImageURL(false);
+        if (img == null || img.length() == 0)
+          img = p.getImageURL(true);
+        ce.imageUrl = safe(img);
+        entries.add(ce);
       }
     }
+    java.util.Collections.sort(entries, new java.util.Comparator<CreditEntry>()
+    {
+      public int compare(CreditEntry a, CreditEntry b)
+      {
+        int c = a.personName.compareToIgnoreCase(b.personName);
+        if (c != 0) return c;
+        c = Integer.compare(a.roleCode, b.roleCode);
+        if (c != 0) return c;
+        return Integer.compare(a.sourceOrder, b.sourceOrder);
+      }
+    });
+    appendArrayStart(sb, "credits");
+    boolean first = true;
+    for (int i = 0; i < entries.size(); i++)
+    {
+      CreditEntry ce = entries.get(i);
+      if (!first) sb.append(',');
+      first = false;
+      sb.append('{');
+      append(sb, "person_id", ce.personId);
+      append(sb, "person_name", ce.personName);
+      append(sb, "role_code", ce.roleCode);
+      append(sb, "role_name", ce.roleName);
+      if (ce.imageUrl.length() > 0)
+        append(sb, "image_url", ce.imageUrl);
+      closeObject(sb);
+    }
     sb.append(']');
+  }
+
+  private static final class CreditEntry
+  {
+    int sourceOrder;
+    String personId;
+    String personName;
+    int roleCode;
+    String roleName;
+    String imageUrl;
   }
 
   private static void appendAssetsObject(StringBuilder sb,
       NgClientRecordingCopyTransferManager.TransferSession session,
       MediaFile mf,
+      ArrayList<OfflineAsset> images,
       ArrayList<OfflineAsset> captions,
       OfflineAsset comskip,
       OfflineAsset transcript)
@@ -492,6 +544,8 @@ public final class NgClientOfflineCompanionBuilder
     appendFileArray(sb, "recording_files", mf == null ? null : mf.getFile(0));
     append(sb, "recording_file_size", mf == null ? 0L : Math.max(0L, mf.getSize()));
     closeObject(sb);
+
+    appendImagesArray(sb, "images", session, images == null ? new ArrayList<OfflineAsset>() : images);
 
     if (captions != null && !captions.isEmpty())
       appendCaptionArray(sb, "captions", session, captions);
@@ -545,12 +599,6 @@ public final class NgClientOfflineCompanionBuilder
         show.getAnyImageUrl(0, false));
     addRemoteArtworkUnique(rv, seenShowUrls, "fanart", fanartUrl, null, "image/jpeg");
 
-    for (int i = 0; i < 8; i++)
-    {
-      String extra = show.getImageUrlForIndex(i, false);
-      addRemoteArtworkUnique(rv, seenShowUrls, "other", extra, null, "image/jpeg");
-    }
-
     SeriesInfo si = show.getSeriesInfo();
     if (si != null)
       addRemoteArtworkUnique(rv, seenShowUrls, "banner", si.getImageURL(false), null, "image/jpeg");
@@ -571,6 +619,12 @@ public final class NgClientOfflineCompanionBuilder
       if (headshot == null || headshot.length() == 0)
         continue;
       addRemoteArtwork(rv, "person", headshot, personId, "image/jpeg");
+    }
+
+    for (int i = 0; i < 8; i++)
+    {
+      String extra = show.getImageUrlForIndex(i, false);
+      addRemoteArtworkUnique(rv, seenShowUrls, "other", extra, null, "image/jpeg");
     }
 
     return rv;
@@ -822,7 +876,7 @@ public final class NgClientOfflineCompanionBuilder
     return role.toLowerCase().replace(' ', '_');
   }
 
-  private static void appendArtworkArray(StringBuilder sb, String key,
+  private static void appendImagesArray(StringBuilder sb, String key,
       NgClientRecordingCopyTransferManager.TransferSession session,
       ArrayList<OfflineAsset> assets)
   {
@@ -837,6 +891,8 @@ public final class NgClientOfflineCompanionBuilder
       append(sb, "url", "/api/transfers/" + escape(session.sessionToken) + "/offline/artwork/" + i);
       if (a.personId != null && a.personId.length() > 0)
         append(sb, "subject_id", a.personId);
+      if (a.contentType != null && a.contentType.length() > 0)
+        append(sb, "mime_type", a.contentType);
       sb.append('}');
     }
     sb.append(']');
@@ -892,7 +948,7 @@ public final class NgClientOfflineCompanionBuilder
     if (sb.charAt(sb.length() - 1) != '{') sb.append(',');
     sb.append('"').append(escape(key)).append('"').append(':').append('[');
     if (f != null)
-      sb.append('"').append(escape(f.getAbsolutePath())).append('"');
+      sb.append('"').append(escape(f.getName())).append('"');
     sb.append(']');
   }
 
