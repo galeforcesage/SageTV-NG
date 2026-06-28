@@ -705,6 +705,8 @@ public final class NgClientRecordingCopyTransferManager
     append(sb, "download_path", downloadPath);
     append(sb, "download_username", session.downloadUsername);
     append(sb, "download_password", session.downloadPassword);
+    append(sb, "username", session.downloadUsername);
+    append(sb, "password", session.downloadPassword);
     append(sb, "offline_metadata_url", offlineMetadataUrl);
     append(sb, "offline_metadata_path", offlineMetadataPath);
     append(sb, "resume_from_offset", session.bytesTransferred);
@@ -791,6 +793,8 @@ public final class NgClientRecordingCopyTransferManager
     append(sb, "download_path", buildTransferContentPath(session));
     append(sb, "download_username", session.downloadUsername);
     append(sb, "download_password", session.downloadPassword);
+    append(sb, "username", session.downloadUsername);
+    append(sb, "password", session.downloadPassword);
     append(sb, "offline_metadata_url", buildTransferOfflineMetadataUrl(session));
     append(sb, "offline_metadata_path", buildTransferOfflineMetadataPath(session));
     append(sb, "bytes_transferred", session.bytesTransferred);
@@ -821,6 +825,8 @@ public final class NgClientRecordingCopyTransferManager
     append(sb, "download_path", buildTransferContentPath(session));
     append(sb, "download_username", session.downloadUsername);
     append(sb, "download_password", session.downloadPassword);
+    append(sb, "username", session.downloadUsername);
+    append(sb, "password", session.downloadPassword);
     append(sb, "offline_metadata_url", buildTransferOfflineMetadataUrl(session));
     append(sb, "offline_metadata_path", buildTransferOfflineMetadataPath(session));
     append(sb, "bytes_transferred", session.bytesTransferred);
@@ -1371,8 +1377,21 @@ public final class NgClientRecordingCopyTransferManager
   private static void addAdjustmentReasonCodes(TransferSession session,
       java.util.List<PolicyAdjustment> adjustments)
   {
-    for (int i = 0; i < adjustments.size(); i++)
-      addReasonCode(session, adjustments.get(i).code, adjustments.get(i).message);
+    if (session == null || adjustments == null) return;
+    // Snapshot size: callers pass session.adjustments (same list ref), and any
+    // mutation during the loop would re-iterate the appended entries forever.
+    int n = adjustments.size();
+    for (int i = 0; i < n; i++)
+    {
+      PolicyAdjustment adj = adjustments.get(i);
+      if (adj == null || adj.code == null || adj.code.length() == 0)
+        continue;
+      if (session.recentReasonCodes.contains(adj.code))
+        session.recentReasonCodes.remove(adj.code);
+      session.recentReasonCodes.add(adj.code);
+      while (session.recentReasonCodes.size() > 8)
+        session.recentReasonCodes.remove(0);
+    }
   }
 
   private static void addReasonCode(TransferSession session, String code, String message)
@@ -1385,7 +1404,11 @@ public final class NgClientRecordingCopyTransferManager
     while (session.recentReasonCodes.size() > 8)
       session.recentReasonCodes.remove(0);
     if (message != null && message.length() > 0)
+    {
       session.adjustments.add(new PolicyAdjustment(code, message));
+      while (session.adjustments.size() > 32)
+        session.adjustments.remove(0);
+    }
   }
 
   private static String safe(String val)

@@ -130926,7 +130926,7 @@
                           <ns0:Action Name="If(StringIndexOf(TransferCreateResult, &quot;TRANSFER_SESSION_ACK&quot;) &gt;= 0, &quot;Download started.&quot;, &quot;Could not start download.&quot;)" Sym="NGDLQ-1604">
                            <ns0:Text Name="" Sym="NGDLQ-1605"/>
                           </ns0:Action>
-                          <ns0:Action Name="GetRecordingCopyTransferQueueSummaryText()" Sym="NGDLQ-1620">
+                          <ns0:Action Name="GetMediaTitle(MediaFile)" Sym="NGDLQ-1620">
                            <ns0:Text Name="" Sym="NGDLQ-1621"/>
                           </ns0:Action>
                           <ns0:Item Name="Close" Sym="NGDLQ-1606">
@@ -130942,7 +130942,7 @@
                           <ns0:Action Name="If(StringIndexOf(TransferCreateResult, &quot;TRANSFER_SESSION_ACK&quot;) &gt;= 0, &quot;Download queued.&quot;, &quot;Could not queue download.&quot;)" Sym="NGDLQ-1614">
                            <ns0:Text Name="" Sym="NGDLQ-1615"/>
                           </ns0:Action>
-                          <ns0:Action Name="GetRecordingCopyTransferQueueSummaryText()" Sym="NGDLQ-1622">
+                          <ns0:Action Name="GetMediaTitle(MediaFile)" Sym="NGDLQ-1622">
                            <ns0:Text Name="" Sym="NGDLQ-1623"/>
                           </ns0:Action>
                           <ns0:Item Name="Close" Sym="NGDLQ-1616">
