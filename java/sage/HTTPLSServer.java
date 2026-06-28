@@ -1196,6 +1196,25 @@ public class HTTPLSServer implements Runnable
         long kbps = Math.max(0L, ((bytesSent * 8L * 1000L) / elapsedMs) / 1024L);
         long progressedTo = Math.max(session.bytesTransferred, start + bytesSent);
         transferMgr.updateProgress(token, progressedTo, kbps, null);
+
+        // Play-nice pacing: when playback/recording activity contends for BW or disk,
+        // sleep just enough each chunk to keep our running rate at or below the cap.
+        long capKbps = computePlayniceCapKbps();
+        if (capKbps > 0)
+        {
+          long allowedBytes = (capKbps * 1024L / 8L) * elapsedMs / 1000L;
+          if (bytesSent > allowedBytes)
+          {
+            long overBytes = bytesSent - allowedBytes;
+            long sleepMs = (overBytes * 8L * 1000L) / (capKbps * 1024L);
+            if (sleepMs > 200L) sleepMs = 200L;
+            if (sleepMs > 0)
+            {
+              try { Thread.sleep(sleepMs); }
+              catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+            }
+          }
+        }
       }
     }
     finally
@@ -2948,6 +2967,82 @@ public class HTTPLSServer implements Runnable
       off += rem;
       len -= rem;
     }
+  }
+
+  // Computes the play-nice download cap based on current playback/recording activity.
+  // Returns 0 (= unthrottled) when nothing else is going on, so a lone download keeps
+  // the full pipe. Re-evaluated every chunk so playback start/stop adapts mid-transfer.
+  private long computePlayniceCapKbps()
+  {
+    if (!Sage.getBoolean("miniclient/transfer/playnice_enabled", true))
+      return 0L;
+
+    boolean bwShared = false;
+    boolean diskShared = false;
+
+    // Any active recording = disk-write pressure regardless of NIC (HDHR on dedicated
+    // NIC, PCIe capture card, network HDHR -- all funnel into the same disk writes).
+    try
+    {
+      MediaFile[] recs = SeekerSelector.getInstance().getCurrRecordFiles();
+      if (recs != null && recs.length > 0)
+        diskShared = true;
+    }
+    catch (Throwable t) { /* ignore */ }
+
+    // Determine this download's server-side local NIC so we can compare with playback
+    // sessions' server-side local NIC. If the addresses match the bandwidth path is
+    // shared; if they differ, only disk is shared.
+    java.net.InetAddress downloadLocalAddr = null;
+    try
+    {
+      if (sake != null && sake.socket() != null)
+        downloadLocalAddr = sake.socket().getLocalAddress();
+    }
+    catch (Throwable t) { /* ignore */ }
+
+    boolean nicAware = Sage.getBoolean("miniclient/transfer/playnice_nic_aware", true);
+    try
+    {
+      UIClient[] watchers = Seeker.getInstance().getActiveWatchClients();
+      if (watchers != null && watchers.length > 0)
+      {
+        if (!nicAware || downloadLocalAddr == null)
+        {
+          bwShared = true;
+        }
+        else
+        {
+          for (int i = 0; i < watchers.length; i++)
+          {
+            UIClient uic = watchers[i];
+            if (uic instanceof MiniClientSageRenderer)
+            {
+              java.net.InetAddress wAddr = ((MiniClientSageRenderer) uic).getServerLocalAddress();
+              if (wAddr == null || wAddr.equals(downloadLocalAddr))
+              {
+                bwShared = true;
+                break;
+              }
+              diskShared = true;
+            }
+            else
+            {
+              // Local UI or other watcher with no socket: assume BW-shared (conservative)
+              bwShared = true;
+              break;
+            }
+          }
+        }
+      }
+    }
+    catch (Throwable t) { /* ignore */ }
+
+    if (bwShared)
+      return Math.max(256L, Sage.getLong("miniclient/transfer/playnice_bw_cap_kbps", 8000L));
+    if (diskShared)
+      return Math.max(256L, Sage.getLong("miniclient/transfer/playnice_disk_cap_kbps", 50000L));
+    return 0L;
   }
 
   private java.nio.ByteBuffer readBuf;
