@@ -744,6 +744,21 @@ public class MiniClientSageRenderer extends SageRenderer
     Sage.put("external_authorized_file_transfers", propValue);
   }
 
+  // Returns the SERVER's local IP for this miniclient connection so callers
+  // (e.g. HTTPLSServer play-nice throttle) can decide whether two sessions
+  // share a NIC. May return null if the socket has been torn down.
+  public java.net.InetAddress getServerLocalAddress()
+  {
+    try
+    {
+      java.nio.channels.SocketChannel cs = clientSocket;
+      if (cs == null) return null;
+      java.net.Socket s = cs.socket();
+      return s == null ? null : s.getLocalAddress();
+    }
+    catch (Throwable t) { return null; }
+  }
+
   public java.net.Socket getPlayerSocket()
   {
     java.nio.channels.SocketChannel sc = getPlayerSocketChannel();

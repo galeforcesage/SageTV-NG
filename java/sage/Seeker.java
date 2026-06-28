@@ -3627,6 +3627,19 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
     }
   }
 
+  public UIClient[] getActiveWatchClients()
+  {
+    java.util.HashSet<UIClient> all = new java.util.HashSet<UIClient>();
+    synchronized (clientWatchFileMap)
+    {
+      for (Set<UIClient> set : clientWatchFileMap.values())
+      {
+        if (set != null) all.addAll(set);
+      }
+    }
+    return all.toArray(new UIClient[0]);
+  }
+
   public boolean isMediaFileBeingViewed(MediaFile mf)
   {
     return clientWatchFileMap.containsKey(mf);
