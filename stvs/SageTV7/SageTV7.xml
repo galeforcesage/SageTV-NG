@@ -112772,11 +112772,11 @@
   <ns0:Hook Name="BeforeMenuLoad" Sym="OPUS4A-182174">
    <ns0:Action Name="ContinueProcessing = true" Sym="OPUS4A-182217" />
    <ns0:Action Name="&quot;REM Set initial plugin type to the last-viewed type.&quot;" Sym="OPUS4A-182177">
-    <ns0:Action Name="CurPluginType = GetProperty( &quot;plugin/last_type_browsed&quot;, GetLocal(&quot;_c_GetElement_PluginTypesList_0&quot;) )" Sym="OPUS4A-182178">
+    <ns0:Action Name="CurPluginType = GetProperty( &quot;plugin/last_type_browsed&quot;, GetElement(PluginTypesList,0) )" Sym="OPUS4A-182178">
      <ns0:Action Name="&quot;REM Make sure it is a valid plugin type.&quot;" Sym="OPUS4A-182179">
       <ns0:Action Name="index = FindElementIndex( PluginTypesList, CurPluginType )" Sym="OPUS4A-182180">
        <ns0:Conditional Name="index == -1" Sym="OPUS4A-182181">
-        <ns0:Action Name="CurPluginType = GetLocal(&quot;_c_GetElement_PluginTypesList_0&quot;)" Sym="OPUS4A-182182" />
+        <ns0:Action Name="CurPluginType = GetElement(PluginTypesList,0)" Sym="OPUS4A-182182" />
        </ns0:Conditional>
       </ns0:Action>
      </ns0:Action>
