@@ -1115,3 +1115,10 @@ docs/~*
 __pycache__/
 *.pyc
 *.pyo
+
+# Local scratch / analysis / cached STV files (not repository code)
+/report.txt
+/session.txt
+/build-native.sh
+/stvs/**/*_cached_ac*.xml
+/stvs/**/phase3_expression_analysis*.json
