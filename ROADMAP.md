@@ -307,7 +307,14 @@ shell `|`. `FFMPEGTranscoder` cannot model this with its current
 - TensorRT-optimized models — Real-ESRGAN-TRT is faster but needs a
   GPU-specific compiled engine; not worth the build complexity until
   someone actually wants it.
-- NVIDIA RTX VSR (RTX 30/40 only; not available on the 2060).
+- NVIDIA RTX VSR — **does not apply server-side.** VSR is a *display-time*
+  upscaler in the NVIDIA display/decode pipeline (browser video, NVIDIA
+  app), applied at the point of presentation on the machine with the
+  screen. A headless SageTV-NG server has no display output, so VSR has
+  nothing to hook even on RTX 30/40/50 hardware. It could only ever help
+  on a *client* that both has an RTX GPU and plays video through a
+  VSR-enabled surface — which is outside SageTV-NG's control. Not a
+  server feature at any GPU generation.
 
 **Validation.** Convert one known 480p SD recording with
 `AI_UPSCALE_1080_GENERAL` and one known 1080p OTA with
@@ -319,6 +326,70 @@ controversial, keep AI presets SD-only.
 
 **Estimated effort.** 3–5 days end-to-end (engine + preset schema +
 two shipped presets + container/runtime plumbing + validation).
+
+### GPU offload review (2026-07)
+
+Follow-up items from a GPU-offload audit. Several sibling ideas were
+already tracked above (libnpp/cuda-nvcc rebuild, AI-upscale container
+bind + `graphics` capability, vendor-agnostic `_SW` presets, HLS/DASH,
+RTX VSR) — the items below are the ones not previously captured.
+
+- **No-GPU / GPU-absent graceful degradation (cross-cutting, required).**
+  `HwEncoder` already probes the ffmpeg binary once per JVM and falls
+  back through `nvenc,vaapi,qsv,amf,videotoolbox,none` to
+  `libx264`/`libx265`, so encoder *selection* is already vendor-safe.
+  The gap is that the modernized `Ministry` presets hardcode
+  `h264_nvenc`/`hevc_nvenc` and `-hwaccel cuda` in the command string and
+  bypass `HwEncoder`. On a host with no NVENC those presets fail outright.
+  Work: (1) route preset codec + `-hwaccel` selection through
+  `HwEncoder.pick()` at job-build time so `_NV` presets auto-rewrite to
+  software (`libx264`/`libx265`, drop `-hwaccel cuda`) when no GPU is
+  detected — or land the vendor-agnostic `_SW` catalogue (Option A above)
+  and auto-select; (2) gate the AI-upscale path on a successful Vulkan
+  device probe and skip (log + fall back to Lanczos or straight encode)
+  when absent; (3) make the container GPU reservation opt-in (base
+  `docker-compose.yml` is already CPU-only; GPU is layered via override)
+  and have startup log the detected encoder tier once. This is the
+  prerequisite for shipping SageTV-NG to users without an NVIDIA card.
+
+- **Comskip external GPU engine (speculative).** `CommercialDetectionJob`
+  already supports `commercial_detection/engine=external` with a
+  templated command (`external_recorded_args` /
+  `external_live_args`, `{input}/{output}/{ini}` substitution), so an
+  alternate comskip binary is pure configuration — no Java change. BUT:
+  mainline comskip is not GPU-bound in a way a "comskip-cuda" drop-in
+  solves, and no well-maintained CUDA comskip fork exists. The realistic
+  GPU win is NVDEC-accelerated *decode* feeding comskip's analysis, which
+  upstream comskip does not do. Treat as R&D, not a 2-hour swap. (Also
+  verify the property key match: the job reads
+  `commercial_detection/external_engine_path` while the manager
+  get/set uses its own key — confirm before relying on the UI hook.)
+
+- **Live-tune NVENC audit (small).** The modernized NVENC catalogue is
+  offline-`Ministry`-only by design. The live on-the-fly transcode path
+  (`HTTPLSServer` + `LiveTranscodeProfile`, which has a
+  `hw_accel: auto|nvenc|vaapi|qsv|amf|videotoolbox|none` field) should be
+  spot-checked to confirm it actually resolves to `h264_nvenc` when a GPU
+  is present, so concurrent MiniClient transcodes don't silently bottleneck
+  on CPU. Audit + fix wiring if needed; pairs with the no-GPU item above.
+
+- **NVDEC thumbnail generation (low value — likely rejected).** Proposed
+  as a library-rescan speed-up, but thumbnails are single-frame
+  seek+extract operations where per-file NVDEC context init typically
+  *outweighs* the decode saving. Only worth it if profiling shows thumbnail
+  generation is a real bottleneck on batch import; otherwise leave as CPU.
+
+- **AI/ML commercial detection (R&D parking lot).** Replacing comskip's
+  black-frame/silence/aspect heuristics with an ONNX/TensorRT ad-vs-content
+  classifier is a research effort with no training-data pipeline today;
+  the "much better on sports/news" payoff is unproven. Park until (a)
+  comskip accuracy is measured to be the actual pain point and (b) a
+  labeled dataset path exists. Would reuse the external-engine hook.
+
+- **Face recognition / people tagging — out of scope.** A photo-library
+  ML feature with little DVR/live-TV value and large scope/privacy
+  surface. Not aligned with SageTV-NG's recording/streaming product
+  focus; not planned.
 
 ## Playback track
 
