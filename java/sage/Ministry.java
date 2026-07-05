@@ -252,9 +252,42 @@ public class Ministry implements Runnable
   private static String buildPresetSpec(java.util.Properties p)
   {
     String container = p.getProperty("container", "mp4").trim();
-    String global = expandEncoderTokens(p.getProperty("global", "").trim());
-    String args = expandEncoderTokens(p.getProperty("args", "").trim());
+    String global = p.getProperty("global", "").trim();
+    String args = p.getProperty("args", "").trim();
     if (args.length() == 0) return null;
+
+    // Resolve the %V264%/%V265% encoder tokens and keep the CUDA -hwaccel
+    // flags consistent with the chosen encoder. These presets are authored
+    // for NVENC + CUDA decode; when NVENC is unavailable the tokens resolve
+    // to software encoders (libx264/libx265) and the CUDA -hwaccel flags must
+    // be stripped or ffmpeg aborts with "no CUDA device" on a GPU-less host.
+    boolean nvencUsed = false;
+    boolean tokenPresent = false;
+    if (args.indexOf("%V264%") != -1 || global.indexOf("%V264%") != -1)
+    {
+      tokenPresent = true;
+      HwEncoder.Kind k = pickPresetEncoder("h264");
+      if (k == HwEncoder.Kind.NVENC) nvencUsed = true;
+      String enc = HwEncoder.encoderName(k, "h264");
+      args = args.replace("%V264%", enc);
+      global = global.replace("%V264%", enc);
+    }
+    if (args.indexOf("%V265%") != -1 || global.indexOf("%V265%") != -1)
+    {
+      tokenPresent = true;
+      HwEncoder.Kind k = pickPresetEncoder("hevc");
+      if (k == HwEncoder.Kind.NVENC) nvencUsed = true;
+      String enc = HwEncoder.encoderName(k, "hevc");
+      args = args.replace("%V265%", enc);
+      global = global.replace("%V265%", enc);
+    }
+    // Software (or non-CUDA) fallback: drop the CUDA-specific -hwaccel flags.
+    if (tokenPresent && !nvencUsed)
+    {
+      global = stripCudaHwaccel(global);
+      args = stripCudaHwaccel(args);
+    }
+
     StringBuilder sb = new StringBuilder();
     sb.append("f=").append(sage.media.format.MediaFormat.escapeString(container)).append(';');
     if (global.length() > 0)
@@ -277,20 +310,44 @@ public class Ministry implements Runnable
     Sage.put(FORMAT_LABEL_PREFIX + name, label);
   }
 
-  private static String expandEncoderTokens(String s)
+  // Encoder choice for the CUDA-shaped screen-tier presets. Only NVENC gets
+  // the CUDA fast path here; every other outcome (no GPU, or a non-NVIDIA HW
+  // encoder that can't be wired into a CUDA-authored filter graph) degrades to
+  // the software encoder (libx264/libx265). Native VAAPI/QSV/AMF acceleration
+  // belongs to dedicated vendor-specific preset files (see ROADMAP
+  // "Vendor-agnostic preset coverage"), not an auto-rewrite of CUDA presets.
+  private static HwEncoder.Kind pickPresetEncoder(String codec)
+  {
+    HwEncoder.Kind k = HwEncoder.pick(codec);
+    if (k == HwEncoder.Kind.NVENC) return k;
+    if (k != HwEncoder.Kind.NONE && Sage.DBG)
+      System.out.println("Ministry: " + codec + " HW encoder " + k + " is available but the"
+          + " screen-tier presets are CUDA-shaped; using software (libx264/libx265)."
+          + " Add a vendor-specific preset for native " + k + " acceleration.");
+    return HwEncoder.Kind.NONE;
+  }
+
+  // Remove CUDA-only decode flags (-hwaccel cuda, -hwaccel_output_format cuda,
+  // -hwaccel_device N) from a preset arg string, leaving all other flags intact.
+  // Used when a CUDA-authored preset falls back to a software encoder so the
+  // command does not demand a CUDA device that may be absent.
+  private static String stripCudaHwaccel(String s)
   {
     if (s == null || s.length() == 0) return "";
-    if (s.indexOf("%V264%") != -1)
+    String[] toks = s.trim().split("\\s+");
+    StringBuilder sb = new StringBuilder();
+    for (int i = 0; i < toks.length; i++)
     {
-      HwEncoder.Kind k = HwEncoder.pick("h264");
-      s = s.replace("%V264%", HwEncoder.encoderName(k, "h264"));
+      String t = toks[i];
+      if (t.equals("-hwaccel") || t.equals("-hwaccel_output_format") || t.equals("-hwaccel_device"))
+      {
+        i++; // also skip this flag's value token
+        continue;
+      }
+      if (sb.length() > 0) sb.append(' ');
+      sb.append(t);
     }
-    if (s.indexOf("%V265%") != -1)
-    {
-      HwEncoder.Kind k = HwEncoder.pick("hevc");
-      s = s.replace("%V265%", HwEncoder.encoderName(k, "hevc"));
-    }
-    return s;
+    return sb.toString();
   }
 
   private static class MinistryHolder
@@ -315,6 +372,13 @@ public class Ministry implements Runnable
 
     // Load the modernized NVENC/upscale preset catalogue from disk.
     loadPresets();
+
+    // Log the resolved transcode encoder tier once so no-GPU / wrong-GPU
+    // deployments are diagnosable from the startup log.
+    if (Sage.DBG)
+      System.out.println("Ministry: transcode encoder tier -> h264=" + HwEncoder.pick("h264")
+          + " hevc=" + HwEncoder.pick("hevc")
+          + " (software fallback = libx264/libx265 when NVENC absent)");
 
     // Replace the stale legacy STV menu sort order (which only references
     // dead names) with the modernized preset ordering. No-op if the user has

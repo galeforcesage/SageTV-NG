@@ -1095,8 +1095,26 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // Add the parameters for dynamic bitrate control
       xcodeParamsVec.add("-f");
       xcodeParamsVec.add("mpegts");
+      // Live/HLS video encoder selection. Route through HwEncoder so NVENC is
+      // used when the host has an NVIDIA GPU + an nvenc-capable ffmpeg; else
+      // fall back to software libx264 (no-GPU hosts keep working unchanged).
+      // NOTE: VAAPI/QSV/AMF are intentionally NOT engaged on this path yet --
+      // the httpls -vf deinterlace/scale chain needs a hwupload filter-graph
+      // rework and the bundled ffmpeg is NVENC-only. See ROADMAP "AMD / Intel
+      // live transcode (VAAPI / QSV / AMF)". HwEncoder.pick() only returns
+      // those kinds when the ffmpeg binary actually advertises them, so this
+      // stays software until that work lands.
+      HwEncoder.Kind liveKind = HwEncoder.pick("h264");
+      boolean liveNvenc = (liveKind == HwEncoder.Kind.NVENC);
+      if (liveKind != HwEncoder.Kind.NONE && !liveNvenc && Sage.DBG)
+        System.out.println("FFMpegTranscoder: httpls: HW encoder " + liveKind +
+            " is not yet wired for the live/HLS path (needs hwupload filter-graph rework);" +
+            " using software libx264. See ROADMAP: AMD/Intel live transcode.");
+      if (Sage.DBG)
+        System.out.println("FFMpegTranscoder: httpls: video encoder tier -> " +
+            (liveNvenc ? "h264_nvenc (NVENC)" : "libx264 (software)"));
       xcodeParamsVec.add("-vcodec");
-      xcodeParamsVec.add(videoCodec = "libx264");
+      xcodeParamsVec.add(videoCodec = liveNvenc ? "h264_nvenc" : "libx264");
       String sizeKey = String.format(BITRATE_OPTIONS_SIZE_KEY, estimatedBandwidth/1000);
       String xcodeSize = Sage.get(sizeKey, Sage.get(String.format(BITRATE_OPTIONS_SIZE_KEY, "default"), "480x272"));
       if (Sage.DBG)
@@ -1128,6 +1146,28 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add("2");
       xcodeParamsVec.add("-ar");
       xcodeParamsVec.add("44100");
+      if (liveNvenc)
+      {
+      // NVENC accepts software frames directly (no -hwaccel/hwupload needed on
+      // this path). Emit encoder-appropriate rate control instead of the
+      // libx264-only option soup, which nvenc rejects or ignores.
+      xcodeParamsVec.add("-preset");
+      xcodeParamsVec.add(Sage.get("multimedia/hwaccel/nvenc/live_preset", "p4"));
+      xcodeParamsVec.add("-rc:v");
+      xcodeParamsVec.add("vbr");
+      xcodeParamsVec.add("-g");
+      xcodeParamsVec.add("250");
+      xcodeParamsVec.add("-keyint_min");
+      xcodeParamsVec.add("25");
+      xcodeParamsVec.add("-bf");
+      xcodeParamsVec.add("0");
+      xcodeParamsVec.add("-profile:v");
+      xcodeParamsVec.add("high");
+      xcodeParamsVec.add("-level");
+      xcodeParamsVec.add("auto");
+      }
+      else
+      {
       xcodeParamsVec.add("-coder");
       xcodeParamsVec.add("0");
       xcodeParamsVec.add("-flags");
@@ -1177,6 +1217,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add("50");
       xcodeParamsVec.add("-level");
       xcodeParamsVec.add("30");
+      }
       xcodeParamsVec.add("-maxrate");
       xcodeParamsVec.add(currVideoBitrateKbps*6000/5 + "");
       xcodeParamsVec.add("-bufsize");

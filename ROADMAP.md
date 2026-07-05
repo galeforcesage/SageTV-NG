@@ -365,13 +365,58 @@ RTX VSR) — the items below are the ones not previously captured.
   `commercial_detection/external_engine_path` while the manager
   get/set uses its own key — confirm before relying on the UI hook.)
 
-- **Live-tune NVENC audit (small).** The modernized NVENC catalogue is
-  offline-`Ministry`-only by design. The live on-the-fly transcode path
-  (`HTTPLSServer` + `LiveTranscodeProfile`, which has a
-  `hw_accel: auto|nvenc|vaapi|qsv|amf|videotoolbox|none` field) should be
-  spot-checked to confirm it actually resolves to `h264_nvenc` when a GPU
-  is present, so concurrent MiniClient transcodes don't silently bottleneck
-  on CPU. Audit + fix wiring if needed; pairs with the no-GPU item above.
+- ~~**Live-tune NVENC audit (small).**~~ ✅ audit done + NVENC/software
+  wiring landed. Finding confirmed: the live on-the-fly HLS transcode
+  path built its command with a hardcoded `-vcodec libx264` (plus the
+  legacy x264 option soup: `-coder`, `-partitions`, `-me_method`,
+  `-subq`, `-direct-pred`, `-wpredp`, `-rc-lookahead`, `-trellis`, …)
+  in `FFMPEGTranscoder`'s `httplsMode` block, and never consulted
+  `HwEncoder`. `LiveTranscodeProfile.hwAccel` was parsed/stored but
+  `PlaybackDecisionEngine` only ever read its `maxBitrateKbps`, so the
+  `hw_accel` field was effectively dead and concurrent MiniClient live
+  transcodes silently bottlenecked on CPU. **Fix:** the `httplsMode`
+  encoder is now chosen via `HwEncoder.pick("h264")` — `h264_nvenc`
+  with NVENC-appropriate rate control (`-preset`, `-rc:v vbr`, `-g`,
+  `-profile:v high`) when an NVIDIA GPU + nvenc-capable ffmpeg is
+  present, else the original `libx264` block unchanged (no-GPU hosts
+  keep working). NVENC preset knob:
+  `multimedia/hwaccel/nvenc/live_preset` (default `p4`).
+
+- **AMD / Intel live transcode (VAAPI / QSV / AMF) — not yet wired.**
+  The live/HLS path above engages **NVENC only**; on AMD/Intel hosts it
+  falls back to software `libx264`. Full HW support on the live path is
+  deferred because it needs work in three distinct areas:
+  1. **ffmpeg binary.** The bundled SageTV ffmpeg is built
+     `--enable-nvenc` only (verified via `-buildconf`; no `h264_vaapi`
+     / `h264_qsv` / `h264_amf` encoders listed). Rebuild
+     [docker/build-sagetv-ffmpeg.sh](docker/build-sagetv-ffmpeg.sh)
+     with `--enable-vaapi` (AMD/Intel Linux), `--enable-libmfx` or
+     `--enable-libvpl` (Intel QSV), and/or `--enable-amf` (AMD
+     Windows/Linux Pro). Until then `HwEncoder.pick()` correctly
+     returns `NONE` for those kinds, so the live path stays
+     dormant/safe on those hosts.
+  2. **Filter-graph / hwupload rework (the hard part).** The
+     `httplsMode` block appends a **software** `-vf` chain built
+     piecemeal (`yadif` deinterlace + aspect/scale added separately).
+     VAAPI/QSV need frames uploaded to GPU surfaces via a single fused
+     filtergraph (`format=nv12,hwupload` for VAAPI with `-vaapi_device
+     /dev/dri/renderD128`; `hwupload=extra_hw_frames=N` for QSV), and
+     ffmpeg allows only one `-vf`. The current code's multiple
+     conditional `-vf` additions must be consolidated into one graph
+     and interleaved correctly with the hwupload/format-conversion
+     stages. `HwEncoder.globalArgs(k)` and `HwEncoder.videoFilter(k,
+     …)` already produce the right fragments; integrating them into
+     the legacy string-built command is what's outstanding.
+  3. **Per-client override plumbing.** `LiveTranscodeProfile.hwAccel`
+     (`auto|nvenc|vaapi|qsv|amf|videotoolbox|none`) is not currently
+     passed into `FFMPEGTranscoder`; the live path uses the global
+     `multimedia/hwaccel/preferred` order via `HwEncoder.pick()`. To
+     let a specific client force VAAPI/QSV, thread the profile's
+     `hwAccel` through `PlaybackDecisionEngine` → `HTTPLSServer` →
+     `FFMPEGTranscoder` as a per-transcode override of the global pick.
+  Blocked primarily on (1)+(2); (3) is a small follow-on. No AMD/Intel
+  GPU is on the current host, so this is untestable until hardware +
+  an appropriately-built ffmpeg are available.
 
 - **NVDEC thumbnail generation (low value — likely rejected).** Proposed
   as a library-rescan speed-up, but thumbnails are single-frame
