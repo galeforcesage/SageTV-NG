@@ -185,6 +185,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ccextractor \
     nocache \
     hdhomerun-config \
+    `# === GLVND client dispatch stack (REQUIRED for realesrgan-ncnn-vulkan) ===` \
+    `# NVIDIA's libGLX_nvidia.so Vulkan ICD probes for the full GLVND EGL/GL` \
+    `# client libs at vk_icdGetInstanceProcAddr and self-disables (returns NULL,` \
+    `# VK_ERROR_INCOMPATIBLE_DRIVER / vkCreateInstance -9) if they are absent —` \
+    `# BEFORE any device access. libegl1 (libEGL.so.1) and libopengl0` \
+    `# (libOpenGL.so.0) are the two that a minimal image omits; libglx0 /` \
+    `# libglvnd0 / libgl1 pull in the rest of the dispatch layer. Without these,` \
+    `# nvidia-smi works but vulkaninfo fails inside the container even though it` \
+    `# works on the host. See NVIDIA/nvidia-container-toolkit issue #191.` \
+    libglvnd0 \
+    libgl1 \
+    libglx0 \
+    libegl1 \
+    libopengl0 \
     && rm -rf /var/lib/apt/lists/*
 
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
@@ -215,6 +229,13 @@ COPY --from=builder /src/build/release/Sage.jar /opt/sagetv/server/Sage.jar
 # otherwise the apt-installed comskip from the runtime stage is used.
 COPY --from=builder /src/build/elf/comskip.marker /tmp/.comskip-marker
 COPY --from=builder /src/build/elf/ /tmp/builder-elf/
+
+# AI-upscale wrapper (phase-1 of the chained upscale transcode job). This is a
+# source script under bin/, NOT part of the legacy serverrelease assembly, so
+# copy it in explicitly. The realesrgan-ncnn-vulkan binary + models are
+# bind-mounted at /opt/realesrgan:ro by the deploy runner; the wrapper defaults
+# to that path and SageTV passes transcoder/ai_upscale_binary at invocation.
+COPY bin/sage-ai-upscale.sh /opt/sagetv/server/bin/sage-ai-upscale.sh
 
 WORKDIR /opt/sagetv/server
 
