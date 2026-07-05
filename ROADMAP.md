@@ -345,12 +345,30 @@ RTX VSR) — the items below are the ones not previously captured.
   `HwEncoder.pick()` at job-build time so `_NV` presets auto-rewrite to
   software (`libx264`/`libx265`, drop `-hwaccel cuda`) when no GPU is
   detected — or land the vendor-agnostic `_SW` catalogue (Option A above)
-  and auto-select; (2) gate the AI-upscale path on a successful Vulkan
+  and auto-select; ~~(2) gate the AI-upscale path on a successful Vulkan
   device probe and skip (log + fall back to Lanczos or straight encode)
-  when absent; (3) make the container GPU reservation opt-in (base
+  when absent;~~ ✅ **done** — `Ministry.shouldAutoAiUpscale` now calls
+  `aiUpscaleDeviceAvailable()`, a one-per-JVM cached probe that shells out
+  to `sage-ai-upscale.sh --probe` (upscales a trivial 16×16 test frame,
+  exit 0 iff a Vulkan device initializes). When no Vulkan GPU is present
+  the rule declines and the transcode falls back to the preset's own
+  Lanczos scale instead of failing mid-job. Lazy (fires on first
+  qualifying SD→HD job, never per-playback), knobs
+  `transcoder/ai_upscale_require_vulkan` (default true) and
+  `transcoder/ai_upscale_probe_timeout_secs` (default 60).
+  ~~(3) make the container GPU reservation opt-in (base
   `docker-compose.yml` is already CPU-only; GPU is layered via override)
-  and have startup log the detected encoder tier once. This is the
-  prerequisite for shipping SageTV-NG to users without an NVIDIA card.
+  and have startup log the detected encoder tier once.~~ ✅ **done** —
+  base [docker-compose.yml](docker-compose.yml) stays CPU-only and runs
+  anywhere; NVIDIA GPU (NVENC + Vulkan `graphics` cap + Real-ESRGAN bind)
+  is layered via the opt-in [docker-compose.gpu.yml](docker-compose.gpu.yml)
+  (`docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d`).
+  Startup encoder-tier log already landed with the live-path NVENC wiring
+  (`Ministry`). **Remaining for this item: only sub-point (1)** — routing
+  the offline `_NV` presets' codec/`-hwaccel` through `HwEncoder` (partly
+  covered by `buildPresetSpec`/`stripCudaHwaccel`) or the `_SW` catalogue.
+  This is the prerequisite for shipping SageTV-NG to users without an
+  NVIDIA card.
 
 - **Comskip external GPU engine (speculative).** `CommercialDetectionJob`
   already supports `commercial_detection/engine=external` with a

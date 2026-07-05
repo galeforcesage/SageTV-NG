@@ -1,0 +1,48 @@
+#-------------------------------------------------------------------------------
+# sagetv-mine — NVIDIA GPU override (OPT-IN)
+#
+# Layer this on top of the CPU-only base to enable the NVIDIA GPU for:
+#   • hardware transcode (NVENC h264_nvenc / hevc_nvenc via HwEncoder), and
+#   • AI upscale (Real-ESRGAN ncnn-vulkan) which needs a Vulkan device.
+#
+# Usage:
+#     docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+#
+# Without this override the base runs anywhere CPU-only: HwEncoder falls back
+# to software (libx264/libx265) and the AI-upscale chained job is skipped
+# automatically because its one-time Vulkan probe fails safely (see the
+# transcoder/ai_upscale_require_vulkan knob in Sage.properties).
+#
+# Requirements on the host:
+#   • NVIDIA driver + nvidia-container-toolkit installed and working
+#     (verify: `docker run --rm --gpus all nvidia/cuda:12.4.0-base nvidia-smi`).
+#   • For Real-ESRGAN/Vulkan the "graphics" driver capability is REQUIRED
+#     (provides libGLX_nvidia.so.0); it is included in the env below.
+#   • The Real-ESRGAN binary + models available to the container. By default
+#     the code looks for /usr/local/bin/realesrgan-ncnn-vulkan; the bind below
+#     mounts a host copy at /opt/realesrgan (read-only). Point the code at it
+#     via Sage.properties: transcoder/ai_upscale_binary=/opt/realesrgan/realesrgan-ncnn-vulkan
+#-------------------------------------------------------------------------------
+services:
+  sagetv-mine:
+    environment:
+      # Expose all GPUs and the driver capabilities the workloads need.
+      # "graphics" is what makes Vulkan (Real-ESRGAN) work — do not drop it.
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility,graphics
+
+    # Modern Compose GPU reservation. `capabilities: [gpu]` selects the
+    # device; fine-grained driver features are chosen by
+    # NVIDIA_DRIVER_CAPABILITIES above.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    volumes:
+      # Host copy of the Real-ESRGAN ncnn-vulkan binary + models (read-only).
+      # Adjust the host path to wherever you installed it.
+      - /home/sagetv/realesrgan:/opt/realesrgan:ro

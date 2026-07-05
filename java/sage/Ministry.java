@@ -1117,6 +1117,14 @@ public class Ministry implements Runnable
   //   transcoder/ai_upscale_chunk_frames         default 500
   //   transcoder/ai_upscale_intermediate_dir     default ${STATE_DIR}/transcoder/intermediates
   //                                              (falls back to java.io.tmpdir)
+  //   transcoder/ai_upscale_require_vulkan        default true
+  //   transcoder/ai_upscale_probe_timeout_secs    default 60
+  //
+  // No-GPU degradation: when ai_upscale_require_vulkan is true (default) the
+  // chained job only engages if a Vulkan device is actually usable — probed
+  // once per JVM via `sage-ai-upscale.sh --probe`. On a host with no Vulkan
+  // GPU the rule declines and the transcode falls back to the preset's own
+  // (Lanczos) scale instead of failing mid-job.
   // ──────────────────────────────────────────────────────────────────────
 
   private static final java.util.regex.Pattern SCALE_FILTER_PATTERN =
@@ -1155,7 +1163,85 @@ public class Ministry implements Runnable
     int maxSrc = Sage.getInt("transcoder/ai_upscale_max_source_height", 720);
     int minTgt = Sage.getInt("transcoder/ai_upscale_min_target_height", 1080);
     if (sourceHeight <= 0 || targetHeight <= 0) return false;
-    return sourceHeight <= maxSrc && targetHeight >= minTgt;
+    if (!(sourceHeight <= maxSrc && targetHeight >= minTgt)) return false;
+    // Only engage the chained AI-upscale job if a Vulkan device is actually
+    // usable; otherwise decline so the caller runs a plain (Lanczos) preset
+    // transcode rather than spawning an upscaler that would fail mid-job.
+    if (!aiUpscaleDeviceAvailable())
+    {
+      if (Sage.DBG) System.out.println("Ministry: AI upscale rule matched (srcH=" + sourceHeight
+          + " tgtH=" + targetHeight + ") but no usable Vulkan device — using plain transcode");
+      return false;
+    }
+    return true;
+  }
+
+  /** Cached Vulkan-probe result: null=unprobed, TRUE/FALSE once determined. */
+  private static volatile Boolean aiUpscaleVulkanOK = null;
+
+  /**
+   * One-per-JVM probe: can the AI-upscale wrapper initialize a Vulkan device
+   * and upscale a trivial test frame? Result is cached. Gated by
+   * {@code transcoder/ai_upscale_require_vulkan} (default true) — set it to
+   * false to skip the probe and assume the upscaler is usable.
+   */
+  public static boolean aiUpscaleDeviceAvailable()
+  {
+    if (!Sage.getBoolean("transcoder/ai_upscale_require_vulkan", true))
+      return true;
+    Boolean cached = aiUpscaleVulkanOK;
+    if (cached != null) return cached.booleanValue();
+    synchronized (Ministry.class)
+    {
+      if (aiUpscaleVulkanOK != null) return aiUpscaleVulkanOK.booleanValue();
+      boolean ok = probeAiUpscaleVulkan();
+      aiUpscaleVulkanOK = Boolean.valueOf(ok);
+      if (Sage.DBG)
+        System.out.println("Ministry: AI-upscale Vulkan probe -> "
+            + (ok ? "AVAILABLE" : "UNAVAILABLE (falling back to plain transcode)"));
+      return ok;
+    }
+  }
+
+  /** Reset the cached Vulkan-probe result so the next call re-probes. */
+  public static void resetAiUpscaleProbe() { aiUpscaleVulkanOK = null; }
+
+  private static boolean probeAiUpscaleVulkan()
+  {
+    Process p = null;
+    try
+    {
+      String wrapper = Sage.get("transcoder/ai_upscale_wrapper", "bin/sage-ai-upscale.sh");
+      String binary  = Sage.get("transcoder/ai_upscale_binary", "/usr/local/bin/realesrgan-ncnn-vulkan");
+      String model   = Sage.get("transcoder/ai_upscale_model", "realesr-general-x4v3");
+      java.util.ArrayList<String> argv = new java.util.ArrayList<String>();
+      argv.add("/bin/bash");
+      argv.add(wrapper);
+      argv.add("--probe");
+      argv.add("--realesrgan"); argv.add(binary);
+      argv.add("--model"); argv.add(model);
+      if (Sage.DBG) System.out.println("Ministry: AI-upscale probe: " + argv);
+      p = new ProcessBuilder(argv).redirectErrorStream(true).start();
+      // Drain output so a full pipe can't block the child.
+      java.io.BufferedReader r = new java.io.BufferedReader(
+          new java.io.InputStreamReader(p.getInputStream()));
+      try { while (r.readLine() != null) { } }
+      finally { try { r.close(); } catch (java.io.IOException ie) {} }
+      int timeoutSec = Sage.getInt("transcoder/ai_upscale_probe_timeout_secs", 60);
+      if (!p.waitFor(timeoutSec, java.util.concurrent.TimeUnit.SECONDS))
+      {
+        p.destroyForcibly();
+        if (Sage.DBG) System.out.println("Ministry: AI-upscale probe timed out after " + timeoutSec + "s");
+        return false;
+      }
+      return p.exitValue() == 0;
+    }
+    catch (Throwable t)
+    {
+      if (p != null) { try { p.destroyForcibly(); } catch (Throwable ig) {} }
+      if (Sage.DBG) System.out.println("Ministry: AI-upscale probe failed: " + t);
+      return false;
+    }
   }
 
   /**

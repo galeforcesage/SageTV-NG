@@ -72,7 +72,9 @@ config*.log
 /third_party/Microsoft/**/x64/
 
 # gradle/eclipse stuff
-/bin/
+/bin/*
+# ...but keep the AI-upscale wrapper (a source script, not Eclipse output)
+!/bin/sage-ai-upscale.sh
 /.classpath
 /.project
 /.cproject
