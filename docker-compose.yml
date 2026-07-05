@@ -10,6 +10,14 @@
 # IMPORTANT: Use identity mounts (same path host:container) for media volumes
 # so that paths stored in Wiz.bin resolve correctly inside the container.
 #
+# GPU (optional): this base file is CPU-only and runs anywhere. To enable an
+# NVIDIA GPU for hardware transcode (NVENC) and AI upscale (Real-ESRGAN /
+# Vulkan), layer the opt-in override:
+#     docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+# Without the override, HwEncoder falls back to software (libx264/libx265) and
+# the AI-upscale chained job is skipped automatically (its Vulkan probe fails
+# safely) — see the transcoder/ai_upscale_require_vulkan knob.
+#
 # Build:   docker compose build
 # Run:     docker compose up -d
 # Logs:    docker compose logs -f
