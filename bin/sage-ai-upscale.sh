@@ -47,7 +47,11 @@ WIDTH=0
 HEIGHT=0
 MODEL="${SAGE_AI_UPSCALE_MODEL:-realesr-general-x4v3}"
 CHUNK_FRAMES="${SAGE_AI_UPSCALE_CHUNK_FRAMES:-500}"
-REALESRGAN_BIN="${SAGE_AI_UPSCALE_BINARY:-/usr/local/bin/realesrgan-ncnn-vulkan}"
+# Default to the bind-mounted realesrgan location used by our deploy
+# (run_mine.sh mounts the host realesrgan dir at /opt/realesrgan:ro). SageTV
+# normally passes the path explicitly via transcoder/ai_upscale_binary, but a
+# sane default keeps `--probe` and manual invocation working out of the box.
+REALESRGAN_BIN="${SAGE_AI_UPSCALE_BINARY:-/opt/realesrgan/realesrgan-ncnn-vulkan}"
 FFMPEG_BIN="${SAGE_FFMPEG:-/usr/bin/ffmpeg}"
 FFPROBE_BIN="${SAGE_FFPROBE:-/usr/bin/ffprobe}"
 WORKDIR=""
