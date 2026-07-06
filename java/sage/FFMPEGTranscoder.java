@@ -1135,17 +1135,41 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add("-r");
       // Trying to lower the frame rate here caused problems...
       xcodeParamsVec.add("29.97");
-      xcodeParamsVec.add("-acodec");
-      xcodeParamsVec.add("libfdk_aac");
-      xcodeParamsVec.add("-profile:a");
-      xcodeParamsVec.add("aac_he_v2"); // HE-AAC v2 is optimal at 32kbps for HTTPLS streaming
-      // FFmpeg 7.x: -ab is deprecated; use -b:a
-      xcodeParamsVec.add("-b:a");
-      xcodeParamsVec.add(Integer.toString(currAudioBitrateKbps * 1000)); // FFMPEG takes audio in bits/sec now
-      xcodeParamsVec.add("-ac");
-      xcodeParamsVec.add("2");
-      xcodeParamsVec.add("-ar");
-      xcodeParamsVec.add("44100");
+      // --- Audio codec negotiation: source -> down to player capability ---
+      // HLS/MPEG-TS segments may only carry AAC, AC-3 or E-AC-3. If the client
+      // (its effective ClientProfile audio set) can decode the SOURCE audio
+      // codec AND that codec is HLS-safe, pass it through untouched
+      // (-acodec copy) for best quality and zero transcode cost -- "unless the
+      // player is equal". Otherwise transcode down to AAC-LC (aac_low), the
+      // broadest-compatibility target for hls.js and native iOS HLS. HE-AAC v2
+      // was dropped: its parametric stereo decodes unreliably in hls.js/iOS.
+      String srcAudCodec = (sourceFormat != null && sourceFormat.getAudioFormat() != null)
+          ? sourceFormat.getAudioFormat().getFormatName() : null;
+      boolean audioPassthrough =
+          isHlsSafeAudioCodec(srcAudCodec) && clientSupportsHttplsAudioCodec(srcAudCodec);
+      if (audioPassthrough)
+      {
+        if (Sage.DBG) System.out.println("FFMpegTranscoder: httpls: audio passthrough (-acodec copy) for source codec "
+            + srcAudCodec + " (client-supported and HLS-safe)");
+        xcodeParamsVec.add("-acodec");
+        xcodeParamsVec.add("copy");
+      }
+      else
+      {
+        if (Sage.DBG) System.out.println("FFMpegTranscoder: httpls: audio transcode to AAC-LC (aac_low); sourceCodec="
+            + srcAudCodec + " clientAudio=" + httplsClientAudioCodecs);
+        xcodeParamsVec.add("-acodec");
+        xcodeParamsVec.add("libfdk_aac");
+        xcodeParamsVec.add("-profile:a");
+        xcodeParamsVec.add("aac_low"); // AAC-LC: broad hls.js / iOS HLS compatibility
+        // FFmpeg 7.x: -ab is deprecated; use -b:a
+        xcodeParamsVec.add("-b:a");
+        xcodeParamsVec.add(Integer.toString(currAudioBitrateKbps * 1000)); // FFMPEG takes audio in bits/sec now
+        xcodeParamsVec.add("-ac");
+        xcodeParamsVec.add("2");
+        xcodeParamsVec.add("-ar");
+        xcodeParamsVec.add("44100");
+      }
       if (liveNvenc)
       {
       // NVENC accepts software frames directly (no -hwaccel/hwupload needed on
@@ -2809,6 +2833,57 @@ public class FFMPEGTranscoder implements TranscodeEngine
   protected int liveDeficitWindows;
   protected int liveHeadroomWindows;
   protected boolean httplsMode = false;
+
+  /**
+   * Effective audio codecs the connecting HLS client can decode (canonical
+   * SageTV codec names, uppercased). Populated by
+   * {@code HTTPLSServer.setupTranscoder} from the client's resolved
+   * ClientProfile / reported AUDIO_CODECS. {@code null} or empty means the
+   * client capability is unknown, in which case the HLS audio path
+   * conservatively transcodes to AAC-LC rather than passing audio through.
+   */
+  protected java.util.Set httplsClientAudioCodecs;
+
+  public void setHttplsClientAudioCodecs(java.util.Set codecs)
+  {
+    this.httplsClientAudioCodecs = codecs;
+  }
+
+  /** HLS / MPEG-TS segments may only carry AAC, AC-3 or E-AC-3 audio. */
+  private static boolean isHlsSafeAudioCodec(String codec)
+  {
+    return "AAC".equals(canonicalAudioCodec(codec))
+        || "AC3".equals(canonicalAudioCodec(codec))
+        || "EAC3".equals(canonicalAudioCodec(codec));
+  }
+
+  /**
+   * True when the connecting HLS client's effective audio set contains the
+   * given codec (alias-tolerant). Returns {@code false} when the client audio
+   * set is unknown, so callers conservatively transcode instead of copying.
+   */
+  private boolean clientSupportsHttplsAudioCodec(String codec)
+  {
+    if (codec == null || httplsClientAudioCodecs == null || httplsClientAudioCodecs.isEmpty())
+      return false;
+    String want = canonicalAudioCodec(codec);
+    for (Object o : httplsClientAudioCodecs)
+    {
+      if (o != null && want.equals(canonicalAudioCodec(o.toString())))
+        return true;
+    }
+    return false;
+  }
+
+  /** Normalize audio codec spelling variants to a canonical uppercased key. */
+  private static String canonicalAudioCodec(String codec)
+  {
+    if (codec == null) return "";
+    String c = codec.toUpperCase();
+    if (c.equals("AC-3")) return "AC3";
+    if (c.equals("E-AC-3") || c.equals("EC-3") || c.equals("EAC-3")) return "EAC3";
+    return c;
+  }
 
   protected int lastExitCode = -1;
   protected long transcodeEditDuration;
