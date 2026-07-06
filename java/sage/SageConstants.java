@@ -22,5 +22,5 @@ public final class SageConstants
     // Non-instantiable
   }
 
-  public static final int BUILD_VERSION = 1238;
+  public static final int BUILD_VERSION = 1241;
 }
