@@ -1163,7 +1163,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add("0");
       xcodeParamsVec.add("-profile:v");
       xcodeParamsVec.add("high");
-      xcodeParamsVec.add("-level");
+      xcodeParamsVec.add("-level:v");
       xcodeParamsVec.add("auto");
       }
       else
@@ -1215,7 +1215,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add("0");
       xcodeParamsVec.add("-rc-lookahead");
       xcodeParamsVec.add("50");
-      xcodeParamsVec.add("-level");
+      xcodeParamsVec.add("-level:v");
       xcodeParamsVec.add("30");
       }
       xcodeParamsVec.add("-maxrate");
