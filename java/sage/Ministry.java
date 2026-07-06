@@ -252,8 +252,23 @@ public class Ministry implements Runnable
   private static String buildPresetSpec(java.util.Properties p)
   {
     String container = p.getProperty("container", "mp4").trim();
-    String global = p.getProperty("global", "").trim();
-    String args = p.getProperty("args", "").trim();
+
+    // Vendor-block selection: if the preset provides args_nv=/args_sw= keys,
+    // pick the block matching the detected hardware encoder. This lets each
+    // preset carry correct encoder-specific params (NVENC -preset p5 / -rc:v
+    // vbr / -cq:v vs libx264 -preset medium / -crf) without runtime rewriting.
+    // Presets that only have the legacy bare args=/global= keys still work —
+    // they go through the original %V264%/%V265% token + CUDA-strip path.
+    String vendorBlock = pickVendorBlock();
+    String global = p.getProperty("global_" + vendorBlock, "").trim();
+    String args = p.getProperty("args_" + vendorBlock, "").trim();
+    if (args.length() == 0)
+    {
+      // Fallback: legacy bare keys (backward compat for user-authored presets
+      // and presets like DVD_LEGACY_MPEG2 that have no vendor variants).
+      global = p.getProperty("global", "").trim();
+      args = p.getProperty("args", "").trim();
+    }
     if (args.length() == 0) return null;
 
     // Resolve the %V264%/%V265% encoder tokens and keep the CUDA -hwaccel
@@ -325,6 +340,19 @@ public class Ministry implements Runnable
           + " screen-tier presets are CUDA-shaped; using software (libx264/libx265)."
           + " Add a vendor-specific preset for native " + k + " acceleration.");
     return HwEncoder.Kind.NONE;
+  }
+
+  // Select the vendor block suffix for preset .properties lookup.
+  // Returns "nv" when NVENC is available, "sw" otherwise.
+  // Future: "vaapi", "qsv", "amf" when those preset blocks are authored.
+  private static String pickVendorBlock()
+  {
+    HwEncoder.Kind k = HwEncoder.pick("h264");
+    if (k == HwEncoder.Kind.NVENC) return "nv";
+    // Future vendors would be checked here:
+    // if (k == HwEncoder.Kind.VAAPI) return "vaapi";
+    // if (k == HwEncoder.Kind.QSV) return "qsv";
+    return "sw";
   }
 
   // Remove CUDA-only decode flags (-hwaccel cuda, -hwaccel_output_format cuda,
