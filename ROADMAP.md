@@ -193,6 +193,120 @@ work plus a Ministry resolver that builds the cartesian product from
 a preset spec like `args_nv=` / `args_sw=` / `args_vaapi=`. Cleaner
 mental model than Option A once we have >1 GPU vendor in the mix.
 
+### Non-NVIDIA hardware encoder support — VAAPI / QSV / AMF  *(Option B; recommended next step after sub-point (1))*
+
+**Where this fits.** Sub-point (1) of the *No-GPU graceful degradation*
+item (below) only takes the NVENC fast-path **or** drops to CPU
+(`libx264`/`libx265`) — see `Ministry.pickPresetEncoder()`, which
+deliberately collapses any non-NVENC `HwEncoder.Kind` to `NONE` because
+the screen-tier presets are CUDA-shaped and can't be mechanically
+rewritten into a VAAPI/QSV filter graph. So an AMD or Intel box today
+gets a **working** transcode, but a **software** one — it leaves the
+iGPU/dGPU idle. This item closes that gap: give AMD (VAAPI/AMF) and
+Intel (QSV/VAAPI) hosts a native hardware path instead of CPU.
+
+`HwEncoder` already probes and ranks `nvenc,vaapi,qsv,amf,videotoolbox,none`
+per JVM, so **encoder *selection* is solved** — the missing piece is
+authoring vendor-shaped ffmpeg command graphs and wiring `buildPresetSpec`
+to emit the one matching the detected backend.
+
+**Why it can't be a token swap.** Unlike NVENC (where `%V264%` →
+`h264_nvenc` and CUDA `-hwaccel` strips cleanly), each backend needs a
+*structurally different* command:
+
+| Backend | Typical host | Init | Decode hwaccel | Scale filter | Encoders |
+|---|---|---|---|---|---|
+| **VAAPI** | Intel iGPU / AMD (Linux, `/dev/dri/renderD128`) | `-init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va` | `-hwaccel vaapi -hwaccel_output_format vaapi` | `scale_vaapi=w:h` (or `hwupload` after CPU scale) | `h264_vaapi`, `hevc_vaapi` |
+| **QSV** | Intel (iGPU, modern) | `-init_hw_device qsv=hw -filter_hw_device hw` | `-hwaccel qsv -hwaccel_output_format qsv` | `scale_qsv=w:h` | `h264_qsv`, `hevc_qsv` |
+| **AMF** | AMD (Windows; Linux support weak) | n/a (no hwaccel decode) | CPU/DXVA decode | CPU `scale` then encode | `h264_amf`, `hevc_amf` |
+| **VideoToolbox** | macOS (not our container) | n/a | `-hwaccel videotoolbox` | CPU `scale` | `h264_videotoolbox`, `hevc_videotoolbox` |
+
+Note the rate-control knobs also differ: NVENC `-rc vbr -cq:v N`;
+VAAPI `-rc_mode VBR -qp N` (or `-b:v`/`-maxrate`); QSV `-global_quality N
+-look_ahead 1`; AMF `-rc vbr_peak -qp_i/-qp_p`. A single arg string
+can't cover them.
+
+**Design — per-vendor arg blocks (aligns with Option C's `args_<vendor>=`).**
+Extend each screen-tier `presets/transcoder/*.properties` with optional
+keyed blocks; keep `%V264%`/`%V265%` only inside the NV block:
+
+```
+name=TV_1080_COMPAT
+container=mp4
+# NVIDIA (current behaviour; %V264% resolves via HwEncoder)
+global_nv=-hwaccel cuda -hwaccel_output_format cuda
+args_nv=-i ${INPUT} -map 0:v:0 -map 0:a:0? -vf scale=1920:1080:flags=lanczos \
+    -c:v %V264% -preset p5 -rc vbr -cq:v 21 -b:v 10M -maxrate 12M \
+    -c:a aac -b:a 192k -ac 2 -movflags +faststart ${OUTPUT}
+# VAAPI (Intel/AMD Linux)
+global_vaapi=-init_hw_device vaapi=va:${VAAPI_DEVICE} -filter_hw_device va \
+    -hwaccel vaapi -hwaccel_output_format vaapi
+args_vaapi=-i ${INPUT} -map 0:v:0 -map 0:a:0? \
+    -vf scale_vaapi=1920:1080 -c:v h264_vaapi -rc_mode VBR -qp 22 -b:v 10M \
+    -c:a aac -b:a 192k -ac 2 -movflags +faststart ${OUTPUT}
+# QSV (Intel)
+global_qsv=-init_hw_device qsv=hw -filter_hw_device hw \
+    -hwaccel qsv -hwaccel_output_format qsv
+args_qsv=-i ${INPUT} -map 0:v:0 -map 0:a:0? \
+    -vf scale_qsv=1920:1080 -c:v h264_qsv -global_quality 22 -look_ahead 1 \
+    -c:a aac -b:a 192k -ac 2 -movflags +faststart ${OUTPUT}
+# CPU fallback (Option A _SW, always present as the floor)
+args_sw=-i ${INPUT} -map 0:v:0 -map 0:a:0? -vf scale=1920:1080:flags=lanczos \
+    -c:v libx264 -preset medium -crf 21 \
+    -c:a aac -b:a 192k -ac 2 -movflags +faststart ${OUTPUT}
+```
+
+`${VAAPI_DEVICE}` defaults to `/dev/dri/renderD128`, overridable via
+`transcoder/vaapi_device=`. AMF omitted from the container recipe (weak
+Linux support) but the schema slot (`args_amf=`) exists for Windows/bare-
+metal users.
+
+**Engine changes** (`java/sage/Ministry.java`, ~150–250 LOC):
+
+1. `pickPresetEncoder(codec)` — stop collapsing non-NVENC to `NONE`.
+   Return the real `HwEncoder.Kind`. Add `presetBlockFor(Kind)` →
+   `"nv"|"vaapi"|"qsv"|"amf"|"sw"`.
+2. `buildPresetSpec()` — pick `args_<block>` / `global_<block>` for the
+   detected backend, falling back through `sw` if that vendor's block is
+   absent. Resolve `%V264%`/`%V265%` only in the NV block; substitute
+   `${VAAPI_DEVICE}` etc. Emit the same `f=;MRawCmdlineGlobal=;MRawCmdline=`
+   spec — **no `FFMPEGTranscoder` change needed** (the raw-cmdline path
+   already round-trips arbitrary flags).
+3. Back-compat — a preset that only has the legacy single `args=`/`global=`
+   keys keeps working exactly as today (treated as `args_nv` when a
+   `%V…%` token is present, else vendor-neutral).
+
+**Container / device requirements.**
+
+- VAAPI/QSV need a DRI render node: bind `/dev/dri` (already mounted by
+  `run_mine.sh`) and add the container user to the `render`/`video`
+  groups. Verify inside the container with `vainfo` (add `vainfo` +
+  `intel-media-va-driver-non-free` **only** in the opt-in Intel image
+  layer; do **not** bloat the base).
+- ffmpeg build: the unified binary already has `--enable-vaapi`; confirm
+  and add `--enable-libmfx`/`--enable-libvpl` for QSV in a follow-up
+  build task (cross-reference the `--enable-libnpp` build item above).
+  If QSV libs aren't compiled in, `HwEncoder.pick` should not rank QSV —
+  verify the probe reflects the actual build.
+- These are **Linux** accel paths; keep them behind the same opt-in GPU
+  compose layering as NVENC (base compose stays CPU-only).
+
+**Validation.** On an Intel iGPU host and an AMD host: run
+`TV_1080_COMPAT` and `TV_4K_HEVC`, confirm (a) the correct encoder is
+selected (`Ministry` tier log), (b) `ffmpeg` actually offloads (GPU busy
+via `intel_gpu_top` / `radeontop`, CPU stays low), (c) output plays and
+matches the NVENC output at similar bitrate. Regression: NVIDIA host and
+no-GPU host must behave exactly as before.
+
+**Out of scope for v1.** AV1 encode on any backend; full-GPU zero-copy
+VAAPI decode→scale→encode chains (start with CPU-scale + `hwupload` for
+correctness, optimize later); AMF on Linux; per-vendor quality tuning
+beyond a sane VBR default.
+
+**Estimated effort.** 2–4 days (schema + `buildPresetSpec` vendor
+routing + one Intel and one AMD validation pass + container render-node
+plumbing). Depends on access to non-NVIDIA test hardware.
+
 ### FFmpeg build with `--enable-libnpp` / `--enable-cuda-nvcc`
 
 The bundled SageTV ffmpeg is currently built with `--enable-nvenc
@@ -368,7 +482,10 @@ RTX VSR) — the items below are the ones not previously captured.
   the offline `_NV` presets' codec/`-hwaccel` through `HwEncoder` (partly
   covered by `buildPresetSpec`/`stripCudaHwaccel`) or the `_SW` catalogue.
   This is the prerequisite for shipping SageTV-NG to users without an
-  NVIDIA card.
+  NVIDIA card. **Recommended next step once sub-point (1)'s CPU floor is
+  in:** the *Non-NVIDIA hardware encoder support — VAAPI / QSV / AMF*
+  (Option B) item above, so AMD/Intel hosts get native HW accel instead of
+  a software fallback.
 
 - **Comskip external GPU engine (speculative).** `CommercialDetectionJob`
   already supports `commercial_detection/engine=external` with a
