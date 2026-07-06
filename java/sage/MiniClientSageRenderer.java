@@ -7018,6 +7018,19 @@ public class MiniClientSageRenderer extends SageRenderer
   }
 
   /**
+   * Returns this client's effective audio codec set (canonical SageTV codec
+   * names, uppercased) -- the client-reported AUDIO_CODECS, clamped to the
+   * resolved ClientProfile when strict clamping is enabled. Used by the
+   * HTTPLS/HLS transcode path to negotiate audio (pass the source codec
+   * through when the player supports it, else transcode down). May be
+   * {@code null} very early in negotiation.
+   */
+  public java.util.Set getEffectiveAudioCodecs()
+  {
+    return audioCodecs;
+  }
+
+  /**
    * Returns the schema-v2 capability constraints (interlaced gate, container
    * push/pull gate, audio decode gate) for this client, or {@code null} when
    * the client did not negotiate schema v2 or did not provide any constraint

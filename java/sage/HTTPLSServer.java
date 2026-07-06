@@ -2834,6 +2834,26 @@ public class HTTPLSServer implements Runnable
         xcode.transcoder = new FFMPEGTranscoder();
         xcode.transcoder.setEstimatedBandwidth(bwkbps * 1000);
 
+        // Give the transcoder the connecting client's effective audio codec set
+        // so the HLS audio path can negotiate: pass the source audio through
+        // (-acodec copy) when the player supports it and it is HLS-safe, else
+        // transcode down to AAC-LC. Resolved from the client's MiniClient
+        // renderer via the VideoFrame; null-safe when unavailable.
+        try
+        {
+          if (vf != null && vf.getUIMgr() != null && vf.getUIMgr().getRootPanel() != null
+              && (vf.getUIMgr().getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer))
+          {
+            MiniClientSageRenderer mcsr =
+                (MiniClientSageRenderer) vf.getUIMgr().getRootPanel().getRenderEngine();
+            xcode.transcoder.setHttplsClientAudioCodecs(mcsr.getEffectiveAudioCodecs());
+          }
+        }
+        catch (Throwable t)
+        {
+          if (Sage.DBG) System.out.println("iOS HTTP server: could not resolve client audio codecs: " + t);
+        }
+
         int numTempFiles = Sage.getInt("xcode_num_temp_httpls_segments", 20);
         java.io.File[] tempSegFiles = new java.io.File[numTempFiles];
         for (int i = 0; i < numTempFiles; i++)
