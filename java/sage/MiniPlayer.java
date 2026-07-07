@@ -1083,19 +1083,29 @@ public class MiniPlayer implements DVDMediaPlayer
 
       // Transport enforcement: when a managed profile's decision engine says
       // the source needs REMUX or TRANSCODE (i.e. the container/codec is NOT
-      // directly playable by this client), the client must NOT pull the raw
-      // file — it must receive the push-mode remux/transcode. The legacy
+      // directly playable by this client), a LEGACY client must NOT pull the
+      // raw file — it must receive the push-mode remux/transcode. The legacy
       // clientDoesPull flag is seeded from the client's PULL_AV_CONTAINERS
-      // property, which for legacy placeshifters advertises containers (e.g.
-      // Quicktime/MP4) that the client's demuxer cannot actually handle in
-      // pull mode. Clearing clientDoesPull here forces pushMode below so the
-      // REMUX/TRANSCODE verdict (mpeg2psremux etc.) is honored. Only applies
-      // to managed profiles with a non-DIRECT_PLAY verdict; legacy clients
-      // without a profile (profileDecision == null) are unaffected.
+      // property, which for legacy placeshifters is a STATIC, optimistic list
+      // (e.g. MPlayer advertises Quicktime/MP4) that the client's demuxer
+      // cannot actually handle in pull mode. Clearing clientDoesPull here
+      // forces pushMode below so the REMUX/TRANSCODE verdict (mpeg2psremux
+      // etc.) is honored.
+      //
+      // IMPORTANT — NG clients are EXCLUDED from this override. NG clients
+      // (PWA browser, Android MiniClient) do accurate capability negotiation
+      // (browser canPlayType probing, ExoPlayer/IJK decoder matrix), so their
+      // reported PULL_AV_CONTAINERS / codec sets are RELIABLE and must win over
+      // a static server-side profile. Example: Safari genuinely decodes HEVC
+      // even though the conservative pwa_safe profile lists only H.264 — forcing
+      // a transcode there would ignore the client's real capability. So this
+      // correction applies ONLY to legacy (non-NG) clients whose self-report is
+      // a fixed list, not to NG clients whose self-report reflects real decoders.
       if (profileDecision != null && clientDoesPull
+          && mcsr != null && !mcsr.isNgCapableSession()
           && profileDecision.decision != sage.client.PlaybackDecisionEngine.Decision.DIRECT_PLAY)
       {
-        if (Sage.DBG) System.out.println("MiniPlayer: forcing push mode — profile decision "
+        if (Sage.DBG) System.out.println("MiniPlayer: forcing push mode (legacy client) — profile decision "
             + profileDecision.decision + " requires server-side remux/transcode, "
             + "clearing clientDoesPull (was pull-capable per client PULL_AV_CONTAINERS)");
         clientDoesPull = false;
