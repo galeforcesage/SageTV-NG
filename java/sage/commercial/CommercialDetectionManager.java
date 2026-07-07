@@ -74,7 +74,14 @@ public class CommercialDetectionManager
 
   public boolean isEnabled()
   {
-    return Sage.getBoolean("commercial_detection/enabled", false);
+    // Auto-enable when the comskip binary exists at the configured path and
+    // the user has not explicitly disabled it. This removes the need for a
+    // manual Sage.properties edit or plugin install when comskip ships in the
+    // container image.
+    String explicit = Sage.get("commercial_detection/enabled", null);
+    if (explicit != null)
+      return "true".equalsIgnoreCase(explicit.trim());
+    return new java.io.File(getComskipPath()).exists();
   }
 
   // ── Recording lifecycle hooks (called from Seeker) ──
