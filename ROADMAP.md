@@ -613,6 +613,24 @@ RTX VSR) — the items below are the ones not previously captured.
   single biggest trickplay pain on the transcode path. Substantial effort;
   measure seek latency before/after.
 
+  **Completed recording vs live TV differ materially:**
+  - *Completed recording* (static file, no `-activefile`): the clean case.
+    Seek targets are stable and the full duration exists, so the
+    keyframe-indexed restart (option a) is straightforward — pre-index
+    keyframes once and reuse the encoder when the target is near the
+    current position. Highest predictable payoff.
+  - *Live TV / in-progress* (growing file, `-activefile` → `follow=1`):
+    harder AND more important. Every restart must RE-ESTABLISH follow mode
+    or the new ffmpeg stops at the old EOF; seek targets are bounded by the
+    live edge (no forward seek past what's recorded); FF toward live must
+    "catch up then follow." The output-ring-buffer window (option b) is the
+    higher-priority path here because live trickplay is dominated by SMALL
+    nudges near the live edge (skip a break, back up 10s, jump to live) that
+    would land inside already-transcoded output and avoid a restart entirely.
+    Added correctness hazard: if the recording completes mid-seek, the
+    restart must drop follow mode (the `activefile` → `inactivefile`
+    stdin-ctrl transition) — a state the completed-file case never hits.
+
 - **Audio-only transcode when only the audio codec mismatches.** In
   `PlaybackDecisionEngine.evaluate()` the REMUX branch only fires when
   BOTH video and audio codecs are supported and just the container is
@@ -627,6 +645,23 @@ RTX VSR) — the items below are the ones not previously captured.
   trickplay fast (no video encode = no cold-restart cost) AND fixes the
   audio incompatibility. Cross-references the existing AC-4→EAC3
   audio-only path in the deployed jar (see userMemory sagetv-deploy notes).
+
+  **Completed recording vs live TV differ materially:**
+  - *Completed recording* (static file): video stream-copy is trivial;
+    even the seek-restart is far cheaper than full transcode (demux + copy
+    + audio re-encode + mux, no video decode/encode). Straightforward win.
+  - *Live TV / in-progress* — this is the PRIMARY win and the ATSC 3.0
+    case: HEVC video + AC-4 audio live recording on a client that can't
+    decode AC-4 → copy HEVC passthrough + AC-4→EAC3 audio transcode + mux,
+    following the growing file. This is essentially "REMUX + light audio
+    transcode": real-time-safe and, because there is NO video encode, it
+    drastically lowers the seek-restart cost — so **Item 2 partially
+    subsumes Item 1 for the audio-mismatch case**. This directly matches
+    the AC-4→EAC3 audio-only path already deployed (userMemory
+    sagetv-deploy). Recommendation: make audio-only-transcode the default
+    whenever video codec + resolution + bandwidth are OK and only audio
+    fails, for BOTH live and completed sources — it is the best single
+    lever for live ATSC 3.0 trickplay.
 
 - **Per-airing audio language UI selector.** Server-side language-aware
   audio mapping is done (see Done section: `AC4TranscodeJob` honors
