@@ -379,17 +379,18 @@ public class ClientProfileManager
         Arrays.asList("MPEG2-TS", "MPEG2-PS"), Arrays.asList("H.264", "MPEG2-VIDEO"), Arrays.asList("AC3", "AAC", "MP3", "MP2"),
         false, ClientProfile.AUTO_REMUX_AGGRESSIVE, 1920, 1080, false));
 
-    // Desktop (placeshifter): the legacy Windows Placeshifter's DShow demuxer
-    // handles MPEG2-PS/TS natively but NOT MP4/MKV/Quicktime containers in
-    // pull mode (the native StrmDeMux/MpegDeMux-3 pipeline was built for
-    // MPEG-PS/TS only). Upstream google/sagetv always forced push-mode
-    // transcode for non-extender placeshifters; this profile matches that
-    // behavior by listing only the containers the legacy client can pull.
-    // Modern clients that can handle MP4/MKV should use desktop_hevc_optin
-    // or a client-specific profile.
+    // Desktop (placeshifter): broad codec/container coverage matching what the
+    // MPlayer-based placeshifter genuinely handles. The static profile is now a
+    // GUARD RAIL only — the PlaybackDecisionEngine intersects it with the
+    // client's ACTUAL reported capabilities (isSupported* / PULL_AV_CONTAINERS),
+    // so a container/codec listed here is direct-played ONLY when the specific
+    // client also reports it. A client that cannot demux MP4/MKV in pull mode
+    // (e.g. some DShow-based clients) will not report those containers and is
+    // remuxed automatically — no profile edit needed. This matches upstream
+    // google/SageTV, where the client's report is the source of truth.
     profiles.put("desktop_default", new ClientProfile(
         "desktop_default", "Windows/macOS default", true,
-        Arrays.asList("MPEG2-TS", "MPEG2-PS", "MPEG", "MPEG1-PS", "AVI", "WAV", "MP3", "OGG"),
+        Arrays.asList("MP4", "MKV", "MATROSKA", "MPEG2-TS", "MPEG2-PS", "MPEG", "MPEG1-PS", "QUICKTIME", "FLASHVIDEO", "OGG", "MP3", "AAC", "WAV"),
         Arrays.asList("H.264", "MPEG2-VIDEO", "MPEG4-VIDEO", "VC1", "WMV9"),
         Arrays.asList("AAC", "AC3", "EAC3", "EC-3", "MP3", "MP2", "MPG1L2", "MPG1L3", "DTS", "DCA", "FLAC", "VORBIS", "PCM", "PCM_S16LE"),
         false, ClientProfile.AUTO_REMUX_ON_FAILURE, 0, 0, true));

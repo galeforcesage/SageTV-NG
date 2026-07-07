@@ -31,6 +31,30 @@ public class PlaybackDecisionEngine
   }
 
   /**
+   * The client's ACTUAL reported support for the source container / video /
+   * audio, computed by the caller from the client's coarse capability lists
+   * (VIDEO_CODECS / AUDIO_CODECS / PULL_AV_CONTAINERS / PUSH_AV_CONTAINERS via
+   * {@code MiniClientSageRenderer.isSupported*}). Used by the engine as the
+   * legacy-side honor signal so the static profile can only restrict, never
+   * grant, a capability the client did not report (upstream google/SageTV
+   * conjunctive model). {@code true} for a dimension means "client reports it
+   * can handle this"; a missing/empty codec should be passed as {@code true}
+   * (nothing to gate).
+   */
+  public static final class ClientReportedCaps
+  {
+    public final boolean container;
+    public final boolean video;
+    public final boolean audio;
+    public ClientReportedCaps(boolean container, boolean video, boolean audio)
+    {
+      this.container = container;
+      this.video = video;
+      this.audio = audio;
+    }
+  }
+
+  /**
    * Result of a playback decision, including the chosen strategy
    * and the reason for the choice.
    */
@@ -204,12 +228,46 @@ public class PlaybackDecisionEngine
       int sourceBitrateKbps, int availableBandwidthKbps,
       ClientConstraints constraints, boolean sourceInterlaced, boolean isPushTransport)
   {
+    return evaluate(profile, mediaContainer, mediaVideoCodec, mediaAudioCodec,
+        mediaWidth, mediaHeight, isHDx00Extender, sourceBitrateKbps, availableBandwidthKbps,
+        constraints, sourceInterlaced, isPushTransport, null);
+  }
+
+  /**
+   * Full evaluator with the LEGACY client-report intersection.
+   *
+   * <p>{@code clientCaps} carries the client's ACTUAL reported support for the
+   * source container / video / audio (from the coarse {@code VIDEO_CODECS} /
+   * {@code AUDIO_CODECS} / {@code PULL_AV_CONTAINERS} / {@code PUSH_AV_CONTAINERS}
+   * lists via {@code MiniClientSageRenderer.isSupported*}). This is the
+   * upstream google/SageTV honor model: the server never direct-plays a
+   * container/codec the client did not report it can handle.
+   *
+   * <p>The static profile is demoted to a GUARD RAIL: a codec/container is
+   * "OK" only when BOTH the profile allows it AND the client reported it
+   * ({@code profileAllows && clientReports}). The profile can therefore only
+   * RESTRICT, never GRANT a capability the client did not claim. When
+   * {@code clientCaps} is null (callers that haven't been updated), behavior is
+   * unchanged (profile-only), preserving backward compatibility.
+   */
+  public static PlaybackDecision evaluate(ClientProfile profile,
+      String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
+      int mediaWidth, int mediaHeight, boolean isHDx00Extender,
+      int sourceBitrateKbps, int availableBandwidthKbps,
+      ClientConstraints constraints, boolean sourceInterlaced, boolean isPushTransport,
+      ClientReportedCaps clientCaps)
+  {
     if (profile == null)
       return new PlaybackDecision(Decision.DIRECT_PLAY, "No profile (legacy path)", null, null, null);
 
-    boolean containerOK = profile.isContainerAllowed(mediaContainer);
-    boolean videoOK = profile.isVideoCodecAllowed(mediaVideoCodec);
-    boolean audioOK = profile.isAudioCodecAllowed(mediaAudioCodec);
+    // Guard-rail intersection: profile allowance AND the client's actual
+    // reported support. clientCaps==null (unupdated caller) => profile-only.
+    boolean containerOK = profile.isContainerAllowed(mediaContainer)
+        && (clientCaps == null || clientCaps.container);
+    boolean videoOK = profile.isVideoCodecAllowed(mediaVideoCodec)
+        && (clientCaps == null || clientCaps.video);
+    boolean audioOK = profile.isAudioCodecAllowed(mediaAudioCodec)
+        && (clientCaps == null || clientCaps.audio);
 
     // --- Schema v2 capability-constraints gates ---
     // Applied only when the client negotiated schema v2.
@@ -579,10 +637,25 @@ public class PlaybackDecisionEngine
       ClientConstraints primary, ClientConstraints alternate,
       boolean sourceInterlaced, boolean isPushTransport)
   {
+    return evaluateWithPlayerSwitch(profile, mediaContainer, mediaVideoCodec, mediaAudioCodec,
+        mediaWidth, mediaHeight, isHDx00Extender, sourceBitrateKbps, availableBandwidthKbps,
+        defaultPlayer, altPlayer, primary, alternate, sourceInterlaced, isPushTransport, null);
+  }
+
+  /** Player-switch evaluator with the legacy client-report intersection. */
+  public static PlaybackDecision evaluateWithPlayerSwitch(ClientProfile profile,
+      String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
+      int mediaWidth, int mediaHeight, boolean isHDx00Extender,
+      int sourceBitrateKbps, int availableBandwidthKbps,
+      String defaultPlayer, String altPlayer,
+      ClientConstraints primary, ClientConstraints alternate,
+      boolean sourceInterlaced, boolean isPushTransport,
+      ClientReportedCaps clientCaps)
+  {
     PlaybackDecision primaryResult = evaluate(profile, mediaContainer, mediaVideoCodec,
         mediaAudioCodec, mediaWidth, mediaHeight, isHDx00Extender,
         sourceBitrateKbps, availableBandwidthKbps,
-        primary, sourceInterlaced, isPushTransport);
+        primary, sourceInterlaced, isPushTransport, clientCaps);
 
     // No switch possible / needed.
     if (primaryResult.decision == Decision.DIRECT_PLAY) return primaryResult;
@@ -593,7 +666,7 @@ public class PlaybackDecisionEngine
     PlaybackDecision altResult = evaluate(profile, mediaContainer, mediaVideoCodec,
         mediaAudioCodec, mediaWidth, mediaHeight, isHDx00Extender,
         sourceBitrateKbps, availableBandwidthKbps,
-        alternate, sourceInterlaced, isPushTransport);
+        alternate, sourceInterlaced, isPushTransport, clientCaps);
 
     if (altResult.decision == Decision.DIRECT_PLAY)
     {
