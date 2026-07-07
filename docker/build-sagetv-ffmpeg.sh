@@ -10,7 +10,9 @@
 #        -dumpmetadata : emit META:KEY=VALUE lines (FormatParser depends on these)
 #        -brokendts    : ignore broken DTS in MPEG-TS (maps to -fflags +igndts)
 #   2. AC-4 audio decoder (elliotclee/pliu6 fork patches)
-#   3. NVENC (h264/hevc), libx264, libx265, libfdk-aac, libxvid, libfreetype
+#   3. NVENC (h264/hevc) + NVDEC + libnpp (scale_npp/scale_cuda full-GPU pipeline)
+#   4. VAAPI (h264_vaapi/hevc_vaapi + scale_vaapi for AMD/Intel Linux)
+#   5. libx264, libx265, libfdk-aac, libxvid, libfreetype (software fallback)
 #
 # Replaces:
 #   docker/build-modern-ffmpeg.sh  (FFmpeg 6.1.1 + SageTV patches, no AC-4)
@@ -263,10 +265,13 @@ PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig" \
     --enable-libfreetype \
     --enable-nvenc \
     --enable-ffnvcodec \
+    --enable-cuda-nvcc \
+    --enable-libnpp \
+    --enable-vaapi \
     --disable-devices \
     --disable-bzlib \
-    --extra-cflags="-I${PREFIX}/include" \
-    --extra-ldflags="-L${PREFIX}/lib"
+    --extra-cflags="-I${PREFIX}/include -I/usr/local/cuda/include" \
+    --extra-ldflags="-L${PREFIX}/lib -L/usr/local/cuda/lib64"
 
 echo "=== sagetv-ffmpeg: make -j${JOBS} ==="
 make -j"$JOBS"
@@ -285,6 +290,12 @@ echo "=== sagetv-ffmpeg: smoke-testing built binary ==="
     || { echo "ERROR: ac4 decoder missing" >&2; exit 1; }
 "${OUT_DIR}/sagetv-ffmpeg" -hide_banner -encoders 2>&1 | grep -q 'h264_nvenc' \
     || { echo "ERROR: h264_nvenc encoder missing" >&2; exit 1; }
+"${OUT_DIR}/sagetv-ffmpeg" -hide_banner -filters 2>&1 | grep -q 'scale_npp' \
+    || echo "WARN: scale_npp filter not available (libnpp may be missing at runtime)"
+"${OUT_DIR}/sagetv-ffmpeg" -hide_banner -filters 2>&1 | grep -q 'scale_vaapi' \
+    || echo "WARN: scale_vaapi filter not available (VAAPI libs may be missing at runtime)"
+"${OUT_DIR}/sagetv-ffmpeg" -hide_banner -encoders 2>&1 | grep -q 'h264_vaapi' \
+    || echo "WARN: h264_vaapi encoder not available (VAAPI libs may be missing at runtime)"
 "${OUT_DIR}/sagetv-ffprobe" -hide_banner -version >/dev/null \
     || { echo "ERROR: ffprobe build broken" >&2; exit 1; }
 

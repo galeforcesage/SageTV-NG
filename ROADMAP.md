@@ -478,14 +478,18 @@ RTX VSR) — the items below are the ones not previously captured.
   is layered via the opt-in [docker-compose.gpu.yml](docker-compose.gpu.yml)
   (`docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d`).
   Startup encoder-tier log already landed with the live-path NVENC wiring
-  (`Ministry`). **Remaining for this item: only sub-point (1)** — routing
+  (`Ministry`). ~~**Remaining for this item: only sub-point (1)** — routing
   the offline `_NV` presets' codec/`-hwaccel` through `HwEncoder` (partly
-  covered by `buildPresetSpec`/`stripCudaHwaccel`) or the `_SW` catalogue.
-  This is the prerequisite for shipping SageTV-NG to users without an
-  NVIDIA card. **Recommended next step once sub-point (1)'s CPU floor is
-  in:** the *Non-NVIDIA hardware encoder support — VAAPI / QSV / AMF*
-  (Option B) item above, so AMD/Intel hosts get native HW accel instead of
-  a software fallback.
+  covered by `buildPresetSpec`/`stripCudaHwaccel`) or the `_SW` catalogue.~~
+  ✅ **done** — per-vendor preset blocks landed (`6a799164`). All 10 GPU
+  presets now carry `args_nv=`/`global_nv=` (NVENC params) and `args_sw=`
+  (libx264/libx265 with correct `-preset medium`/`slow`, `-crf` instead of
+  NVENC `-rc:v vbr`/`-cq:v`). `Ministry.buildPresetSpec()` selects the
+  block via `pickVendorBlock()` → `"nv"` for NVENC, `"sw"` for everything
+  else. Future vendors add `args_vaapi=`/`args_qsv=` blocks + extend
+  `pickVendorBlock()`. DVD preset unchanged (software-only, no variants).
+  Non-NVIDIA hosts now get a working transcode path. **All three sub-points
+  complete; this item is closed.**
 
 - **Comskip external GPU engine (speculative).** `CommercialDetectionJob`
   already supports `commercial_detection/engine=external` with a
@@ -580,18 +584,19 @@ RTX VSR) — the items below are the ones not previously captured.
   the language per show without changing the global default.
 - **CTA-708 captions in HEVC SEI.** Accessibility win; needs SEI
   extraction or pass-through to client.
-- **Comskip end-to-end verification.** Suspected broken on this branch.
-  Audit the full pipeline: `comskip` invocation (job submission,
-  output `.edl`/`.txt` placement), `SkipMatrix` load
-  (`VideoFrame.commSkipMatrix` + `commSkipFileStart`), auto-skip
-  monitor enable/disable, and the REW-into-commercial preroll logic
-  (`VideoFrame.java` ~line 1840). Verify: (1) comskip jobs actually
-  run on new recordings, (2) `.edl` parses into segments, (3) auto-skip
-  jumps over commercials during playback, (4) REW landing inside a
-  commercial repositions to preroll-before-break instead of bouncing
-  forward. Likely regressions from recent VideoFrame.java churn —
-  add an integration test that loads a known `.edl` and asserts
-  segment count + auto-skip behavior.
+- ~~**Comskip end-to-end verification.**~~ ✅ code audit complete
+  (`8d94cb23`). All four stages verified intact: (1) `Seeker` →
+  `CommercialDetectionManager.onRecordingStarted/Stopped` → `submitJob`
+  → `CommercialDetectionJob.runComskip()` constructs correct command,
+  (2) `EdlWriter.readEdl()` parses standard EDL → `SkipMatrix.fromEdlSegments()`
+  builds binary-search struct, (3) `VideoFrame.checkCommercialSkip()` monitors
+  position every cycle with boundary-aware wake, auto-seeks past commercials,
+  (4) REW preroll (`~line 1845`) uses `SkipMatrix.getCommercialStart()` to land
+  15s before break. Additionally, `isEnabled()` now auto-detects: if
+  `commercial_detection/enabled` has never been set, checks whether the comskip
+  binary exists at the configured path — no manual Sage.properties edit needed.
+  **Remaining: runtime verification test** (enable comskip on a real recording,
+  confirm `.edl` appears, confirm auto-skip fires during playback).
 - **Container/host TZ-mismatch resilience.** Today Sage relies on the
   `time_zone=` property to call `TimeZone.setDefault()` (`Sage.java`
   ~line 1078). When that property is unset OR the container OS clock
