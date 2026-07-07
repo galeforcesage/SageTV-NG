@@ -594,6 +594,40 @@ RTX VSR) — the items below are the ones not previously captured.
 
 ## Playback track
 
+- **Transcode-seek reuse (trickplay responsiveness — high value).**
+  `FFMPEGTranscoder.seekToTime()` currently tears down and respawns
+  ffmpeg on *every* seek (its own comment: "This will ALWAYS rebuild
+  the transcoder" — `stopTranscode()` kills the process + joins consumer
+  threads up to 2s each, then `startTranscode()` spawns a fresh ffmpeg
+  with `-ss`). Because FF/REW are implemented as repeated `seek()` calls
+  (`MiniPlayer.setRate` → relative skips), every trickplay tap pays a
+  full ffmpeg cold-start + pipeline warmup + client buffer flush/refill.
+  Pull and REMUX seeks avoid the encoder entirely (client-side seek or a
+  native byte reposition), so only the TRANSCODE path is slow. Improve by
+  one of: (a) keyframe-indexed restart that reuses the encoder session
+  when the seek target is near the current position, (b) a small
+  output-ring-buffer window so short FF/REW taps land within already-
+  transcoded data (partly exists via `PUSH_BUFFER_SEEKING` /
+  `DETAILED_BUFFER_STATS` client fast-path — verify it engages), or
+  (c) an ffmpeg build/mode that seeks without full teardown. This is the
+  single biggest trickplay pain on the transcode path. Substantial effort;
+  measure seek latency before/after.
+
+- **Audio-only transcode when only the audio codec mismatches.** In
+  `PlaybackDecisionEngine.evaluate()` the REMUX branch only fires when
+  BOTH video and audio codecs are supported and just the container is
+  wrong. When the video codec is fine but the AUDIO codec is unsupported
+  (e.g. AC-4/DTS on a client that lacks it), the decision falls through to
+  the full TRANSCODE branch. It does set `targetVideo = mediaVideoCodec`
+  (source codec unchanged), but the transcoder must then emit
+  `-c:v copy` (stream-copy the video, transcode only the audio, then mux)
+  rather than re-encoding the video. Verify `FFMPEGTranscoder` honors the
+  copy opportunity when `targetVideo == sourceVideo`; if it re-encodes
+  video unnecessarily, add an explicit audio-only path. Payoff: keeps
+  trickplay fast (no video encode = no cold-restart cost) AND fixes the
+  audio incompatibility. Cross-references the existing AC-4→EAC3
+  audio-only path in the deployed jar (see userMemory sagetv-deploy notes).
+
 - **Per-airing audio language UI selector.** Server-side language-aware
   audio mapping is done (see Done section: `AC4TranscodeJob` honors
   `default_audio_language` / `hdhr/ac4_transcode_audio_lang`). Still
