@@ -271,7 +271,8 @@ PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig" \
     --disable-devices \
     --disable-bzlib \
     --extra-cflags="-I${PREFIX}/include -I/usr/local/cuda/include -I/usr/include" \
-    --extra-ldflags="-L${PREFIX}/lib -L/usr/local/cuda/lib64 -L/usr/lib/x86_64-linux-gnu"
+    --extra-ldflags="-L${PREFIX}/lib -L/usr/local/cuda/lib64 -L/usr/lib/x86_64-linux-gnu" \
+    --extra-libs="-lnppig -lnppicc -lnppidei -lnppif -lnppc"
 
 echo "=== sagetv-ffmpeg: make -j${JOBS} ==="
 make -j"$JOBS"
