@@ -368,14 +368,17 @@ public class PlaybackDecisionEngine
     }
 
     // 3. Transcode -- codec, resolution, or bandwidth incompatible. Pick the
-    // highest-quality target codecs the profile + source permit.
+    // highest-quality target codecs the profile + source + CLIENT permit.
+    // Passing constraints intersects the profile's allowed set with the
+    // client's actual reported decoders so we never target a codec this
+    // specific client cannot play (e.g. EAC3 to a generic Chrome PWA).
     String targetContainer = selectBestContainer(profile, null);
     String targetVideo = (videoOK && resolutionOK)
         ? mediaVideoCodec
-        : selectBestVideoCodec(profile, mediaVideoCodec);
+        : selectBestVideoCodec(profile, mediaVideoCodec, constraints);
     String targetAudio = audioOK
         ? mediaAudioCodec
-        : selectBestAudioCodec(profile, mediaAudioCodec);
+        : selectBestAudioCodec(profile, mediaAudioCodec, constraints);
 
     String reason;
     if (!videoOK)        reason = "Video codec " + mediaVideoCodec + " not supported";
@@ -423,25 +426,53 @@ public class PlaybackDecisionEngine
    * (2) HEVC if profile allows it (better quality at the same bitrate),
    * (3) H.264 (universal fallback),
    * (4) first allowed codec.
+   *
+   * When {@code constraints} is non-null and declares video codecs, each
+   * candidate must ALSO be in the client's actual reported set — so we never
+   * pick a target the specific client cannot decode (e.g. a static profile
+   * lists HEVC but this player's decoder matrix omits it). Legacy clients
+   * (null/empty constraints) keep the profile-only behavior unchanged.
    */
+  private static String selectBestVideoCodec(ClientProfile profile, String sourceCodec,
+      ClientConstraints constraints)
+  {
+    if (sourceCodec != null && profile.isVideoCodecAllowed(sourceCodec)
+        && videoSupportedByClient(constraints, sourceCodec))
+      return sourceCodec;
+    if (profile.isAllowHevc() && profile.getVideoCodecs().contains("HEVC")
+        && videoSupportedByClient(constraints, "HEVC"))
+      return "HEVC";
+    if (profile.getVideoCodecs().contains("H.264") && videoSupportedByClient(constraints, "H.264"))
+      return "H.264";
+    if (profile.getVideoCodecs().contains("H264") && videoSupportedByClient(constraints, "H264"))
+      return "H264";
+    // Fall back to the first profile codec the client can actually decode.
+    for (String c : profile.getVideoCodecs())
+      if (videoSupportedByClient(constraints, c))
+        return c;
+    return profile.getVideoCodecs().iterator().next();
+  }
+
   private static String selectBestVideoCodec(ClientProfile profile, String sourceCodec)
   {
-    if (sourceCodec != null && profile.isVideoCodecAllowed(sourceCodec))
-      return sourceCodec;
-    if (profile.isAllowHevc() && profile.getVideoCodecs().contains("HEVC"))
-      return "HEVC";
-    if (profile.getVideoCodecs().contains("H.264"))
-      return "H.264";
-    if (profile.getVideoCodecs().contains("H264"))
-      return "H264";
-    return profile.getVideoCodecs().iterator().next();
+    return selectBestVideoCodec(profile, sourceCodec, null);
   }
 
   /** Backward-compat overload (no source hint). */
   @SuppressWarnings("unused")
   private static String selectBestVideoCodec(ClientProfile profile)
   {
-    return selectBestVideoCodec(profile, null);
+    return selectBestVideoCodec(profile, null, null);
+  }
+
+  // True when the client's schema-v2 constraints allow this video codec, OR
+  // when constraints are absent/empty (legacy client → defer to the profile,
+  // preserving the pre-schema-v2 behavior exactly).
+  private static boolean videoSupportedByClient(ClientConstraints constraints, String codec)
+  {
+    if (constraints == null || constraints.isEmpty() || !constraints.hasAnyVideo())
+      return true;
+    return constraints.getVideo(codec) != null;
   }
 
   /**
@@ -450,27 +481,54 @@ public class PlaybackDecisionEngine
    * (2) EAC3 / EC-3 (multi-channel surround, broadly supported on modern AVRs),
    * (3) AC3 (5.1 surround, near-universal),
    * (4) AAC (stereo / lower quality, last resort).
+   *
+   * When {@code constraints} is non-null and declares audio codecs, each
+   * candidate must ALSO be in the client's actual reported set — so a browser
+   * that decodes only AAC (e.g. generic Chrome/Edge PWA) never gets an
+   * undecodable EAC3 stream, while a Safari/Tizen/Android-Dolby client that
+   * genuinely reports EAC3 still gets the higher-quality surround target.
+   * Legacy clients (null/empty constraints) keep the profile-only behavior.
    */
+  private static String selectBestAudioCodec(ClientProfile profile, String sourceCodec,
+      ClientConstraints constraints)
+  {
+    if (sourceCodec != null && profile.isAudioCodecAllowed(sourceCodec)
+        && audioSupportedByClient(constraints, sourceCodec))
+      return sourceCodec;
+    if (profile.getAudioCodecs().contains("EAC3") && audioSupportedByClient(constraints, "EAC3"))
+      return "EAC3";
+    if (profile.getAudioCodecs().contains("EC-3") && audioSupportedByClient(constraints, "EC-3"))
+      return "EC-3";
+    if (profile.getAudioCodecs().contains("AC3") && audioSupportedByClient(constraints, "AC3"))
+      return "AC3";
+    if (profile.getAudioCodecs().contains("AAC") && audioSupportedByClient(constraints, "AAC"))
+      return "AAC";
+    // Fall back to the first profile codec the client can actually decode.
+    for (String c : profile.getAudioCodecs())
+      if (audioSupportedByClient(constraints, c))
+        return c;
+    return profile.getAudioCodecs().iterator().next();
+  }
+
   private static String selectBestAudioCodec(ClientProfile profile, String sourceCodec)
   {
-    if (sourceCodec != null && profile.isAudioCodecAllowed(sourceCodec))
-      return sourceCodec;
-    if (profile.getAudioCodecs().contains("EAC3"))
-      return "EAC3";
-    if (profile.getAudioCodecs().contains("EC-3"))
-      return "EC-3";
-    if (profile.getAudioCodecs().contains("AC3"))
-      return "AC3";
-    if (profile.getAudioCodecs().contains("AAC"))
-      return "AAC";
-    return profile.getAudioCodecs().iterator().next();
+    return selectBestAudioCodec(profile, sourceCodec, null);
   }
 
   /** Backward-compat overload (no source hint). */
   @SuppressWarnings("unused")
   private static String selectBestAudioCodec(ClientProfile profile)
   {
-    return selectBestAudioCodec(profile, null);
+    return selectBestAudioCodec(profile, null, null);
+  }
+
+  // True when the client's schema-v2 constraints allow this audio codec, OR
+  // when constraints are absent/empty (legacy client → defer to the profile).
+  private static boolean audioSupportedByClient(ClientConstraints constraints, String codec)
+  {
+    if (constraints == null || constraints.isEmpty() || !constraints.hasAnyAudio())
+      return true;
+    return constraints.getAudio(codec) != null;
   }
 
   /** Profile's live-transcode max bitrate ceiling, or {@code 0} if unset. */
