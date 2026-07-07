@@ -1081,6 +1081,26 @@ public class MiniPlayer implements DVDMediaPlayer
       }
       // --- End profile decision ---
 
+      // Transport enforcement: when a managed profile's decision engine says
+      // the source needs REMUX or TRANSCODE (i.e. the container/codec is NOT
+      // directly playable by this client), the client must NOT pull the raw
+      // file — it must receive the push-mode remux/transcode. The legacy
+      // clientDoesPull flag is seeded from the client's PULL_AV_CONTAINERS
+      // property, which for legacy placeshifters advertises containers (e.g.
+      // Quicktime/MP4) that the client's demuxer cannot actually handle in
+      // pull mode. Clearing clientDoesPull here forces pushMode below so the
+      // REMUX/TRANSCODE verdict (mpeg2psremux etc.) is honored. Only applies
+      // to managed profiles with a non-DIRECT_PLAY verdict; legacy clients
+      // without a profile (profileDecision == null) are unaffected.
+      if (profileDecision != null && clientDoesPull
+          && profileDecision.decision != sage.client.PlaybackDecisionEngine.Decision.DIRECT_PLAY)
+      {
+        if (Sage.DBG) System.out.println("MiniPlayer: forcing push mode — profile decision "
+            + profileDecision.decision + " requires server-side remux/transcode, "
+            + "clearing clientDoesPull (was pull-capable per client PULL_AV_CONTAINERS)");
+        clientDoesPull = false;
+      }
+
       if (clientDoesPull && (httpls || pureLocal || !clientDoesMPEG2Push || !clientCanDoMpeg4 || uiBandwidthEstimate >= Sage.getInt("miniplayer/min_bandwidth_for_no_transcode", 2000000)))
       {
         if (Sage.DBG) System.out.println("MiniPlayer is using Pull mode playback");
