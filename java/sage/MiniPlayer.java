@@ -1037,12 +1037,38 @@ public class MiniPlayer implements DVDMediaPlayer
         {
           primaryC = exoConstraints; altC = ijkConstraints; altPlayerTag = "ijkplayer";
         }
+        // Legacy client-report intersection: compute the client's ACTUAL
+        // reported support for the source container/video/audio from its coarse
+        // capability lists (upstream google/SageTV honor model). The engine
+        // uses this so the static profile can only RESTRICT, never GRANT, a
+        // capability the client did not report. The container check follows the
+        // chosen transport (push vs pull); TS is also acceptable for push when
+        // the internal TS->PS remuxer is enabled and the client supports PS push.
+        boolean crContainer;
+        if (isPushTransport)
+        {
+          crContainer = mcsr.isSupportedPushContainerFormat(mediaContainer)
+              || (Sage.getBoolean("enable_internal_push_remuxer", true)
+                  && sage.media.format.MediaFormat.MPEG2_TS.equals(mediaContainer)
+                  && mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS));
+        }
+        else
+        {
+          crContainer = mcsr.isSupportedPullContainerFormat(mediaContainer);
+        }
+        boolean crVideo = (mediaVideo == null || mediaVideo.length() == 0)
+            || mcsr.isSupportedVideoCodec(mediaVideo);
+        boolean crAudio = (mediaAudio == null || mediaAudio.length() == 0)
+            || mcsr.isSupportedAudioCodec(mediaAudio);
+        sage.client.PlaybackDecisionEngine.ClientReportedCaps clientCaps =
+            new sage.client.PlaybackDecisionEngine.ClientReportedCaps(crContainer, crVideo, crAudio);
         profileDecision = sage.client.PlaybackDecisionEngine.evaluateWithPlayerSwitch(
             effectiveProfile, mediaContainer, mediaVideo, mediaAudio,
             mediaW, mediaH, isHDx00, sourceBitrateKbps, availableBwKbps,
             defaultPlayerTag, altPlayerTag,
-            primaryC, altC, srcInterlaced, isPushTransport);
-        if (Sage.DBG) System.out.println("MiniPlayer profile decision: " + profileDecision);
+            primaryC, altC, srcInterlaced, isPushTransport, clientCaps);
+        if (Sage.DBG) System.out.println("MiniPlayer profile decision: " + profileDecision
+            + " clientReports[container=" + crContainer + " video=" + crVideo + " audio=" + crAudio + "]");
 
         // --- Session stickiness contract (per OPENURL) ---
         // The stream plan and target player are selected HERE and HERE ONLY.
