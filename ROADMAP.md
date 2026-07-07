@@ -557,6 +557,23 @@ RTX VSR) — the items below are the ones not previously captured.
   GPU is on the current host, so this is untestable until hardware +
   an appropriately-built ffmpeg are available.
 
+- **MiniPlayer push-mode transcode GPU offload (high priority).**
+  When a MiniClient's profile doesn't support the source codec (e.g.
+  HEVC source + `desktop_default` profile without HEVC), `MiniPlayer`
+  forces a push-mode transcode via `FFMPEGTranscoder`'s legacy format
+  builder. This path produces `-vcodec mpeg4 -f dvd -s 1280x720` at
+  1 Mbps — 2008-era quality, pure CPU, ignores `HwEncoder` entirely.
+  This is the most common transcode trigger for legacy Windows and
+  Android clients watching HEVC/ATSC3 content. Fix: wire
+  `HwEncoder.pick()` into the MiniPlayer push-transcode codec
+  selection so it uses `h264_nvenc` (or software `libx264`) with
+  modern rate control instead of `mpeg4`/DVD. Output format should be
+  MPEG-TS H.264 (universally playable by all MiniClients) at a
+  bitrate appropriate to the client's reported bandwidth. The
+  HTTPLSServer live-tune fix (`httplsMode` NVENC wiring) is a
+  template for this — same pattern, different entry point.
+  Effort: 4–8 hours.
+
 - **NVDEC thumbnail generation (low value — likely rejected).** Proposed
   as a library-rescan speed-up, but thumbnails are single-frame
   seek+extract operations where per-file NVDEC context init typically
