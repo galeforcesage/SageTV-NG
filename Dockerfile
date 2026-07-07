@@ -43,6 +43,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libavcodec-dev \
     libswscale-dev \
     libswresample-dev \
+    `# CUDA toolkit for --enable-cuda-nvcc + --enable-libnpp (scale_npp filter)` \
+    nvidia-cuda-toolkit \
+    libnpp-dev \
+    `# VAAPI for --enable-vaapi (AMD/Intel GPU encode + scale_vaapi filter)` \
+    libva-dev \
     && rm -rf /var/lib/apt/lists/*
 
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
@@ -181,6 +186,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libfdk-aac2 \
     libx265-199 \
     libmp3lame0 \
+    `# VAAPI runtime libs (AMD/Intel GPU accel — no-op if no DRI device present)` \
+    libva2 \
+    libva-drm2 \
     comskip \
     ccextractor \
     nocache \
