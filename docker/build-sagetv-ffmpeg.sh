@@ -245,6 +245,18 @@ else:
 open(path, 'w').write(src)
 PYEOF
 
+# ---------------------------------------------------------------------
+# PATCH 5: Fix scale_npp configure dep resolution
+# ---------------------------------------------------------------------
+# The elliotclee fork lists individual NPP sub-libraries (libnppig,
+# libnppicc, etc.) as separate filter dependencies, but check_lib only
+# enables the umbrella "libnpp" feature. Replace the individual lib deps
+# with just "libnpp" so the dependency check passes when libnpp is found.
+echo "=== sagetv-ffmpeg: patching scale_npp filter deps ==="
+sed -i 's/scale_npp_filter_deps="ffnvcodec libnppig libnppicc libnppicc libnppc libnppidei libnppif"/scale_npp_filter_deps="ffnvcodec libnpp"/' configure
+sed -i 's/scale2ref_npp_filter_deps="ffnvcodec libnppig libnppicc libnppicc libnppc libnppidei libnppif"/scale2ref_npp_filter_deps="ffnvcodec libnpp"/' configure
+sed -i 's/sharpen_npp_filter_deps="ffnvcodec libnppig libnppicc libnppicc libnppc libnppidei libnppif"/sharpen_npp_filter_deps="ffnvcodec libnpp"/' configure
+
 echo "=== sagetv-ffmpeg: configuring ==="
 PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig" \
 ./configure \
