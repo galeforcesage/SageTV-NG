@@ -3940,6 +3940,18 @@ public class MiniClientSageRenderer extends SageRenderer
         sendGetPropertyAsync("IJK_AUDIO_CONSTRAINTS");
         sendGetPropertyAsync("EXO_CONTAINER_CONSTRAINTS");
         sendGetPropertyAsync("IJK_CONTAINER_CONSTRAINTS");
+        // --- PWA / browser client identification + advisory render hints ---
+        // Additive capability queries. Native Windows/Mac clients, Android
+        // MiniClient, and hardware extenders do NOT implement these handlers
+        // and return empty strings, so this is behavior-neutral for them.
+        // The PWA bridge already implements CLIENT_PLATFORM / DEVICE_FORM_FACTOR
+        // / PLAYER_ENGINE / DISPLAY_RESOLUTION handlers (no PWA-side change
+        // required). Read back in the same order below to keep the protocol
+        // aligned.
+        sendGetPropertyAsync("CLIENT_PLATFORM");
+        sendGetPropertyAsync("DEVICE_FORM_FACTOR");
+        sendGetPropertyAsync("PLAYER_ENGINE");
+        sendGetPropertyAsync("DISPLAY_RESOLUTION");
         sendBufferNow();
         // Now get capabilities properties for this specific miniclient
         // The default is to use image maps for text rendering
@@ -4625,6 +4637,53 @@ public class MiniClientSageRenderer extends SageRenderer
         String ijkAudioConstraintsProp = recvr.getStringReply();
         String exoContainerConstraintsProp = recvr.getStringReply();
         String ijkContainerConstraintsProp = recvr.getStringReply();
+        // --- PWA identification + advisory render hints (read in queued order) ---
+        // Empty for native/extender/Android clients (no handler). Only the PWA
+        // bridge returns non-empty values. Stored for identification + logging;
+        // NOT acted upon here (no behavior change).
+        String clientPlatformProp = recvr.getStringReply();
+        String deviceFormFactorProp = recvr.getStringReply();
+        String playerEngineProp = recvr.getStringReply();
+        String displayResolutionProp = recvr.getStringReply();
+        clientPlatform = (clientPlatformProp == null) ? "" : clientPlatformProp.trim();
+        clientDeviceFormFactor = (deviceFormFactorProp == null) ? "" : deviceFormFactorProp.trim();
+        clientPlayerEngine = (playerEngineProp == null) ? "" : playerEngineProp.trim();
+        parsePwaRenderHints(displayResolutionProp);
+        if (Sage.DBG)
+        {
+          System.out.println("MiniClient CLIENT_PLATFORM=" + clientPlatform
+              + " DEVICE_FORM_FACTOR=" + clientDeviceFormFactor
+              + " PLAYER_ENGINE=" + clientPlayerEngine
+              + " DISPLAY_RESOLUTION=" + displayResolutionProp
+              + " isPwaBrowserClient=" + isPwaBrowserClient());
+        }
+        // SERVER3: log parsed PWA render hints once per session when perf
+        // logging is enabled. Advisory only — no render target, image size,
+        // timing, throttling, or artwork generation is changed here.
+        if (isPwaBrowserClient() && Sage.getBoolean("pwa/perf_logging", false))
+        {
+          System.out.println("PWA_PERF render-hints client=" + getNgClientId()
+              + " platform=" + clientPlatform
+              + " formFactor=" + clientDeviceFormFactor
+              + " uiW=" + pwaHintUiWidth
+              + " uiH=" + pwaHintUiHeight
+              + " isTizen=" + pwaHintIsTizen
+              + " playerEngine=" + clientPlayerEngine);
+        }
+        // SERVER4 (future, disabled): PWA-only lower UI/render-target hook.
+        //   Gate: isPwaBrowserClient() && Sage.getBoolean("pwa/enable_render_size_hints", false)
+        //   Would honor pwaHintUiWidth/pwaHintUiHeight to request a smaller UI
+        //   render target for PWA sessions ONLY. Must not affect Android/HD300/
+        //   native clients. Requires before/after metrics. Default disabled.
+        //   Dedicated client fields still needed: renderHints.preferredUiWidth,
+        //   preferredUiHeight, renderScaleHint (PWA team to add + server query).
+        // SERVER5 (future, disabled): PWA-only artwork/texture size hook.
+        //   Gate: isPwaBrowserClient() && Sage.getBoolean("pwa/enable_texture_size_hints", false)
+        //   Would clamp generated texture/artwork dimensions for PWA sessions.
+        //   MUST use client-profile-keyed artwork cache so smaller PWA artwork
+        //   never pollutes the shared/global recording-thumbnail cache. Default
+        //   disabled. Dedicated client fields still needed:
+        //   renderHints.maxTexturePixelsClientHint, maxCacheBytesClientHint.
         if (Sage.DBG)
         {
           System.out.println("MiniClient MINICLIENT_DEFAULT_PLAYER=" + defaultPlayerProp);
@@ -6482,6 +6541,20 @@ public class MiniClientSageRenderer extends SageRenderer
         recvr.discardIntReply();
       else
         recvr.getIntReply();
+      // PWA_PERF (SERVER2): emit compact per-frame metrics. PWA browser
+      // sessions only, and only when pwa/perf_logging=true (latched in
+      // startFrameMini). No behavior change — this runs after the frame is
+      // fully queued/flushed.
+      if (pwaPerfActive)
+      {
+        long frameMicros = (System.nanoTime() - pwaPerfFrameStartNanos) / 1000L;
+        System.out.println("PWA_PERF client=" + getNgClientId()
+            + " platform=" + clientPlatform
+            + " frame=" + pwaPerfFrameId
+            + " bytes=" + pwaPerfFrameBytes
+            + " genUs=" + frameMicros);
+        pwaPerfActive = false;
+      }
     }catch(Exception e)
     {
       connectionError();
@@ -6493,6 +6566,15 @@ public class MiniClientSageRenderer extends SageRenderer
   protected synchronized int startFrameMini()
   {
     if (Sage.DBG && DEBUG_NATIVE2D) System.out.println("startFrameMini()");
+    // PWA_PERF (SERVER2): latch per-frame so the property is read at most once
+    // per frame. Only PWA browser sessions with pwa/perf_logging=true measure.
+    pwaPerfActive = isPwaBrowserClient() && Sage.getBoolean("pwa/perf_logging", false);
+    if (pwaPerfActive)
+    {
+      pwaPerfFrameId++;
+      pwaPerfFrameBytes = 0L;
+      pwaPerfFrameStartNanos = System.nanoTime();
+    }
     try
     {
       prepUICmdHeader(4);
@@ -6544,6 +6626,10 @@ public class MiniClientSageRenderer extends SageRenderer
   protected void sendBufferNow() throws java.io.IOException
   {
     if (sockBuf.position() == 0) return;
+    // PWA_PERF (SERVER2): tally bytes flushed this frame. Observational only —
+    // the flush itself is unchanged. Counts pre-compression payload bytes.
+    if (pwaPerfActive)
+      pwaPerfFrameBytes += sockBuf.position();
     sockBuf.flip();
     if (zout != null)
     {
@@ -6583,6 +6669,10 @@ public class MiniClientSageRenderer extends SageRenderer
       textureBatchBuf.putInt(textureBatchCount);
       textureBatchBuf.putInt(textureBatchSize);
       textureBatchBuf.flip();
+      // PWA_PERF (SERVER2): tally direct texture-batch writes (they bypass
+      // sendBufferNow). Observational only; the writes are unchanged.
+      if (pwaPerfActive)
+        pwaPerfFrameBytes += textureBatchBuf.remaining() + sockBuf.position();
       while (clientSocket != null && textureBatchBuf.hasRemaining())
         clientSocket.write(textureBatchBuf);
       sockBuf.flip();
@@ -7735,6 +7825,67 @@ public class MiniClientSageRenderer extends SageRenderer
   public String getNgClientId()
   {
     return ngClientId == null ? "" : ngClientId;
+  }
+
+  /**
+   * Returns true if and only if this session is a PWA / browser MiniClient,
+   * identified by the explicit CLIENT_PLATFORM capability the PWA bridge
+   * reports during negotiation ("browser" or "tizen").
+   *
+   * Conservative by design: returns false for native Windows/Mac SageTV
+   * Clients, the Android native MiniClient, HD200/HD300 extenders,
+   * Placeshifter clients, and any client that does not implement the
+   * CLIENT_PLATFORM handler. PWA is NEVER inferred from resolution, IP,
+   * hostname, or port. Unknown client == false.
+   */
+  public boolean isPwaBrowserClient()
+  {
+    String p = clientPlatform;
+    if (p == null) return false;
+    p = p.trim().toLowerCase(java.util.Locale.ROOT);
+    return p.equals("browser") || p.equals("tizen");
+  }
+
+  /** CLIENT_PLATFORM capability ("browser"/"tizen" for PWA; empty otherwise). */
+  public String getClientPlatform()
+  {
+    return clientPlatform == null ? "" : clientPlatform;
+  }
+
+  /**
+   * Parse advisory PWA render hints from the existing DISPLAY_RESOLUTION
+   * capability ("WxH"). Values are stored but NOT acted upon (no behavior
+   * change). Missing/invalid values are ignored; absurd dimensions are
+   * clamped. Also derives the Tizen flag from CLIENT_PLATFORM.
+   *
+   * NOTE: dedicated render-hint fields (preferredUiWidth, renderScaleHint,
+   * maxTexturePixelsClientHint, maxCacheBytesClientHint, tizenVersion,
+   * isSamsungTV) are NOT yet sent by the PWA client. When the PWA team adds
+   * them, query them alongside CLIENT_PLATFORM and extend this parser.
+   */
+  private void parsePwaRenderHints(String displayResolutionProp)
+  {
+    pwaHintUiWidth = 0;
+    pwaHintUiHeight = 0;
+    pwaHintIsTizen = "tizen".equalsIgnoreCase(clientPlatform == null ? "" : clientPlatform.trim());
+    if (displayResolutionProp == null) return;
+    String s = displayResolutionProp.trim();
+    int x = s.indexOf('x');
+    if (x < 0) x = s.indexOf('X');
+    if (x <= 0 || x >= s.length() - 1) return;
+    try
+    {
+      int w = Integer.parseInt(s.substring(0, x).trim());
+      int h = Integer.parseInt(s.substring(x + 1).trim());
+      // Clamp to a sane advisory range; ignore absurd values entirely.
+      if (w < 160 || w > 7680 || h < 120 || h > 4320) return;
+      pwaHintUiWidth = w;
+      pwaHintUiHeight = h;
+    }
+    catch (NumberFormatException e)
+    {
+      // Invalid hint: leave at 0 (unknown). No error, no behavior change.
+    }
   }
 
   public boolean isNgCapableSession()
@@ -9370,6 +9521,29 @@ public class MiniClientSageRenderer extends SageRenderer
   private volatile String ngVersion = "";
   private String ngClientId = "";
   private volatile java.util.Set<String> ngCapabilities = java.util.Collections.emptySet();
+  // --- PWA / browser client identification + render hints (additive) ---
+  // clientPlatform is the CLIENT_PLATFORM capability reported by the client:
+  // "browser" or "tizen" for the PWA client; empty/null for every native and
+  // extender client (they do not implement the handler). Never inferred from
+  // resolution, IP, host, or port. See isPwaBrowserClient().
+  private volatile String clientPlatform = "";
+  private volatile String clientDeviceFormFactor = "";
+  private volatile String clientPlayerEngine = "";
+  // Advisory PWA render hints parsed from existing capability properties.
+  // Stored but NOT acted upon — future PWA-only hooks may read them (SERVER4/5).
+  // 0 means "unknown/unset". Absurd values are clamped in parsePwaRenderHints().
+  private volatile int pwaHintUiWidth = 0;
+  private volatile int pwaHintUiHeight = 0;
+  private volatile boolean pwaHintIsTizen = false;
+  // --- PWA-only GFX perf instrumentation (SERVER2) ---
+  // Active only when pwa/perf_logging=true AND isPwaBrowserClient(). Purely
+  // observational: no command payload, send order, buffering, or timing is
+  // altered. pwaPerfActive is latched per-frame in startFrameMini() so the
+  // property is read at most once per frame.
+  private boolean pwaPerfActive = false;
+  private long pwaPerfFrameStartNanos = 0L;
+  private long pwaPerfFrameBytes = 0L;
+  private long pwaPerfFrameId = 0L;
   private boolean remoteWindowedSystem;
   private boolean supportsForcedMediaReconnect;
 
