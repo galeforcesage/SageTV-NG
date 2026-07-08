@@ -19,6 +19,18 @@ $ErrorActionPreference = 'Stop'
 $host_addr = $script:HostAddr
 $jar       = Join-Path $script:RepoRoot 'build\release\Sage.jar'
 
+# ---- [-1/7] Refuse dirty-tree deploys ---------------------------------------
+# BUILD_VERSION is derived from git commit count. If you build with
+# uncommitted Java/preset changes, the resulting jar's BUILD_VERSION will
+# match your current HEAD even though its bytes don't match any commit --
+# that's precisely how we lost provenance in the past. Refuse unless -Force.
+if ((Test-DirtyTree) -and -not $Force) {
+    Write-Host '[dirty-tree] uncommitted source changes detected:' -ForegroundColor Red
+    Get-DirtyTreeSummary | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+    Write-Host 'Commit (or stash) before deploying, or pass -Force to override.' -ForegroundColor Yellow
+    exit 2
+}
+
 # ---- [0/7] Auto-snapshot working tree (recoverable via refs/wip-safety/*) ----
 & "$PSScriptRoot\snapshot_safety.ps1" -Message 'pre-deploy_jar' -Quiet
 

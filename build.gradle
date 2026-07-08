@@ -34,7 +34,10 @@ ext {
   majorVersion = (versionText =~ /MAJOR_VERSION = ([0-9]+)/)[0][1]
   minorVersion = (versionText =~ /MINOR_VERSION = ([0-9]+)/)[0][1]
   microVersion = (versionText =~ /MICRO_VERSION = ([0-9]+)/)[0][1]
-  buildVersion = getBuildNumber()
+  // BUILD_VERSION is derived deterministically from `git rev-list --count HEAD`
+  // on every build; SageConstants.java is generated (see generateSageConstants).
+  // Falls back to 0 if git is not available (e.g. tarball build).
+  buildVersion = computeGitBuildNumber()
 
   baseVersion  = "${majorVersion}.${minorVersion}.${microVersion}"
   fullVersion = "${baseVersion}.${buildVersion}"
@@ -78,6 +81,11 @@ sourceSets {
     java {
       srcDirs = [
         'java',
+        // Generated SageConstants.java (build number derived from git).
+        // See generateSageConstants task. This dir must appear before the
+        // static 'java' dir would matter, but SageConstants.java is deleted
+        // from the source tree so there is no duplicate-class conflict.
+        "${buildDir}/generated/sources/sageConstants/java",
         'third_party/Javolution/java',
         'third_party/jcraft/java',
         'third_party/jtux/java',
@@ -350,114 +358,99 @@ task(packageSageJar)  {
 }
 
 /**
- * Get the current build number from the git commit history, but use the .buildnumber or SageConstants
- * if the git command is not available.
+ * Deterministically derive the BUILD_VERSION from git commit count.
+ * Cross-platform (Linux, Windows, macOS). Every commit auto-increments the
+ * build number. Uncommitted changes DO NOT bump the number — if you build a
+ * dirty tree, the resulting jar's BUILD_VERSION matches the last committed
+ * SHA even though the bytes differ. The deploy_jar gate is responsible for
+ * refusing dirty-tree builds; do not weaken that check.
  *
- * @return build number
+ * Returns "0" if git is unavailable (e.g. tarball / .git missing).
  */
-def getBuildNumber() {
-  def buildVerText = file('java/sage/SageConstants.java').text
-  // pull the build number from the .buildnumber, if it exists, otherwise, look in SageConstants.java
-  def buildVer = (file('.buildnumber').exists()) ? (file(".buildnumber").text) : (buildVerText =~ /BUILD_VERSION = ([0-9]+)/)[0][1]
-
-  if (OperatingSystem.current().isLinux()) {
-    // use git to find the build version
-    // 03-06-2025 jusjoken: Also we should note that you will get error code 128 if you have git
-    //  installed, but you did not pull this project using git because git will not know where 
-    //  to get the commit count from. 
-    new ByteArrayOutputStream().withStream { outputStream ->
-      exec {
-        executable 'git'
-        args 'rev-list', 'HEAD', '--count'
-        standardOutput = outputStream
-      }
-      buildVer = outputStream.toString().trim()
+def computeGitBuildNumber() {
+  try {
+    def out = new ByteArrayOutputStream()
+    def err = new ByteArrayOutputStream()
+    def result = exec {
+      executable 'git'
+      args 'rev-list', '--count', 'HEAD'
+      standardOutput = out
+      errorOutput = err
+      ignoreExitValue = true
     }
-  } else if (OperatingSystem.current().isWindows()) {
-    //ensure full path to git\bin is in the Path Environment variable on windows
-    // 04-24-2017 JS: I changed this to remove the dependency on sh. Also we should note that
-    // you will get error code 128 if you have git installed, but you did not pull this project
-    // using git because git will not know where to get the commit count from. 
-    new ByteArrayOutputStream().withStream { outputStream ->
-      exec {
-        executable 'git'
-        args 'rev-list', 'HEAD', '--count'
-        standardOutput = outputStream
-      }
-      buildVer = outputStream.toString().trim()
+    if (result.exitValue == 0) {
+      def val = out.toString().trim()
+      if (val ==~ /[0-9]+/) return val
     }
+    System.err.println("computeGitBuildNumber: git failed (exit=${result.exitValue}) stderr=${err.toString().trim()}; using 0")
+  } catch (Exception e) {
+    System.err.println("computeGitBuildNumber: git not runnable (${e.message}); using 0")
   }
-
-  // Allow manual bumping via .buildnumber when it is higher than git commit count.
-  if (file('.buildnumber').exists()) {
-    def pinnedBuildVer = file('.buildnumber').text.trim()
-    if (pinnedBuildVer ==~ /[0-9]+/ && pinnedBuildVer.toInteger() > buildVer.toString().toInteger()) {
-      buildVer = pinnedBuildVer
-    }
-  }
-
-  if (buildVer == null || buildVer == "") buildVer = 0;
-  return buildVer;
+  return '0'
 }
 
 /**
- * Task to update the build number in SageConstants based on the # of git commits
- * Not sure I like it, yet.
+ * Generate sage/SageConstants.java into build/generated with the current
+ * git-derived BUILD_VERSION. This replaces the old edit-in-place + backup +
+ * restore dance around a checked-in SageConstants.java, so the source tree
+ * is never mutated by a build and no .bak file is produced.
+ *
+ * The generated file is placed in a source set that is compiled together
+ * with the rest of `java/`; the previously checked-in
+ * `java/sage/SageConstants.java` has been deleted so there is no
+ * duplicate-class conflict.
  */
-task(updateBuildNumber)  {
+task generateSageConstants {
+  def outDir = new File("${buildDir}/generated/sources/sageConstants/java/sage")
+  def outFile = new File(outDir, 'SageConstants.java')
+  inputs.property 'buildVersion', { -> computeGitBuildNumber() }
+  outputs.file outFile
   doLast {
-    buildVersion = getBuildNumber()
+    outDir.mkdirs()
+    def bv = computeGitBuildNumber()
+    outFile.text = '''\
+/*
+ * Copyright 2015 The SageTV Authors. All Rights Reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package sage;
 
-    def file = new File(projectDir.absolutePath + '/java/sage/SageConstants.java');
-    def fileBak = new File(projectDir.absolutePath + '/java/sage/SageConstants.java.bak');
+/**
+ * Generated by gradle task generateSageConstants; do NOT edit by hand.
+ * BUILD_VERSION is derived from `git rev-list --count HEAD` at build time.
+ */
+public final class SageConstants
+{
+  private SageConstants()
+  {
+    // Non-instantiable
+  }
 
-    // Always refresh backup from current source so restoreSageConstants
-    // restores the just-edited value, not stale content from a prior build.
-    fileBak.text = file.text
-    System.out.println("Backed up ${file}")
-
-    // update SageConstants.java
-    ant.replaceregexp(
-      file: 'java/sage/SageConstants.java',
-      match: "public static final int BUILD_VERSION = [0-9]+;",
-      replace: "public static final int BUILD_VERSION = ${buildVersion};"
-    )
-
-    // reupdate these values since buildVersion changes	
-    fullVersion = "${majorVersion}.${minorVersion}.${microVersion}.${buildVersion}"
+  public static final int BUILD_VERSION = ''' + bv + ''';
+}
+'''
+    fullVersion = "${majorVersion}.${minorVersion}.${microVersion}.${bv}"
     versionArch = "${fullVersion}_" + (arch == 64 ? 'amd64' : 'i386')
-
-    System.out.println("SAGETV VERSION ${versionArch}");
-
-    // save buildnumber to file
-    // we'll be referencing it later
-    // Eventually we'll do this, but for now, fetch it every time
-    new File('.buildnumber').write(buildVersion)
-  }
-}
-
-/**
- * restore the SageConstants.java that was modified during updateBuildNumber
- */
-task(restoreSageConstants) {
-  doLast {
-    def file = new File('java/sage/SageConstants.java');
-    def fileBak = new File('java/sage/SageConstants.java.bak');
-
-    if (fileBak.exists()) {
-      file.text = fileBak.text
-      System.out.println("Restored ${file}");
-      fileBak.deleteOnExit()
-    }
+    System.out.println("SAGETV VERSION ${versionArch} (git-derived BUILD_VERSION=${bv})")
   }
 }
 
 // task dependencies
-compileJava.dependsOn updateBuildNumber
+compileJava.dependsOn generateSageConstants
 sageJar.dependsOn cleanSageJar, classes, test
 miniclientJar.dependsOn clean, miniclientClasses, cleanMiniJar
 linuxMiniClientRelease.dependsOn miniclientJar
-sageJar.finalizedBy restoreSageConstants
 
 // Eclipse project setup
 eclipse {
