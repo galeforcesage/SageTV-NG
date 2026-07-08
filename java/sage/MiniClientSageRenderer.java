@@ -3952,6 +3952,15 @@ public class MiniClientSageRenderer extends SageRenderer
         sendGetPropertyAsync("DEVICE_FORM_FACTOR");
         sendGetPropertyAsync("PLAYER_ENGINE");
         sendGetPropertyAsync("DISPLAY_RESOLUTION");
+        // --- Playback Surface capability model (Protocol v2.1) — Phase 1 ---
+        // Discovery query. If the client advertises PLAYBACK_SURFACES we do
+        // a follow-up round to pull the six per-surface properties per id
+        // (see readPlaybackSurfacesReply below). Legacy clients that don't
+        // implement this handler return empty and the follow-up round is
+        // skipped entirely — pure additive, no behavior change on the
+        // existing V1/V2 negotiation path. See ROADMAP.md "Playback Surface
+        // capability model (Protocol 2.1)".
+        sendGetPropertyAsync("PLAYBACK_SURFACES");
         sendBufferNow();
         // Now get capabilities properties for this specific miniclient
         // The default is to use image maps for text rendering
@@ -4645,6 +4654,10 @@ public class MiniClientSageRenderer extends SageRenderer
         String deviceFormFactorProp = recvr.getStringReply();
         String playerEngineProp = recvr.getStringReply();
         String displayResolutionProp = recvr.getStringReply();
+        // Playback Surface v2.1 discovery — read the surface-id list here;
+        // the per-surface property replies (if any) are pulled AFTER this
+        // block via a second async round in readPlaybackSurfaces().
+        String playbackSurfacesProp = recvr.getStringReply();
         clientPlatform = (clientPlatformProp == null) ? "" : clientPlatformProp.trim();
         clientDeviceFormFactor = (deviceFormFactorProp == null) ? "" : deviceFormFactorProp.trim();
         clientPlayerEngine = (playerEngineProp == null) ? "" : playerEngineProp.trim();
@@ -4701,6 +4714,67 @@ public class MiniClientSageRenderer extends SageRenderer
           System.out.println("MiniClient IJK_AUDIO_CONSTRAINTS=" + ijkAudioConstraintsProp);
           System.out.println("MiniClient EXO_CONTAINER_CONSTRAINTS=" + exoContainerConstraintsProp);
           System.out.println("MiniClient IJK_CONTAINER_CONSTRAINTS=" + ijkContainerConstraintsProp);
+        }
+
+        // --- Playback Surface v2.1 discovery (Phase 1: log-only) ---
+        // Second async round: for each id in PLAYBACK_SURFACES, queue the 6
+        // per-surface properties and read the replies in the same queued
+        // order. Skipped entirely when the client advertised no surfaces
+        // (legacy V1/V2 clients) so their handshake is byte-for-byte
+        // unchanged. Failures here are caught locally so a broken surface
+        // advertisement can't kill the whole handshake for an otherwise
+        // healthy legacy path -- we just log and leave playbackSurfaces
+        // empty. Phase 1 is discovery + logging only; nothing downstream
+        // consumes playbackSurfaces yet. See ROADMAP.md "Playback Surface
+        // capability model (Protocol 2.1)".
+        playbackSurfaces = sage.client.PlaybackSurfaceSet.empty();
+        java.util.List<String> surfaceIds =
+            sage.client.PlaybackSurfaceSet.split(playbackSurfacesProp);
+        if (!surfaceIds.isEmpty())
+        {
+          try
+          {
+            for (String sid : surfaceIds)
+            {
+              sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_ROUTE");
+              sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_PRIORITY");
+              sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_DELIVERY_MODES");
+              sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_VIDEO_CODECS");
+              sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_CODECS");
+              sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_CONTAINERS");
+            }
+            sendBufferNow();
+            final java.util.Map<String, String[]> rawSurfaceProps =
+                new java.util.LinkedHashMap<String, String[]>();
+            for (String sid : surfaceIds)
+            {
+              String[] props = new String[6];
+              props[0] = recvr.getStringReply();
+              props[1] = recvr.getStringReply();
+              props[2] = recvr.getStringReply();
+              props[3] = recvr.getStringReply();
+              props[4] = recvr.getStringReply();
+              props[5] = recvr.getStringReply();
+              rawSurfaceProps.put(sid, props);
+            }
+            playbackSurfaces = sage.client.PlaybackSurfaceSet.build(
+                playbackSurfacesProp,
+                new java.util.function.Function<String, String[]>() {
+                  @Override public String[] apply(String sid) { return rawSurfaceProps.get(sid); }
+                });
+          }
+          catch (Exception e)
+          {
+            if (Sage.DBG) System.out.println(
+                "MiniClient PLAYBACK_SURFACES discovery failed (leaving empty; "
+                + "legacy V1/V2 path unaffected): " + e);
+            playbackSurfaces = sage.client.PlaybackSurfaceSet.empty();
+          }
+        }
+        if (Sage.DBG && playbackSurfacesProp != null && playbackSurfacesProp.length() > 0)
+        {
+          System.out.println("MiniClient PLAYBACK_SURFACES=" + playbackSurfacesProp);
+          System.out.println("MiniClient PlaybackSurfaces parsed: " + playbackSurfaces);
         }
 
         // Build the schema-v2 capability-constraints object. Only populated
@@ -7853,6 +7927,26 @@ public class MiniClientSageRenderer extends SageRenderer
   }
 
   /**
+   * Returns the {@link sage.client.PlaybackSurfaceSet} advertised by this
+   * client during the capability handshake. Empty for legacy V1/V2 clients
+   * that don't implement the Protocol v2.1 handshake. Never null.
+   *
+   * <p>Phase 1 (current): read-only, informational -- exposed here so
+   * server-side code can log or inspect surface advertisements. Nothing
+   * consumes it for playback decisions yet.
+   *
+   * <p>Phase 2 (planned, gated): {@link sage.client.PlaybackDecisionEngine}
+   * will call this from a new {@code evaluateSurfaces()} path when
+   * {@code miniplayer/use_playback_surfaces=true} and this set is non-empty;
+   * otherwise the legacy V1/V2 {@code evaluateWithPlayerSwitch()} runs
+   * unchanged.
+   */
+  public sage.client.PlaybackSurfaceSet getPlaybackSurfaces()
+  {
+    return playbackSurfaces == null ? sage.client.PlaybackSurfaceSet.empty() : playbackSurfaces;
+  }
+
+  /**
    * Parse advisory PWA render hints from the existing DISPLAY_RESOLUTION
    * capability ("WxH"). Values are stored but NOT acted upon (no behavior
    * change). Missing/invalid values are ignored; absurd dimensions are
@@ -9535,6 +9629,15 @@ public class MiniClientSageRenderer extends SageRenderer
   private volatile int pwaHintUiWidth = 0;
   private volatile int pwaHintUiHeight = 0;
   private volatile boolean pwaHintIsTizen = false;
+  // --- Playback Surface v2.1 capability set (Phase 1: discovery + log only) ---
+  // Populated from PLAYBACK_SURFACES + PLAYBACK_SURFACE_<id>_* during the
+  // capability handshake. Empty for legacy V1/V2 clients (they never advertise
+  // PLAYBACK_SURFACES so the follow-up discovery round is skipped entirely).
+  // No decision-engine consumer yet -- Phase 2 wires this into
+  // PlaybackDecisionEngine.evaluateSurfaces(). See ROADMAP.md "Playback Surface
+  // capability model (Protocol 2.1)".
+  private volatile sage.client.PlaybackSurfaceSet playbackSurfaces =
+      sage.client.PlaybackSurfaceSet.empty();
   // --- PWA-only GFX perf instrumentation (SERVER2) ---
   // Active only when pwa/perf_logging=true AND isPwaBrowserClient(). Purely
   // observational: no command payload, send order, buffering, or timing is
