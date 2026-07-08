@@ -879,8 +879,10 @@ public class PlaybackDecisionEngine
     java.util.List<SurfaceDecision> results = new java.util.ArrayList<SurfaceDecision>();
     for (PlaybackSurface s : surfaces.asMap().values())
     {
-      String mode = pickDeliveryModeForSurface(s);
-      if (mode == null)
+      // Quick pre-filter: does the surface declare ANY server-servable mode?
+      // If it only advertised dash/webrtc (which the server can't feed yet),
+      // skip -- there's no point evaluating its decision.
+      if (!surfaceHasAnyServableMode(s))
       {
         if (sage.Sage.DBG) System.out.println("PlaybackDecisionEngine.evaluateSurfaces: "
             + "skipping surface '" + s.getId() + "' — declared DELIVERY_MODES=" + s.getDeliveryModes()
@@ -889,6 +891,17 @@ public class PlaybackDecisionEngine
       }
       PlaybackDecision d = evaluateForSurface(s, mediaContainer, mediaVideoCodec, mediaAudioCodec,
           mediaWidth, mediaHeight, sourceBitrateKbps, availableBandwidthKbps, sourceInterlaced);
+      // NOW pick delivery mode, decision-aware. pull can only fulfill
+      // DIRECT_PLAY; REMUX / AUDIO_TRANSCODE / TRANSCODE need push or hls
+      // because the server must feed transformed bytes.
+      String mode = pickDeliveryModeForDecision(s, d.decision);
+      if (mode == null)
+      {
+        if (sage.Sage.DBG) System.out.println("PlaybackDecisionEngine.evaluateSurfaces: "
+            + "surface '" + s.getId() + "' has no servable delivery mode for decision " + d.decision
+            + " (declared=" + s.getDeliveryModes() + "); dropping");
+        continue;
+      }
       results.add(new SurfaceDecision(s, d, mode));
     }
     java.util.Collections.sort(results, SURFACE_DECISION_COMPARATOR);
@@ -896,19 +909,56 @@ public class PlaybackDecisionEngine
   }
 
   /**
-   * Select the delivery mode the server should use for this surface, given
-   * what the server can actually serve. Returns {@code null} when the
-   * surface's declared modes don't intersect {@link #SERVER_SERVABLE_DELIVERY_MODES}.
-   * Preference order matches server efficiency: {@code pull} first (cheapest —
-   * no server-side muxing), then {@code push}, then {@code hls}.
+   * Returns true when {@code surface}'s declared delivery modes intersect
+   * {@link #SERVER_SERVABLE_DELIVERY_MODES}. Cheap pre-filter used by
+   * {@link #evaluateSurfaces} to skip surfaces the server has no way to
+   * feed bytes to (e.g. a hypothetical webrtc-only surface today).
    */
-  private static String pickDeliveryModeForSurface(PlaybackSurface s)
+  private static boolean surfaceHasAnyServableMode(PlaybackSurface s)
+  {
+    if (s == null) return false;
+    java.util.List<String> declared = s.getDeliveryModes();
+    if (declared == null || declared.isEmpty()) return false;
+    for (String m : declared) if (SERVER_SERVABLE_DELIVERY_MODES.contains(m)) return true;
+    return false;
+  }
+
+  /**
+   * Select the delivery mode the server should use for this surface, GIVEN
+   * the decision the engine just reached. This is the critical piece that
+   * routes REMUX / AUDIO_TRANSCODE / TRANSCODE decisions away from pull
+   * mode (which would serve the raw file and defeat the transform) toward
+   * push / hls (which the server can feed transformed bytes into).
+   *
+   * <p>Rules:
+   * <ul>
+   *   <li>{@code DIRECT_PLAY}: any declared mode works. Prefer {@code pull}
+   *       (cheapest — no server-side muxing), then {@code push}, then
+   *       {@code hls}.</li>
+   *   <li>{@code REMUX} / {@code AUDIO_TRANSCODE} / {@code TRANSCODE}: pull
+   *       is unusable (raw file bypasses the transform pipeline). Prefer
+   *       {@code push} (adaptive), then {@code hls} (segmented). Returns
+   *       {@code null} if the surface declares only pull — that
+   *       configuration can't fulfill a non-direct decision and the surface
+   *       is dropped from the ranking.</li>
+   * </ul>
+   * Returns {@code null} to signal "no viable mode for this decision"; the
+   * caller drops the surface with a WARN.
+   */
+  private static String pickDeliveryModeForDecision(PlaybackSurface s, Decision d)
   {
     if (s == null) return null;
     java.util.List<String> declared = s.getDeliveryModes();
     if (declared == null || declared.isEmpty()) return null;
-    // Preference order (cheapest server cost first).
-    if (declared.contains("pull")) return "pull";
+    if (d == Decision.DIRECT_PLAY)
+    {
+      // Any servable mode; cheapest first.
+      if (declared.contains("pull")) return "pull";
+      if (declared.contains("push")) return "push";
+      if (declared.contains("hls"))  return "hls";
+      return null;
+    }
+    // Non-DIRECT: server must feed transformed bytes; pull cannot.
     if (declared.contains("push")) return "push";
     if (declared.contains("hls"))  return "hls";
     return null;
