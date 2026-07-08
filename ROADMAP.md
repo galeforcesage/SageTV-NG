@@ -105,6 +105,39 @@ Phases 0–3 cover real-world need without touching the broadcast stack.
   binary or need their own modernization. Not blocking the server-side
   unification.
 
+- **AudioPlan struct refactor for `FFMPEGTranscoder` command build.**
+  Long-term follow-up to the immediate `aresample=async=N` + `-acodec
+  copy` gating fix (commit landing 2026-07). Introduce a small typed
+  holder — `AudioPlan { codec, bitrate, channels, filters[] }` —
+  constructed once per session in `FFMPEGTranscoder.startTranscode()`
+  before the ArrayList-of-tokens command builder runs. Enforce the
+  invariant `filters.isEmpty() OR codec != "copy"` at construction
+  time (throw `IllegalStateException` on violation). Benefits:
+    - **Makes the class of bug a compile-time / construction-time
+      error** instead of a runtime ffmpeg exit that HTTPLSServer
+      loops on. The current bug (aresample + copy) exited with
+      "Filtering and streamcopy cannot be used together" and Sage
+      respawned in a tight loop, hanging iOS/PWA HLS playback of
+      any DVR MPEG2-PS content.
+    - **Centralizes audio-side decisions** currently scattered across
+      the HLS branch (line ~1150), the AC-4 override helper
+      (`maybeOverrideAc4AudioCodec`), the placeshifter branch, and the
+      sync/`-af` block (line ~1727) — each of which mutates the same
+      shared `xcodeParamsVec` and can invalidate assumptions the
+      others made.
+    - **Prepares for other codec/filter combos** that will hit the
+      same class of stricter validation as we track upstream ffmpeg
+      (video-side `-vf` + `-c:v copy` is the mirror case; volume /
+      loudnorm / channelmap filters would run into the same trap).
+    - **Enables audio-plan-level testing** without spawning ffmpeg —
+      unit test the plan builder in isolation, replacing the current
+      "build command, spawn, read stderr, hope" verification loop.
+  Scope note: pair this with a matching `VideoPlan` if the same
+  refactor lands cleanly; the two together retire most direct
+  manipulation of `xcodeParamsVec` and let a future contributor
+  reason about the transcoder command by reading two structs instead
+  of tracing 800 lines of imperative appends.
+
 ### Offline transcode preset modernization (`Ministry`)
 
 Replace the legacy 2008-era offline transcode profile catalogue in
