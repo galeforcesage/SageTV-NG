@@ -98,6 +98,68 @@ public final class PlaybackSurfaceSet
     return out;
   }
 
+  // ---- canonical-name aliasing (Protocol v2.1) --------------------------
+  //
+  // The server holds media metadata using SageTV's INTERNAL codec / container
+  // spelling (e.g. "H.264", "MPEG2-Video", "Quicktime"), while the Protocol
+  // v2.1 canonical names on the wire are strict (e.g. "H264", "MPEG2-VIDEO",
+  // "MP4"). Rather than force every caller to canonicalize, PlaybackSurface's
+  // support* checks canonicalize the query first via these helpers. Clients
+  // that mis-spell a token also get normalized (H.264 -> H264, ac-3 -> AC3),
+  // so a slightly non-conforming client still gets a correct decision.
+  //
+  // Rules:
+  //   - Case-insensitive: everything is uppercased first.
+  //   - Only the aliases that SageTV's own FormatParser emits, or that clients
+  //     have been observed to send in the wild, are hardcoded here. Everything
+  //     else passes through unchanged (uppercased).
+  //   - If a token uppercases directly to its canonical name (e.g.
+  //     "mpeg2-video" -> "MPEG2-VIDEO"), no explicit alias entry is needed.
+
+  /** Canonicalize a video codec name to its Protocol v2.1 spelling. */
+  public static String canonicalVideoCodec(String raw)
+  {
+    if (raw == null || raw.length() == 0) return raw;
+    String u = raw.trim().toUpperCase(java.util.Locale.ROOT);
+    if ("H.264".equals(u)) return "H264";            // SageTV MediaFormat.H264 = "H.264"
+    if ("H.265".equals(u) || "H265".equals(u)) return "HEVC";
+    return u;
+  }
+
+  /** Canonicalize an audio codec name to its Protocol v2.1 spelling. */
+  public static String canonicalAudioCodec(String raw)
+  {
+    if (raw == null || raw.length() == 0) return raw;
+    String u = raw.trim().toUpperCase(java.util.Locale.ROOT);
+    if ("AC-3".equals(u)) return "AC3";
+    if ("E-AC-3".equals(u) || "EC-3".equals(u)) return "EAC3";
+    if ("AC-4".equals(u)) return "AC4";
+    if ("MPG1L2".equals(u)) return "MP2";            // SageTV FormatParser MPEG-1 Layer II
+    if ("MPG1L3".equals(u)) return "MP3";            // SageTV FormatParser MPEG-1 Layer III
+    return u;
+  }
+
+  /** Canonicalize a container name to its Protocol v2.1 spelling. */
+  public static String canonicalContainer(String raw)
+  {
+    if (raw == null || raw.length() == 0) return raw;
+    String u = raw.trim().toUpperCase(java.util.Locale.ROOT);
+    // SageTV parses .mp4 files with container="Quicktime" (same ISOBMFF format).
+    if ("QUICKTIME".equals(u)) return "MP4";
+    // Legacy short forms sometimes seen.
+    if ("MPG".equals(u) || "MPEG".equals(u)) return "MPEG2-PS";
+    if ("TS".equals(u)) return "MPEG2-TS";
+    if ("MKV".equals(u)) return "MATROSKA";
+    return u;
+  }
+
+  /** Canonicalize a delivery mode. Kept for symmetry; delivery modes are lowercase in v2.1. */
+  public static String canonicalDeliveryMode(String raw)
+  {
+    if (raw == null || raw.length() == 0) return raw;
+    return raw.trim().toLowerCase(java.util.Locale.ROOT);
+  }
+
   /**
    * Case-sensitive check against a canonical set. Returns the input list
    * filtered to canonical tokens only; each non-canonical token is logged
@@ -113,10 +175,18 @@ public final class PlaybackSurfaceSet
     List<String> ok = new ArrayList<String>(tokens.size());
     for (String t : tokens)
     {
-      if (canonical.contains(t)) ok.add(t);
+      // Normalize to canonical spelling first so a client that sends "H.264"
+      // or "ac-3" or "Quicktime" still ends up stored as the canonical token.
+      String normalized;
+      if (canonical == CANONICAL_VIDEO_CODECS)         normalized = canonicalVideoCodec(t);
+      else if (canonical == CANONICAL_AUDIO_CODECS)    normalized = canonicalAudioCodec(t);
+      else if (canonical == CANONICAL_CONTAINERS)      normalized = canonicalContainer(t);
+      else if (canonical == CANONICAL_DELIVERY_MODES)  normalized = canonicalDeliveryMode(t);
+      else                                             normalized = t;
+      if (canonical.contains(normalized)) ok.add(normalized);
       else System.err.println("PlaybackSurfaceSet WARN: surface '" + surfaceId
           + "' " + propKind + " has non-canonical token '" + t
-          + "' (accepted: " + canonical + "); ignored");
+          + "' (normalized='" + normalized + "', accepted: " + canonical + "); ignored");
     }
     return ok;
   }

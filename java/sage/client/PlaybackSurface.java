@@ -78,10 +78,42 @@ public final class PlaybackSurface
   public List<String> getAudioCodecs() { return audioCodecs; }
   public List<String> getContainers() { return containers; }
 
-  public boolean supportsDeliveryMode(String mode) { return mode != null && deliveryModes.contains(mode); }
-  public boolean supportsVideoCodec(String codec) { return codec != null && videoCodecs.contains(codec); }
-  public boolean supportsAudioCodec(String codec) { return codec != null && audioCodecs.contains(codec); }
-  public boolean supportsContainer(String container) { return container != null && containers.contains(container); }
+  public boolean supportsDeliveryMode(String mode)
+  {
+    return mode != null
+        && deliveryModes.contains(PlaybackSurfaceSet.canonicalDeliveryMode(mode));
+  }
+
+  /**
+   * Alias- and case-tolerant check against the surface's declared video
+   * codec list. SageTV's FormatParser emits internal spellings (e.g.
+   * {@code "H.264"}, {@code "MPEG2-Video"}) that don't literally match the
+   * canonical v2.1 tokens ({@code "H264"}, {@code "MPEG2-VIDEO"}) even
+   * though they refer to the same codec. Canonicalizing the query via
+   * {@link PlaybackSurfaceSet#canonicalVideoCodec} before comparison fixes
+   * the class of bug that made an MPG2 source appear un-decodable to the
+   * ijk software surface (which does list MPEG2-VIDEO) purely because of
+   * a case mismatch.
+   */
+  public boolean supportsVideoCodec(String codec)
+  {
+    return codec != null
+        && videoCodecs.contains(PlaybackSurfaceSet.canonicalVideoCodec(codec));
+  }
+
+  /** Alias- and case-tolerant check against the surface's audio codec list. */
+  public boolean supportsAudioCodec(String codec)
+  {
+    return codec != null
+        && audioCodecs.contains(PlaybackSurfaceSet.canonicalAudioCodec(codec));
+  }
+
+  /** Alias- and case-tolerant check against the surface's container list. */
+  public boolean supportsContainer(String container)
+  {
+    return container != null
+        && containers.contains(PlaybackSurfaceSet.canonicalContainer(container));
+  }
 
   @Override
   public String toString()
