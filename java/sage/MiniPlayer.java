@@ -1165,6 +1165,36 @@ public class MiniPlayer implements DVDMediaPlayer
             if (Sage.DBG) System.out.println("MiniPlayer failed to send CAP_EFFECTIVE_SURFACE="
                 + chosenSurfaceId + ": " + ioe);
           }
+          // Phase 2.5 wiring: publish the surface's target codecs + delivery
+          // mode to the MiniClient session state so the transcoder subsystem
+          // (HTTPLSServer.setupTranscoder + FFMPEGTranscoder) can honor the
+          // surface's HONEST target list instead of falling back to the
+          // coarse V1 AUDIO_CODECS lookup that mis-negotiated AC3 for
+          // Chromium MSE clients (Tizen PWA 2026-07 incident).
+          mcsr.setCurrentSurfaceSelection(chosenSurfaceId,
+              profileDecision != null ? profileDecision.targetAudioCodec : "",
+              profileDecision != null ? profileDecision.targetVideoCodec : "",
+              chosenSurfaceDelivery);
+          // Phase 2.5 transport override: honor the surface's declared
+          // delivery mode as an authoritative signal for THIS stream. This
+          // is orthogonal to the legacy transport-force block below (which
+          // only fires for non-NG legacy clients). Surface-aware clients
+          // are trusted -- their surface list is the honest report of what
+          // pipeline they want to receive bytes through.
+          if ("pull".equals(chosenSurfaceDelivery) && !clientDoesPull)
+          {
+            if (Sage.DBG) System.out.println("MiniPlayer: surface '" + chosenSurfaceId
+                + "' declared pull delivery — forcing clientDoesPull=true");
+            clientDoesPull = true;
+          }
+          else if ("push".equals(chosenSurfaceDelivery) && clientDoesPull)
+          {
+            if (Sage.DBG) System.out.println("MiniPlayer: surface '" + chosenSurfaceId
+                + "' declared push delivery — forcing clientDoesPull=false");
+            clientDoesPull = false;
+          }
+          // "hls" delivery is honored via the existing HTTPLS routing path
+          // (iPhoneMode / iosstream detection). No override needed here.
         }
       }
       // --- End profile decision ---

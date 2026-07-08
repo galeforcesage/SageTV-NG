@@ -1173,10 +1173,31 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // player is equal". Otherwise transcode down to AAC-LC (aac_low), the
       // broadest-compatibility target for hls.js and native iOS HLS. HE-AAC v2
       // was dropped: its parametric stereo decodes unreliably in hls.js/iOS.
+      //
+      // Protocol v2.1 Phase 2.5 override: when the winning PlaybackSurface
+      // published a TARGET audio codec via setHttplsSurfaceTargetAudioCodec(),
+      // that is the honest per-decode-path signal and OVERRIDES the coarse
+      // V1 clientSupportsHttplsAudioCodec() lookup. Copy only when the
+      // target matches source AND source is HLS-safe; else transcode to
+      // the surface's target (currently AAC via the existing libfdk_aac
+      // path). Legacy sessions leave httplsSurfaceTargetAudioCodec empty
+      // and fall through to the pre-Phase-2.5 client-caps decision.
       String srcAudCodec = (sourceFormat != null && sourceFormat.getAudioFormat() != null)
           ? sourceFormat.getAudioFormat().getFormatName() : null;
-      boolean audioPassthrough =
-          isHlsSafeAudioCodec(srcAudCodec) && clientSupportsHttplsAudioCodec(srcAudCodec);
+      boolean audioPassthrough;
+      if (httplsSurfaceTargetAudioCodec != null && httplsSurfaceTargetAudioCodec.length() > 0)
+      {
+        audioPassthrough = isHlsSafeAudioCodec(srcAudCodec)
+            && canonicalAudioCodec(srcAudCodec).equals(canonicalAudioCodec(httplsSurfaceTargetAudioCodec));
+        if (Sage.DBG) System.out.println("FFMpegTranscoder: httpls: surface v2.1 target audio codec="
+            + httplsSurfaceTargetAudioCodec + " sourceCodec=" + srcAudCodec
+            + " -> " + (audioPassthrough ? "-acodec copy (match)" : "transcode to target"));
+      }
+      else
+      {
+        audioPassthrough =
+            isHlsSafeAudioCodec(srcAudCodec) && clientSupportsHttplsAudioCodec(srcAudCodec);
+      }
       if (audioPassthrough)
       {
         if (Sage.DBG) System.out.println("FFMpegTranscoder: httpls: audio passthrough (-acodec copy) for source codec "
@@ -2901,6 +2922,42 @@ public class FFMPEGTranscoder implements TranscodeEngine
   public void setHttplsClientAudioCodecs(java.util.Set codecs)
   {
     this.httplsClientAudioCodecs = codecs;
+  }
+
+  /**
+   * Surface-declared TARGET audio codec for this stream (Protocol v2.1
+   * Phase 2.5). When non-empty this is the honest per-decode-path signal
+   * from the winning {@link sage.client.PlaybackSurface} and OVERRIDES the
+   * coarse {@link #httplsClientAudioCodecs} lookup for the audio-copy vs
+   * transcode decision. Empty for legacy V1/V2 sessions (in which case
+   * the pre-Phase-2.5 client-caps lookup runs unchanged).
+   *
+   * <p>Why the override matters: a Chromium-based Tizen PWA advertises
+   * {@code AUDIO_CODECS} = AAC,AC3,EAC3 (matching the native tizen
+   * player's decoder set), but its Media Source Extensions decoder path
+   * only handles AAC. Surface {@code pwa_mse} advertises just AAC in its
+   * per-surface audio list; that becomes the target here, forcing
+   * AC3 -> AAC transcode instead of the AC3 passthrough that MSE rejects.
+   */
+  protected String httplsSurfaceTargetAudioCodec = "";
+
+  public void setHttplsSurfaceTargetAudioCodec(String codec)
+  {
+    this.httplsSurfaceTargetAudioCodec = (codec == null) ? "" : codec;
+  }
+
+  /**
+   * Surface-declared TARGET video codec for this stream (Protocol v2.1
+   * Phase 2.5). Populated for surface-aware sessions; empty for legacy.
+   * Reserved for future use -- the HLS branch currently always encodes
+   * to h264_nvenc; a follow-up will honor {@code -c:v copy} when the
+   * source video codec matches this target.
+   */
+  protected String httplsSurfaceTargetVideoCodec = "";
+
+  public void setHttplsSurfaceTargetVideoCodec(String codec)
+  {
+    this.httplsSurfaceTargetVideoCodec = (codec == null) ? "" : codec;
   }
 
   /** HLS / MPEG-TS segments may only carry AAC, AC-3 or E-AC-3 audio. */

@@ -2839,6 +2839,15 @@ public class HTTPLSServer implements Runnable
         // (-acodec copy) when the player supports it and it is HLS-safe, else
         // transcode down to AAC-LC. Resolved from the client's MiniClient
         // renderer via the VideoFrame; null-safe when unavailable.
+        //
+        // Protocol v2.1 Phase 2.5: if the MiniClient has an active surface
+        // selection (MiniPlayer set it after the surface-aware ranker picked
+        // a winner), ALSO push the surface's target audio/video codecs to
+        // the transcoder. Those override the V1 coarse-list lookup in
+        // FFMPEGTranscoder so a Chromium MSE client's honest AAC-only
+        // surface preference is honored instead of being masked by its
+        // legacy AUDIO_CODECS=AAC,AC3,EAC3 advertisement (which reflects
+        // the native tizen player, not MSE).
         try
         {
           if (vf != null && vf.getUIMgr() != null && vf.getUIMgr().getRootPanel() != null
@@ -2847,6 +2856,14 @@ public class HTTPLSServer implements Runnable
             MiniClientSageRenderer mcsr =
                 (MiniClientSageRenderer) vf.getUIMgr().getRootPanel().getRenderEngine();
             xcode.transcoder.setHttplsClientAudioCodecs(mcsr.getEffectiveAudioCodecs());
+            String surfAud = mcsr.getCurrentSurfaceTargetAudioCodec();
+            String surfVid = mcsr.getCurrentSurfaceTargetVideoCodec();
+            xcode.transcoder.setHttplsSurfaceTargetAudioCodec(surfAud);
+            xcode.transcoder.setHttplsSurfaceTargetVideoCodec(surfVid);
+            if (Sage.DBG && (surfAud.length() > 0 || surfVid.length() > 0))
+              System.out.println("iOS HTTP server: surface v2.1 targets for '"
+                  + mcsr.getCurrentSurfaceId() + "' audio=" + surfAud
+                  + " video=" + surfVid + " delivery=" + mcsr.getCurrentSurfaceDeliveryMode());
           }
         }
         catch (Throwable t)

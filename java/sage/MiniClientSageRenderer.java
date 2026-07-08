@@ -7947,6 +7947,61 @@ public class MiniClientSageRenderer extends SageRenderer
   }
 
   /**
+   * Publish the winning {@link sage.client.PlaybackSurface}'s target
+   * codecs + delivery mode for the current stream. Called by
+   * {@link sage.MiniPlayer} at OPENURL, AFTER the surface-aware ranker
+   * picked the winner. Consumed by {@code HTTPLSServer.setupTranscoder}
+   * (and future push-mode setup) to override the transcoder's V1-based
+   * codec lookup with the surface's HONEST target. Pass empty strings
+   * (or nulls) to clear -- legacy V1/V2 sessions do exactly that so the
+   * transcoder falls back to its pre-Phase-2.5 client-caps lookup.
+   *
+   * <p>Session-scoped: refreshed per OPENURL, sticky for the duration of
+   * the stream. Matches the {@code CAP_EFFECTIVE_SURFACE} contract emitted
+   * to the client at the same point.
+   */
+  public void setCurrentSurfaceSelection(String surfaceId, String targetAudioCodec,
+      String targetVideoCodec, String deliveryMode)
+  {
+    this.currentSurfaceId = (surfaceId == null) ? "" : surfaceId;
+    this.currentSurfaceTargetAudioCodec = (targetAudioCodec == null) ? "" : targetAudioCodec;
+    this.currentSurfaceTargetVideoCodec = (targetVideoCodec == null) ? "" : targetVideoCodec;
+    this.currentSurfaceDeliveryMode = (deliveryMode == null) ? "" : deliveryMode;
+  }
+
+  /** Winning surface id for the current stream, or "" for legacy sessions. */
+  public String getCurrentSurfaceId() { return currentSurfaceId == null ? "" : currentSurfaceId; }
+
+  /**
+   * Surface-declared target audio codec for the current stream, or "" for
+   * legacy sessions. Transcoder consumers prefer this over the coarse V1
+   * {@code AUDIO_CODECS} lookup when non-empty.
+   */
+  public String getCurrentSurfaceTargetAudioCodec()
+  {
+    return currentSurfaceTargetAudioCodec == null ? "" : currentSurfaceTargetAudioCodec;
+  }
+
+  /**
+   * Surface-declared target video codec for the current stream, or "" for
+   * legacy sessions. Transcoder consumers prefer this over legacy defaults
+   * when non-empty.
+   */
+  public String getCurrentSurfaceTargetVideoCodec()
+  {
+    return currentSurfaceTargetVideoCodec == null ? "" : currentSurfaceTargetVideoCodec;
+  }
+
+  /**
+   * Delivery mode the surface-aware ranker picked for the current stream
+   * ({@code pull} / {@code push} / {@code hls}), or "" for legacy sessions.
+   */
+  public String getCurrentSurfaceDeliveryMode()
+  {
+    return currentSurfaceDeliveryMode == null ? "" : currentSurfaceDeliveryMode;
+  }
+
+  /**
    * Parse advisory PWA render hints from the existing DISPLAY_RESOLUTION
    * capability ("WxH"). Values are stored but NOT acted upon (no behavior
    * change). Missing/invalid values are ignored; absurd dimensions are
@@ -9638,6 +9693,19 @@ public class MiniClientSageRenderer extends SageRenderer
   // capability model (Protocol 2.1)".
   private volatile sage.client.PlaybackSurfaceSet playbackSurfaces =
       sage.client.PlaybackSurfaceSet.empty();
+  // --- Playback Surface v2.1 per-stream selection (Phase 2.5) ---
+  // Set by MiniPlayer at OPENURL AFTER the surface-aware ranker picks the
+  // winning surface for THIS stream. Consumed by HTTPLSServer.setupTranscoder
+  // (and future push-mode transcoder wiring) so the FFMPEG audio/video codec
+  // decisions honor the surface's HONEST capability list rather than falling
+  // back to the coarse V1 AUDIO_CODECS lookup that is wrong for surfaces like
+  // pwa_mse (Tizen native decodes AC3, Chromium MSE does not). Cleared to
+  // empty for legacy V1/V2 sessions so the transcoder falls back to its
+  // pre-Phase-2.5 behavior. Session-scoped, refreshed per OPENURL.
+  private volatile String currentSurfaceId = "";
+  private volatile String currentSurfaceTargetAudioCodec = "";
+  private volatile String currentSurfaceTargetVideoCodec = "";
+  private volatile String currentSurfaceDeliveryMode = "";
   // --- PWA-only GFX perf instrumentation (SERVER2) ---
   // Active only when pwa/perf_logging=true AND isPwaBrowserClient(). Purely
   // observational: no command payload, send order, buffering, or timing is
