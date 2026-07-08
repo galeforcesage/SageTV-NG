@@ -904,6 +904,36 @@ public class FFMPEGTranscoder implements TranscodeEngine
         + ac4SourceAudioCodec + (abIndex >= 0 ? " (bitrate slot=" + abIndex + ")" : ""));
   }
 
+  /**
+   * Returns true when {@code -acodec copy} (or the equivalent {@code -c:a} /
+   * {@code -codec:a} spelling) has already been added to {@code xcodeParamsVec}.
+   * Modern ffmpeg (6.1+ / the elliotclee fork) refuses {@code -af} together
+   * with a stream-copied audio output — it errors out with "Filtering and
+   * streamcopy cannot be used together" / "Error opening output files:
+   * Invalid argument" and exits immediately. Older ffmpeg silently dropped
+   * the filter in copy mode, so any audio filter (e.g. {@code aresample=async=N})
+   * was already a no-op there. Callers must gate audio-filter emits on this
+   * check to avoid triggering the tight ffmpeg respawn loop HTTPLSServer would
+   * otherwise fall into (observed on iOS/PWA HLS playback, 2026-07).
+   */
+  @SuppressWarnings({"rawtypes"})
+  private static boolean isAudioCopySelected(java.util.ArrayList xcodeParamsVec)
+  {
+    if (xcodeParamsVec == null) return false;
+    for (int i = 0; i < xcodeParamsVec.size() - 1; i++)
+    {
+      Object o = xcodeParamsVec.get(i);
+      if (!(o instanceof String)) continue;
+      String tok = (String) o;
+      if (tok.equals("-acodec") || tok.equals("-c:a") || tok.equals("-codec:a"))
+      {
+        Object v = xcodeParamsVec.get(i + 1);
+        if (v instanceof String && "copy".equalsIgnoreCase((String) v)) return true;
+      }
+    }
+    return false;
+  }
+
   public void startTranscode() throws java.io.IOException
   {
     xcodeBufferBaseNum = 0;
@@ -1708,6 +1738,16 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // has been removed in favor of -af aresample=async=N. Map the legacy values:
     //   -vsync 0 -> -fps_mode passthrough
     //   -vsync 1 -> -fps_mode cfr
+    //
+    // Modern ffmpeg (6.1+) additionally refuses `-af aresample=async=N` when the
+    // audio output is `-acodec copy` — it exits with "Filtering and streamcopy
+    // cannot be used together" / "Error opening output files: Invalid argument"
+    // before serving a single byte, which HTTPLSServer respawns in a tight loop.
+    // Older ffmpeg silently ignored the filter in copy mode, so gating on the
+    // copy check restores the old effective behavior. If a source genuinely
+    // needs aresample drift correction, force it onto the audio re-encode
+    // branch above rather than trying to filter through a copy.
+    boolean audioIsCopy = isAudioCopySelected(xcodeParamsVec);
     if (dynamicRateAdjust || (isMpeg4Codec && outputFile == null))
     {
       xcodeParamsVec.add("-fps_mode");
@@ -1724,15 +1764,29 @@ public class FFMPEGTranscoder implements TranscodeEngine
         xcodeParamsVec.add("cfr");
       else
         xcodeParamsVec.add("passthrough");
-      xcodeParamsVec.add("-af");
-      xcodeParamsVec.add("aresample=async=1");
+      if (!audioIsCopy)
+      {
+        xcodeParamsVec.add("-af");
+        xcodeParamsVec.add("aresample=async=1");
+      }
+      else if (Sage.DBG)
+      {
+        System.out.println("FFMPEGTranscoder: skipping -af aresample=async=1 (audio is -acodec copy)");
+      }
     }
     else //if (xcodeParams.indexOf("-f mp4") != -1 || xcodeParams.indexOf("-f 3gp") != -1 || xcodeParams.indexOf("-f psp") != -1)
     {
       xcodeParamsVec.add("-fps_mode");
       xcodeParamsVec.add("cfr");
-      xcodeParamsVec.add("-af");
-      xcodeParamsVec.add("aresample=async=100");
+      if (!audioIsCopy)
+      {
+        xcodeParamsVec.add("-af");
+        xcodeParamsVec.add("aresample=async=100");
+      }
+      else if (Sage.DBG)
+      {
+        System.out.println("FFMPEGTranscoder: skipping -af aresample=async=100 (audio is -acodec copy)");
+      }
     }
 
     if (Sage.DBG && "TRUE".equals(Sage.get("xcode_video_bitrate_stats", null)))
