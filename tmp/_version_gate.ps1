@@ -1,15 +1,53 @@
 # _version_gate.ps1 - shared helpers for BUILD_VERSION drift detection.
 # Dot-source from deploy_*.ps1: . "$PSScriptRoot\_version_gate.ps1"
+#
+# BUILD_VERSION IS NOW DERIVED FROM GIT (`git rev-list --count HEAD`).
+# Every commit auto-increments the number. The old .buildnumber pin file is
+# gone; SageConstants.java is generated into buildoutput/generated at build
+# time and is NOT checked in. Semantics of each gate:
+#   [stale-build]  local jar BV != current git-count(HEAD)
+#                  -> you built at an older HEAD and made new commits;
+#                     rebuild before deploying.
+#   [no-op]        local jar md5 == deployed jar md5  -> nothing to do.
+#   [downgrade]    local jar BV < deployed BV  -> older commit; refuse.
+#   [unbumped]     local jar BV == deployed BV but bytes differ  ->
+#                  same-commit rebuild deploying different bytes; this can
+#                  ONLY happen if you built with uncommitted changes.
+#   [dirty-tree]   `git status --porcelain` shows uncommitted Java/preset
+#                  edits at build/deploy time. Refuse; commit first.
 
 $script:HostAddr = if ($env:SAGE_DEPLOY_HOST) { $env:SAGE_DEPLOY_HOST } else { 'sagetv@<HOST>' }
 $script:RepoRoot = if ($env:SAGE_REPO_ROOT)   { $env:SAGE_REPO_ROOT }   else { (Split-Path -Parent $PSScriptRoot) }
 
 function Get-RepoBuildVersion {
-    $path = Join-Path $script:RepoRoot 'java\sage\SageConstants.java'
-    if (-not (Test-Path $path)) { throw "missing $path" }
-    $m = Select-String -Path $path -Pattern 'BUILD_VERSION\s*=\s*(\d+)' | Select-Object -First 1
-    if (-not $m) { throw "BUILD_VERSION not found in $path" }
-    return [int]$m.Matches[0].Groups[1].Value
+    # BUILD_VERSION is derived from git commit count at build time; the source
+    # file is generated (not checked in). The "repo version" for the gate is
+    # therefore what the *next* build would produce = git rev-list --count HEAD.
+    Push-Location $script:RepoRoot
+    try {
+        $out = git rev-list --count HEAD 2>$null
+        if (-not $out) { throw "git rev-list failed in $script:RepoRoot" }
+        return [int]($out.Trim())
+    } finally { Pop-Location }
+}
+
+function Test-DirtyTree {
+    # Returns $true when there are uncommitted changes to source files that
+    # would ship in Sage.jar (Java sources, presets, resource paths). Docs,
+    # scripts, and gitignored files are excluded. Used by deploy_jar.ps1 to
+    # refuse dirty-tree deploys (see "[dirty-tree]" in header comment).
+    Push-Location $script:RepoRoot
+    try {
+        $lines = git status --porcelain -- 'java/**' 'presets/**' 'stvs/**' 'i18n/**' 2>$null
+        return [bool]($lines -and $lines.Trim().Length -gt 0)
+    } finally { Pop-Location }
+}
+
+function Get-DirtyTreeSummary {
+    Push-Location $script:RepoRoot
+    try {
+        return (git status --porcelain -- 'java/**' 'presets/**' 'stvs/**' 'i18n/**' 2>$null)
+    } finally { Pop-Location }
 }
 
 function Get-LocalJarBuildVersion {

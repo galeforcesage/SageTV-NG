@@ -3,8 +3,14 @@
 *.bak
 config*.log
 
+# BUILD_VERSION is now derived from `git rev-list --count HEAD` at build
+# time and SageConstants.java is generated into build/generated. The old
+# .buildnumber cache and SageConstants.java.bak restore file are obsolete;
+# keep the ignore lines so any stale copies from older checkouts don't get
+# accidentally committed.
 .buildnumber
 
+/java/sage/SageConstants.java
 /java/sage/SageConstants.java.bak
 
 # Local host-specific deploy / debug helpers (NOT for upstream).
