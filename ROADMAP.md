@@ -696,6 +696,55 @@ RTX VSR) — the items below are the ones not previously captured.
     fails, for BOTH live and completed sources — it is the best single
     lever for live ATSC 3.0 trickplay.
 
+- **HLS segment retention window (iOS / PWA trickplay).**
+  Concretizes option (b) of the transcode-seek-reuse item above,
+  specifically for the HLS iPhoneMode path (`HTTPLSServer` /
+  `iosstream_*_list.m3u8`). Today when a client seeks, the m3u8 window
+  slides forward and old `.ts` segments are dropped, so any REW /
+  short-jump-back triggers a full pipeline restart. Retain the last N
+  already-generated segments (config: `httpls/retain_past_segments`,
+  default 6 = ~60s at 10-sec segments) so a short REW lands inside
+  cached output and the client fetches it via a normal segment GET
+  instead of racing an ffmpeg cold-restart. Also emit an extended live
+  edge in the playlist (`EXT-X-MEDIA-SEQUENCE` accounting for the
+  retention prefix) so ExoPlayer / hls.js / Safari understand the
+  reverse window is available. Directly targets the tizen PWA "short
+  REW glitches" pattern; complements the generic ring-buffer option
+  (b) above by giving it a concrete artifact (segment files on disk)
+  and a client-facing contract (the m3u8 header). Small effort; a
+  size-cap on retained segments and mtime-based eviction cover the
+  disk-usage concern.
+
+- **PTS → byte-offset keyframe index (reusable infrastructure).**
+  Standalone building block that unblocks several of the items above
+  and below. Today ffmpeg re-scans each source at start (`-analyzeduration`
+  cost) to locate keyframes, and the SageTV `MediaFile` layer has no
+  cheap `seek-to-nearest-keyframe(ptsMs)` primitive. Add a small on-disk
+  sidecar per recording:
+  `/opt/sagetv/state/mine/keyframe_index/<mediaFileId>.kf` — a compact
+  binary array of `(ptsMs int64, byteOffset int64, streamIndex int8)`
+  entries built once by a background `Ministry`-style task after the
+  recording completes (and incrementally for in-progress recordings,
+  gated on the `-activefile` state). Consumers:
+    - **Seek-reuse (option a):** `FFMPEGTranscoder.seekToTime()` uses the
+      index to pick the exact `-ss` value that lands on the nearest
+      keyframe, skipping ffmpeg's internal probe entirely — cheaper cold
+      restart and correct-first-frame output. Live TV: incremental index
+      is written as segments finalize, so partial coverage is normal;
+      the transcoder falls back to a full probe past the last indexed
+      keyframe.
+    - **Thumbnail generation:** BMT / Phoenix thumbnail extraction can
+      seek to any keyframe without a full scan.
+    - **Comskip result verification / playback:** commercial-skip
+      boundary snapping to nearest keyframe becomes O(1) instead of
+      re-decoding surrounding frames.
+    - **HLS segment ptsToSegment mapping:** the segment retention item
+      above uses the index to compute which retained segments cover a
+      given PTS without opening files.
+  Format keeps to a stable simple binary so a future compressed variant
+  is drop-in. Not a trickplay fix by itself, but the shared substrate
+  that lets several trickplay improvements land at a small marginal cost.
+
 - **Per-airing audio language UI selector.** Server-side language-aware
   audio mapping is done (see Done section: `AC4TranscodeJob` honors
   `default_audio_language` / `hdhr/ac4_transcode_audio_lang`). Still
