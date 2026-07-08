@@ -627,6 +627,134 @@ RTX VSR) — the items below are the ones not previously captured.
 
 ## Playback track
 
+- **Playback Surface capability model (Protocol 2.1) — replaces device /
+  browser / OS-based negotiation.**
+  Introduce a generic *Playback Surface* as the first-class unit of
+  playback-path capability. A surface is one concrete decode pipeline
+  exposed by a client: `android_media3`, `android_ijk`, `pwa_native`,
+  `pwa_mse`, `windows_libmpv`, `windows_mediafoundation`,
+  `macos_avfoundation`, etc. The server evaluates each surface
+  independently and picks the best one per source — capabilities from
+  separate surfaces must **never** be merged.
+
+  **Why this is needed.** The 2026-07 tizen PWA "no video / no audio"
+  incident traced to conflating one device with one capability set:
+  Tizen has TWO decoders (native player decodes AC3; MSE does not),
+  and the server picked the wrong path because it trusted a single
+  `AUDIO_CODECS` list. Android already needed `EXO_*` / `IJK_*`
+  prefixed properties as a workaround for the same reason. The
+  Playback Surface model makes what we've been half-modeling with
+  prefixes a first-class concept, retires the browser/OS name-based
+  special cases (`isPwaBrowserClient()`, `isHDx00Extender()`,
+  profile-lookup-by-name), and treats delivery mode (push / pull /
+  hls / dash / webrtc) as its own dimension rather than pretending
+  `HLS` is a container.
+
+  **Property contract** (per surface `<id>`):
+  ```
+  PLAYBACK_SURFACES=<id>[,<id>...]
+
+  PLAYBACK_SURFACE_<id>_ROUTE            # e.g. native, software
+  PLAYBACK_SURFACE_<id>_PRIORITY         # 0..100 (100=primary, 0=disabled)
+  PLAYBACK_SURFACE_<id>_DELIVERY_MODES   # from delivery-mode set below
+  PLAYBACK_SURFACE_<id>_VIDEO_CODECS     # from video-codec set below
+  PLAYBACK_SURFACE_<id>_AUDIO_CODECS     # from audio-codec set below
+  PLAYBACK_SURFACE_<id>_CONTAINERS       # from container set below
+  ```
+
+  **Canonical SageTV names** (clients normalize; server compares
+  directly — no alias translation on the server):
+  - **Video codecs:** `MPEG1-VIDEO MPEG2-VIDEO MPEG4-VIDEO H264 HEVC VP9 AV1`
+  - **Audio codecs:** `MP2 MP3 AAC HE-AAC AC3 EAC3 AC4 DTS TRUEHD OPUS FLAC PCM`
+  - **Containers:** `MPEG2-PS MPEG2-TS MP4 MATROSKA AVI MOV FLV WEBM`
+  - **Delivery modes** (NOT containers): `pull push hls dash webrtc`
+
+  **Stream selection — per surface, evaluated independently:**
+  1. Direct Play — container + video + audio all supported
+  2. Remux — video + audio supported, container not
+  3. Audio Transcode — video supported, audio not
+  4. Full Transcode — video not supported
+
+  **Ranking across surfaces:**
+  1. Primary: DIRECT_PLAY > REMUX > AUDIO_TRANSCODE > FULL_TRANSCODE
+  2. Secondary: highest `PRIORITY` wins
+  3. Tertiary: lowest server CPU cost
+  4. Quaternary: lowest quality loss
+  5. Final tiebreak: deterministic surface-id ordering
+
+  **Priority scale (client-authored, 0–100):**
+  ```
+  100 = Primary path         40 = Legacy fallback
+   80 = Preferred alternate  20 = Compatibility only
+   60 = Good fallback        10 = Last resort
+                              0 = Disabled
+  ```
+
+  **Legacy contract (non-negotiable).** V1 (`VIDEO_CODECS`,
+  `AUDIO_CODECS`, `PULL_AV_CONTAINERS`, `PUSH_AV_CONTAINERS`,
+  `MINICLIENT_DEFAULT_PLAYER`) and V2 (`EXO_*`, `IJK_*`) properties
+  stay wired exactly as they are today. Playback Surface support is
+  **purely additive**: a client that doesn't advertise
+  `PLAYBACK_SURFACES` gets the current negotiation path unchanged;
+  a client that does advertise them gets the new path (once Phase 2
+  ships). Legacy Placeshifter / HD200 / HD300 / older Android never
+  advertise surfaces and keep working forever on V1/V2.
+
+  **Forward compatibility.** Server iterates `PLAYBACK_SURFACES`; no
+  hardcoded surface-name switch statements. Future surfaces
+  (`hbbtv_native`, `chromecast_native`, etc.) drop in via new client
+  advertisements without a server change.
+
+  **Phased delivery (avoids the "big-bang refactor" trap):**
+
+  - *Phase 1 — Discovery + logging only (low risk).* Server reads
+    `PLAYBACK_SURFACES` + per-surface properties, parses them into a
+    `PlaybackSurfaceSet` with canonical-name validation, and **just
+    logs them**. Zero decision-engine change. Warn on non-canonical
+    tokens so clients get feedback while iterating. Verifies parser
+    handles the naming contract and gives us a real dataset before
+    any behavior change.
+  - *Phase 2 — Surface-aware evaluation path (opt-in).* Add
+    `PlaybackDecisionEngine.evaluateSurfaces(surfaceSet, mediaInfo)`
+    returning a ranked list of `(surface, decision)` tuples.
+    `MiniPlayer` picks the top-ranked, emits `CAP_EFFECTIVE_SURFACE=<id>`
+    (session-sticky, same contract as `CAP_EFFECTIVE_PLAYER`), routes
+    push/pull/hls per the winning surface's `DELIVERY_MODES`. Gated on
+    `Sage.getBoolean("miniplayer/use_playback_surfaces", true)` for
+    rollback. If gate is off OR the client didn't send surfaces, fall
+    through to existing V1/V2 `evaluateWithPlayerSwitch` unchanged.
+  - *Phase 3 — Delivery-mode routing.* Wire `DELIVERY_MODES` to real
+    routing decisions. `pull` / `push` → `MiniPlayer` transport as
+    today. `hls` → forces `HTTPLSServer` regardless of the iPhoneMode
+    detection heuristic. `dash` / `webrtc` → warn "surface would
+    prefer <mode> but server does not implement it, falling back to
+    next-best surface." That naturally schedules building DASH /
+    WebRTC servers if telemetry shows real demand.
+  - *Phase 4 — V2 retirement (measurement-gated, months later).* Once
+    telemetry shows zero surface-less sessions from NG-capable
+    clients, consider removing server-side `EXO_*` / `IJK_*` handling.
+    V1 stays forever for real-world legacy Placeshifter clients.
+
+  **Where the current profile system fits.** For surface-advertising
+  clients, `ClientProfileManager` demotes from *identity registry* to
+  pure **hard-cap policy layer** (e.g., "this client has known bugs on
+  4K HEVC — clamp resolution regardless of what the surface claims").
+  For non-surface clients it keeps its current guard-rail role (intersect
+  profile allowance with client's coarse capability report, per commit
+  `e43036dd`). Either way, profile is no longer the source of truth for
+  what a client can decode.
+
+  **Cross-references — existing playback items that become sub-cases:**
+  - The *audio-only transcode* item below is Case #3 of surface stream
+    selection made explicit — a first-class outcome instead of a hidden
+    sub-branch of TRANSCODE.
+  - The *transcode-seek reuse* item below applies per-surface once
+    Phase 2 lands (the surface identity is stable across a session, so
+    the seek-reuse cache keys off it too).
+  - The *HLS segment retention* item below becomes the concrete
+    implementation of `DELIVERY_MODES=hls` behavior when the winning
+    surface picks HLS.
+
 - **Transcode-seek reuse (trickplay responsiveness — high value).**
   `FFMPEGTranscoder.seekToTime()` currently tears down and respawns
   ffmpeg on *every* seek (its own comment: "This will ALWAYS rebuild
