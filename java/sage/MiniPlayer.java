@@ -1062,13 +1062,53 @@ public class MiniPlayer implements DVDMediaPlayer
             || mcsr.isSupportedAudioCodec(mediaAudio);
         sage.client.PlaybackDecisionEngine.ClientReportedCaps clientCaps =
             new sage.client.PlaybackDecisionEngine.ClientReportedCaps(crContainer, crVideo, crAudio);
-        profileDecision = sage.client.PlaybackDecisionEngine.evaluateWithPlayerSwitch(
-            effectiveProfile, mediaContainer, mediaVideo, mediaAudio,
-            mediaW, mediaH, isHDx00, sourceBitrateKbps, availableBwKbps,
-            defaultPlayerTag, altPlayerTag,
-            primaryC, altC, srcInterlaced, isPushTransport, clientCaps);
-        if (Sage.DBG) System.out.println("MiniPlayer profile decision: " + profileDecision
-            + " clientReports[container=" + crContainer + " video=" + crVideo + " audio=" + crAudio + "]");
+
+        // --- Playback Surface capability model (Protocol v2.1) — Phase 2 ---
+        // When the client advertised PLAYBACK_SURFACES during the capability
+        // handshake AND the gate is on, run the surface-aware evaluator FIRST.
+        // The winning surface's decision becomes profileDecision and the
+        // legacy V1/V2 evaluateWithPlayerSwitch() below is skipped. If no
+        // surfaces were advertised OR the gate is off OR no surface produced
+        // a servable decision, we fall through to the legacy path unchanged.
+        // See ROADMAP.md "Playback Surface capability model (Protocol 2.1)".
+        String chosenSurfaceId = null;
+        String chosenSurfaceDelivery = null;
+        sage.client.PlaybackSurfaceSet surfaces = (mcsr != null)
+            ? mcsr.getPlaybackSurfaces() : sage.client.PlaybackSurfaceSet.empty();
+        if (!surfaces.isEmpty() && Sage.getBoolean("miniplayer/use_playback_surfaces", true))
+        {
+          java.util.List<sage.client.PlaybackDecisionEngine.SurfaceDecision> ranked =
+              sage.client.PlaybackDecisionEngine.evaluateSurfaces(surfaces,
+                  mediaContainer, mediaVideo, mediaAudio,
+                  mediaW, mediaH, sourceBitrateKbps, availableBwKbps, srcInterlaced);
+          if (!ranked.isEmpty())
+          {
+            sage.client.PlaybackDecisionEngine.SurfaceDecision winner = ranked.get(0);
+            profileDecision = winner.decision;
+            chosenSurfaceId = winner.surface.getId();
+            chosenSurfaceDelivery = winner.chosenDeliveryMode;
+            if (Sage.DBG) System.out.println("MiniPlayer surface decision (v2.1): winner=" + winner
+                + " runnersUp=" + (ranked.size() - 1)
+                + " (surfaces=" + surfaces.size() + " advertised)");
+          }
+          else if (Sage.DBG)
+          {
+            System.out.println("MiniPlayer surface decision (v2.1): no servable surface "
+                + "(client advertised " + surfaces.size() + " but none met delivery filter); "
+                + "falling back to legacy V1/V2 path");
+          }
+        }
+
+        if (profileDecision == null)
+        {
+          profileDecision = sage.client.PlaybackDecisionEngine.evaluateWithPlayerSwitch(
+              effectiveProfile, mediaContainer, mediaVideo, mediaAudio,
+              mediaW, mediaH, isHDx00, sourceBitrateKbps, availableBwKbps,
+              defaultPlayerTag, altPlayerTag,
+              primaryC, altC, srcInterlaced, isPushTransport, clientCaps);
+          if (Sage.DBG) System.out.println("MiniPlayer profile decision: " + profileDecision
+              + " clientReports[container=" + crContainer + " video=" + crVideo + " audio=" + crAudio + "]");
+        }
 
         // --- Session stickiness contract (per OPENURL) ---
         // The stream plan and target player are selected HERE and HERE ONLY.
@@ -1102,6 +1142,28 @@ public class MiniPlayer implements DVDMediaPlayer
           catch (java.io.IOException ioe)
           {
             if (Sage.DBG) System.out.println("MiniPlayer failed to send CAP_EFFECTIVE_PLAYER=" + chosenPlayer + ": " + ioe);
+          }
+        }
+        // --- Playback Surface capability model (Protocol v2.1) — Phase 2 ---
+        // If a surface won the ranking above, emit CAP_EFFECTIVE_SURFACE
+        // exactly once per OPENURL. Same session-stickiness contract as
+        // CAP_EFFECTIVE_PLAYER: trickplay/seek never re-run the decision,
+        // the chosen surface stays locked for the active stream. Only
+        // emitted when the surface-aware path picked a winner; legacy
+        // sessions never see this property.
+        if (mcsr != null && chosenSurfaceId != null && chosenSurfaceId.length() > 0)
+        {
+          if (Sage.DBG) System.out.println("MiniPlayer OPENURL surface-plan locked: surface="
+              + chosenSurfaceId + " delivery=" + chosenSurfaceDelivery
+              + " decision=" + (profileDecision != null ? profileDecision.decision : "n/a"));
+          try
+          {
+            mcsr.sendSetProperty("CAP_EFFECTIVE_SURFACE", chosenSurfaceId);
+          }
+          catch (java.io.IOException ioe)
+          {
+            if (Sage.DBG) System.out.println("MiniPlayer failed to send CAP_EFFECTIVE_SURFACE="
+                + chosenSurfaceId + ": " + ioe);
           }
         }
       }

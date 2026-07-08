@@ -27,6 +27,17 @@ public class PlaybackDecisionEngine
   {
     DIRECT_PLAY,
     REMUX,
+    /**
+     * Video codec + container are supported; only the audio codec needs
+     * re-encoding. Introduced by Protocol v2.1 (Playback Surface model).
+     * Legacy V1/V2 paths never return this value -- they emit {@link #TRANSCODE}
+     * with {@code targetVideo == sourceVideo} for the same scenario. Existing
+     * downstream code that only distinguishes DIRECT_PLAY from "everything
+     * else" continues to work; consumers that want to take the cheap
+     * audio-only pipeline (see ROADMAP.md "Audio-only transcode when only
+     * the audio codec mismatches") should treat AUDIO_TRANSCODE explicitly.
+     */
+    AUDIO_TRANSCODE,
     TRANSCODE
   }
 
@@ -677,5 +688,305 @@ public class PlaybackDecisionEngine
     }
 
     return primaryResult;
+  }
+
+  // ==========================================================================
+  // Playback Surface Capability Model (Protocol v2.1) — Phase 2
+  //
+  // Surface-aware evaluation path. Called from MiniPlayer when the client
+  // advertised PLAYBACK_SURFACES and miniplayer/use_playback_surfaces=true;
+  // otherwise the legacy V1/V2 evaluate() / evaluateWithPlayerSwitch() path
+  // runs unchanged. See ROADMAP.md "Playback Surface capability model
+  // (Protocol 2.1)" for design + phasing.
+  //
+  // Contract:
+  //   - Evaluate each surface INDEPENDENTLY. Capabilities from separate
+  //     surfaces MUST NEVER be merged.
+  //   - Skip surfaces whose DELIVERY_MODES does not intersect what the
+  //     server can actually serve (see SERVER_SERVABLE_DELIVERY_MODES).
+  //   - Rank by (a) decision tier, (b) client-declared PRIORITY, (c) server
+  //     CPU cost proxy, (d) deterministic id order.
+  //   - Surface path does NOT consult ClientProfile — the surface IS the
+  //     honest capability report. Profile stays as a hard-cap policy layer
+  //     for a separate future extension.
+  // ==========================================================================
+
+  /**
+   * Delivery modes the SageTV server can actually serve today. A surface
+   * whose {@code DELIVERY_MODES} does not intersect this set is skipped
+   * with a WARN when {@link #evaluateSurfaces} runs, since the server has
+   * no way to deliver bytes to it. Order matches routing preference:
+   * {@code pull} (cheapest), {@code push} (adaptive), {@code hls}
+   * (segmented for iOS/PWA). Extend when DASH/WebRTC servers ship.
+   */
+  public static final java.util.Set<String> SERVER_SERVABLE_DELIVERY_MODES =
+      java.util.Collections.unmodifiableSet(new java.util.LinkedHashSet<String>(
+          java.util.Arrays.asList("pull", "push", "hls")));
+
+  /**
+   * Pairs a {@link PlaybackSurface} with the {@link PlaybackDecision} the
+   * engine reached for THAT surface against a given source. Returned in
+   * ranked order by {@link #evaluateSurfaces}; the first element is the
+   * winning surface + decision.
+   */
+  public static final class SurfaceDecision
+  {
+    public final PlaybackSurface surface;
+    public final PlaybackDecision decision;
+    /**
+     * Delivery mode the server picked for this surface (from the intersection
+     * of surface's declared modes with {@link #SERVER_SERVABLE_DELIVERY_MODES},
+     * respecting server preference order). Populated even for non-winning
+     * results so the caller can inspect the runner-up path.
+     */
+    public final String chosenDeliveryMode;
+
+    public SurfaceDecision(PlaybackSurface surface, PlaybackDecision decision, String chosenDeliveryMode)
+    {
+      this.surface = surface;
+      this.decision = decision;
+      this.chosenDeliveryMode = chosenDeliveryMode;
+    }
+
+    @Override
+    public String toString()
+    {
+      return "SurfaceDecision[surface=" + (surface == null ? "?" : surface.getId())
+          + " priority=" + (surface == null ? 0 : surface.getPriority())
+          + " delivery=" + chosenDeliveryMode
+          + " decision=" + decision + "]";
+    }
+  }
+
+  /**
+   * Evaluate a single {@link PlaybackSurface} against a source. Returns
+   * a {@link PlaybackDecision} whose {@code decision} is one of DIRECT_PLAY,
+   * REMUX, AUDIO_TRANSCODE, or TRANSCODE per the Protocol v2.1 case list.
+   * Bandwidth budget is applied identically to the legacy evaluator. The
+   * surface IS the honest capability report -- no profile, no constraints,
+   * no ClientReportedCaps intersection.
+   */
+  public static PlaybackDecision evaluateForSurface(PlaybackSurface surface,
+      String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
+      int mediaWidth, int mediaHeight,
+      int sourceBitrateKbps, int availableBandwidthKbps,
+      boolean sourceInterlaced)
+  {
+    if (surface == null)
+      return new PlaybackDecision(Decision.DIRECT_PLAY, "No surface (legacy path)", null, null, null);
+
+    boolean containerOK = surface.supportsContainer(mediaContainer);
+    boolean videoOK = (mediaVideoCodec == null || mediaVideoCodec.length() == 0)
+        || surface.supportsVideoCodec(mediaVideoCodec);
+    boolean audioOK = (mediaAudioCodec == null || mediaAudioCodec.length() == 0)
+        || surface.supportsAudioCodec(mediaAudioCodec);
+
+    // Bandwidth budget — identical to legacy path.
+    boolean bandwidthOK = true;
+    int targetBitrateKbps = 0;
+    if (sourceBitrateKbps > 0 && availableBandwidthKbps > 0)
+    {
+      float safety = sage.Sage.getFloat("playback/bandwidth_safety_factor", 0.85f);
+      if (safety <= 0f || safety > 1f) safety = 0.85f;
+      int budgetKbps = (int) (availableBandwidthKbps * safety);
+      if (sourceBitrateKbps > budgetKbps)
+      {
+        bandwidthOK = false;
+        targetBitrateKbps = budgetKbps;
+      }
+    }
+
+    if (sage.Sage.DBG)
+      System.out.println("PlaybackDecisionEngine.surface[" + surface.getId() + "]: "
+          + "container=" + mediaContainer + "(" + containerOK + ") "
+          + "video=" + mediaVideoCodec + "(" + videoOK + ") "
+          + "audio=" + mediaAudioCodec + "(" + audioOK + ") "
+          + "sourceKbps=" + sourceBitrateKbps + " availableKbps=" + availableBandwidthKbps
+          + " bandwidthOK=" + bandwidthOK);
+
+    // Case 1: Direct Play
+    if (containerOK && videoOK && audioOK && bandwidthOK)
+      return new PlaybackDecision(Decision.DIRECT_PLAY,
+          "surface " + surface.getId() + " covers container+video+audio",
+          mediaContainer, mediaVideoCodec, mediaAudioCodec);
+
+    // Case 2: Remux — codecs OK, container wrong (bandwidth still must fit)
+    if (videoOK && audioOK && bandwidthOK && !containerOK)
+    {
+      String tgtContainer = selectBestContainerForSurface(surface);
+      return new PlaybackDecision(Decision.REMUX,
+          "surface " + surface.getId() + " lacks container " + mediaContainer
+          + ", remuxing to " + tgtContainer,
+          tgtContainer, mediaVideoCodec, mediaAudioCodec);
+    }
+
+    // Case 3: Audio Transcode — video codec OK, audio codec not.
+    // Container can be remuxed as part of the audio-transcode job.
+    if (videoOK && !audioOK)
+    {
+      String tgtContainer = containerOK ? mediaContainer : selectBestContainerForSurface(surface);
+      String tgtAudio = selectBestAudioCodecForSurface(surface, mediaAudioCodec);
+      if (targetBitrateKbps == 0) targetBitrateKbps = 0;
+      return new PlaybackDecision(Decision.AUDIO_TRANSCODE,
+          "surface " + surface.getId() + " lacks audio " + mediaAudioCodec
+          + ", transcoding audio to " + tgtAudio + " (video copy)",
+          tgtContainer, mediaVideoCodec, tgtAudio, targetBitrateKbps);
+    }
+
+    // Case 4: Full Transcode — video codec not supported (or bandwidth exceeded).
+    String tgtContainer = selectBestContainerForSurface(surface);
+    String tgtVideo = videoOK ? mediaVideoCodec : selectBestVideoCodecForSurface(surface, mediaVideoCodec);
+    String tgtAudio = audioOK ? mediaAudioCodec : selectBestAudioCodecForSurface(surface, mediaAudioCodec);
+    String reason;
+    if (!videoOK)         reason = "surface " + surface.getId() + " lacks video " + mediaVideoCodec;
+    else if (!bandwidthOK) reason = "source " + sourceBitrateKbps + " kbps exceeds available "
+        + availableBandwidthKbps + " kbps (target " + targetBitrateKbps + " kbps)";
+    else                  reason = "full transcode fallback (surface " + surface.getId() + ")";
+    return new PlaybackDecision(Decision.TRANSCODE, reason,
+        tgtContainer, tgtVideo, tgtAudio, targetBitrateKbps);
+  }
+
+  /**
+   * Rank every surface in {@code surfaces} against the source and return the
+   * results sorted best-first. Surfaces whose {@code DELIVERY_MODES} does
+   * not intersect {@link #SERVER_SERVABLE_DELIVERY_MODES} are dropped with a
+   * WARN (server has no way to deliver to them). Returns an empty list only
+   * when the input is empty or every surface was undeliverable.
+   *
+   * <p>Ranking order:
+   * <ol>
+   *   <li>Decision tier: DIRECT_PLAY &gt; REMUX &gt; AUDIO_TRANSCODE &gt; TRANSCODE</li>
+   *   <li>Highest client-declared PRIORITY wins</li>
+   *   <li>Server CPU cost proxy: {@code hls} &gt; {@code push} &gt; {@code pull}
+   *       (pull is cheapest — no server-side muxing)</li>
+   *   <li>Deterministic tiebreak: alphabetical surface id</li>
+   * </ol>
+   *
+   * <p>The winner (index 0) is what {@link sage.MiniPlayer} adopts and
+   * emits via {@code CAP_EFFECTIVE_SURFACE}. Runners-up are returned for
+   * logging / future auto-fallback logic.
+   */
+  public static java.util.List<SurfaceDecision> evaluateSurfaces(
+      PlaybackSurfaceSet surfaces,
+      String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
+      int mediaWidth, int mediaHeight,
+      int sourceBitrateKbps, int availableBandwidthKbps,
+      boolean sourceInterlaced)
+  {
+    if (surfaces == null || surfaces.isEmpty())
+      return java.util.Collections.<SurfaceDecision>emptyList();
+
+    java.util.List<SurfaceDecision> results = new java.util.ArrayList<SurfaceDecision>();
+    for (PlaybackSurface s : surfaces.asMap().values())
+    {
+      String mode = pickDeliveryModeForSurface(s);
+      if (mode == null)
+      {
+        if (sage.Sage.DBG) System.out.println("PlaybackDecisionEngine.evaluateSurfaces: "
+            + "skipping surface '" + s.getId() + "' — declared DELIVERY_MODES=" + s.getDeliveryModes()
+            + " does not intersect server-servable " + SERVER_SERVABLE_DELIVERY_MODES);
+        continue;
+      }
+      PlaybackDecision d = evaluateForSurface(s, mediaContainer, mediaVideoCodec, mediaAudioCodec,
+          mediaWidth, mediaHeight, sourceBitrateKbps, availableBandwidthKbps, sourceInterlaced);
+      results.add(new SurfaceDecision(s, d, mode));
+    }
+    java.util.Collections.sort(results, SURFACE_DECISION_COMPARATOR);
+    return results;
+  }
+
+  /**
+   * Select the delivery mode the server should use for this surface, given
+   * what the server can actually serve. Returns {@code null} when the
+   * surface's declared modes don't intersect {@link #SERVER_SERVABLE_DELIVERY_MODES}.
+   * Preference order matches server efficiency: {@code pull} first (cheapest —
+   * no server-side muxing), then {@code push}, then {@code hls}.
+   */
+  private static String pickDeliveryModeForSurface(PlaybackSurface s)
+  {
+    if (s == null) return null;
+    java.util.List<String> declared = s.getDeliveryModes();
+    if (declared == null || declared.isEmpty()) return null;
+    // Preference order (cheapest server cost first).
+    if (declared.contains("pull")) return "pull";
+    if (declared.contains("push")) return "push";
+    if (declared.contains("hls"))  return "hls";
+    return null;
+  }
+
+  private static int decisionTierRank(Decision d)
+  {
+    if (d == Decision.DIRECT_PLAY)     return 0;
+    if (d == Decision.REMUX)           return 1;
+    if (d == Decision.AUDIO_TRANSCODE) return 2;
+    return 3; // TRANSCODE
+  }
+
+  private static int deliveryModeCpuRank(String mode)
+  {
+    if ("pull".equals(mode)) return 0;
+    if ("push".equals(mode)) return 1;
+    if ("hls".equals(mode))  return 2;
+    return 3;
+  }
+
+  private static final java.util.Comparator<SurfaceDecision> SURFACE_DECISION_COMPARATOR =
+      new java.util.Comparator<SurfaceDecision>() {
+        @Override
+        public int compare(SurfaceDecision a, SurfaceDecision b) {
+          int at = decisionTierRank(a.decision.decision);
+          int bt = decisionTierRank(b.decision.decision);
+          if (at != bt) return Integer.compare(at, bt);
+          // Higher PRIORITY wins (so negate).
+          int ap = a.surface == null ? 0 : a.surface.getPriority();
+          int bp = b.surface == null ? 0 : b.surface.getPriority();
+          if (ap != bp) return Integer.compare(bp, ap);
+          // Cheaper delivery wins.
+          int ac = deliveryModeCpuRank(a.chosenDeliveryMode);
+          int bc = deliveryModeCpuRank(b.chosenDeliveryMode);
+          if (ac != bc) return Integer.compare(ac, bc);
+          // Deterministic tiebreak.
+          String aid = a.surface == null ? "" : a.surface.getId();
+          String bid = b.surface == null ? "" : b.surface.getId();
+          return aid.compareTo(bid);
+        }
+      };
+
+  // ---- surface-scoped target-codec pickers (independent of ClientProfile) ----
+
+  private static String selectBestContainerForSurface(PlaybackSurface s)
+  {
+    if (s == null) return "MP4";
+    java.util.List<String> c = s.getContainers();
+    if (c.isEmpty()) return "MP4";
+    // Prefer MP4 (universal), then MPEG2-TS (HLS-friendly), then whatever is available.
+    if (c.contains("MP4")) return "MP4";
+    if (c.contains("MPEG2-TS")) return "MPEG2-TS";
+    return c.iterator().next();
+  }
+
+  private static String selectBestVideoCodecForSurface(PlaybackSurface s, String sourceCodec)
+  {
+    if (s == null) return sourceCodec == null ? "H264" : sourceCodec;
+    java.util.List<String> v = s.getVideoCodecs();
+    if (v.isEmpty()) return sourceCodec == null ? "H264" : sourceCodec;
+    if (sourceCodec != null && v.contains(sourceCodec)) return sourceCodec;
+    // Prefer HEVC when the surface supports it (better quality/bitrate), else H264.
+    if (v.contains("HEVC")) return "HEVC";
+    if (v.contains("H264")) return "H264";
+    return v.iterator().next();
+  }
+
+  private static String selectBestAudioCodecForSurface(PlaybackSurface s, String sourceCodec)
+  {
+    if (s == null) return sourceCodec == null ? "AAC" : sourceCodec;
+    java.util.List<String> a = s.getAudioCodecs();
+    if (a.isEmpty()) return sourceCodec == null ? "AAC" : sourceCodec;
+    if (sourceCodec != null && a.contains(sourceCodec)) return sourceCodec;
+    // Prefer EAC3 for surround, then AC3, then AAC (universal).
+    if (a.contains("EAC3")) return "EAC3";
+    if (a.contains("AC3"))  return "AC3";
+    if (a.contains("AAC"))  return "AAC";
+    return a.iterator().next();
   }
 }
