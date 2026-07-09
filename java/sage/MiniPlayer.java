@@ -1077,10 +1077,14 @@ public class MiniPlayer implements DVDMediaPlayer
             ? mcsr.getPlaybackSurfaces() : sage.client.PlaybackSurfaceSet.empty();
         if (!surfaces.isEmpty() && Sage.getBoolean("miniplayer/use_playback_surfaces", true))
         {
+          // 2.1.0002: pass ContainerFormat so the evaluator can inspect
+          // multiple audio streams, filter by server language, and prefer
+          // native-decode over transcode (see selectBestAudioStream).
           java.util.List<sage.client.PlaybackDecisionEngine.SurfaceDecision> ranked =
               sage.client.PlaybackDecisionEngine.evaluateSurfaces(surfaces,
                   mediaContainer, mediaVideo, mediaAudio,
-                  mediaW, mediaH, sourceBitrateKbps, availableBwKbps, srcInterlaced);
+                  mediaW, mediaH, sourceBitrateKbps, availableBwKbps, srcInterlaced,
+                  cf);
           if (!ranked.isEmpty())
           {
             sage.client.PlaybackDecisionEngine.SurfaceDecision winner = ranked.get(0);
