@@ -978,8 +978,39 @@ public class MiniPlayer implements DVDMediaPlayer
       {
         String mediaContainer = currMF.getContainerFormat();
         String mediaVideo = currMF.getPrimaryVideoFormat();
-        String mediaAudio = currMF.getPrimaryAudioFormat();
         sage.media.format.ContainerFormat cf = currMF.getFileFormat();
+        // 2.1.0004: multi-audio-stream selection for ALL clients (Legacy + 2.1).
+        // Instead of getPrimaryAudioFormat() (which picks lowest orderIndex,
+        // ignoring language/channels), use the smart selector that filters by
+        // server language, sorts by quality, and prefers native decode. For
+        // Legacy V1 clients the coarse AUDIO_CODECS set is used for the
+        // native-decode check; for Protocol 2.1 the surface-based overload
+        // runs in the evaluateSurfaces path below.
+        String mediaAudio;
+        int legacyChosenAudioStreamIndex = -1;
+        if (cf != null && cf.getAudioFormats(false) != null && cf.getAudioFormats(false).length > 1
+            && mcsr != null)
+        {
+          @SuppressWarnings("rawtypes")
+          java.util.Set v1Audio = mcsr.getEffectiveAudioCodecs();
+          sage.client.PlaybackDecisionEngine.AudioStreamChoice legacyAsc =
+              sage.client.PlaybackDecisionEngine.selectBestAudioStreamLegacy(v1Audio, cf);
+          if (legacyAsc != null && legacyAsc.audioFormat != null)
+          {
+            mediaAudio = legacyAsc.audioFormat.getFormatName();
+            legacyChosenAudioStreamIndex = legacyAsc.audioFormat.getOrderIndex();
+            if (Sage.DBG) System.out.println("MiniPlayer: legacy multi-audio selection: "
+                + legacyAsc + " (overrides getPrimaryAudioFormat)");
+          }
+          else
+          {
+            mediaAudio = currMF.getPrimaryAudioFormat();
+          }
+        }
+        else
+        {
+          mediaAudio = currMF.getPrimaryAudioFormat();
+        }
         int mediaW = 0, mediaH = 0;
         if (cf != null && cf.getVideoFormat() != null)
         {

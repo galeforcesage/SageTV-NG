@@ -918,6 +918,132 @@ public class PlaybackDecisionEngine
   }
 
   /**
+   * Legacy V1 (9.2.16) overload of the multi-audio-stream selector. Uses the
+   * client's coarse V1 {@code AUDIO_CODECS} set (a flat comma-separated list
+   * of codec names like "AC3,AAC,MP3") instead of a per-surface codec list.
+   * Applies the same rule as the surface variant:
+   * <ol>
+   *   <li>Filter to server language.</li>
+   *   <li>Sort by quality (channels desc, bitrate desc).</li>
+   *   <li>First natively-decodable stream wins (native = codec appears in
+   *       the V1 set).</li>
+   *   <li>If none decodable, return highest quality for transcode.</li>
+   * </ol>
+   *
+   * <p>This ensures Legacy 9.2.16 clients also get the best language-matched,
+   * quality-sorted audio stream instead of the legacy "lowest orderIndex"
+   * behavior from {@code ContainerFormat.getAudioFormat()}.
+   *
+   * @param v1AudioCodecs the client's V1-reported audio codec set (may be
+   *   null/empty if unknown — in which case every stream is treated as
+   *   non-decodable and the highest quality is returned for transcode).
+   * @param cf the source container format with multiple audio streams.
+   * @return the chosen audio stream + whether it's native, or {@code null}
+   *         when no audio streams exist at all.
+   */
+  @SuppressWarnings({"rawtypes"})
+  public static AudioStreamChoice selectBestAudioStreamLegacy(
+      java.util.Set v1AudioCodecs, sage.media.format.ContainerFormat cf)
+  {
+    if (cf == null) return null;
+    sage.media.format.AudioFormat[] allAudio = cf.getAudioFormats(false);
+    if (allAudio == null || allAudio.length == 0) return null;
+    if (allAudio.length == 1)
+    {
+      boolean ok = v1CodecSetContains(v1AudioCodecs, allAudio[0].getFormatName());
+      return new AudioStreamChoice(allAudio[0], ok);
+    }
+
+    // Determine server language preference (2-letter or 3-letter).
+    String serverLang2 = "";
+    String serverLang3 = "";
+    if (sage.Sage.userLocale != null)
+    {
+      serverLang2 = sage.Sage.userLocale.getLanguage();
+      serverLang3 = sage.Sage.userLocale.getISO3Language();
+    }
+
+    // Filter to server language.
+    java.util.List<sage.media.format.AudioFormat> langMatched =
+        new java.util.ArrayList<sage.media.format.AudioFormat>();
+    for (sage.media.format.AudioFormat af : allAudio)
+    {
+      String lang = af.getLanguage();
+      if (lang != null && lang.length() > 0
+          && (lang.equalsIgnoreCase(serverLang2) || lang.equalsIgnoreCase(serverLang3)))
+        langMatched.add(af);
+    }
+    java.util.List<sage.media.format.AudioFormat> candidates;
+    if (!langMatched.isEmpty())
+      candidates = langMatched;
+    else
+    {
+      candidates = new java.util.ArrayList<sage.media.format.AudioFormat>();
+      for (sage.media.format.AudioFormat af : allAudio) candidates.add(af);
+    }
+
+    // Sort by quality: most channels desc, then highest bitrate desc.
+    java.util.Collections.sort(candidates, new java.util.Comparator<sage.media.format.AudioFormat>() {
+      @Override
+      public int compare(sage.media.format.AudioFormat a, sage.media.format.AudioFormat b)
+      {
+        int ch = Integer.compare(b.getChannels(), a.getChannels());
+        if (ch != 0) return ch;
+        return Integer.compare(b.getBitrate(), a.getBitrate());
+      }
+    });
+
+    if (sage.Sage.DBG)
+    {
+      StringBuilder sb = new StringBuilder("PlaybackDecisionEngine.selectBestAudioStreamLegacy: candidates=[");
+      for (int i = 0; i < candidates.size(); i++)
+      {
+        if (i > 0) sb.append(", ");
+        sage.media.format.AudioFormat af = candidates.get(i);
+        sb.append(af.getFormatName()).append(" ch=").append(af.getChannels())
+          .append(" br=").append(af.getBitrate())
+          .append(" lang=").append(af.getLanguage());
+      }
+      sb.append("] serverLang=").append(serverLang3.length() > 0 ? serverLang3 : serverLang2)
+        .append(" v1AudioCodecs=").append(v1AudioCodecs);
+      System.out.println(sb.toString());
+    }
+
+    // Walk highest-quality first: prefer native decode over transcode.
+    for (sage.media.format.AudioFormat af : candidates)
+    {
+      if (v1CodecSetContains(v1AudioCodecs, af.getFormatName()))
+      {
+        if (sage.Sage.DBG) System.out.println("PlaybackDecisionEngine.selectBestAudioStreamLegacy: "
+            + "native match: " + af.getFormatName() + " ch=" + af.getChannels()
+            + " lang=" + af.getLanguage());
+        return new AudioStreamChoice(af, true);
+      }
+    }
+
+    // No native decode available — return the highest quality for transcode.
+    sage.media.format.AudioFormat best = candidates.get(0);
+    if (sage.Sage.DBG) System.out.println("PlaybackDecisionEngine.selectBestAudioStreamLegacy: "
+        + "no native match, will transcode highest quality: " + best.getFormatName()
+        + " ch=" + best.getChannels() + " lang=" + best.getLanguage());
+    return new AudioStreamChoice(best, false);
+  }
+
+  /** Case- and alias-tolerant codec membership check against a V1 raw set. */
+  @SuppressWarnings({"rawtypes"})
+  private static boolean v1CodecSetContains(java.util.Set codecs, String formatName)
+  {
+    if (codecs == null || codecs.isEmpty() || formatName == null) return false;
+    String canon = PlaybackSurfaceSet.canonicalAudioCodec(formatName);
+    for (Object o : codecs)
+    {
+      if (o != null && canon.equals(PlaybackSurfaceSet.canonicalAudioCodec(o.toString())))
+        return true;
+    }
+    return false;
+  }
+
+  /**
    * Evaluate a single {@link PlaybackSurface} against a source. Returns
    * a {@link PlaybackDecision} whose {@code decision} is one of DIRECT_PLAY,
    * REMUX, AUDIO_TRANSCODE, or TRANSCODE per the Protocol v2.1 case list.
