@@ -7963,10 +7963,27 @@ public class MiniClientSageRenderer extends SageRenderer
   public void setCurrentSurfaceSelection(String surfaceId, String targetAudioCodec,
       String targetVideoCodec, String deliveryMode)
   {
+    setCurrentSurfaceSelection(surfaceId, targetAudioCodec, targetVideoCodec, deliveryMode, -1);
+  }
+
+  /**
+   * Extended setter including the surface-selected audio stream orderIndex
+   * (Protocol 2.1.0003). See {@link #setCurrentSurfaceSelection(String,
+   * String, String, String)} for the base contract.
+   *
+   * @param audioStreamIndex the chosen audio stream's
+   *   {@link sage.media.format.BitstreamFormat#getOrderIndex()}, or -1 for
+   *   legacy sessions / single-audio sources (falls back to the transcoder's
+   *   own audio-stream selection).
+   */
+  public void setCurrentSurfaceSelection(String surfaceId, String targetAudioCodec,
+      String targetVideoCodec, String deliveryMode, int audioStreamIndex)
+  {
     this.currentSurfaceId = (surfaceId == null) ? "" : surfaceId;
     this.currentSurfaceTargetAudioCodec = (targetAudioCodec == null) ? "" : targetAudioCodec;
     this.currentSurfaceTargetVideoCodec = (targetVideoCodec == null) ? "" : targetVideoCodec;
     this.currentSurfaceDeliveryMode = (deliveryMode == null) ? "" : deliveryMode;
+    this.currentSurfaceAudioStreamIndex = audioStreamIndex;
   }
 
   /** Winning surface id for the current stream, or "" for legacy sessions. */
@@ -7999,6 +8016,17 @@ public class MiniClientSageRenderer extends SageRenderer
   public String getCurrentSurfaceDeliveryMode()
   {
     return currentSurfaceDeliveryMode == null ? "" : currentSurfaceDeliveryMode;
+  }
+
+  /**
+   * Surface-selected audio stream orderIndex for the current stream, or -1
+   * for legacy sessions / single-audio sources. Consumed by
+   * {@code HTTPLSServer.setupTranscoder} to pass to
+   * {@code FFMPEGTranscoder.setHttplsSurfaceAudioStreamIndex()}.
+   */
+  public int getCurrentSurfaceAudioStreamIndex()
+  {
+    return currentSurfaceAudioStreamIndex;
   }
 
   /**
@@ -9706,6 +9734,11 @@ public class MiniClientSageRenderer extends SageRenderer
   private volatile String currentSurfaceTargetAudioCodec = "";
   private volatile String currentSurfaceTargetVideoCodec = "";
   private volatile String currentSurfaceDeliveryMode = "";
+  // 2.1.0003: surface-selected audio stream orderIndex from the multi-audio
+  // selection rule (selectBestAudioStream). -1 for legacy sessions. Consumed
+  // by HTTPLSServer.setupTranscoder → FFMPEGTranscoder.setHttplsSurfaceAudioStreamIndex
+  // to emit the correct -map for the chosen audio track.
+  private volatile int currentSurfaceAudioStreamIndex = -1;
   // --- PWA-only GFX perf instrumentation (SERVER2) ---
   // Active only when pwa/perf_logging=true AND isPwaBrowserClient(). Purely
   // observational: no command payload, send order, buffering, or timing is
