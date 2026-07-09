@@ -833,12 +833,45 @@ public class PlaybackDecisionEngine
   public static AudioStreamChoice selectBestAudioStream(
       PlaybackSurface surface, sage.media.format.ContainerFormat cf)
   {
+    return selectBestAudioStream(surface, cf, null);
+  }
+
+  /**
+   * 2.1.0007 / 2.1.0006 overload of the surface audio selector.
+   *
+   * <p>2.1.0007 — {@code clientLang} (CLIENT_AUDIO_LANGUAGE, ISO 639-1/2) is
+   * honored ahead of the server locale. Language preference chain:
+   * client language → server locale → all streams (never break playback over
+   * a language miss).
+   *
+   * <p>2.1.0006 — a stream counts as {@code nativelyDecodable} only when the
+   * surface can BOTH decode the codec AND actually reach that track in the
+   * source container (see {@link PlaybackSurface#canAccessAudioTrack}). This
+   * prevents the "one playable audio track means all tracks are safe"
+   * assumption: e.g. an MPEG2-PS with AC3 5.1 in a later substream that the
+   * client's demuxer can't reach must NOT be reported as direct-playable just
+   * because the codec is decodable.
+   */
+  public static AudioStreamChoice selectBestAudioStream(
+      PlaybackSurface surface, sage.media.format.ContainerFormat cf, String clientLang)
+  {
     if (cf == null) return null;
     sage.media.format.AudioFormat[] allAudio = cf.getAudioFormats(false);
     if (allAudio == null || allAudio.length == 0) return null;
+    final String container = cf.getFormatName();
+    // Lowest orderIndex among audio streams = the container's "first" audio
+    // track. Demuxer reachability rules (e.g. MPEG2-PS first_substream_only)
+    // are keyed on this.
+    int minAudioIndex = Integer.MAX_VALUE;
+    for (sage.media.format.AudioFormat af : allAudio)
+      if (af.getOrderIndex() < minAudioIndex) minAudioIndex = af.getOrderIndex();
+
     if (allAudio.length == 1)
     {
-      boolean ok = surface != null && surface.supportsAudioCodec(allAudio[0].getFormatName());
+      boolean first = allAudio[0].getOrderIndex() == minAudioIndex;
+      boolean ok = surface != null
+          && surface.supportsAudioCodec(allAudio[0].getFormatName())
+          && surface.canAccessAudioTrack(container, first);
       return new AudioStreamChoice(allAudio[0], ok);
     }
 
@@ -850,24 +883,40 @@ public class PlaybackDecisionEngine
       serverLang2 = sage.Sage.userLocale.getLanguage(); // "en"
       serverLang3 = sage.Sage.userLocale.getISO3Language(); // "eng"
     }
+    String cl = (clientLang == null) ? "" : clientLang.trim();
 
-    // Filter to server language. Fall back to all streams if none match.
-    java.util.List<sage.media.format.AudioFormat> langMatched =
+    // Filter to preferred language. Client language wins; if it matches none,
+    // fall back to server language; if that matches none either, use all.
+    java.util.List<sage.media.format.AudioFormat> clientMatched =
+        new java.util.ArrayList<sage.media.format.AudioFormat>();
+    java.util.List<sage.media.format.AudioFormat> serverMatched =
         new java.util.ArrayList<sage.media.format.AudioFormat>();
     for (sage.media.format.AudioFormat af : allAudio)
     {
       String lang = af.getLanguage();
-      if (lang != null && lang.length() > 0
-          && (lang.equalsIgnoreCase(serverLang2) || lang.equalsIgnoreCase(serverLang3)))
-        langMatched.add(af);
+      if (lang == null || lang.length() == 0) continue;
+      if (cl.length() > 0 && lang.equalsIgnoreCase(cl))
+        clientMatched.add(af);
+      if (lang.equalsIgnoreCase(serverLang2) || lang.equalsIgnoreCase(serverLang3))
+        serverMatched.add(af);
     }
     java.util.List<sage.media.format.AudioFormat> candidates;
-    if (!langMatched.isEmpty())
-      candidates = langMatched;
+    String langPref;
+    if (!clientMatched.isEmpty())
+    {
+      candidates = clientMatched;
+      langPref = "client:" + cl;
+    }
+    else if (!serverMatched.isEmpty())
+    {
+      candidates = serverMatched;
+      langPref = "server:" + (serverLang3.length() > 0 ? serverLang3 : serverLang2);
+    }
     else
     {
       candidates = new java.util.ArrayList<sage.media.format.AudioFormat>();
       for (sage.media.format.AudioFormat af : allAudio) candidates.add(af);
+      langPref = "none";
     }
 
     // Sort by quality: most channels desc, then highest bitrate desc.
@@ -892,27 +941,36 @@ public class PlaybackDecisionEngine
           .append(" br=").append(af.getBitrate())
           .append(" lang=").append(af.getLanguage());
       }
-      sb.append("] serverLang=").append(serverLang3.length() > 0 ? serverLang3 : serverLang2)
-        .append(" langFilterUsed=").append(!langMatched.isEmpty());
+      sb.append("] clientLang=").append(cl.length() > 0 ? cl : "(none)")
+        .append(" serverLang=").append(serverLang3.length() > 0 ? serverLang3 : serverLang2)
+        .append(" langPref=").append(langPref)
+        .append(" container=").append(container);
       System.out.println(sb.toString());
     }
 
-    // Walk highest-quality first: prefer native decode over transcode.
+    // Walk highest-quality first: prefer native decode over transcode. A
+    // stream is only "native" when the surface can decode the codec AND reach
+    // the track in this container (2.1.0006 track-access gate). A native
+    // lower-quality accessible stream beats a transcoded higher-quality one.
     for (sage.media.format.AudioFormat af : candidates)
     {
-      if (surface != null && surface.supportsAudioCodec(af.getFormatName()))
+      boolean first = af.getOrderIndex() == minAudioIndex;
+      if (surface != null
+          && surface.supportsAudioCodec(af.getFormatName())
+          && surface.canAccessAudioTrack(container, first))
       {
         if (sage.Sage.DBG) System.out.println("PlaybackDecisionEngine.selectBestAudioStream: "
             + "native match: " + af.getFormatName() + " ch=" + af.getChannels()
-            + " lang=" + af.getLanguage());
+            + " lang=" + af.getLanguage() + " firstTrack=" + first);
         return new AudioStreamChoice(af, true);
       }
     }
 
-    // No native decode available — return the highest quality for transcode.
+    // No natively-decodable + accessible stream — return the highest quality
+    // for transcode.
     sage.media.format.AudioFormat best = candidates.get(0);
     if (sage.Sage.DBG) System.out.println("PlaybackDecisionEngine.selectBestAudioStream: "
-        + "no native match, will transcode highest quality: " + best.getFormatName()
+        + "no native+accessible match, will transcode highest quality: " + best.getFormatName()
         + " ch=" + best.getChannels() + " lang=" + best.getLanguage());
     return new AudioStreamChoice(best, false);
   }
@@ -945,6 +1003,20 @@ public class PlaybackDecisionEngine
   public static AudioStreamChoice selectBestAudioStreamLegacy(
       java.util.Set v1AudioCodecs, sage.media.format.ContainerFormat cf)
   {
+    return selectBestAudioStreamLegacy(v1AudioCodecs, cf, null);
+  }
+
+  /**
+   * 2.1.0007 overload of the Legacy audio selector: honors a client-advertised
+   * preferred audio language (CLIENT_AUDIO_LANGUAGE) ahead of the server
+   * locale. Language preference chain: client language → server locale → all
+   * streams. No track-access gate applies on the Legacy path (Legacy clients
+   * advertise no surface and therefore no container-access rules).
+   */
+  @SuppressWarnings({"rawtypes"})
+  public static AudioStreamChoice selectBestAudioStreamLegacy(
+      java.util.Set v1AudioCodecs, sage.media.format.ContainerFormat cf, String clientLang)
+  {
     if (cf == null) return null;
     sage.media.format.AudioFormat[] allAudio = cf.getAudioFormats(false);
     if (allAudio == null || allAudio.length == 0) return null;
@@ -962,24 +1034,40 @@ public class PlaybackDecisionEngine
       serverLang2 = sage.Sage.userLocale.getLanguage();
       serverLang3 = sage.Sage.userLocale.getISO3Language();
     }
+    String cl = (clientLang == null) ? "" : clientLang.trim();
 
-    // Filter to server language.
-    java.util.List<sage.media.format.AudioFormat> langMatched =
+    // Filter to preferred language. Client language wins; if it matches none,
+    // fall back to server language; if that matches none either, use all.
+    java.util.List<sage.media.format.AudioFormat> clientMatched =
+        new java.util.ArrayList<sage.media.format.AudioFormat>();
+    java.util.List<sage.media.format.AudioFormat> serverMatched =
         new java.util.ArrayList<sage.media.format.AudioFormat>();
     for (sage.media.format.AudioFormat af : allAudio)
     {
       String lang = af.getLanguage();
-      if (lang != null && lang.length() > 0
-          && (lang.equalsIgnoreCase(serverLang2) || lang.equalsIgnoreCase(serverLang3)))
-        langMatched.add(af);
+      if (lang == null || lang.length() == 0) continue;
+      if (cl.length() > 0 && lang.equalsIgnoreCase(cl))
+        clientMatched.add(af);
+      if (lang.equalsIgnoreCase(serverLang2) || lang.equalsIgnoreCase(serverLang3))
+        serverMatched.add(af);
     }
     java.util.List<sage.media.format.AudioFormat> candidates;
-    if (!langMatched.isEmpty())
-      candidates = langMatched;
+    String langPref;
+    if (!clientMatched.isEmpty())
+    {
+      candidates = clientMatched;
+      langPref = "client:" + cl;
+    }
+    else if (!serverMatched.isEmpty())
+    {
+      candidates = serverMatched;
+      langPref = "server:" + (serverLang3.length() > 0 ? serverLang3 : serverLang2);
+    }
     else
     {
       candidates = new java.util.ArrayList<sage.media.format.AudioFormat>();
       for (sage.media.format.AudioFormat af : allAudio) candidates.add(af);
+      langPref = "none";
     }
 
     // Sort by quality: most channels desc, then highest bitrate desc.
@@ -1004,7 +1092,9 @@ public class PlaybackDecisionEngine
           .append(" br=").append(af.getBitrate())
           .append(" lang=").append(af.getLanguage());
       }
-      sb.append("] serverLang=").append(serverLang3.length() > 0 ? serverLang3 : serverLang2)
+      sb.append("] clientLang=").append(cl.length() > 0 ? cl : "(none)")
+        .append(" serverLang=").append(serverLang3.length() > 0 ? serverLang3 : serverLang2)
+        .append(" langPref=").append(langPref)
         .append(" v1AudioCodecs=").append(v1AudioCodecs);
       System.out.println(sb.toString());
     }
@@ -1177,6 +1267,27 @@ public class PlaybackDecisionEngine
       boolean sourceInterlaced,
       sage.media.format.ContainerFormat cf)
   {
+    return evaluateSurfaces(surfaces, mediaContainer, mediaVideoCodec, mediaAudioCodec,
+        mediaWidth, mediaHeight, sourceBitrateKbps, availableBandwidthKbps, sourceInterlaced,
+        cf, null);
+  }
+
+  /**
+   * 2.1.0007 overload: threads the client-advertised preferred audio language
+   * (CLIENT_AUDIO_LANGUAGE) into {@link #selectBestAudioStream} so multi-audio
+   * sources are matched to the client's language first, then the server
+   * locale. {@code clientLang} may be null/empty (all legacy sessions and NG
+   * clients that omit it) in which case the server locale is used as before.
+   */
+  public static java.util.List<SurfaceDecision> evaluateSurfaces(
+      PlaybackSurfaceSet surfaces,
+      String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
+      int mediaWidth, int mediaHeight,
+      int sourceBitrateKbps, int availableBandwidthKbps,
+      boolean sourceInterlaced,
+      sage.media.format.ContainerFormat cf,
+      String clientLang)
+  {
     if (surfaces == null || surfaces.isEmpty())
       return java.util.Collections.<SurfaceDecision>emptyList();
 
@@ -1199,8 +1310,9 @@ public class PlaybackDecisionEngine
       if (multiAudio)
       {
         // Multi-audio: pick the best stream for THIS surface using language +
-        // quality + native-decode-over-transcode preference.
-        asc = selectBestAudioStream(s, cf);
+        // quality + native-decode-over-transcode preference, with the
+        // 2.1.0006 track-access gate applied inside selectBestAudioStream.
+        asc = selectBestAudioStream(s, cf, clientLang);
         String chosenAudioCodec = (asc != null) ? asc.audioFormat.getFormatName() : mediaAudioCodec;
         boolean audioOK = (asc != null) ? asc.nativelyDecodable : false;
         d = evaluateForSurfaceWithAudioChoice(s, mediaContainer, mediaVideoCodec,
