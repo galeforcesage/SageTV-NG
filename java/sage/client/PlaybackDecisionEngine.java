@@ -740,12 +740,27 @@ public class PlaybackDecisionEngine
      * results so the caller can inspect the runner-up path.
      */
     public final String chosenDeliveryMode;
+    /**
+     * The audio stream chosen by {@link #selectBestAudioStream}, or null when
+     * the source has a single audio stream or the flat-string evaluator was
+     * used. Carries the orderIndex needed for the ffmpeg {@code -map} and
+     * whether the surface can natively decode the stream. Protocol 2.1.0003.
+     */
+    public final AudioStreamChoice audioStreamChoice;
 
-    public SurfaceDecision(PlaybackSurface surface, PlaybackDecision decision, String chosenDeliveryMode)
+    public SurfaceDecision(PlaybackSurface surface, PlaybackDecision decision,
+        String chosenDeliveryMode)
+    {
+      this(surface, decision, chosenDeliveryMode, null);
+    }
+
+    public SurfaceDecision(PlaybackSurface surface, PlaybackDecision decision,
+        String chosenDeliveryMode, AudioStreamChoice audioStreamChoice)
     {
       this.surface = surface;
       this.decision = decision;
       this.chosenDeliveryMode = chosenDeliveryMode;
+      this.audioStreamChoice = audioStreamChoice;
     }
 
     @Override
@@ -1054,11 +1069,12 @@ public class PlaybackDecisionEngine
       }
 
       PlaybackDecision d;
+      AudioStreamChoice asc = null;
       if (multiAudio)
       {
         // Multi-audio: pick the best stream for THIS surface using language +
         // quality + native-decode-over-transcode preference.
-        AudioStreamChoice asc = selectBestAudioStream(s, cf);
+        asc = selectBestAudioStream(s, cf);
         String chosenAudioCodec = (asc != null) ? asc.audioFormat.getFormatName() : mediaAudioCodec;
         boolean audioOK = (asc != null) ? asc.nativelyDecodable : false;
         d = evaluateForSurfaceWithAudioChoice(s, mediaContainer, mediaVideoCodec,
@@ -1080,7 +1096,7 @@ public class PlaybackDecisionEngine
             + " (declared=" + s.getDeliveryModes() + "); dropping");
         continue;
       }
-      results.add(new SurfaceDecision(s, d, mode));
+      results.add(new SurfaceDecision(s, d, mode, asc));
     }
     java.util.Collections.sort(results, SURFACE_DECISION_COMPARATOR);
     return results;

@@ -2860,10 +2860,15 @@ public class HTTPLSServer implements Runnable
             String surfVid = mcsr.getCurrentSurfaceTargetVideoCodec();
             xcode.transcoder.setHttplsSurfaceTargetAudioCodec(surfAud);
             xcode.transcoder.setHttplsSurfaceTargetVideoCodec(surfVid);
+            // 2.1.0003: pass the surface-selected audio stream orderIndex so
+            // the -map block picks the right track (language + quality aware).
+            int surfAudIdx = mcsr.getCurrentSurfaceAudioStreamIndex();
+            xcode.transcoder.setHttplsSurfaceAudioStreamIndex(surfAudIdx);
             if (Sage.DBG && (surfAud.length() > 0 || surfVid.length() > 0))
               System.out.println("iOS HTTP server: surface v2.1 targets for '"
                   + mcsr.getCurrentSurfaceId() + "' audio=" + surfAud
-                  + " video=" + surfVid + " delivery=" + mcsr.getCurrentSurfaceDeliveryMode());
+                  + " video=" + surfVid + " audioStreamIdx=" + surfAudIdx
+                  + " delivery=" + mcsr.getCurrentSurfaceDeliveryMode());
           }
         }
         catch (Throwable t)

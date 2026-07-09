@@ -1073,6 +1073,7 @@ public class MiniPlayer implements DVDMediaPlayer
         // See ROADMAP.md "Playback Surface capability model (Protocol 2.1)".
         String chosenSurfaceId = null;
         String chosenSurfaceDelivery = null;
+        int chosenSurfaceAudioStreamIndex = -1;
         sage.client.PlaybackSurfaceSet surfaces = (mcsr != null)
             ? mcsr.getPlaybackSurfaces() : sage.client.PlaybackSurfaceSet.empty();
         if (!surfaces.isEmpty() && Sage.getBoolean("miniplayer/use_playback_surfaces", true))
@@ -1091,7 +1092,12 @@ public class MiniPlayer implements DVDMediaPlayer
             profileDecision = winner.decision;
             chosenSurfaceId = winner.surface.getId();
             chosenSurfaceDelivery = winner.chosenDeliveryMode;
+            // 2.1.0003: extract the chosen audio stream's orderIndex so the
+            // transcoder's -map picks the right track (language + quality aware).
+            if (winner.audioStreamChoice != null && winner.audioStreamChoice.audioFormat != null)
+              chosenSurfaceAudioStreamIndex = winner.audioStreamChoice.audioFormat.getOrderIndex();
             if (Sage.DBG) System.out.println("MiniPlayer surface decision (v2.1): winner=" + winner
+                + " audioStreamIdx=" + chosenSurfaceAudioStreamIndex
                 + " runnersUp=" + (ranked.size() - 1)
                 + " (surfaces=" + surfaces.size() + " advertised)");
           }
@@ -1178,7 +1184,8 @@ public class MiniPlayer implements DVDMediaPlayer
           mcsr.setCurrentSurfaceSelection(chosenSurfaceId,
               profileDecision != null ? profileDecision.targetAudioCodec : "",
               profileDecision != null ? profileDecision.targetVideoCodec : "",
-              chosenSurfaceDelivery);
+              chosenSurfaceDelivery,
+              chosenSurfaceAudioStreamIndex);
           // Phase 2.5 transport override: honor the surface's declared
           // delivery mode as an authoritative signal for THIS stream. This
           // is orthogonal to the legacy transport-force block below (which

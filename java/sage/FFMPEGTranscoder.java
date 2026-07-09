@@ -1691,10 +1691,21 @@ public class FFMPEGTranscoder implements TranscodeEngine
             af = ffFormat.getAudioFormat();
           if (af != null && af.getOrderIndex() >= 0)
           {
+            // 2.1.0003: when the surface-aware ranker picked a specific audio
+            // stream (multi-audio selection by language + quality + native-decode
+            // preference), use THAT stream's orderIndex instead of the legacy
+            // getAudioFormat() result (which just picks the lowest orderIndex,
+            // ignoring language/channels). Legacy sessions leave
+            // httplsSurfaceAudioStreamIndex == -1, so the old code path runs.
+            int audioMapIndex = (httplsSurfaceAudioStreamIndex >= 0)
+                ? httplsSurfaceAudioStreamIndex : af.getOrderIndex();
+            if (sage.Sage.DBG && httplsSurfaceAudioStreamIndex >= 0)
+              System.out.println("FFMPEGTranscoder: 2.1.0003 surface audio -map override: "
+                  + "legacy=" + af.getOrderIndex() + " surface=" + httplsSurfaceAudioStreamIndex);
             xcodeParamsVec.add("-map");
             xcodeParamsVec.add("0:" + vf.getOrderIndex());
             xcodeParamsVec.add("-map");
-            xcodeParamsVec.add("0:" + af.getOrderIndex());
+            xcodeParamsVec.add("0:" + audioMapIndex);
             if (embedSubtitleStreams && sourceHasSubtitleStreams)
             {
               xcodeParamsVec.add("-map");
@@ -2958,6 +2969,25 @@ public class FFMPEGTranscoder implements TranscodeEngine
   public void setHttplsSurfaceTargetVideoCodec(String codec)
   {
     this.httplsSurfaceTargetVideoCodec = (codec == null) ? "" : codec;
+  }
+
+  /**
+   * Surface-selected audio stream orderIndex for the current stream
+   * (Protocol 2.1.0003). When >= 0, the explicit {@code -map 0:<index>}
+   * block uses this value instead of the legacy getAudioFormat() lookup
+   * (which just picks the lowest orderIndex, ignoring language/channels).
+   * Set to -1 for legacy sessions (the old code path runs unchanged).
+   *
+   * <p>Populated by {@code HTTPLSServer.setupTranscoder} from
+   * {@code MiniClientSageRenderer.getCurrentSurfaceAudioStreamIndex()},
+   * which is set by {@code MiniPlayer} from the winning
+   * {@link sage.client.PlaybackDecisionEngine.AudioStreamChoice}.
+   */
+  protected int httplsSurfaceAudioStreamIndex = -1;
+
+  public void setHttplsSurfaceAudioStreamIndex(int index)
+  {
+    this.httplsSurfaceAudioStreamIndex = index;
   }
 
   /** HLS / MPEG-TS segments may only carry AAC, AC-3 or E-AC-3 audio. */
