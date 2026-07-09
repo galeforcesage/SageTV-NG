@@ -4650,13 +4650,17 @@ public class MiniClientSageRenderer extends SageRenderer
         if (isNgCapableSession())
         {
           // Second burst: NG-only queries. These are queued, flushed, and read
-          // in one round — exactly like the initial burst but separated so
+          // in one round â€” exactly like the initial burst but separated so
           // Legacy clients never see them on the wire.
           sendGetPropertyAsync("CLIENT_PLATFORM");
           sendGetPropertyAsync("DEVICE_FORM_FACTOR");
           sendGetPropertyAsync("PLAYER_ENGINE");
           sendGetPropertyAsync("DISPLAY_RESOLUTION");
           sendGetPropertyAsync("PLAYBACK_SURFACES");
+          // 2.1.0007: session-level preferred audio language (ISO 639, 2- or
+          // 3-letter). Client/session property, NOT per-surface. Falls back to
+          // the server locale when absent. Legacy clients never send it.
+          sendGetPropertyAsync("CLIENT_AUDIO_LANGUAGE");
           sendBufferNow();
 
           clientPlatformProp = recvr.getStringReply();
@@ -4664,6 +4668,8 @@ public class MiniClientSageRenderer extends SageRenderer
           playerEngineProp = recvr.getStringReply();
           displayResolutionProp = recvr.getStringReply();
           playbackSurfacesProp = recvr.getStringReply();
+          String clientAudioLanguageProp = recvr.getStringReply();
+          clientAudioLanguage = (clientAudioLanguageProp == null) ? "" : clientAudioLanguageProp.trim();
 
           clientPlatform = (clientPlatformProp == null) ? "" : clientPlatformProp.trim();
           clientDeviceFormFactor = (deviceFormFactorProp == null) ? "" : deviceFormFactorProp.trim();
@@ -4708,19 +4714,26 @@ public class MiniClientSageRenderer extends SageRenderer
                 sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_VIDEO_CODECS");
                 sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_CODECS");
                 sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_CONTAINERS");
+                // 2.1.0006: track-access capability dimension (all optional).
+                sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_TRACK_ACCESS");
+                sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_TRACK_SELECTION_MODE");
+                sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_CONTAINER_RULES");
               }
               sendBufferNow();
               final java.util.Map<String, String[]> rawSurfaceProps =
                   new java.util.LinkedHashMap<String, String[]>();
               for (String sid : surfaceIds)
               {
-                String[] props = new String[6];
+                String[] props = new String[9];
                 props[0] = recvr.getStringReply();
                 props[1] = recvr.getStringReply();
                 props[2] = recvr.getStringReply();
                 props[3] = recvr.getStringReply();
                 props[4] = recvr.getStringReply();
                 props[5] = recvr.getStringReply();
+                props[6] = recvr.getStringReply();
+                props[7] = recvr.getStringReply();
+                props[8] = recvr.getStringReply();
                 rawSurfaceProps.put(sid, props);
               }
               playbackSurfaces = sage.client.PlaybackSurfaceSet.build(
@@ -4774,7 +4787,7 @@ public class MiniClientSageRenderer extends SageRenderer
         clientDefaultPlayer = (defaultPlayerProp == null) ? "" : defaultPlayerProp.trim().toLowerCase();
         if (capSchemaVersion >= 2)
         {
-          // Parse BOTH player sets regardless of which one is default — the
+          // Parse BOTH player sets regardless of which one is default â€” the
           // PlaybackDecisionEngine consults both to decide whether a per-stream
           // player switch (CAP_EFFECTIVE_PLAYER) can avoid a transcode.
           sage.client.ClientConstraints exoParsed = sage.client.ClientConstraints.parse(
@@ -4868,7 +4881,7 @@ public class MiniClientSageRenderer extends SageRenderer
           }
           // Echo back the connect-time DEFAULT player so the client can
           // confirm capability negotiation. This is NOT the per-stream
-          // selection — that is computed and emitted by MiniPlayer.load()
+          // selection â€” that is computed and emitted by MiniPlayer.load()
           // at OPENURL (see "OPENURL stream-plan locked" log), where the
           // engine may select an alternate player for THIS stream only.
           if (Sage.DBG) System.out.println("MiniClient CONNECT default CAP_EFFECTIVE_PLAYER=" + defaultPlayer);
@@ -6604,7 +6617,7 @@ public class MiniClientSageRenderer extends SageRenderer
         recvr.getIntReply();
       // PWA_PERF (SERVER2): emit compact per-frame metrics. PWA browser
       // sessions only, and only when pwa/perf_logging=true (latched in
-      // startFrameMini). No behavior change — this runs after the frame is
+      // startFrameMini). No behavior change â€” this runs after the frame is
       // fully queued/flushed.
       if (pwaPerfActive)
       {
@@ -6687,7 +6700,7 @@ public class MiniClientSageRenderer extends SageRenderer
   protected void sendBufferNow() throws java.io.IOException
   {
     if (sockBuf.position() == 0) return;
-    // PWA_PERF (SERVER2): tally bytes flushed this frame. Observational only —
+    // PWA_PERF (SERVER2): tally bytes flushed this frame. Observational only â€”
     // the flush itself is unchanged. Counts pre-compression payload bytes.
     if (pwaPerfActive)
       pwaPerfFrameBytes += sockBuf.position();
@@ -7250,7 +7263,7 @@ public class MiniClientSageRenderer extends SageRenderer
 
   /**
    * Parse simple JSON override map: {"key":"value", "key2":"value2"}
-   * Minimal parser — no nested objects, no arrays.
+   * Minimal parser â€” no nested objects, no arrays.
    */
   private java.util.Map<String, String> parseSimpleJsonOverrides(String json)
   {
@@ -7911,6 +7924,17 @@ public class MiniClientSageRenderer extends SageRenderer
   public String getClientPlatform()
   {
     return clientPlatform == null ? "" : clientPlatform;
+  }
+
+  /**
+   * CLIENT_AUDIO_LANGUAGE capability (2.1.0007): the ISO 639 language the
+   * NG client prefers for audio track selection on multi-track sources.
+   * Empty when the client did not advertise one (all legacy clients, and NG
+   * clients that omit it); callers must then fall back to the server locale.
+   */
+  public String getCurrentClientAudioLanguage()
+  {
+    return clientAudioLanguage == null ? "" : clientAudioLanguage;
   }
 
   /**
@@ -9693,8 +9717,12 @@ public class MiniClientSageRenderer extends SageRenderer
   private volatile String clientPlatform = "";
   private volatile String clientDeviceFormFactor = "";
   private volatile String clientPlayerEngine = "";
+  // 2.1.0007: session-level preferred audio language advertised by NG clients
+  // (CLIENT_AUDIO_LANGUAGE, ISO 639-1/2). Empty for legacy clients; the decision
+  // engine then falls back to the server locale. See getCurrentClientAudioLanguage().
+  private volatile String clientAudioLanguage = "";
   // Advisory PWA render hints parsed from existing capability properties.
-  // Stored but NOT acted upon — future PWA-only hooks may read them (SERVER4/5).
+  // Stored but NOT acted upon â€” future PWA-only hooks may read them (SERVER4/5).
   // 0 means "unknown/unset". Absurd values are clamped in parsePwaRenderHints().
   private volatile int pwaHintUiWidth = 0;
   private volatile int pwaHintUiHeight = 0;
@@ -9723,7 +9751,7 @@ public class MiniClientSageRenderer extends SageRenderer
   private volatile String currentSurfaceDeliveryMode = "";
   // 2.1.0003: surface-selected audio stream orderIndex from the multi-audio
   // selection rule (selectBestAudioStream). -1 for legacy sessions. Consumed
-  // by HTTPLSServer.setupTranscoder → FFMPEGTranscoder.setHttplsSurfaceAudioStreamIndex
+  // by HTTPLSServer.setupTranscoder â†’ FFMPEGTranscoder.setHttplsSurfaceAudioStreamIndex
   // to emit the correct -map for the chosen audio track.
   private volatile int currentSurfaceAudioStreamIndex = -1;
   // --- PWA-only GFX perf instrumentation (SERVER2) ---

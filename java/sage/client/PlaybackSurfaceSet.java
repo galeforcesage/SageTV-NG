@@ -63,6 +63,21 @@ public final class PlaybackSurfaceSet
       new HashSet<String>(Arrays.asList(
           "pull", "push", "hls", "dash", "webrtc")));
 
+  /** Canonical values for {@code PLAYBACK_SURFACE_<id>_AUDIO_TRACK_ACCESS} (2.1.0006). */
+  public static final Set<String> CANONICAL_AUDIO_TRACK_ACCESS = Collections.unmodifiableSet(
+      new HashSet<String>(Arrays.asList(
+          "all", "primary_only", "default_only", "none")));
+
+  /** Canonical values for {@code PLAYBACK_SURFACE_<id>_AUDIO_TRACK_SELECTION_MODE} (2.1.0006). */
+  public static final Set<String> CANONICAL_AUDIO_TRACK_SELECTION_MODE = Collections.unmodifiableSet(
+      new HashSet<String>(Arrays.asList(
+          "client", "server")));
+
+  /** Canonical rule tokens allowed inside {@code PLAYBACK_SURFACE_<id>_AUDIO_CONTAINER_RULES} (2.1.0006). */
+  public static final Set<String> CANONICAL_AUDIO_CONTAINER_RULE_TOKENS = Collections.unmodifiableSet(
+      new HashSet<String>(Arrays.asList(
+          "all_tracks", "first_substream_only", "order_sensitive", "default_track_only")));
+
   private static final PlaybackSurfaceSet EMPTY =
       new PlaybackSurfaceSet(Collections.<String, PlaybackSurface>emptyMap());
 
@@ -161,6 +176,85 @@ public final class PlaybackSurfaceSet
   }
 
   /**
+   * Canonicalize + validate the {@code AUDIO_TRACK_ACCESS} value (2.1.0006).
+   * Returns {@code "default_only"} (the conservative default) for empty or
+   * non-canonical input, logging a WARN for the latter. NEVER defaults to
+   * {@code "all"} -- the server must not assume all tracks are reachable.
+   */
+  public static String canonicalTrackAccess(String surfaceId, String raw)
+  {
+    if (raw == null || raw.trim().length() == 0) return "default_only";
+    String v = raw.trim().toLowerCase(java.util.Locale.ROOT);
+    if (CANONICAL_AUDIO_TRACK_ACCESS.contains(v)) return v;
+    System.err.println("PlaybackSurfaceSet WARN: surface '" + surfaceId
+        + "' AUDIO_TRACK_ACCESS '" + raw + "' not canonical (accepted: "
+        + CANONICAL_AUDIO_TRACK_ACCESS + "); using conservative default_only");
+    return "default_only";
+  }
+
+  /**
+   * Canonicalize + validate the {@code AUDIO_TRACK_SELECTION_MODE} value
+   * (2.1.0006). Returns {@code "client"} for empty/non-canonical input.
+   */
+  public static String canonicalSelectionMode(String surfaceId, String raw)
+  {
+    if (raw == null || raw.trim().length() == 0) return "client";
+    String v = raw.trim().toLowerCase(java.util.Locale.ROOT);
+    if (CANONICAL_AUDIO_TRACK_SELECTION_MODE.contains(v)) return v;
+    System.err.println("PlaybackSurfaceSet WARN: surface '" + surfaceId
+        + "' AUDIO_TRACK_SELECTION_MODE '" + raw + "' not canonical (accepted: "
+        + CANONICAL_AUDIO_TRACK_SELECTION_MODE + "); using default client");
+    return "client";
+  }
+
+  /**
+   * Parse the {@code AUDIO_CONTAINER_RULES} value (2.1.0006) into a map keyed
+   * by canonical container name. Wire format is a semicolon-separated list of
+   * {@code CONTAINER:rule1,rule2} entries, e.g.
+   * {@code MPEG2-PS:first_substream_only,order_sensitive;MPEG2-TS:all_tracks}.
+   * Non-canonical containers or rule tokens are dropped with a WARN.
+   */
+  public static Map<String, List<String>> parseContainerRules(String surfaceId, String raw)
+  {
+    if (raw == null || raw.trim().length() == 0)
+      return Collections.<String, List<String>>emptyMap();
+    Map<String, List<String>> out = new LinkedHashMap<String, List<String>>();
+    for (String entry : raw.split(";"))
+    {
+      String e = entry.trim();
+      if (e.length() == 0) continue;
+      int colon = e.indexOf(':');
+      if (colon <= 0 || colon >= e.length() - 1)
+      {
+        System.err.println("PlaybackSurfaceSet WARN: surface '" + surfaceId
+            + "' AUDIO_CONTAINER_RULES entry '" + e + "' missing CONTAINER:rules form; ignored");
+        continue;
+      }
+      String rawContainer = e.substring(0, colon).trim();
+      String container = canonicalContainer(rawContainer);
+      if (!CANONICAL_CONTAINERS.contains(container))
+      {
+        System.err.println("PlaybackSurfaceSet WARN: surface '" + surfaceId
+            + "' AUDIO_CONTAINER_RULES container '" + rawContainer + "' not canonical; ignored");
+        continue;
+      }
+      List<String> rules = new ArrayList<String>();
+      for (String tok : e.substring(colon + 1).split(","))
+      {
+        String t = tok.trim().toLowerCase(java.util.Locale.ROOT);
+        if (t.length() == 0) continue;
+        if (CANONICAL_AUDIO_CONTAINER_RULE_TOKENS.contains(t)) rules.add(t);
+        else System.err.println("PlaybackSurfaceSet WARN: surface '" + surfaceId
+            + "' AUDIO_CONTAINER_RULES rule '" + t + "' for container " + container
+            + " not canonical (accepted: " + CANONICAL_AUDIO_CONTAINER_RULE_TOKENS + "); ignored");
+      }
+      if (!rules.isEmpty())
+        out.put(container, Collections.unmodifiableList(rules));
+    }
+    return out.isEmpty() ? Collections.<String, List<String>>emptyMap() : out;
+  }
+
+  /**
    * Case-sensitive check against a canonical set. Returns the input list
    * filtered to canonical tokens only; each non-canonical token is logged
    * as a WARN with the surface id, property kind, and offending token so
@@ -193,9 +287,18 @@ public final class PlaybackSurfaceSet
 
   /**
    * Build a set from the raw {@code PLAYBACK_SURFACES} list plus a lookup
-   * function that returns the six per-surface property strings for a given
-   * id in this exact order:
-   * {@code [ROUTE, PRIORITY, DELIVERY_MODES, VIDEO_CODECS, AUDIO_CODECS, CONTAINERS]}.
+   * function that returns the per-surface property strings for a given id.
+   * The array is read positionally:
+   * {@code [ROUTE, PRIORITY, DELIVERY_MODES, VIDEO_CODECS, AUDIO_CODECS,
+   * CONTAINERS, AUDIO_TRACK_ACCESS, AUDIO_TRACK_SELECTION_MODE,
+   * AUDIO_CONTAINER_RULES]}.
+   *
+   * <p>Indices 0-5 are required (pre-2.1.0006). Indices 6-8 (the track-access
+   * dimension) are OPTIONAL -- when the array is shorter than 9, or those
+   * entries are empty, the conservative defaults apply
+   * ({@code audioTrackAccess="default_only"}, NEVER {@code "all"}). This keeps
+   * the additive contract: a client that advertises surfaces but hasn't added
+   * the track-access fields still parses, it just gets safe defaults.
    *
    * <p>Callers own the transport (the miniclient uses
    * {@code sendGetPropertyAsync} + {@code recvr.getStringReply()}). Any
@@ -244,8 +347,16 @@ public final class PlaybackSurfaceSet
             + "' has empty video+audio+container sets after canonical filtering; dropped");
         continue;
       }
+      // --- 2.1.0006 track-access dimension (optional; conservative defaults) ---
+      String rawAccess = (props.length > 6 && props[6] != null) ? props[6].trim() : "";
+      String rawSelMode = (props.length > 7 && props[7] != null) ? props[7].trim() : "";
+      String rawRules = (props.length > 8 && props[8] != null) ? props[8].trim() : "";
+      String audioTrackAccess = canonicalTrackAccess(id, rawAccess);
+      String audioTrackSelectionMode = canonicalSelectionMode(id, rawSelMode);
+      Map<String, List<String>> audioContainerRules = parseContainerRules(id, rawRules);
       out.put(id, new PlaybackSurface(id, route, priority,
-          deliveryModes, videoCodecs, audioCodecs, containers));
+          deliveryModes, videoCodecs, audioCodecs, containers,
+          audioTrackAccess, audioTrackSelectionMode, audioContainerRules));
     }
     return out.isEmpty() ? empty() : new PlaybackSurfaceSet(out);
   }

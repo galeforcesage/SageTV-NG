@@ -994,7 +994,8 @@ public class MiniPlayer implements DVDMediaPlayer
           @SuppressWarnings("rawtypes")
           java.util.Set v1Audio = mcsr.getEffectiveAudioCodecs();
           sage.client.PlaybackDecisionEngine.AudioStreamChoice legacyAsc =
-              sage.client.PlaybackDecisionEngine.selectBestAudioStreamLegacy(v1Audio, cf);
+              sage.client.PlaybackDecisionEngine.selectBestAudioStreamLegacy(
+                  v1Audio, cf, mcsr.getCurrentClientAudioLanguage());
           if (legacyAsc != null && legacyAsc.audioFormat != null)
           {
             mediaAudio = legacyAsc.audioFormat.getFormatName();
@@ -1116,7 +1117,7 @@ public class MiniPlayer implements DVDMediaPlayer
               sage.client.PlaybackDecisionEngine.evaluateSurfaces(surfaces,
                   mediaContainer, mediaVideo, mediaAudio,
                   mediaW, mediaH, sourceBitrateKbps, availableBwKbps, srcInterlaced,
-                  cf);
+                  cf, (mcsr != null) ? mcsr.getCurrentClientAudioLanguage() : null);
           if (!ranked.isEmpty())
           {
             sage.client.PlaybackDecisionEngine.SurfaceDecision winner = ranked.get(0);
