@@ -994,8 +994,7 @@ public class MiniPlayer implements DVDMediaPlayer
           @SuppressWarnings("rawtypes")
           java.util.Set v1Audio = mcsr.getEffectiveAudioCodecs();
           sage.client.PlaybackDecisionEngine.AudioStreamChoice legacyAsc =
-              sage.client.PlaybackDecisionEngine.selectBestAudioStreamLegacy(
-                  v1Audio, cf, mcsr.getCurrentClientAudioLanguage());
+              sage.client.PlaybackDecisionEngine.selectBestAudioStreamLegacy(v1Audio, cf);
           if (legacyAsc != null && legacyAsc.audioFormat != null)
           {
             mediaAudio = legacyAsc.audioFormat.getFormatName();
@@ -1117,7 +1116,7 @@ public class MiniPlayer implements DVDMediaPlayer
               sage.client.PlaybackDecisionEngine.evaluateSurfaces(surfaces,
                   mediaContainer, mediaVideo, mediaAudio,
                   mediaW, mediaH, sourceBitrateKbps, availableBwKbps, srcInterlaced,
-                  cf, (mcsr != null) ? mcsr.getCurrentClientAudioLanguage() : null);
+                  cf);
           if (!ranked.isEmpty())
           {
             sage.client.PlaybackDecisionEngine.SurfaceDecision winner = ranked.get(0);
@@ -1224,11 +1223,36 @@ public class MiniPlayer implements DVDMediaPlayer
           // only fires for non-NG legacy clients). Surface-aware clients
           // are trusted -- their surface list is the honest report of what
           // pipeline they want to receive bytes through.
-          if ("pull".equals(chosenSurfaceDelivery) && !clientDoesPull)
+          //
+          // 2.1.0008 single-port / remote-client transport safety:
+          // stv:// PULL uses a SEPARATE media-server port, so it only works
+          // on a LAN connection. A remote client reachable on just the
+          // control/HTTP port (default 31099, NAT-forwarded) cannot fetch a
+          // pull URL. HLS and native PUSH both ride the single 31099 port and
+          // survive NAT. Therefore:
+          //   - An httpls session is left ENTIRELY alone -- HLS is its
+          //     delivery and clientDoesPull was already configured upstream
+          //     (line ~830) for the HLS path.
+          //   - pull is forced ONLY on a local (LAN) connection.
+          //   - push is always safe to force (rides 31099).
+          boolean localConn = (mcsr != null && mcsr.isLocalConnection());
+          if (httpls)
+          {
+            if (Sage.DBG) System.out.println("MiniPlayer: httpls session — surface '"
+                + chosenSurfaceId + "' delivery=" + chosenSurfaceDelivery
+                + " not applied to transport; HLS over the single HTTP port is the delivery");
+          }
+          else if ("pull".equals(chosenSurfaceDelivery) && !clientDoesPull && localConn)
           {
             if (Sage.DBG) System.out.println("MiniPlayer: surface '" + chosenSurfaceId
-                + "' declared pull delivery — forcing clientDoesPull=true");
+                + "' declared pull delivery (local connection) — forcing clientDoesPull=true");
             clientDoesPull = true;
+          }
+          else if ("pull".equals(chosenSurfaceDelivery) && !clientDoesPull && !localConn)
+          {
+            if (Sage.DBG) System.out.println("MiniPlayer: surface '" + chosenSurfaceId
+                + "' declared pull delivery but connection is REMOTE — stv:// pull needs a "
+                + "separate media-server port unreachable over a single NAT port; keeping push/HLS");
           }
           else if ("push".equals(chosenSurfaceDelivery) && clientDoesPull)
           {
