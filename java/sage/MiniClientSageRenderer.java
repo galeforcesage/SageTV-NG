@@ -3940,27 +3940,13 @@ public class MiniClientSageRenderer extends SageRenderer
         sendGetPropertyAsync("IJK_AUDIO_CONSTRAINTS");
         sendGetPropertyAsync("EXO_CONTAINER_CONSTRAINTS");
         sendGetPropertyAsync("IJK_CONTAINER_CONSTRAINTS");
-        // --- PWA / browser client identification + advisory render hints ---
-        // Additive capability queries. Native Windows/Mac clients, Android
-        // MiniClient, and hardware extenders do NOT implement these handlers
-        // and return empty strings, so this is behavior-neutral for them.
-        // The PWA bridge already implements CLIENT_PLATFORM / DEVICE_FORM_FACTOR
-        // / PLAYER_ENGINE / DISPLAY_RESOLUTION handlers (no PWA-side change
-        // required). Read back in the same order below to keep the protocol
-        // aligned.
-        sendGetPropertyAsync("CLIENT_PLATFORM");
-        sendGetPropertyAsync("DEVICE_FORM_FACTOR");
-        sendGetPropertyAsync("PLAYER_ENGINE");
-        sendGetPropertyAsync("DISPLAY_RESOLUTION");
-        // --- Playback Surface capability model (Protocol v2.1) — Phase 1 ---
-        // Discovery query. If the client advertises PLAYBACK_SURFACES we do
-        // a follow-up round to pull the six per-surface properties per id
-        // (see readPlaybackSurfacesReply below). Legacy clients that don't
-        // implement this handler return empty and the follow-up round is
-        // skipped entirely — pure additive, no behavior change on the
-        // existing V1/V2 negotiation path. See ROADMAP.md "Playback Surface
-        // capability model (Protocol 2.1)".
-        sendGetPropertyAsync("PLAYBACK_SURFACES");
+        // NOTE: NG-only queries (CLIENT_PLATFORM, DEVICE_FORM_FACTOR,
+        // PLAYER_ENGINE, DISPLAY_RESOLUTION, PLAYBACK_SURFACES) are NOT in
+        // this initial burst. They are queried in a SEPARATE conditional round
+        // AFTER NG detection (see "NG-only capability round" below). Legacy
+        // 9.2.16 clients (Windows Placeshifter, HD200/HD300) may not reply to
+        // unknown property queries at all, which desyncs the protocol and
+        // crashes the handshake (verified: Windows Placeshifter 2026-07-08).
         sendBufferNow();
         // Now get capabilities properties for this specific miniclient
         // The default is to use image maps for text rendering
@@ -4646,57 +4632,119 @@ public class MiniClientSageRenderer extends SageRenderer
         String ijkAudioConstraintsProp = recvr.getStringReply();
         String exoContainerConstraintsProp = recvr.getStringReply();
         String ijkContainerConstraintsProp = recvr.getStringReply();
-        // --- PWA identification + advisory render hints (read in queued order) ---
-        // Empty for native/extender/Android clients (no handler). Only the PWA
-        // bridge returns non-empty values. Stored for identification + logging;
-        // NOT acted upon here (no behavior change).
-        String clientPlatformProp = recvr.getStringReply();
-        String deviceFormFactorProp = recvr.getStringReply();
-        String playerEngineProp = recvr.getStringReply();
-        String displayResolutionProp = recvr.getStringReply();
-        // Playback Surface v2.1 discovery — read the surface-id list here;
-        // the per-surface property replies (if any) are pulled AFTER this
-        // block via a second async round in readPlaybackSurfaces().
-        String playbackSurfacesProp = recvr.getStringReply();
-        clientPlatform = (clientPlatformProp == null) ? "" : clientPlatformProp.trim();
-        clientDeviceFormFactor = (deviceFormFactorProp == null) ? "" : deviceFormFactorProp.trim();
-        clientPlayerEngine = (playerEngineProp == null) ? "" : playerEngineProp.trim();
-        parsePwaRenderHints(displayResolutionProp);
-        if (Sage.DBG)
+
+        // --- NG-only capability round (Protocol 2.1) ---
+        // These queries are ONLY sent to NG-capable clients. Legacy 9.2.16
+        // clients (Windows Placeshifter, HD200/HD300) may not reply to unknown
+        // property queries at all, which desyncs the protocol and crashes the
+        // handshake (verified: Windows Placeshifter 2026-07-08). NG detection
+        // (ngVersion + ngCapabilities) is complete by this point so
+        // isNgCapableSession() is reliable.
+        String clientPlatformProp = null;
+        String deviceFormFactorProp = null;
+        String playerEngineProp = null;
+        String displayResolutionProp = null;
+        String playbackSurfacesProp = null;
+        playbackSurfaces = sage.client.PlaybackSurfaceSet.empty();
+
+        if (isNgCapableSession())
         {
-          System.out.println("MiniClient CLIENT_PLATFORM=" + clientPlatform
-              + " DEVICE_FORM_FACTOR=" + clientDeviceFormFactor
-              + " PLAYER_ENGINE=" + clientPlayerEngine
-              + " DISPLAY_RESOLUTION=" + displayResolutionProp
-              + " isPwaBrowserClient=" + isPwaBrowserClient());
+          // Second burst: NG-only queries. These are queued, flushed, and read
+          // in one round — exactly like the initial burst but separated so
+          // Legacy clients never see them on the wire.
+          sendGetPropertyAsync("CLIENT_PLATFORM");
+          sendGetPropertyAsync("DEVICE_FORM_FACTOR");
+          sendGetPropertyAsync("PLAYER_ENGINE");
+          sendGetPropertyAsync("DISPLAY_RESOLUTION");
+          sendGetPropertyAsync("PLAYBACK_SURFACES");
+          sendBufferNow();
+
+          clientPlatformProp = recvr.getStringReply();
+          deviceFormFactorProp = recvr.getStringReply();
+          playerEngineProp = recvr.getStringReply();
+          displayResolutionProp = recvr.getStringReply();
+          playbackSurfacesProp = recvr.getStringReply();
+
+          clientPlatform = (clientPlatformProp == null) ? "" : clientPlatformProp.trim();
+          clientDeviceFormFactor = (deviceFormFactorProp == null) ? "" : deviceFormFactorProp.trim();
+          clientPlayerEngine = (playerEngineProp == null) ? "" : playerEngineProp.trim();
+          parsePwaRenderHints(displayResolutionProp);
+
+          if (Sage.DBG)
+          {
+            System.out.println("MiniClient CLIENT_PLATFORM=" + clientPlatform
+                + " DEVICE_FORM_FACTOR=" + clientDeviceFormFactor
+                + " PLAYER_ENGINE=" + clientPlayerEngine
+                + " DISPLAY_RESOLUTION=" + displayResolutionProp
+                + " isPwaBrowserClient=" + isPwaBrowserClient());
+          }
+          if (isPwaBrowserClient() && Sage.getBoolean("pwa/perf_logging", false))
+          {
+            System.out.println("PWA_PERF render-hints client=" + getNgClientId()
+                + " platform=" + clientPlatform
+                + " formFactor=" + clientDeviceFormFactor
+                + " uiW=" + pwaHintUiWidth
+                + " uiH=" + pwaHintUiHeight
+                + " isTizen=" + pwaHintIsTizen
+                + " playerEngine=" + clientPlayerEngine);
+          }
+
+          // --- Playback Surface v2.1 discovery ---
+          // Third burst (conditional on PLAYBACK_SURFACES being non-empty):
+          // for each surface id, queue the 6 per-surface properties and read
+          // the replies. Entirely skipped for NG clients that don't yet
+          // advertise surfaces.
+          java.util.List<String> surfaceIds =
+              sage.client.PlaybackSurfaceSet.split(playbackSurfacesProp);
+          if (!surfaceIds.isEmpty())
+          {
+            try
+            {
+              for (String sid : surfaceIds)
+              {
+                sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_ROUTE");
+                sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_PRIORITY");
+                sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_DELIVERY_MODES");
+                sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_VIDEO_CODECS");
+                sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_CODECS");
+                sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_CONTAINERS");
+              }
+              sendBufferNow();
+              final java.util.Map<String, String[]> rawSurfaceProps =
+                  new java.util.LinkedHashMap<String, String[]>();
+              for (String sid : surfaceIds)
+              {
+                String[] props = new String[6];
+                props[0] = recvr.getStringReply();
+                props[1] = recvr.getStringReply();
+                props[2] = recvr.getStringReply();
+                props[3] = recvr.getStringReply();
+                props[4] = recvr.getStringReply();
+                props[5] = recvr.getStringReply();
+                rawSurfaceProps.put(sid, props);
+              }
+              playbackSurfaces = sage.client.PlaybackSurfaceSet.build(
+                  playbackSurfacesProp,
+                  new java.util.function.Function<String, String[]>() {
+                    @Override public String[] apply(String sid) { return rawSurfaceProps.get(sid); }
+                  });
+            }
+            catch (Exception e)
+            {
+              if (Sage.DBG) System.out.println(
+                  "MiniClient PLAYBACK_SURFACES discovery failed (leaving empty; "
+                  + "legacy path unaffected): " + e);
+              playbackSurfaces = sage.client.PlaybackSurfaceSet.empty();
+            }
+          }
+          if (Sage.DBG && playbackSurfacesProp != null && playbackSurfacesProp.length() > 0)
+          {
+            System.out.println("MiniClient PLAYBACK_SURFACES=" + playbackSurfacesProp);
+            System.out.println("MiniClient PlaybackSurfaces parsed: " + playbackSurfaces);
+          }
         }
-        // SERVER3: log parsed PWA render hints once per session when perf
-        // logging is enabled. Advisory only — no render target, image size,
-        // timing, throttling, or artwork generation is changed here.
-        if (isPwaBrowserClient() && Sage.getBoolean("pwa/perf_logging", false))
-        {
-          System.out.println("PWA_PERF render-hints client=" + getNgClientId()
-              + " platform=" + clientPlatform
-              + " formFactor=" + clientDeviceFormFactor
-              + " uiW=" + pwaHintUiWidth
-              + " uiH=" + pwaHintUiHeight
-              + " isTizen=" + pwaHintIsTizen
-              + " playerEngine=" + clientPlayerEngine);
-        }
-        // SERVER4 (future, disabled): PWA-only lower UI/render-target hook.
-        //   Gate: isPwaBrowserClient() && Sage.getBoolean("pwa/enable_render_size_hints", false)
-        //   Would honor pwaHintUiWidth/pwaHintUiHeight to request a smaller UI
-        //   render target for PWA sessions ONLY. Must not affect Android/HD300/
-        //   native clients. Requires before/after metrics. Default disabled.
-        //   Dedicated client fields still needed: renderHints.preferredUiWidth,
-        //   preferredUiHeight, renderScaleHint (PWA team to add + server query).
-        // SERVER5 (future, disabled): PWA-only artwork/texture size hook.
-        //   Gate: isPwaBrowserClient() && Sage.getBoolean("pwa/enable_texture_size_hints", false)
-        //   Would clamp generated texture/artwork dimensions for PWA sessions.
-        //   MUST use client-profile-keyed artwork cache so smaller PWA artwork
-        //   never pollutes the shared/global recording-thumbnail cache. Default
-        //   disabled. Dedicated client fields still needed:
-        //   renderHints.maxTexturePixelsClientHint, maxCacheBytesClientHint.
+        // --- end NG-only capability round ---
+
         if (Sage.DBG)
         {
           System.out.println("MiniClient MINICLIENT_DEFAULT_PLAYER=" + defaultPlayerProp);
@@ -4714,67 +4762,6 @@ public class MiniClientSageRenderer extends SageRenderer
           System.out.println("MiniClient IJK_AUDIO_CONSTRAINTS=" + ijkAudioConstraintsProp);
           System.out.println("MiniClient EXO_CONTAINER_CONSTRAINTS=" + exoContainerConstraintsProp);
           System.out.println("MiniClient IJK_CONTAINER_CONSTRAINTS=" + ijkContainerConstraintsProp);
-        }
-
-        // --- Playback Surface v2.1 discovery (Phase 1: log-only) ---
-        // Second async round: for each id in PLAYBACK_SURFACES, queue the 6
-        // per-surface properties and read the replies in the same queued
-        // order. Skipped entirely when the client advertised no surfaces
-        // (legacy V1/V2 clients) so their handshake is byte-for-byte
-        // unchanged. Failures here are caught locally so a broken surface
-        // advertisement can't kill the whole handshake for an otherwise
-        // healthy legacy path -- we just log and leave playbackSurfaces
-        // empty. Phase 1 is discovery + logging only; nothing downstream
-        // consumes playbackSurfaces yet. See ROADMAP.md "Playback Surface
-        // capability model (Protocol 2.1)".
-        playbackSurfaces = sage.client.PlaybackSurfaceSet.empty();
-        java.util.List<String> surfaceIds =
-            sage.client.PlaybackSurfaceSet.split(playbackSurfacesProp);
-        if (!surfaceIds.isEmpty())
-        {
-          try
-          {
-            for (String sid : surfaceIds)
-            {
-              sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_ROUTE");
-              sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_PRIORITY");
-              sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_DELIVERY_MODES");
-              sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_VIDEO_CODECS");
-              sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_CODECS");
-              sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_CONTAINERS");
-            }
-            sendBufferNow();
-            final java.util.Map<String, String[]> rawSurfaceProps =
-                new java.util.LinkedHashMap<String, String[]>();
-            for (String sid : surfaceIds)
-            {
-              String[] props = new String[6];
-              props[0] = recvr.getStringReply();
-              props[1] = recvr.getStringReply();
-              props[2] = recvr.getStringReply();
-              props[3] = recvr.getStringReply();
-              props[4] = recvr.getStringReply();
-              props[5] = recvr.getStringReply();
-              rawSurfaceProps.put(sid, props);
-            }
-            playbackSurfaces = sage.client.PlaybackSurfaceSet.build(
-                playbackSurfacesProp,
-                new java.util.function.Function<String, String[]>() {
-                  @Override public String[] apply(String sid) { return rawSurfaceProps.get(sid); }
-                });
-          }
-          catch (Exception e)
-          {
-            if (Sage.DBG) System.out.println(
-                "MiniClient PLAYBACK_SURFACES discovery failed (leaving empty; "
-                + "legacy V1/V2 path unaffected): " + e);
-            playbackSurfaces = sage.client.PlaybackSurfaceSet.empty();
-          }
-        }
-        if (Sage.DBG && playbackSurfacesProp != null && playbackSurfacesProp.length() > 0)
-        {
-          System.out.println("MiniClient PLAYBACK_SURFACES=" + playbackSurfacesProp);
-          System.out.println("MiniClient PlaybackSurfaces parsed: " + playbackSurfaces);
         }
 
         // Build the schema-v2 capability-constraints object. Only populated
