@@ -627,6 +627,62 @@ RTX VSR) — the items below are the ones not previously captured.
 
 ## Playback track
 
+- **NG-first decision ordering in `MiniPlayer.load()` (hoist the NG ruling to
+  the top).**
+  Today the NG capability ruling is computed too late in `load()`: `mcsr` (and
+  therefore `isNgCapableSession()`) is known at line ~659, but the surface
+  decision (`evaluateSurfaces` → delivery / DIRECT_PLAY-vs-TRANSCODE) doesn't
+  run until ~line 1094 — *after* the legacy `iPhoneMode → httpls` latch (~830),
+  the bandwidth probe (832-951), and the legacy pull/push heuristics. So every
+  legacy determination fires first and we bolt on `!isNgCapableSession()`
+  patches after the fact. Goal: compute the NG ruling FIRST, then each legacy
+  branch becomes a clean `if (ngSession) { honor surface plan } else { legacy }`.
+
+  **Bandwidth split (why the hoist is safe).** The surface capability verdict
+  (which surface, DIRECT_PLAY vs TRANSCODE, delivery mode) is bandwidth-
+  independent — pure codec/container matching. Only `targetBitrateKbps` needs
+  `availableBwKbps`, and `targetBitrateKbps` is currently **unused in
+  MiniPlayer** (only logged). So the capability/delivery verdict can be hoisted
+  above the bandwidth probe (pass `availableBwKbps=0`); refine the bitrate
+  target after the probe for the TRANSCODE case only. For DIRECT_PLAY NG
+  sessions the bandwidth probe can be skipped entirely (no transcode → no rate
+  adaptation).
+
+  **Legacy determination → NG override matrix** (each becomes `if (ngSession)…`):
+  | # | Legacy determination (load()) | NG signal that overrides it |
+  |---|---|---|
+  | 1 | `httpls` latch (`isIOSClient()`, ~830) | surface delivery mode: suppress for surface `pull`/DIRECT_PLAY, keep for surface `hls`/TRANSCODE |
+  | 2 | `clientDoesPull` (pull container+codec, ~808) | surface `DELIVERY_MODES` + `VIDEO/AUDIO_CODECS` |
+  | 3 | `clientDoesMPEG2Push` / `clientCanDoMpeg4` / `clientCanDoMPEGHD` | surface video codec set |
+  | 4 | bandwidth probe (832-951) | skip for surface DIRECT_PLAY; else feed target bitrate |
+  | 5 | `lowBandwidth` (962) | surface decision + `targetBitrateKbps` |
+  | 6 | pull-vs-push mode (`if clientDoesPull && (httpls||…)`, ~1035) | surface `chosenDeliveryMode` |
+  | 7 | push transcode format select (`dynamic`/`dynamicts`/`fixedPush`, 1560-1690) | surface target video/audio codecs |
+  | 8 | URL construction (`iosstream`/`stv://`/file, ~2300-2330) | surface delivery → `hls`=iosstream, `pull`=`stv://` (bridge rewrites) |
+
+  **The old `stv://` blocker is OBSOLETE (bridge rewrite).** An earlier version of
+  this item claimed the URL builder needed a rewrite because a browser can't
+  consume `stv://`. That is no longer true: the PWA bridge's `_loadPullMode`
+  (`public/js/media/player.js`) rewrites `stv://<host>/path` (and `file://` and a
+  bare `/path`) → `<bridge>/rawmedia?path=<path>`, a byte-range HTTP endpoint; the
+  bridge runs on the SageTV host and streams the raw file straight off disk —
+  which also sidesteps the separate `stv://` media-server port. For codecs the
+  browser can't natively decode, the pull path falls back to the bridge
+  `/transcode` endpoint. So the server can emit its existing `stv://` pull URL for
+  an NG DIRECT_PLAY decision and it routes cleanly to the browser via the bridge.
+  No URL-builder rewrite is required — only gating `httpls` on the surface
+  delivery mode (which needs the surface *verdict* computed above the ~830 latch,
+  i.e. the hoist).
+
+  **Landing order.** (a) Hoist `ngSession` + the surface capability verdict to
+  the top, behavior-preserving, instrument every override point (structural half
+  — DONE, no behavior change). (b) Gate the `httpls` latch on the hoisted surface
+  verdict: suppress for `pull`/DIRECT_PLAY (routes via bridge `/rawmedia`), keep
+  for `hls`/TRANSCODE (server-side NVENC HLS). (c) Flip the remaining matrix
+  branches one at a time, verifying per branch. (Server-side transcode stays the
+  path for TRANSCODE; the bridge `/transcode` is only a client-side fallback for
+  a capability-report mismatch.)
+
 - **Playback Surface capability model (Protocol 2.1) — replaces device /
   browser / OS-based negotiation.**
   Introduce a generic *Playback Surface* as the first-class unit of
