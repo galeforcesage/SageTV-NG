@@ -1944,20 +1944,60 @@ public class FFMPEGTranscoder implements TranscodeEngine
               int fpsIdx = sb.indexOf("fps=");
               int sizeIdx = sb.indexOf("size=");
               int timeIdx = sb.indexOf("time=");
-              int kbIdx = sb.indexOf("kB", sizeIdx);
               int bitrateIdx = sb.indexOf("bitrate=");
-              
-              if (sizeIdx != -1 && timeIdx != -1 && kbIdx != -1 && bitrateIdx != -1)
+
+              // Locate the end of the "size=" numeric field by its unit token.
+              // Modern FFmpeg (6.1+, e.g. N-124561 / Lavc62) reports the byte
+              // count with binary IEC units "KiB"/"MiB"/"GiB"; older builds used
+              // "kB". The legacy code only searched for "kB", so on modern ffmpeg
+              // indexOf returned -1, this whole block was skipped, lastXcodeStreamTime
+              // never advanced, HLS segments never closed, and PWA/iOS playback
+              // hung until the client disconnected. Detect whichever unit is
+              // present and scale to bytes accordingly ("kB" was always really KiB).
+              int unitIdx = -1;
+              long sizeUnitMult = 1024L;
+              if (sizeIdx != -1)
+              {
+                int kibIdx = sb.indexOf("KiB", sizeIdx);
+                int mibIdx = sb.indexOf("MiB", sizeIdx);
+                int gibIdx = sb.indexOf("GiB", sizeIdx);
+                int legacyKbIdx = sb.indexOf("kB", sizeIdx);
+                if (kibIdx != -1) { unitIdx = kibIdx; sizeUnitMult = 1024L; }
+                else if (mibIdx != -1) { unitIdx = mibIdx; sizeUnitMult = 1024L * 1024L; }
+                else if (gibIdx != -1) { unitIdx = gibIdx; sizeUnitMult = 1024L * 1024L * 1024L; }
+                else if (legacyKbIdx != -1) { unitIdx = legacyKbIdx; sizeUnitMult = 1024L; }
+              }
+
+              if (sizeIdx != -1 && timeIdx != -1 && unitIdx != -1 && bitrateIdx != -1)
               {
                 String frameStr = "";
-                String sizeStr = sb.substring(sizeIdx + 5, kbIdx).trim();
+                String sizeStr = sb.substring(sizeIdx + 5, unitIdx).trim();
                 String timeStr = sb.substring(timeIdx + 5, bitrateIdx).trim();
                 
                 if (sizeStr.indexOf('.') == -1)
                 {
                   try
                   {
-                    double time = Double.parseDouble(timeStr);
+                    // FFmpeg reports "time=" as an HH:MM:SS.ms timecode (e.g.
+                    // "00:00:04.26"); support that plus a bare decimal-seconds
+                    // value and "N/A" for robustness. Double.parseDouble alone
+                    // throws on the colon-delimited timecode.
+                    double time;
+                    if (timeStr.startsWith("N/A"))
+                    {
+                      time = 0;
+                    }
+                    else if (timeStr.indexOf(':') == -1)
+                    {
+                      time = Double.parseDouble(timeStr);
+                    }
+                    else
+                    {
+                      String[] timeParts = timeStr.split(":");
+                      time = 0;
+                      for (int ti = 0; ti < timeParts.length; ti++)
+                        time = time * 60 + Double.parseDouble(timeParts[ti]);
+                    }
                     
                     //Fallback to using frame count to determin time if the time is < 1
                     if(time > 1)
@@ -1980,7 +2020,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
                       lastXcodeStreamTime = Math.round(1000 * (frame / fps));
                     }
                     
-                    lastXcodeStreamPosition = Long.parseLong(sizeStr) * 1024;
+                    lastXcodeStreamPosition = Long.parseLong(sizeStr) * sizeUnitMult;
                     
                   }
                   catch (NumberFormatException e)
