@@ -774,9 +774,15 @@ public class MiniPlayer implements DVDMediaPlayer
       enableBufferFillPause = Sage.getBoolean("miniclient/enable_buffer_fill_on_seek", false);
       boolean pureLocal = false;
       boolean httpls = false;
+      // NG-first ruling (ROADMAP: "NG-first decision ordering in MiniPlayer.load()").
+      // Computed once, as early as mcsr is known, so every legacy determination
+      // below can be read as `if (ngSession) { honor surface plan } else { legacy }`
+      // instead of bolting on scattered !isNgCapableSession() patches after the fact.
+      boolean ngSession = false;
       isMpeg2PS = sage.media.format.MediaFormat.MPEG2_PS.equals(currMF.getContainerFormat());
       if (mcsr != null)
       {
+        ngSession = mcsr.isNgCapableSession();
         mediaExtender = mcsr.isMediaExtender();
         hdMediaPlayer = mcsr.isStandaloneMediaPlayer();
         if (mcsr.isMiniClientColorKeyed())
@@ -825,9 +831,67 @@ public class MiniPlayer implements DVDMediaPlayer
           fixedPushFormat = mcsr.getFixedPushMediaFormat();
           fixedPushRemuxFormat = mcsr.getFixedPushRemuxFormat();
 
-          // We use HTTP Live Streaming for this
+          // NG-first: compute the surface capability verdict BEFORE the legacy
+          // iPhoneMode HLS latch so transport follows the honest surface plan.
+          // Bandwidth-independent (availableBwKbps=0) -- the authoritative
+          // decision with real bandwidth is still computed later (~L1094); this
+          // early pass only decides pull(DIRECT_PLAY) vs hls(TRANSCODE) for the
+          // httpls gate. evaluateSurfaces is pure, so the double call is safe.
+          String ngEarlyDelivery = null;
+          sage.client.PlaybackDecisionEngine.PlaybackDecision ngEarlyDecision = null;
+          if (ngSession && Sage.getBoolean("miniplayer/use_playback_surfaces", true))
+          {
+            sage.client.PlaybackSurfaceSet ngEarlySurfaces = mcsr.getPlaybackSurfaces();
+            sage.media.format.ContainerFormat ngEcf = currMF.getFileFormat();
+            if (ngEarlySurfaces != null && !ngEarlySurfaces.isEmpty())
+            {
+              int ngEw = 0, ngEh = 0, ngEkbps = 0;
+              boolean ngEint = false;
+              if (ngEcf != null && ngEcf.getVideoFormat() != null)
+              {
+                ngEw = ngEcf.getVideoFormat().getWidth();
+                ngEh = ngEcf.getVideoFormat().getHeight();
+                ngEint = ngEcf.getVideoFormat().isInterlaced();
+              }
+              if (ngEcf != null && ngEcf.getBitrate() > 0) ngEkbps = ngEcf.getBitrate() / 1000;
+              java.util.List<sage.client.PlaybackDecisionEngine.SurfaceDecision> ngEranked =
+                  sage.client.PlaybackDecisionEngine.evaluateSurfaces(ngEarlySurfaces,
+                      currMF.getContainerFormat(), currMF.getPrimaryVideoFormat(),
+                      currMF.getPrimaryAudioFormat(), ngEw, ngEh, ngEkbps, 0, ngEint, ngEcf);
+              if (!ngEranked.isEmpty())
+              {
+                ngEarlyDelivery = ngEranked.get(0).chosenDeliveryMode;
+                ngEarlyDecision = ngEranked.get(0).decision;
+              }
+            }
+          }
+
+          // Legacy iPhoneMode HLS latch, now gated by the NG surface verdict
+          // (ROADMAP: "NG-first decision ordering"). When NG's surface plan
+          // wants a non-hls delivery (pull for DIRECT_PLAY), SUPPRESS httpls and
+          // use pull: the browser's bridge rewrites the stv:// / bare-path URL
+          // to <bridge>/rawmedia (byte-range disk read) for native decode. When
+          // the plan wants hls (TRANSCODE), KEEP httpls -> server-side NVENC HLS.
+          // Non-NG / no-surface sessions are unchanged (legacy latch).
           if (mcsr.isIOSClient() && (currMF.isVideo() || currMF.isTV()))
-            clientDoesPull = httpls = true;
+          {
+            boolean ngPullOverride = ngSession && ngEarlyDelivery != null
+                && !"hls".equals(ngEarlyDelivery)
+                && Sage.getBoolean("miniplayer/ng_suppress_httpls_for_pull", true);
+            if (ngPullOverride)
+            {
+              clientDoesPull = true; // pull mode; httpls stays false
+              if (Sage.DBG) System.out.println("MiniPlayer: NG-first: iPhoneMode HLS latch SUPPRESSED"
+                  + " (surface delivery=" + ngEarlyDelivery + " decision=" + ngEarlyDecision
+                  + "); using pull -> browser bridge /rawmedia instead of iosstream");
+            }
+            else
+            {
+              clientDoesPull = httpls = true;
+              if (Sage.DBG && ngSession) System.out.println("MiniPlayer: NG-first: iPhoneMode HLS latch"
+                  + " active (surface delivery=" + ngEarlyDelivery + ") -> server-side HLS/transcode");
+            }
+          }
 
           uiBandwidthEstimate = mcsr.getEstimatedBandwidth();
           // Disable transcoding on the fly
@@ -1287,7 +1351,7 @@ public class MiniPlayer implements DVDMediaPlayer
       // correction applies ONLY to legacy (non-NG) clients whose self-report is
       // a fixed list, not to NG clients whose self-report reflects real decoders.
       if (profileDecision != null && clientDoesPull
-          && mcsr != null && !mcsr.isNgCapableSession()
+          && mcsr != null && !ngSession
           && profileDecision.decision != sage.client.PlaybackDecisionEngine.Decision.DIRECT_PLAY)
       {
         if (Sage.DBG) System.out.println("MiniPlayer: forcing push mode (legacy client) — profile decision "
@@ -1574,7 +1638,7 @@ public class MiniPlayer implements DVDMediaPlayer
         if (profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.DIRECT_PLAY
             && transcoded
             && pushMode && mcsr != null
-          && mcsr.isNgCapableSession()
+          && ngSession
             && majorTypeHint == MediaFile.MEDIATYPE_VIDEO)
         {
           if (Sage.DBG) System.out.println("MiniPlayer: profile-authoritative override forces DIRECT_PLAY"
