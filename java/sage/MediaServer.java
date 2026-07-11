@@ -56,6 +56,12 @@ public class MediaServer implements Runnable
         (MMC.getInstance().isNTSCVideoFormat() ? "352x240" : "352x288") + " -r " + (MMC.getInstance().isNTSCVideoFormat() ? "29.97" : "25"));
     Sage.put(XCODE_QUALITIES_PROPERTY_ROOT + "SVCD6Ch", "-f dvd -b 2000 -g 3 -bf 0 -acodec ac3 -ab 384 -ar 48000 -ac 6 -s " +
         (MMC.getInstance().isNTSCVideoFormat() ? "352x240" : "352x288") + " -r " + (MMC.getInstance().isNTSCVideoFormat() ? "29.97" : "25"));
+    // Browser / MSE target: fragmented MP4 with H.264 High + AAC stereo. Browsers cannot
+    // decode MPEG-2, so the desktop PWA path transcodes to this. Video bitrate is intentionally
+    // omitted here -- FFMPEGTranscoder injects -b:v from its estimated bandwidth and the pull
+    // proxy drives it live via the XCODE_ADJUST MediaServer command. frag_keyframe+empty_moov+
+    // default_base_moof produces the fMP4 framing MSE needs for progressive playback.
+    Sage.put(XCODE_QUALITIES_PROPERTY_ROOT + "browserhd", "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof -vcodec libx264 -preset veryfast -pix_fmt yuv420p -profile:v high -level 4.1 -acodec aac -ac 2 -ar 48000 -b:a 128k");
     extraFileSet = new java.util.HashSet();
     String extraFilesProp = Sage.get("media_server/extra_allowed_files", "miniclient");
     java.util.StringTokenizer toker = new java.util.StringTokenizer(extraFilesProp, ";");
