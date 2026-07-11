@@ -12157,16 +12157,7 @@
              </ns0:Action>
             </ns0:Branch>
             <ns0:Branch Name="false" Sym="COMSKIP-790c">
-             <ns0:Action Name="NextBoundary = GetNextCommercialBoundaryTime(GetCurrentMediaFile(), GetMediaTime())" Sym="COMSKIP-790d">
-              <ns0:Conditional Name="NextBoundary &gt; 0" Sym="COMSKIP-790e">
-               <ns0:Branch Name="true" Sym="COMSKIP-790f">
-                <ns0:Action Name="Seek(NextBoundary)" Sym="COMSKIP-790g" />
-               </ns0:Branch>
-               <ns0:Branch Name="false" Sym="COMSKIP-790h">
-                <ns0:Action Name="SkipForward()" Sym="COMSKIP-790i" />
-               </ns0:Branch>
-              </ns0:Conditional>
-             </ns0:Action>
+             <ns0:Action Name="SkipForward()" Sym="COMSKIP-790d" />
             </ns0:Branch>
            </ns0:Conditional>
           </ns0:Branch>
@@ -12211,16 +12202,7 @@
          <ns0:Action Ref="3766" Name="&quot;REM Display extra bot..." />
          <ns0:Conditional Name="HasCommercialMarkers(GetCurrentMediaFile())" Sym="COMSKIP-796">
           <ns0:Branch Name="true" Sym="COMSKIP-796a">
-           <ns0:Action Name="PrevBoundary = GetPreviousCommercialBoundaryTime(GetCurrentMediaFile(), GetMediaTime())" Sym="COMSKIP-796b">
-            <ns0:Conditional Name="PrevBoundary &gt; 0" Sym="COMSKIP-796c">
-             <ns0:Branch Name="true" Sym="COMSKIP-796d">
-              <ns0:Action Name="Seek(PrevBoundary)" Sym="COMSKIP-796e" />
-             </ns0:Branch>
-             <ns0:Branch Name="false" Sym="COMSKIP-796f">
-              <ns0:Action Name="SkipBackwards()" Sym="COMSKIP-796g" />
-             </ns0:Branch>
-            </ns0:Conditional>
-           </ns0:Action>
+           <ns0:Action Name="SkipBackwards()" Sym="COMSKIP-796b" />
           </ns0:Branch>
           <ns0:Branch Name="false" Sym="COMSKIP-796h">
            <ns0:Action Name="SkipBackwards()" Sym="BASE-53002" />
@@ -12252,7 +12234,16 @@
       <ns0:Branch Name="true" Sym="BASE-53016">
        <ns0:Action Name="DisplayTimebarStatus = true" Sym="BASE-53017">
         <ns0:Action Ref="3766" Name="&quot;REM Display extra bot..." />
-        <ns0:Action Name="SkipForward2()" Sym="BASE-53018" />
+        <ns0:Action Name="NextBoundary = GetNextCommercialBoundaryTime(GetCurrentMediaFile(), GetMediaTime())" Sym="BASE-53018">
+         <ns0:Conditional Name="NextBoundary &gt; 0" Sym="COMSKIP-FF2NAV-cond">
+          <ns0:Branch Name="true" Sym="COMSKIP-FF2NAV-t">
+           <ns0:Action Name="Seek(NextBoundary)" Sym="COMSKIP-FF2NAV-seek" />
+          </ns0:Branch>
+          <ns0:Branch Name="false" Sym="COMSKIP-FF2NAV-f">
+           <ns0:Action Name="SkipForward2()" Sym="COMSKIP-FF2NAV-skip" />
+          </ns0:Branch>
+         </ns0:Conditional>
+        </ns0:Action>
        </ns0:Action>
       </ns0:Branch>
       <ns0:Branch Name="false" Sym="BASE-53019">
@@ -12278,7 +12269,16 @@
       <ns0:Branch Name="true" Sym="BASE-53029">
        <ns0:Action Name="DisplayTimebarStatus = true" Sym="BASE-53030">
         <ns0:Action Ref="3766" Name="&quot;REM Display extra bot..." />
-        <ns0:Action Name="SkipBackwards2()" Sym="BASE-53031" />
+        <ns0:Action Name="PrevBoundary = GetPreviousCommercialBoundaryTime(GetCurrentMediaFile(), GetMediaTime())" Sym="BASE-53031">
+         <ns0:Conditional Name="PrevBoundary &gt; 0" Sym="COMSKIP-REW2NAV-cond">
+          <ns0:Branch Name="true" Sym="COMSKIP-REW2NAV-t">
+           <ns0:Action Name="Seek(PrevBoundary)" Sym="COMSKIP-REW2NAV-seek" />
+          </ns0:Branch>
+          <ns0:Branch Name="false" Sym="COMSKIP-REW2NAV-f">
+           <ns0:Action Name="SkipBackwards2()" Sym="COMSKIP-REW2NAV-skip" />
+          </ns0:Branch>
+         </ns0:Conditional>
+        </ns0:Action>
        </ns0:Action>
       </ns0:Branch>
       <ns0:Branch Name="false" Sym="BASE-53032">
