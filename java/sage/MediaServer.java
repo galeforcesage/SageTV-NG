@@ -1212,6 +1212,50 @@ public class MediaServer implements Runnable
             int numWritten = s.write(commBufWrite);
             if (MEDIA_SERVER_DEBUG) System.out.println("MediaServer wrote out " + numWritten + " bytes");
           }
+          else if (tempString.indexOf("XCODE_ADJUST ") == 0)
+          {
+            // NG pull-mode live bitrate control. A pull proxy (e.g. the PWA
+            // bridge) that serves the transcoded bytes to the end client, and
+            // therefore measures real downstream throughput, sends an ABSOLUTE
+            // target VIDEO bitrate in kbps. We clamp it to a sane range and
+            // translate it to the transcoder's delta-based videorateadapt (the
+            // same live control the push path uses). Only valid when a live
+            // FFMPEGTranscoder is active on this connection (XCODE_SETUP was
+            // issued); REMUX / raw connections reply NO_INIT so the caller knows
+            // adjustment isn't applicable. Stock servers don't implement this
+            // command, so it is NG-only by construction; callers must treat an
+            // unrecognized-command / error reply as "adaptation unavailable".
+            if (xcoder instanceof FFMPEGTranscoder && Sage.getBoolean("media_server/allow_xcode_adjust", true))
+            {
+              FFMPEGTranscoder fftc = (FFMPEGTranscoder) xcoder;
+              try
+              {
+                int targetKbps = Integer.parseInt(tempString.substring(13).trim());
+                int minKbps = Sage.getInt("media_server/xcode_adjust_min_kbps", 300);
+                int maxKbps = Sage.getInt("media_server/xcode_adjust_max_kbps", 8000);
+                targetKbps = Math.max(minKbps, Math.min(maxKbps, targetKbps));
+                int delta = targetKbps - fftc.getCurrentVideoBitrateKbps();
+                if (delta != 0)
+                  fftc.dynamicVideoRateAdjust(delta);
+                if (Sage.DBG) System.out.println("MediaServer XCODE_ADJUST target=" + targetKbps +
+                    "kbps -> new video=" + fftc.getCurrentVideoBitrateKbps() + "kbps");
+                commBufWrite.clear();
+                commBufWrite.put((fftc.getCurrentVideoBitrateKbps() + "\r\n").getBytes()).flip();
+              }
+              catch (NumberFormatException nfe)
+              {
+                commBufWrite.clear();
+                commBufWrite.put("PARAM_ERROR\r\n".getBytes()).flip();
+              }
+            }
+            else
+            {
+              commBufWrite.clear();
+              commBufWrite.put("NO_INIT\r\n".getBytes()).flip();
+            }
+            int numWritten = s.write(commBufWrite);
+            if (MEDIA_SERVER_DEBUG) System.out.println("MediaServer wrote out " + numWritten + " bytes");
+          }
           else if (tempString.indexOf("REMUX_SETUP ") == 0)
           {
             // REMUX_SETUP Mode OutputFormat Parameters...
