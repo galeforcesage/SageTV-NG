@@ -1841,13 +1841,16 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         {
           lastVideoOpTime = Sage.eventTime();
           long rewTarget = getMediaTimeMillis() + daJob.time;
-          // Comskip-aware rewind: if the rewind would land inside a detected
-          // commercial segment, the auto-skip monitor would immediately bounce
-          // the user forward to the end — defeating the rewind. Instead, land
-          // the user a configurable preroll (default 15s) BEFORE the start of
-          // the commercial so they can see the lead-in.
-          // Only active when auto-skip is enabled; in manual mode the user
-          // explicitly wants to land where they pressed REW.
+          // Comskip-aware rewind. When auto-skip is enabled and the user rewinds
+          // INTO a detected commercial segment, the auto-skip monitor would
+          // normally bounce them forward again — making it impossible to re-watch
+          // content that comskip mis-detected as a commercial (e.g. the start of
+          // the show right after a break). By default we now HONOR the rewind:
+          // land exactly where REW targeted and suppress auto-skip for this
+          // segment (by marking wasInCommercial) until playback leaves the zone
+          // or the user seeks forward. Set videoframe/comskip_rew_watch_override
+          // = false to restore the legacy behavior of landing a preroll before
+          // the commercial start instead.
           sage.commercial.SkipMatrix sm = commSkipMatrix;
           if (sm != null && sm.getSegmentCount() > 0
               && sage.commercial.CommercialDetectionManager.getInstance().isAutoSkipEnabled())
@@ -1855,16 +1858,29 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
             long fileRel = rewTarget - commSkipFileStart;
             if (fileRel >= 0 && sm.isInCommercial(fileRel))
             {
-              long commStartFileRel = sm.getCommercialStart(fileRel);
-              if (commStartFileRel >= 0)
+              if (uiMgr.getBoolean(prefs + "comskip_rew_watch_override", true))
               {
-                long preroll = uiMgr.getLong(prefs + "comskip_rew_preroll_ms", 15000L);
-                long adjustedFileRel = Math.max(0L, commStartFileRel - preroll);
-                long adjustedEpoch = adjustedFileRel + commSkipFileStart;
-                if (Sage.DBG) System.out.println("VideoFrame: REW landed inside commercial at fileRel=" +
-                    fileRel + "ms; adjusting to " + adjustedFileRel + "ms (commStart=" +
-                    commStartFileRel + "ms - preroll=" + preroll + "ms)");
-                rewTarget = adjustedEpoch;
+                // Manual rewind into a commercial zone: let the user watch it.
+                // Marking wasInCommercial prevents the monitor's "just entered a
+                // commercial" transition from firing an auto-skip; it resets when
+                // playback naturally exits the segment.
+                wasInCommercial = true;
+                if (Sage.DBG) System.out.println("VideoFrame: REW into commercial at fileRel=" +
+                    fileRel + "ms; honoring rewind and suppressing auto-skip for this segment");
+              }
+              else
+              {
+                long commStartFileRel = sm.getCommercialStart(fileRel);
+                if (commStartFileRel >= 0)
+                {
+                  long preroll = uiMgr.getLong(prefs + "comskip_rew_preroll_ms", 15000L);
+                  long adjustedFileRel = Math.max(0L, commStartFileRel - preroll);
+                  long adjustedEpoch = adjustedFileRel + commSkipFileStart;
+                  if (Sage.DBG) System.out.println("VideoFrame: REW landed inside commercial at fileRel=" +
+                      fileRel + "ms; adjusting to " + adjustedFileRel + "ms (commStart=" +
+                      commStartFileRel + "ms - preroll=" + preroll + "ms)");
+                  rewTarget = adjustedEpoch;
+                }
               }
             }
           }
