@@ -32,6 +32,85 @@ public class MediaServer implements Runnable
   public static final String XCODE_QUALITIES_PROPERTY_ROOT = "media_server/transcode_quality/";
   private static final byte[] OK_BYTES = "OK\r\n".getBytes();
   private static final byte[] RN_BYTES = "\r\n".getBytes();
+
+  /**
+   * Build the "browserhd" transcode-quality param string. Container (fragmented
+   * MP4) and audio (AAC stereo) are fixed; the H.264 video encoder is chosen at
+   * startup by {@link sage.HwEncoder} so ONE mode works across hardware:
+   *   No-GPU  -> libx264
+   *   NVIDIA  -> h264_nvenc
+   *   AMD     -> h264_amf (Windows) / h264_vaapi (Linux, future)
+   *   Intel   -> h264_qsv / h264_vaapi (future)
+   * Video bitrate is intentionally omitted: FFMPEGTranscoder injects -b:v from
+   * its estimated bandwidth and the pull proxy drives it live via XCODE_ADJUST.
+   *
+   * Overrides:
+   *   media_server/browserhd_video_codec = auto (default) | libx264 |
+   *     h264_nvenc | h264_qsv | h264_amf | h264_vaapi
+   *   media_server/browserhd_preset      = preset hint (default "veryfast")
+   *
+   * NOTE: this string is spliced into the ffmpeg command AFTER -i (output side).
+   * VAAPI requires a pre-"-i" -vaapi_device init that the property path cannot
+   * carry yet, so an auto-pick (or explicit request) of VAAPI falls back to
+   * libx264 here. Once the browser path grows pre-input plumbing, drop the
+   * fallback to light up AMD/Intel VAAPI.
+   */
+  private static String buildBrowserHdParams()
+  {
+    final String container = "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof";
+    final String audio = "-acodec aac -ac 2 -ar 48000 -b:a 128k";
+    String sel = Sage.get("media_server/browserhd_video_codec", "auto");
+    String presetHint = Sage.get("media_server/browserhd_preset", "veryfast");
+
+    sage.HwEncoder.Kind k;
+    String enc;
+    if (sel == null || sel.length() == 0 || "auto".equalsIgnoreCase(sel))
+    {
+      k = sage.HwEncoder.pick("h264"); // nvenc / vaapi / qsv / amf, or NONE
+      enc = sage.HwEncoder.encoderName(k, "h264");
+      if (enc == null) { k = sage.HwEncoder.Kind.NONE; enc = "libx264"; }
+    }
+    else if ("libx264".equalsIgnoreCase(sel))
+    {
+      k = sage.HwEncoder.Kind.NONE; enc = "libx264";
+    }
+    else
+    {
+      enc = sel;
+      if (sel.indexOf("nvenc") >= 0) k = sage.HwEncoder.Kind.NVENC;
+      else if (sel.indexOf("vaapi") >= 0) k = sage.HwEncoder.Kind.VAAPI;
+      else if (sel.indexOf("qsv") >= 0) k = sage.HwEncoder.Kind.QSV;
+      else if (sel.indexOf("amf") >= 0) k = sage.HwEncoder.Kind.AMF;
+      else k = sage.HwEncoder.Kind.NONE;
+    }
+
+    // The property path emits everything after -i; VAAPI's mandatory pre-"-i"
+    // -vaapi_device can't live there, so downgrade to software rather than emit
+    // a command ffmpeg will reject.
+    if (k == sage.HwEncoder.Kind.VAAPI)
+    {
+      if (Sage.DBG) System.out.println("MediaServer.browserhd: VAAPI needs pre-input device "
+          + "init (unsupported on the property path yet) -> falling back to libx264");
+      k = sage.HwEncoder.Kind.NONE; enc = "libx264";
+    }
+
+    StringBuilder sb = new StringBuilder(container);
+    sb.append(" -vf ").append(sage.HwEncoder.videoFilter(k, "yuv420p", null));
+    sb.append(" -c:v ").append(enc);
+    String preset = sage.HwEncoder.preset(k, presetHint);
+    if (preset != null && preset.length() > 0)
+      sb.append(' ').append(sage.HwEncoder.presetFlag(k)).append(' ').append(preset);
+    sb.append(" -profile:v high");
+    // libx264 gets an explicit level cap for broad browser MSE compatibility;
+    // hardware encoders auto-select an appropriate level.
+    if (k == sage.HwEncoder.Kind.NONE)
+      sb.append(" -level 4.1");
+    sb.append(' ').append(audio);
+    String out = sb.toString();
+    if (Sage.DBG) System.out.println("MediaServer.browserhd params (" + k + "/" + enc + "): " + out);
+    return out;
+  }
+
   public MediaServer()
   {
     alive = true;
@@ -57,11 +136,11 @@ public class MediaServer implements Runnable
     Sage.put(XCODE_QUALITIES_PROPERTY_ROOT + "SVCD6Ch", "-f dvd -b 2000 -g 3 -bf 0 -acodec ac3 -ab 384 -ar 48000 -ac 6 -s " +
         (MMC.getInstance().isNTSCVideoFormat() ? "352x240" : "352x288") + " -r " + (MMC.getInstance().isNTSCVideoFormat() ? "29.97" : "25"));
     // Browser / MSE target: fragmented MP4 with H.264 High + AAC stereo. Browsers cannot
-    // decode MPEG-2, so the desktop PWA path transcodes to this. Video bitrate is intentionally
-    // omitted here -- FFMPEGTranscoder injects -b:v from its estimated bandwidth and the pull
-    // proxy drives it live via the XCODE_ADJUST MediaServer command. frag_keyframe+empty_moov+
-    // default_base_moof produces the fMP4 framing MSE needs for progressive playback.
-    Sage.put(XCODE_QUALITIES_PROPERTY_ROOT + "browserhd", "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof -vcodec libx264 -preset veryfast -pix_fmt yuv420p -profile:v high -level 4.1 -acodec aac -ac 2 -ar 48000 -b:a 128k");
+    // decode MPEG-2, so the desktop PWA path transcodes to this. The H.264 encoder is chosen
+    // at startup by sage.HwEncoder so this single mode covers No-GPU (libx264), NVENC, and --
+    // as backends mature -- AMD/Intel. frag_keyframe+empty_moov+default_base_moof produces the
+    // fMP4 framing MSE needs for progressive playback. See buildBrowserHdParams().
+    Sage.put(XCODE_QUALITIES_PROPERTY_ROOT + "browserhd", buildBrowserHdParams());
     extraFileSet = new java.util.HashSet();
     String extraFilesProp = Sage.get("media_server/extra_allowed_files", "miniclient");
     java.util.StringTokenizer toker = new java.util.StringTokenizer(extraFilesProp, ";");
