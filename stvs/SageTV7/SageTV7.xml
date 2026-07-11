@@ -150046,7 +150046,7 @@
                             </ns0:Action>
                            </ns0:Branch>
                            <ns0:Branch Name="false" Sym="BASE-47324-NO-AUTH">
-                            <ns0:Action Name="CurrentDirPath = ReplaceAll(java_lang_Object_toString(FolderCell), &quot;\\&quot;, &quot;/&quot;)" Sym="BASE-47325-FIX">
+                            <ns0:Action Name="CurrentDirPath = FolderCell" Sym="BASE-47325-FIX">
                              <ns0:Action ID="53218" Name="IsValidDirBrowserDir = true" Sym="BASE-47321">
                               <ns0:Action ID="53001" Name="&quot;REM Mark CurrentDirPath as a last-browsed dir, if needed.&quot;" Sym="BASE-47182">
                                <ns0:Conditional Name="Size(TrackLastDirPathProperty) &gt; 0" Sym="BASE-47183">
