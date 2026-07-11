@@ -997,6 +997,62 @@ public class CommercialSkipAPI {
         return boundary >= 0 ? fileStartMs + boundary : -1L;
       }});
 
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "GetAutoSkipStopDelayMs", true)
+    {
+      /**
+       * Returns the stop delay in milliseconds - how early before a commercial ends to resume playback.
+       * @return the stop delay in ms (0 = seek to exact end)
+       * @since 9.3
+       *
+       * @declaration public int GetAutoSkipStopDelayMs();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return CommercialDetectionManager.getInstance().getAutoSkipStopDelayMs();
+      }});
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "SetAutoSkipStopDelayMs", new String[] { "DelayMs" }, true)
+    {
+      /**
+       * Sets the auto-skip stop delay in milliseconds - how early before a commercial ends to resume playback.
+       * @param DelayMs the stop delay in ms (0 = seek to exact end)
+       * @since 9.3
+       *
+       * @declaration public void SetAutoSkipStopDelayMs(int DelayMs);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        int ms = getInt(stack);
+        CommercialDetectionManager.getInstance().setAutoSkipStopDelayMs(ms);
+        return null;
+      }});
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "GetMinCommercialDurationMs", true)
+    {
+      /**
+       * Returns the minimum commercial segment duration in ms required to trigger a skip.
+       * @return the minimum duration in ms
+       * @since 9.3
+       *
+       * @declaration public int GetMinCommercialDurationMs();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        return CommercialDetectionManager.getInstance().getMinCommercialDurationMs();
+      }});
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "SetMinCommercialDurationMs", new String[] { "DurationMs" }, true)
+    {
+      /**
+       * Sets the minimum commercial segment duration in ms required to trigger a skip.
+       * @param DurationMs the minimum duration in ms (0 = skip all)
+       * @since 9.3
+       *
+       * @declaration public void SetMinCommercialDurationMs(int DurationMs);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        int ms = getInt(stack);
+        CommercialDetectionManager.getInstance().setMinCommercialDurationMs(ms);
+        return null;
+      }});
+
     rft.put(new PredefinedJEPFunction("CommercialSkip", "GetCommercialSegmentCount", new String[] { "MediaFile" })
     {
       /**
