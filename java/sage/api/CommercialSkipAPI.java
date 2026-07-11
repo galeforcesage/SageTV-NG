@@ -945,6 +945,58 @@ public class CommercialSkipAPI {
         return getCommercialEndTimeMs(mf, timeMs);
       }});
 
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "GetNextCommercialBoundaryTime", new String[] { "MediaFile", "TimeMs" })
+    {
+      /**
+       * Returns the next commercial segment boundary (start or end) after the given time,
+       * in epoch milliseconds. Returns -1 if no boundary exists.
+       * @param MediaFile the MediaFile being played
+       * @param TimeMs the current playback time in epoch milliseconds
+       * @return next boundary time in epoch ms, or -1
+       * @since 9.3
+       *
+       * @declaration public long GetNextCommercialBoundaryTime(MediaFile MediaFile, long TimeMs);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        long timeMs = getLong(stack);
+        MediaFile mf = getMediaFile(stack);
+        if (mf == null) return -1L;
+        SkipMatrix matrix = null;
+        VideoFrame vf = stack.getUIMgrSafe().getVideoFrame();
+        if (vf != null && mf.equals(vf.getCurrFile()))
+          matrix = vf.getCommercialSkipMatrix();
+        if (matrix == null) return -1L;
+        long fileStartMs = mf.getStart(0);
+        long boundary = matrix.getNextBoundary(timeMs - fileStartMs);
+        return boundary >= 0 ? fileStartMs + boundary : -1L;
+      }});
+
+    rft.put(new PredefinedJEPFunction("CommercialSkip", "GetPreviousCommercialBoundaryTime", new String[] { "MediaFile", "TimeMs" })
+    {
+      /**
+       * Returns the previous commercial segment boundary (start or end) before the given time,
+       * in epoch milliseconds. Returns -1 if no boundary exists.
+       * @param MediaFile the MediaFile being played
+       * @param TimeMs the current playback time in epoch milliseconds
+       * @return previous boundary time in epoch ms, or -1
+       * @since 9.3
+       *
+       * @declaration public long GetPreviousCommercialBoundaryTime(MediaFile MediaFile, long TimeMs);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        long timeMs = getLong(stack);
+        MediaFile mf = getMediaFile(stack);
+        if (mf == null) return -1L;
+        SkipMatrix matrix = null;
+        VideoFrame vf = stack.getUIMgrSafe().getVideoFrame();
+        if (vf != null && mf.equals(vf.getCurrFile()))
+          matrix = vf.getCommercialSkipMatrix();
+        if (matrix == null) return -1L;
+        long fileStartMs = mf.getStart(0);
+        long boundary = matrix.getPreviousBoundary(timeMs - fileStartMs);
+        return boundary >= 0 ? fileStartMs + boundary : -1L;
+      }});
+
     rft.put(new PredefinedJEPFunction("CommercialSkip", "GetCommercialSegmentCount", new String[] { "MediaFile" })
     {
       /**
