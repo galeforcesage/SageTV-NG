@@ -857,7 +857,8 @@ public class MiniPlayer implements DVDMediaPlayer
               java.util.List<sage.client.PlaybackDecisionEngine.SurfaceDecision> ngEranked =
                   sage.client.PlaybackDecisionEngine.evaluateSurfaces(ngEarlySurfaces,
                       currMF.getContainerFormat(), currMF.getPrimaryVideoFormat(),
-                      currMF.getPrimaryAudioFormat(), ngEw, ngEh, ngEkbps, 0, ngEint, ngEcf);
+                      currMF.getPrimaryAudioFormat(), ngEw, ngEh, ngEkbps, 0, ngEint, ngEcf,
+                      mcsr.getCurrentClientAudioLanguage());
               if (!ngEranked.isEmpty())
               {
                 ngEarlyDelivery = ngEranked.get(0).chosenDeliveryMode;
@@ -1176,11 +1177,16 @@ public class MiniPlayer implements DVDMediaPlayer
           // 2.1.0002: pass ContainerFormat so the evaluator can inspect
           // multiple audio streams, filter by server language, and prefer
           // native-decode over transcode (see selectBestAudioStream).
+          // 2.1.0007: thread the client-reported preferred audio language
+          // (CLIENT_AUDIO_LANGUAGE) so multi-audio sources match the client's
+          // language first, then the server locale (null-safe; empty falls
+          // back to server locale as before).
+          String clientAudioLang = (mcsr != null) ? mcsr.getCurrentClientAudioLanguage() : null;
           java.util.List<sage.client.PlaybackDecisionEngine.SurfaceDecision> ranked =
               sage.client.PlaybackDecisionEngine.evaluateSurfaces(surfaces,
                   mediaContainer, mediaVideo, mediaAudio,
                   mediaW, mediaH, sourceBitrateKbps, availableBwKbps, srcInterlaced,
-                  cf);
+                  cf, clientAudioLang);
           if (!ranked.isEmpty())
           {
             sage.client.PlaybackDecisionEngine.SurfaceDecision winner = ranked.get(0);
