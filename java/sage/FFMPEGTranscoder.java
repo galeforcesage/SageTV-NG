@@ -591,6 +591,31 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
   }
 
+  /**
+   * Pick a target WxH for the modern H.264 push path by video-bitrate tier,
+   * never upscaling beyond the source. When the source dimensions are unknown
+   * (e.g. an as-yet-unparsed HEVC recording) fall back to a 16:9 tier size so we
+   * never emit the legacy "-s 0x0". Returns even dimensions.
+   */
+  private static int[] pickH264PushSize(int videoKbps, sage.media.format.VideoFormat src)
+  {
+    int th; // target height tier
+    if (videoKbps < 1200) th = 360;
+    else if (videoKbps < 2500) th = 480;
+    else if (videoKbps < 5000) th = 720;
+    else th = 1080;
+    int sw = (src != null) ? src.getWidth() : 0;
+    int sh = (src != null) ? src.getHeight() : 0;
+    if (sw <= 0 || sh <= 0)
+    {
+      int w16 = th * 16 / 9;
+      return new int[] { (w16 + 1) / 2 * 2, (th + 1) / 2 * 2 };
+    }
+    if (th > sh) th = sh; // never upscale beyond source
+    int tw = (int) Math.round((double) sw / (double) sh * th);
+    return new int[] { (tw + 1) / 2 * 2, (th + 1) / 2 * 2 };
+  }
+
   public void setTranscodeFormat(String str, sage.media.format.ContainerFormat inSourceFormat)
   {
     sourceFormat = inSourceFormat;
@@ -600,6 +625,14 @@ public class FFMPEGTranscoder implements TranscodeEngine
     {
       iOSMode = true;
       dynamicRateAdjust = true;
+    }
+    else if ("dynamich264".equalsIgnoreCase(str))
+    {
+      // Modern H.264 MPEG-TS push (bandwidth-aware, GPU-accelerated when
+      // available). dynamicRateAdjust keeps the push-buffer bitrate adapter
+      // (videorateadapt) active; pushH264 selects the H.264/TS command shape.
+      dynamicRateAdjust = true;
+      pushH264 = true;
     }
     else if ("audioonly".equalsIgnoreCase(str))
     {
@@ -1310,6 +1343,108 @@ public class FFMPEGTranscoder implements TranscodeEngine
       }
 
       // Preserve aspect ratio properly
+      if (sourceFormat != null)
+      {
+        sage.media.format.VideoFormat vidForm = sourceFormat.getVideoFormat();
+        if (vidForm != null && ((vidForm.getArNum() > 0 && vidForm.getArDen() > 0) || (vidForm.getWidth() > 0 && vidForm.getHeight() > 0)))
+        {
+          xcodeParamsVec.add("-aspect");
+          if (vidForm.getArNum() > 0 && vidForm.getArDen() > 0)
+            xcodeParamsVec.add(vidForm.getArNum() + ":" + vidForm.getArDen());
+          else
+            xcodeParamsVec.add(vidForm.getWidth() + ":" + vidForm.getHeight());
+        }
+      }
+    }
+    else if (dynamicRateAdjust && pushH264)
+    {
+      // ---- Modern H.264 MPEG-TS push (replaces legacy mpeg4/DVD ~1 Mbps) ----
+      // GPU-accelerated via HwEncoder when the host has NVENC; else software
+      // libx264 (No-GPU hosts keep working). Resolution + bitrate track the
+      // CLIENT'S REPORTED bandwidth (estimatedBandwidth, bits/sec) so NG/modern
+      // clients get best-quality playback for their link instead of the old
+      // fixed ~1 Mbps clamp. Output is H.264-in-MPEG-TS, decodable by every push
+      // client that advertised H.264 + MPEG2-TS (the gate that picked this mode
+      // in MiniPlayer). NVENC videorateadapt keeps working via dynamicRateAdjust.
+      isMpeg4Codec = false;
+      xcodeParamsVec.add("-f");
+      xcodeParamsVec.add("mpegts");
+      HwEncoder.Kind pushKind = HwEncoder.pick("h264");
+      boolean pushNvenc = (pushKind == HwEncoder.Kind.NVENC);
+      if (pushKind != HwEncoder.Kind.NONE && !pushNvenc && Sage.DBG)
+        System.out.println("FFMPEGTranscoder: push-h264: HW encoder " + pushKind +
+            " not yet wired for the push path (needs hwupload); using libx264.");
+      videoCodec = pushNvenc ? "h264_nvenc" : "libx264";
+      if (Sage.DBG)
+        System.out.println("FFMPEGTranscoder: push-h264 encoder -> " + videoCodec
+            + " (reportedBW=" + (estimatedBandwidth / 1000) + " kbps)");
+      xcodeParamsVec.add("-vcodec");
+      xcodeParamsVec.add(videoCodec);
+
+      // Bandwidth-aware target. estimatedBandwidth is the client's reported link
+      // (bits/sec) from MiniPlayer.setEstimatedBandwidth; 0 => unknown, assume a
+      // comfortable 8 Mbps. Reserve ~10% headroom plus audio.
+      long bwKbps = (estimatedBandwidth > 0 ? estimatedBandwidth : 8000000L) / 1000L;
+      int audioKbps = (bwKbps < 1500) ? 96 : 128;
+      int videoKbps = (int) Math.max(200, bwKbps * 90 / 100 - audioKbps);
+      videoKbps = Math.min(videoKbps, Sage.getInt("miniplayer/h264_push_max_video_kbps", 12000));
+      int[] wh = pickH264PushSize(videoKbps, srcVideo);
+      targetWidth = wh[0];
+      targetHeight = wh[1];
+      currVideoBitrateKbps = videoKbps;
+      currAudioBitrateKbps = audioKbps;
+      currFps = MMC.getInstance().isNTSCVideoFormat() ? 30 : 25;
+      xcodeParamsVec.add("-s");
+      xcodeParamsVec.add(targetWidth + "x" + targetHeight);
+      xcodeParamsVec.add("-r");
+      xcodeParamsVec.add(MMC.getInstance().isNTSCVideoFormat() ? "29.97" : "25");
+      xcodeParamsVec.add("-b:v");
+      xcodeParamsVec.add(Integer.toString(currVideoBitrateKbps * 1000));
+      // Audio: AAC-LC stereo -- universally decodable by H.264-capable push
+      // clients. Override via miniplayer/h264_push_audio_codec.
+      xcodeParamsVec.add("-acodec");
+      xcodeParamsVec.add(Sage.get("miniplayer/h264_push_audio_codec", "aac"));
+      xcodeParamsVec.add("-b:a");
+      xcodeParamsVec.add(Integer.toString(currAudioBitrateKbps * 1000));
+      xcodeParamsVec.add("-ac");
+      xcodeParamsVec.add("2");
+      xcodeParamsVec.add("-ar");
+      xcodeParamsVec.add("48000");
+      if (pushNvenc)
+      {
+        xcodeParamsVec.add("-preset");
+        xcodeParamsVec.add(Sage.get("multimedia/hwaccel/nvenc/push_preset", "p4"));
+        xcodeParamsVec.add("-rc:v");
+        xcodeParamsVec.add("vbr");
+        xcodeParamsVec.add("-g");
+        xcodeParamsVec.add("250");
+        xcodeParamsVec.add("-keyint_min");
+        xcodeParamsVec.add("25");
+        xcodeParamsVec.add("-bf");
+        xcodeParamsVec.add("0");
+        xcodeParamsVec.add("-profile:v");
+        xcodeParamsVec.add("high");
+        xcodeParamsVec.add("-level:v");
+        xcodeParamsVec.add("auto");
+      }
+      else
+      {
+        xcodeParamsVec.add("-preset");
+        xcodeParamsVec.add(Sage.get("multimedia/hwaccel/libx264/push_preset", "veryfast"));
+        xcodeParamsVec.add("-g");
+        xcodeParamsVec.add("250");
+        xcodeParamsVec.add("-keyint_min");
+        xcodeParamsVec.add("25");
+        xcodeParamsVec.add("-bf");
+        xcodeParamsVec.add("2");
+        xcodeParamsVec.add("-profile:v");
+        xcodeParamsVec.add("high");
+      }
+      xcodeParamsVec.add("-maxrate");
+      xcodeParamsVec.add(Integer.toString(currVideoBitrateKbps * 6000 / 5));
+      xcodeParamsVec.add("-bufsize");
+      xcodeParamsVec.add(Integer.toString(currVideoBitrateKbps * 5000));
+      // Preserve display aspect ratio (same as the legacy dynamic path).
       if (sourceFormat != null)
       {
         sage.media.format.VideoFormat vidForm = sourceFormat.getVideoFormat();
@@ -2953,6 +3088,13 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
   protected boolean dynamicRateAdjust = false;
   protected boolean iOSMode = false;
+  /** Modern H.264 MPEG-TS push (set by the "dynamich264" transcode mode). When
+   *  true the dynamic push path emits H.264 (NVENC or software libx264) in an
+   *  MPEG-TS container at a bandwidth-appropriate resolution/bitrate instead of
+   *  the legacy 2008-era mpeg4/DVD clamped near 1 Mbps. Only engaged for clients
+   *  that positively advertise H.264 video + MPEG2-TS push (gated in MiniPlayer),
+   *  so legacy 9.2.16 extenders/placeshifters keep the mpeg4 path unchanged. */
+  protected boolean pushH264 = false;
   protected long estimatedBandwidth;
   protected int liveLastBandwidthHintKbps;
   protected int liveSmoothedBandwidthHintKbps;

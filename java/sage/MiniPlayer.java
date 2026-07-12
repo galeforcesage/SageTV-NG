@@ -763,6 +763,8 @@ public class MiniPlayer implements DVDMediaPlayer
       boolean clientDoesPull = false;
       boolean clientCanDoMpeg4 = false;
       boolean clientCanDoMPEGHD = false;
+      // Modern H.264 MPEG-TS push eligibility (set below once mcsr is known).
+      boolean h264PushOK = false;
       hdMediaPlayer = false;
       String fixedPushFormat = null;
       String fixedPushRemuxFormat = null;
@@ -788,6 +790,14 @@ public class MiniPlayer implements DVDMediaPlayer
         if (mcsr.isMiniClientColorKeyed())
           colorKey = mcsr.getMiniClientColorKey();
         clientDoesMPEG2Push = mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS);
+        // Modern H.264 MPEG-TS push: engage ONLY when the client positively
+        // advertises H.264 video AND MPEG2-TS push. Legacy 9.2.16 clients
+        // (HD100/HD200 hardware extenders, classic placeshifter) that don't keep
+        // the existing mpeg4/DVD dynamic path unchanged. Kill-switch:
+        // miniplayer/enable_h264_push_transcode (default true).
+        h264PushOK = Sage.getBoolean("miniplayer/enable_h264_push_transcode", true)
+            && mcsr.isSupportedVideoCodec(sage.media.format.MediaFormat.H264)
+            && mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_TS);
         detailedPushBufferStats = mcsr.isDetailedPushBufferStats();
         if (mcsr.isSupportedVideoCodec("MPEG2-VIDEO@HL"))
         {
@@ -1462,8 +1472,9 @@ public class MiniPlayer implements DVDMediaPlayer
           if (hevcSrcLegacy)
           {
             dynamicRateAdjust = false;
-            prefTranscodeMode = (mcsr != null && mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS))
-                ? "dynamic" : "dynamicts";
+            prefTranscodeMode = h264PushOK ? "dynamich264"
+                : ((mcsr != null && mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS))
+                    ? "dynamic" : "dynamicts");
             if (Sage.DBG) System.out.println("MiniPlayer: HEVC source — forcing prefTranscodeMode=" + prefTranscodeMode
                 + " (legacy fixedPushFormat would produce -r 0 -s 0x0)");
           }
@@ -1473,7 +1484,8 @@ public class MiniPlayer implements DVDMediaPlayer
             if (dynamicRateAdjust)
               prefTranscodeMode = majorTypeHint == MediaFile.MEDIATYPE_AUDIO ?
                   ((uiBandwidthEstimate > 256000) ? "music128" : "music") :
-                    ((mcsr != null && mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS)) ? "dynamic" : "dynamicts");
+                    (h264PushOK ? "dynamich264"
+                     : ((mcsr != null && mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS)) ? "dynamic" : "dynamicts"));
                   else
                     prefTranscodeMode = fixedPushFormat;
             // Even when a FIXED_PUSH_MEDIA_FORMAT is locked in by the
@@ -1748,10 +1760,10 @@ public class MiniPlayer implements DVDMediaPlayer
             }
             else
             {
-              prefTranscodeMode = mcsr.isSupportedPushContainerFormat(
-                  sage.media.format.MediaFormat.MPEG2_PS) ? "dynamic" : "dynamicts";
+              prefTranscodeMode = h264PushOK ? "dynamich264"
+                  : (mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS) ? "dynamic" : "dynamicts");
               dynamicRateAdjust = true;
-              pathTaken = "dynamic-fallback";
+              pathTaken = h264PushOK ? "dynamic-h264-fallback" : "dynamic-fallback";
             }
             if (Sage.DBG) System.out.println("MiniPlayer: profile-authoritative override forces TRANSCODE (legacy missed it) path="
                 + pathTaken + " mode=" + prefTranscodeMode + " srcVCodec=" + _srcVCodec
