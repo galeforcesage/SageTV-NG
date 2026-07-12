@@ -44,6 +44,18 @@ public final class SageLogBridge
   private static volatile PrintStream originalOut;
   private static volatile PrintStream originalErr;
 
+  /**
+   * When true, drop sagex-api's unconditional
+   * {@code System.out.printf("Calling: Api: %s; Command: %s;\n")} trace. Because
+   * the bridge's PrintStream is autoFlush, that single printf is split into up
+   * to five separate {@code sage.stdout} lines per API call, which floods the
+   * log (e.g. an in-JVM poller hitting MediaPlayerAPI.GetCurrentMediaFile every
+   * ~2s). Read once at {@link #install(String)} from
+   * {@code logging/suppress_sagex_api_trace} (default true). Set the property
+   * false and restart to restore the tracing.
+   */
+  static volatile boolean suppressSagexApiTrace = true;
+
   /** Logger name for everything written through {@code System.out}. */
   public static final String STDOUT_LOGGER = "sage.stdout";
   /** Logger name for everything written through {@code System.err}. */
@@ -62,6 +74,8 @@ public final class SageLogBridge
     if (installed) return;
     originalOut = System.out;
     originalErr = System.err;
+
+    suppressSagexApiTrace = Sage.getBoolean("logging/suppress_sagex_api_trace", true);
 
     Logger outLog = LoggerFactory.getLogger(STDOUT_LOGGER);
     Logger errLog = LoggerFactory.getLogger(STDERR_LOGGER);
@@ -110,6 +124,15 @@ public final class SageLogBridge
     private final Logger log;
     private final boolean asError;
     private final java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream(256);
+
+    /**
+     * Per-thread countdown used to swallow the multi-line sagex "Calling: Api:"
+     * trace cluster. The opening "Calling: Api:" fragment arms the countdown;
+     * the following fragments (api name, "; Command: ", command, ";") on the
+     * SAME thread are then dropped. Per-thread state guarantees interleaved
+     * logging from other threads is never affected.
+     */
+    private final ThreadLocal<int[]> apiTrace = ThreadLocal.withInitial(() -> new int[1]);
 
     LineBufferingOutputStream(Logger log, boolean asError)
     {
@@ -173,8 +196,32 @@ public final class SageLogBridge
       String line = buf.toString(StandardCharsets.UTF_8);
       buf.reset();
       if (line.isEmpty()) return;
+      if (!asError && suppressSagexApiTrace && isSagexApiTraceLine(line)) return;
       if (asError) log.error("{}", line);
       else log.info("{}", line);
+    }
+
+    /**
+     * True if {@code line} is part of sagex ApiHandler's "Calling: Api:" trace
+     * cluster and should be dropped. Stateful per-thread: the opening
+     * "Calling: Api:" fragment arms a short countdown that swallows the
+     * following fragments up to and including the trailing ";" terminator. The
+     * countdown is bounded so a malformed/partial cluster can never swallow
+     * more than a handful of this thread's own lines.
+     */
+    private boolean isSagexApiTraceLine(String line)
+    {
+      int[] c = apiTrace.get();
+      if (c[0] > 0) {
+        c[0]--;
+        if (";".equals(line)) c[0] = 0; // trailing fragment ends the cluster early
+        return true;
+      }
+      if (line.startsWith("Calling: Api:")) {
+        c[0] = 5; // safety bound; the ";" terminator normally clears it sooner
+        return true;
+      }
+      return false;
     }
   }
 }
