@@ -1181,6 +1181,7 @@ public class MiniPlayer implements DVDMediaPlayer
         String chosenSurfaceDelivery = null;
         String chosenSurfaceXcodeMode = null;
         int chosenSurfaceAudioStreamIndex = -1;
+        int chosenSurfaceAudioChannels = 0;
         sage.client.PlaybackSurfaceSet surfaces = (mcsr != null)
             ? mcsr.getPlaybackSurfaces() : sage.client.PlaybackSurfaceSet.empty();
         if (!surfaces.isEmpty() && Sage.getBoolean("miniplayer/use_playback_surfaces", true))
@@ -1208,7 +1209,10 @@ public class MiniPlayer implements DVDMediaPlayer
             // 2.1.0003: extract the chosen audio stream's orderIndex so the
             // transcoder's -map picks the right track (language + quality aware).
             if (winner.audioStreamChoice != null && winner.audioStreamChoice.audioFormat != null)
+            {
               chosenSurfaceAudioStreamIndex = winner.audioStreamChoice.audioFormat.getOrderIndex();
+              chosenSurfaceAudioChannels = winner.audioStreamChoice.audioFormat.getChannels();
+            }
             if (Sage.DBG) System.out.println("MiniPlayer surface decision (v2.1): winner=" + winner
                 + " audioStreamIdx=" + chosenSurfaceAudioStreamIndex
                 + " runnersUp=" + (ranked.size() - 1)
@@ -1298,6 +1302,34 @@ public class MiniPlayer implements DVDMediaPlayer
             String effDelivery = (chosenSurfaceXcodeMode != null && chosenSurfaceXcodeMode.length() > 0)
                 ? chosenSurfaceDelivery + ":" + chosenSurfaceXcodeMode
                 : chosenSurfaceDelivery;
+            // Protocol 2.1 option B: for the fMP4 modes that TRANSCODE audio
+            // (browserhd, browserhd_copyv) carry the decision's best target
+            // audio codec + source channel count as ";acodec=<v>;ac=<n>" so the
+            // server honors "best codec the client supports at/below source"
+            // instead of the static AAC-stereo floor. Copy/remux modes omit it.
+            if (("browserhd".equals(chosenSurfaceXcodeMode) || "browserhd_copyv".equals(chosenSurfaceXcodeMode))
+                && profileDecision != null && profileDecision.targetAudioCodec != null
+                && profileDecision.targetAudioCodec.length() > 0)
+            {
+              String tac = profileDecision.targetAudioCodec.trim().toUpperCase(java.util.Locale.ROOT);
+              String ffAcodec = null;
+              if (tac.equals("EAC3") || tac.equals("E-AC-3") || tac.equals("EC-3")) ffAcodec = "eac3";
+              else if (tac.equals("AC3") || tac.equals("AC-3")) ffAcodec = "ac3";
+              else if (tac.equals("AAC") || tac.equals("HE-AAC")) ffAcodec = "aac";
+              else if (tac.equals("MP2")) ffAcodec = "mp2";
+              else if (tac.equals("OPUS")) ffAcodec = "libopus";
+              else if (tac.equals("FLAC")) ffAcodec = "flac";
+              // else (DTS/TRUEHD/unknown): no override -> the mode's default stands.
+              if (ffAcodec != null)
+              {
+                effDelivery += ";acodec=" + ffAcodec;
+                int ch = chosenSurfaceAudioChannels;
+                if (ch <= 0 && currMF != null && currMF.getFileFormat() != null
+                    && currMF.getFileFormat().getAudioFormat() != null)
+                  ch = currMF.getFileFormat().getAudioFormat().getChannels();
+                if (ch > 0) effDelivery += ";ac=" + ch;
+              }
+            }
             if (Sage.DBG) System.out.println("MiniPlayer OPENURL emit CAP_EFFECTIVE_DELIVERY=" + effDelivery);
             try
             {

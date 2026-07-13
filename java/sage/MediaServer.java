@@ -1304,10 +1304,37 @@ public class MediaServer implements Runnable
           }
           else if (tempString.indexOf("XCODE_SETUP ") == 0)
           {
-            String xcodeMode = tempString.substring(tempString.indexOf(" ") + 1);
-            if (Sage.DBG) System.out.println("MediaServer is serving up in transcode mode: " + xcodeMode);
-            xcoder = new FFMPEGTranscoder();
-            xcoder.setTranscodeFormat(xcodeMode, null);
+            String xcodeArg = tempString.substring(tempString.indexOf(" ") + 1);
+            // Protocol 2.1 (option B): "<mode>;k=v;k=v". The base mode is
+            // normalized; the ";k=v" suffix carries per-request surface hints
+            // (acodec, ac) so the server honors the decision engine's best
+            // audio target. Keys parsed case-insensitively; values verbatim.
+            String xcodeMode = xcodeArg;
+            String surfAcodec = null;
+            int surfAc = 0;
+            int semi = xcodeArg.indexOf(';');
+            if (semi >= 0)
+            {
+              xcodeMode = xcodeArg.substring(0, semi).trim();
+              java.util.StringTokenizer pt = new java.util.StringTokenizer(xcodeArg.substring(semi + 1), ";");
+              while (pt.hasMoreTokens())
+              {
+                String p = pt.nextToken();
+                int eq = p.indexOf('=');
+                if (eq <= 0) continue;
+                String k = p.substring(0, eq).trim().toLowerCase();
+                String v = p.substring(eq + 1).trim();
+                if (k.equals("acodec")) surfAcodec = v;
+                else if (k.equals("ac")) { try { surfAc = Integer.parseInt(v); } catch (NumberFormatException nfe) {} }
+              }
+            }
+            if (Sage.DBG) System.out.println("MediaServer is serving up in transcode mode: " + xcodeMode
+                + (surfAcodec != null ? " (surface acodec=" + surfAcodec + " ac=" + surfAc + ")" : ""));
+            FFMPEGTranscoder fftc = new FFMPEGTranscoder();
+            xcoder = fftc;
+            if (surfAcodec != null && surfAcodec.length() > 0) fftc.setSurfaceTargetAudioCodec(surfAcodec);
+            if (surfAc > 0) fftc.setSurfaceTargetAudioChannels(surfAc);
+            fftc.setTranscodeFormat(xcodeMode, null);
             commBufWrite.clear();
             commBufWrite.put(OK_BYTES).flip();
             int numWritten = s.write(commBufWrite);
