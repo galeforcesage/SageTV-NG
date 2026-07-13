@@ -1915,6 +1915,23 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // needs aresample drift correction, force it onto the audio re-encode
     // branch above rather than trying to filter through a copy.
     boolean audioIsCopy = isAudioCopySelected(xcodeParamsVec);
+    // MP4-family + AAC stream-copy: AAC from an ADTS-framed source (MPEG-TS)
+    // must be converted to ASC via the aac_adtstoasc bitstream filter or the
+    // mp4 muxer rejects the header ("Malformed AAC bitstream detected"). Verified
+    // safe to always apply for AAC copy -- it passes already-ASC AAC (MKV/MP4)
+    // through unchanged. Gated on AAC only (the filter errors on non-AAC) and on
+    // copy only (re-encode emits ASC directly). Fixes browserhd_remux on
+    // H.264+AAC MPEG-TS sources; harmless for library MKV/MP4 remux.
+    if (audioIsCopy && isMp4FamilyOutput() && sourceFormat != null
+        && sourceFormat.getAudioFormat() != null
+        && sage.media.format.MediaFormat.AAC.equals(sourceFormat.getAudioFormat().getFormatName())
+        && !xcodeParamsVec.contains("aac_adtstoasc"))
+    {
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: adding -bsf:a aac_adtstoasc "
+          + "(AAC stream-copy into MP4-family container)");
+      xcodeParamsVec.add("-bsf:a");
+      xcodeParamsVec.add("aac_adtstoasc");
+    }
     if (dynamicRateAdjust || (isMpeg4Codec && outputFile == null))
     {
       xcodeParamsVec.add("-fps_mode");
