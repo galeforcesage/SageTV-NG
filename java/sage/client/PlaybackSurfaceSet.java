@@ -61,7 +61,11 @@ public final class PlaybackSurfaceSet
   /** Canonical delivery modes accepted in {@code PLAYBACK_SURFACE_<id>_DELIVERY_MODES}. NOT containers. */
   public static final Set<String> CANONICAL_DELIVERY_MODES = Collections.unmodifiableSet(
       new HashSet<String>(Arrays.asList(
-          "pull", "push", "hls", "dash", "webrtc")));
+          // pull-xcode (Protocol 2.1): pull transport, but of a SERVER-TRANSCODED
+          // stream (via an XCODE_SETUP mode) rather than the raw file. The client
+          // bridge maps CAP_EFFECTIVE_DELIVERY=pull-xcode:<mode> 1:1 to its
+          // /msproxy?mode=<mode> endpoint, so it never sniffs the stream on NG.
+          "pull", "pull-xcode", "push", "hls", "dash", "webrtc")));
 
   /** Canonical values for {@code PLAYBACK_SURFACE_<id>_AUDIO_TRACK_ACCESS} (2.1.0006). */
   public static final Set<String> CANONICAL_AUDIO_TRACK_ACCESS = Collections.unmodifiableSet(
