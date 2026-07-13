@@ -1179,6 +1179,7 @@ public class MiniPlayer implements DVDMediaPlayer
         // See ROADMAP.md "Playback Surface capability model (Protocol 2.1)".
         String chosenSurfaceId = null;
         String chosenSurfaceDelivery = null;
+        String chosenSurfaceXcodeMode = null;
         int chosenSurfaceAudioStreamIndex = -1;
         sage.client.PlaybackSurfaceSet surfaces = (mcsr != null)
             ? mcsr.getPlaybackSurfaces() : sage.client.PlaybackSurfaceSet.empty();
@@ -1203,6 +1204,7 @@ public class MiniPlayer implements DVDMediaPlayer
             profileDecision = winner.decision;
             chosenSurfaceId = winner.surface.getId();
             chosenSurfaceDelivery = winner.chosenDeliveryMode;
+            chosenSurfaceXcodeMode = winner.chosenXcodeMode;
             // 2.1.0003: extract the chosen audio stream's orderIndex so the
             // transcoder's -map picks the right track (language + quality aware).
             if (winner.audioStreamChoice != null && winner.audioStreamChoice.audioFormat != null)
@@ -1286,6 +1288,27 @@ public class MiniPlayer implements DVDMediaPlayer
             if (Sage.DBG) System.out.println("MiniPlayer failed to send CAP_EFFECTIVE_SURFACE="
                 + chosenSurfaceId + ": " + ioe);
           }
+          // Protocol 2.1: publish the effective delivery mode (and, for
+          // pull-xcode, the concrete server-native XCODE_SETUP mode) so the
+          // bridge maps CAP_EFFECTIVE_DELIVERY=pull-xcode:<mode> 1:1 to its
+          // /msproxy?mode=<mode> and the PWA stops sniffing on NG. For plain
+          // pull/push/hls just the mode name is sent (no xcode mode).
+          if (chosenSurfaceDelivery != null && chosenSurfaceDelivery.length() > 0)
+          {
+            String effDelivery = (chosenSurfaceXcodeMode != null && chosenSurfaceXcodeMode.length() > 0)
+                ? chosenSurfaceDelivery + ":" + chosenSurfaceXcodeMode
+                : chosenSurfaceDelivery;
+            if (Sage.DBG) System.out.println("MiniPlayer OPENURL emit CAP_EFFECTIVE_DELIVERY=" + effDelivery);
+            try
+            {
+              mcsr.sendSetProperty("CAP_EFFECTIVE_DELIVERY", effDelivery);
+            }
+            catch (java.io.IOException ioe)
+            {
+              if (Sage.DBG) System.out.println("MiniPlayer failed to send CAP_EFFECTIVE_DELIVERY="
+                  + effDelivery + ": " + ioe);
+            }
+          }
           // Phase 2.5 wiring: publish the surface's target codecs + delivery
           // mode to the MiniClient session state so the transcoder subsystem
           // (HTTPLSServer.setupTranscoder + FFMPEGTranscoder) can honor the
@@ -1326,6 +1349,18 @@ public class MiniPlayer implements DVDMediaPlayer
           {
             if (Sage.DBG) System.out.println("MiniPlayer: surface '" + chosenSurfaceId
                 + "' declared pull delivery (local connection) — forcing clientDoesPull=true");
+            clientDoesPull = true;
+          }
+          else if ("pull-xcode".equals(chosenSurfaceDelivery) && !clientDoesPull)
+          {
+            // pull-xcode rides the single control/HTTP port via the bridge's
+            // /msproxy?mode=<xcodeMode>, so it is safe on both LAN and remote
+            // (unlike raw stv:// pull which needs the separate media-server
+            // port). Force pull transport; the client requested XCODE mode is
+            // carried in CAP_EFFECTIVE_DELIVERY above.
+            if (Sage.DBG) System.out.println("MiniPlayer: surface '" + chosenSurfaceId
+                + "' declared pull-xcode delivery (mode=" + chosenSurfaceXcodeMode
+                + ") — forcing clientDoesPull=true");
             clientDoesPull = true;
           }
           else if ("pull".equals(chosenSurfaceDelivery) && !clientDoesPull && !localConn)

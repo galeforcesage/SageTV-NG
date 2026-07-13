@@ -140,7 +140,23 @@ public class MediaServer implements Runnable
     // at startup by sage.HwEncoder so this single mode covers No-GPU (libx264), NVENC, and --
     // as backends mature -- AMD/Intel. frag_keyframe+empty_moov+default_base_moof produces the
     // fMP4 framing MSE needs for progressive playback. See buildBrowserHdParams().
+    // Used by the surface decision engine for a pwa_mse FULL_TRANSCODE (video not decodable).
     Sage.put(XCODE_QUALITIES_PROPERTY_ROOT + "browserhd", buildBrowserHdParams());
+    // Protocol 2.1 pull-xcode modes (surface-aware, all server-native -- the bridge no longer
+    // self-injects any transcode mode; NG owns every mode). Same fMP4 framing as browserhd.
+    // browserhd_copyv  -- pwa_mse AUDIO_TRANSCODE: copy the decodable H.264 video, transcode
+    //   only the unplayable audio (e.g. AC-3/E-AC-3 from cable/QAM H.264, IPTV, library
+    //   mkv/mp4) to AAC-LC. No needless video re-encode.
+    Sage.put(XCODE_QUALITIES_PROPERTY_ROOT + "browserhd_copyv",
+        "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof -c:v copy -acodec aac -ac 2 -ar 48000 -b:a 128k");
+    // browserhd_remux -- pwa_mse REMUX: codecs already decodable by the browser, only the
+    //   container needs changing. Copy video + audio into fragmented MP4. Zero transcode.
+    Sage.put(XCODE_QUALITIES_PROPERTY_ROOT + "browserhd_remux",
+        "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof -c:v copy -c:a copy");
+    // mpeg2tsremux -- TV/AVPlay REMUX: copy video + audio into MPEG-TS (Chromium MSE cannot
+    //   demux TS, so this is the TV surface's remux, never the browser's). Server-native now.
+    Sage.put(XCODE_QUALITIES_PROPERTY_ROOT + "mpeg2tsremux",
+        "-f mpegts -c:v copy -c:a copy -copyts");
     extraFileSet = new java.util.HashSet();
     String extraFilesProp = Sage.get("media_server/extra_allowed_files", "miniclient");
     java.util.StringTokenizer toker = new java.util.StringTokenizer(extraFilesProp, ";");

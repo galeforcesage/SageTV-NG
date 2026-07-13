@@ -721,7 +721,7 @@ public class PlaybackDecisionEngine
    */
   public static final java.util.Set<String> SERVER_SERVABLE_DELIVERY_MODES =
       java.util.Collections.unmodifiableSet(new java.util.LinkedHashSet<String>(
-          java.util.Arrays.asList("pull", "push", "hls")));
+          java.util.Arrays.asList("pull", "pull-xcode", "push", "hls")));
 
   /**
    * Pairs a {@link PlaybackSurface} with the {@link PlaybackDecision} the
@@ -748,19 +748,35 @@ public class PlaybackDecisionEngine
      */
     public final AudioStreamChoice audioStreamChoice;
 
+    /**
+     * For a {@code pull-xcode} delivery mode, the concrete server-native
+     * XCODE_SETUP mode name the client/bridge must request (e.g. {@code
+     * browserhd}, {@code browserhd_copyv}, {@code browserhd_remux},
+     * {@code mpeg2tsremux}). null for pull/push/hls (no server transcode
+     * mode to name). Emitted as {@code CAP_EFFECTIVE_DELIVERY=pull-xcode:<mode>}.
+     */
+    public final String chosenXcodeMode;
+
     public SurfaceDecision(PlaybackSurface surface, PlaybackDecision decision,
         String chosenDeliveryMode)
     {
-      this(surface, decision, chosenDeliveryMode, null);
+      this(surface, decision, chosenDeliveryMode, null, null);
     }
 
     public SurfaceDecision(PlaybackSurface surface, PlaybackDecision decision,
         String chosenDeliveryMode, AudioStreamChoice audioStreamChoice)
     {
+      this(surface, decision, chosenDeliveryMode, audioStreamChoice, null);
+    }
+
+    public SurfaceDecision(PlaybackSurface surface, PlaybackDecision decision,
+        String chosenDeliveryMode, AudioStreamChoice audioStreamChoice, String chosenXcodeMode)
+    {
       this.surface = surface;
       this.decision = decision;
       this.chosenDeliveryMode = chosenDeliveryMode;
       this.audioStreamChoice = audioStreamChoice;
+      this.chosenXcodeMode = chosenXcodeMode;
     }
 
     @Override
@@ -769,6 +785,7 @@ public class PlaybackDecisionEngine
       return "SurfaceDecision[surface=" + (surface == null ? "?" : surface.getId())
           + " priority=" + (surface == null ? 0 : surface.getPriority())
           + " delivery=" + chosenDeliveryMode
+          + (chosenXcodeMode != null ? ":" + chosenXcodeMode : "")
           + " decision=" + decision + "]";
     }
   }
@@ -1334,7 +1351,10 @@ public class PlaybackDecisionEngine
             + " (declared=" + s.getDeliveryModes() + "); dropping");
         continue;
       }
-      results.add(new SurfaceDecision(s, d, mode, asc));
+      // For a pull-xcode delivery, resolve the concrete server-native XCODE_SETUP
+      // mode the bridge will request (surface-family + decision aware).
+      String xcodeMode = "pull-xcode".equals(mode) ? xcodeModeForDecision(s, d.decision) : null;
+      results.add(new SurfaceDecision(s, d, mode, asc, xcodeMode));
     }
     java.util.Collections.sort(results, SURFACE_DECISION_COMPARATOR);
     return results;
@@ -1470,10 +1490,56 @@ public class PlaybackDecisionEngine
       if (declared.contains("hls"))  return "hls";
       return null;
     }
-    // Non-DIRECT: server must feed transformed bytes; pull cannot.
+    // Non-DIRECT: server must feed transformed bytes; raw pull cannot, but
+    // pull-xcode (a pull of a SERVER-TRANSCODED stream) can and is preferred --
+    // it rides the single control/HTTP port via the bridge's /msproxy and lets
+    // the PWA stop sniffing. Fall back to push (adaptive) then hls (segmented).
+    if (declared.contains("pull-xcode")) return "pull-xcode";
     if (declared.contains("push")) return "push";
     if (declared.contains("hls"))  return "hls";
     return null;
+  }
+
+  /**
+   * Map an engine {@link Decision} to the concrete server-native XCODE_SETUP
+   * mode a {@code pull-xcode} surface must request. Browser/MSE surfaces get
+   * fragmented-MP4 modes; native/AVPlay (TV) surfaces get MPEG-TS modes:
+   * <pre>
+   *                     browser (fMP4)     TV/AVPlay (TS)
+   *   REMUX             browserhd_remux    mpeg2tsremux
+   *   AUDIO_TRANSCODE   browserhd_copyv    audioonly
+   *   TRANSCODE         browserhd          dynamich264
+   * </pre>
+   */
+  private static String xcodeModeForDecision(PlaybackSurface s, Decision d)
+  {
+    boolean fmp4 = surfaceWantsFmp4(s);
+    if (d == Decision.REMUX)           return fmp4 ? "browserhd_remux" : "mpeg2tsremux";
+    if (d == Decision.AUDIO_TRANSCODE) return fmp4 ? "browserhd_copyv" : "audioonly";
+    return fmp4 ? "browserhd" : "dynamich264"; // FULL_TRANSCODE (and any future tier)
+  }
+
+  /**
+   * True when the surface consumes fragmented MP4 (browser MSE), false when it
+   * takes MPEG-TS (native/AVPlay TV). Route wins ({@code mse} vs
+   * {@code native}/{@code avplay}); otherwise infer from container caps;
+   * default to fMP4 when ambiguous (the browser is the primary pull-xcode user).
+   */
+  private static boolean surfaceWantsFmp4(PlaybackSurface s)
+  {
+    if (s == null) return true;
+    String route = s.getRoute();
+    if (route != null)
+    {
+      String r = route.toLowerCase(java.util.Locale.ROOT);
+      if (r.contains("mse")) return true;
+      if (r.contains("native") || r.contains("avplay")) return false;
+    }
+    boolean mp4 = s.supportsContainer("MP4");
+    boolean ts = s.supportsContainer("MPEG2-TS");
+    if (mp4 && !ts) return true;
+    if (ts && !mp4) return false;
+    return true;
   }
 
   private static int decisionTierRank(Decision d)
@@ -1487,9 +1553,10 @@ public class PlaybackDecisionEngine
   private static int deliveryModeCpuRank(String mode)
   {
     if ("pull".equals(mode)) return 0;
-    if ("push".equals(mode)) return 1;
-    if ("hls".equals(mode))  return 2;
-    return 3;
+    if ("pull-xcode".equals(mode)) return 1;
+    if ("push".equals(mode)) return 2;
+    if ("hls".equals(mode))  return 3;
+    return 4;
   }
 
   private static final java.util.Comparator<SurfaceDecision> SURFACE_DECISION_COMPARATOR =
