@@ -43,6 +43,22 @@ public class FFMPEGTranscoder implements TranscodeEngine
   }
   private String ac4SourceAudioCodec;
 
+  /**
+   * Surface-aware target audio codec (ffmpeg encoder name: {@code eac3}/{@code
+   * ac3}/{@code aac}/...) chosen by the decision engine as the best codec the
+   * client declares at/below the source quality. Set from the XCODE_SETUP
+   * ";acodec=<v>" param (Protocol 2.1 option B). When present it rewrites the
+   * static {@code -acodec} in the browserhd* fMP4 transcode modes, so an
+   * EAC3-capable fMP4 surface (Safari/TV) gets E-AC-3 5.1 instead of the AAC
+   * stereo floor -- while a plain browser (declares only AAC) still gets AAC.
+   * No-op for stream-copy (remux) modes.
+   */
+  private String surfaceTargetAudioCodec;
+  /** Source audio channel count to preserve (from ";ac=<n>"); 0 = mode default. */
+  private int surfaceTargetAudioChannels;
+  public void setSurfaceTargetAudioCodec(String codec) { this.surfaceTargetAudioCodec = codec; }
+  public void setSurfaceTargetAudioChannels(int ch) { this.surfaceTargetAudioChannels = ch; }
+
   public long getAvailableTranscodeBytes()
   {
     if (bufferOutput)
@@ -935,6 +951,58 @@ public class FFMPEGTranscoder implements TranscodeEngine
     }
     if (Sage.DBG) System.out.println("FFMPEGTranscoder: AC-4 source — audio codec overridden to "
         + ac4SourceAudioCodec + (abIndex >= 0 ? " (bitrate slot=" + abIndex + ")" : ""));
+  }
+
+  /**
+   * Protocol 2.1 (option B): when a surface-aware target audio codec/channels
+   * were supplied via the XCODE_SETUP ";acodec=;ac=" params, rewrite the audio
+   * codec + channel count + bitrate in the assembled command. Realizes the
+   * decision engine's "best codec the client supports at/below source" pick
+   * instead of the static "-acodec aac -ac 2" floor in the browserhd* modes.
+   * No-op when unset or when audio is stream-copied (remux modes keep source).
+   */
+  @SuppressWarnings({"rawtypes","unchecked"})
+  private void maybeOverrideSurfaceAudio(java.util.ArrayList xcodeParamsVec)
+  {
+    if (surfaceTargetAudioCodec == null || surfaceTargetAudioCodec.length() == 0) return;
+    if (isAudioCopySelected(xcodeParamsVec)) return; // remux: preserve source codec
+    int acodecIdx = -1, acIdx = -1, abIdx = -1;
+    for (int i = 0; i < xcodeParamsVec.size() - 1; i++)
+    {
+      Object o = xcodeParamsVec.get(i);
+      if (!(o instanceof String)) continue;
+      String tok = (String) o;
+      if (tok.equals("-acodec") || tok.equals("-c:a") || tok.equals("-codec:a")) acodecIdx = i + 1;
+      else if (tok.equals("-ac")) acIdx = i + 1;
+      else if (tok.equals("-ab") || tok.equals("-b:a")) abIdx = i + 1;
+    }
+    if (acodecIdx >= 0) xcodeParamsVec.set(acodecIdx, surfaceTargetAudioCodec);
+    else { xcodeParamsVec.add("-c:a"); xcodeParamsVec.add(surfaceTargetAudioCodec); }
+    int ch = surfaceTargetAudioChannels;
+    if (ch > 0)
+    {
+      if (acIdx >= 0) xcodeParamsVec.set(acIdx, Integer.toString(ch));
+      else { xcodeParamsVec.add("-ac"); xcodeParamsVec.add(Integer.toString(ch)); }
+    }
+    else ch = 2; // for bitrate scaling only; leave any existing -ac untouched
+    String abps = surfaceAudioBitrate(surfaceTargetAudioCodec, ch);
+    if (abIdx >= 0) xcodeParamsVec.set(abIdx, abps);
+    else { xcodeParamsVec.add("-b:a"); xcodeParamsVec.add(abps); }
+    if (Sage.DBG) System.out.println("FFMPEGTranscoder: surface audio override -> codec="
+        + surfaceTargetAudioCodec + " channels="
+        + (surfaceTargetAudioChannels > 0 ? Integer.toString(surfaceTargetAudioChannels) : "src")
+        + " bitrate=" + abps);
+  }
+
+  /** Per-codec/per-channel audio bitrate for the surface audio override. */
+  private static String surfaceAudioBitrate(String codec, int channels)
+  {
+    boolean surround = channels >= 5;
+    if ("eac3".equalsIgnoreCase(codec)) return Sage.get("miniplayer/eac3_bitrate", surround ? "640k" : "192k");
+    if ("ac3".equalsIgnoreCase(codec))  return surround ? "448k" : "192k";
+    // aac/opus/etc: ~64 kbps per channel, clamped to [96k, 512k].
+    int kbps = Math.min(512, Math.max(96, channels * 64));
+    return kbps + "k";
   }
 
   /**
@@ -2048,6 +2116,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // codec the profile picked. Keeps the rest of the profile (mux, video,
     // sync, channels) intact and avoids forking every transcode profile.
     maybeOverrideAc4AudioCodec(xcodeParamsVec);
+    maybeOverrideSurfaceAudio(xcodeParamsVec);
     String[] xcodeParamArray = (String[]) xcodeParamsVec.toArray(Pooler.EMPTY_STRING_ARRAY);
     // Always log the FFmpeg command line for diagnosability (disable with xcode_cmdline_debug=FALSE)
     if (Sage.DBG && !"FALSE".equals(Sage.get("xcode_cmdline_debug", "TRUE"))) System.out.println("Executing xcoding process with args: " + java.util.Arrays.asList(xcodeParamArray));
