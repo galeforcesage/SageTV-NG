@@ -2,7 +2,7 @@
 ###############################################################################
 # SageTV Java 21 Docker Build Script
 #
-# Clones from galeforcesage/SageTV-mine (all patches pre-applied)
+# Clones from galeforcesage/SageTV-NG (all patches pre-applied)
 # and builds + runs a Docker container.
 #
 # NOTE: this script launches a direct shared-file-bind style container flow,
@@ -17,7 +17,7 @@
 ###############################################################################
 set -e
 
-REPO_URL="https://github.com/galeforcesage/SageTV-mine.git"
+REPO_URL="https://github.com/galeforcesage/SageTV-NG.git"
 BRANCH="appmod/java-upgrade-20260328165139"
 
 echo "================================================"
