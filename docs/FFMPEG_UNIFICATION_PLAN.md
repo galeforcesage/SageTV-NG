@@ -12,7 +12,7 @@ gets aliased into `/opt/sagetv/server/ffmpeg`).
 
 ## Problem
 
-Container `sagetv-mine` currently ships `/opt/sagetv/server/ffmpeg`
+Container `sagetv-ng` currently ships `/opt/sagetv/server/ffmpeg`
 as the legacy 2010 SageTV-patched binary (git-bbb07a0, built May 25
 2021). Modern callers reference `/usr/local/bin/ffprobe-ac4` and
 `/usr/local/bin/ffmpeg-ac4` (pliu6/elliotclee AC-4 fork) which are
@@ -147,37 +147,37 @@ running container.
 
 ```
 # 1. Build new image
-docker build -t sagetv-mine:ffmpeg-unified C:\Users\<...>\SageTV-mine
+docker build -t sagetv-ng:ffmpeg-unified C:\Users\<...>\SageTV-NG
 
 # 2. Smoke-test the new ffmpeg inside the image
-docker run --rm sagetv-mine:ffmpeg-unified \
+docker run --rm sagetv-ng:ffmpeg-unified \
   /opt/sagetv/server/ffmpeg -h full 2>&1 | \
   grep -E 'stdinctrl|activefile|dumpmetadata|brokendts'
-docker run --rm sagetv-mine:ffmpeg-unified \
+docker run --rm sagetv-ng:ffmpeg-unified \
   /opt/sagetv/server/ffmpeg -decoders 2>&1 | grep ac4
-docker run --rm sagetv-mine:ffmpeg-unified \
+docker run --rm sagetv-ng:ffmpeg-unified \
   /opt/sagetv/server/ffmpeg -encoders 2>&1 | grep h264_nvenc
 
 # 3. Extract just the binaries from the new image
-docker create --name ffmpeg-extract sagetv-mine:ffmpeg-unified
+docker create --name ffmpeg-extract sagetv-ng:ffmpeg-unified
 docker cp ffmpeg-extract:/opt/sagetv/server/ffmpeg  .\ffmpeg.new
 docker cp ffmpeg-extract:/opt/sagetv/server/ffprobe .\ffprobe.new
 docker rm ffmpeg-extract
 
 # 4. Backup in-container binaries and deploy new ones
-docker exec sagetv-mine cp /opt/sagetv/server/ffmpeg  /opt/sagetv/server/ffmpeg.preac4
+docker exec sagetv-ng cp /opt/sagetv/server/ffmpeg  /opt/sagetv/server/ffmpeg.preac4
 # (ffprobe doesn't yet exist in the running container; skip backup)
-docker cp .\ffmpeg.new  sagetv-mine:/opt/sagetv/server/ffmpeg
-docker cp .\ffprobe.new sagetv-mine:/opt/sagetv/server/ffprobe
-docker exec sagetv-mine chmod 755 /opt/sagetv/server/ffmpeg /opt/sagetv/server/ffprobe
+docker cp .\ffmpeg.new  sagetv-ng:/opt/sagetv/server/ffmpeg
+docker cp .\ffprobe.new sagetv-ng:/opt/sagetv/server/ffprobe
+docker exec sagetv-ng chmod 755 /opt/sagetv/server/ffmpeg /opt/sagetv/server/ffprobe
 
 # 5. Build & deploy Sage.jar with Phase C/D Java repoints
 # (standard sageJar / scp / docker cp / docker restart flow)
 ```
 
-Rollback during testing: `docker exec sagetv-mine mv
+Rollback during testing: `docker exec sagetv-ng mv
 /opt/sagetv/server/ffmpeg.preac4 /opt/sagetv/server/ffmpeg && docker
-restart sagetv-mine`.
+restart sagetv-ng`.
 
 ## Phase F — Cutover
 
@@ -185,7 +185,7 @@ User decision: no 24h burn-in required (dev system). After Phase E
 smoke test passes for 109.1 playback + at least one legacy ATSC1
 recording, delete `ffmpeg.preac4` from the live container and move
 on. The next time the container is recreated from any image, it
-picks up `sagetv-mine:ffmpeg-unified` automatically.
+picks up `sagetv-ng:ffmpeg-unified` automatically.
 
 ---
 

@@ -1,6 +1,6 @@
-# Plugin-Repo Compatibility Audit — SageTV-mine vs upstream google/sagetv
+# Plugin-Repo Compatibility Audit — SageTV-NG vs upstream google/sagetv
 
-Audit target: every SageTV-mine commit on top of `upstream/master`
+Audit target: every SageTV-NG commit on top of `upstream/master`
 (google/sagetv), scored against the surfaces consumed by the
 **OpenSageTV/sagetv-plugin-repo** plugins (Phoenix, BMT, sagex, CMT,
 OpenDCT, Comskip launcher, nielm, Samsung TV Plus, ~150 total).
@@ -121,7 +121,7 @@ entirely unaffected.
   - AC4 transcode now emits AC3 audio in the TS, matching the
     expectation Comskip's `mpeg2dec` already has.
 - HEVC inside MPEG-TS (ATSC3 native captures) is the one new
-  combination. **Verified on the deployed `sagetv-mine` container**:
+  combination. **Verified on the deployed `sagetv-ng` container**:
   bundled `comskip 0.82.011` (libavcodec.so.60) successfully decoded
   a 30s libx265-in-mpegts test file (898 frames, full logo/scene/
   aspect analysis, commercials detected). The in-tree
@@ -156,7 +156,7 @@ the running deployment.
 
 ## Overall verdict
 
-**The SageTV-mine fork preserves the full OpenSageTV/sagetv-plugin-repo
+**The SageTV-NG fork preserves the full OpenSageTV/sagetv-plugin-repo
 contract.** Every divergent file is either:
 
 1. additive only (no signatures removed), or
@@ -190,7 +190,7 @@ Class A — confirmed safe by surface audit (no recompile needed):
 - Comskip launcher plugin (calls external `comskip` binary; sees
   `.mpg` TS files as always)
 - nielm_sagewebserver (Jetty 6 era, requires manual Jetty 9
-  migration — **unrelated to SageTV-mine changes; was already
+  migration — **unrelated to SageTV-NG changes; was already
   broken on stock Google build before our fork.**)
 
 Class B — needs runtime sanity check (subscribes to events / parses

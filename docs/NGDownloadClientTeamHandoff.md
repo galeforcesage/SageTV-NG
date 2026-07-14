@@ -13,9 +13,9 @@ Versioning rule for this release:
 - Do not introduce a V2 split, alternate protocol mode, or client-side compatibility branch before the release date.
 
 Primary source docs:
-- [NGDownloadClientPRD.md](c:/Users/ted/SageTV-mine/docs/NGDownloadClientPRD.md)
-- [NGDownloadManifestV1Schema.md](c:/Users/ted/SageTV-mine/docs/NGDownloadManifestV1Schema.md)
-- [OFFLINE_PLAYBACK_SYNC_SERVER_CONTRACT.md](c:/Users/ted/SageTV-mine/docs/OFFLINE_PLAYBACK_SYNC_SERVER_CONTRACT.md)
+- [NGDownloadClientPRD.md](c:/Users/ted/SageTV-NG/docs/NGDownloadClientPRD.md)
+- [NGDownloadManifestV1Schema.md](c:/Users/ted/SageTV-NG/docs/NGDownloadManifestV1Schema.md)
+- [OFFLINE_PLAYBACK_SYNC_SERVER_CONTRACT.md](c:/Users/ted/SageTV-NG/docs/OFFLINE_PLAYBACK_SYNC_SERVER_CONTRACT.md)
 
 ## 1. What The Client Team Needs To Build
 
