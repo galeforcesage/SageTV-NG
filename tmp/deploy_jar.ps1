@@ -104,7 +104,11 @@ Write-Host ''
 
 # ---- [4/7] docker cp + chown ------------------------------------------------
 Write-Host '=== [4/7] docker cp + chown ===' -ForegroundColor Cyan
-ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker cp /tmp/Sage.jar sagetv-mine:/opt/sagetv/server/Sage.jar; docker exec sagetv-mine chown sagetv:sagetv /opt/sagetv/server/Sage.jar 2>/dev/null; docker exec sagetv-mine ls -l /opt/sagetv/server/Sage.jar'
+# Copy to BOTH classpath locations. Root /opt/sagetv/server/Sage.jar is
+# authoritative (-cp Sage.jar:JARs/* loads it first), but we keep the
+# secondary JARs/Sage.jar byte-identical so md5/date checks (and casual
+# `javap` inspections) never mislead into thinking a stale jar is live.
+ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker cp /tmp/Sage.jar sagetv-mine:/opt/sagetv/server/Sage.jar; docker cp /tmp/Sage.jar sagetv-mine:/opt/sagetv/server/JARs/Sage.jar; docker exec sagetv-mine chown sagetv:sagetv /opt/sagetv/server/Sage.jar /opt/sagetv/server/JARs/Sage.jar 2>/dev/null; docker exec sagetv-mine ls -l /opt/sagetv/server/Sage.jar /opt/sagetv/server/JARs/Sage.jar'
 Write-Host ''
 
 # ---- [5/7] verify md5 + BUILD_VERSION post-copy -----------------------------
