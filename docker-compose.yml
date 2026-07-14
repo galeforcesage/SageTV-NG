@@ -1,5 +1,5 @@
 #-------------------------------------------------------------------------------
-# sagetv-mine — Docker Compose (shared-file-bind profile, supported alternate)
+# sagetv-ng — Docker Compose (shared-file-bind profile, supported alternate)
 #
 # This profile directly bind-mounts Wiz.bin and Sage.properties. Keep it for
 # implementations that intentionally rely on direct file binds.
@@ -24,12 +24,12 @@
 # Stop:    docker compose down
 #-------------------------------------------------------------------------------
 services:
-  sagetv-mine:
+  sagetv-ng:
     build:
       context: .
       dockerfile: Dockerfile
-    image: sagetv-mine:current
-    container_name: sagetv-mine
+    image: sagetv-ng:current
+    container_name: sagetv-ng
     restart: unless-stopped
     network_mode: host
 
@@ -52,7 +52,7 @@ services:
       # - /var/media/pictures:/var/media/pictures
       # - /var/media/music:/var/media/music
 
-      # ── sagetv-mine isolated runtime state ──
+      # ── sagetv-ng isolated runtime state ──
       - /opt/sagetv/docker/mine/SageTVPlugins:/opt/sagetv/server/SageTVPlugins
       - /opt/sagetv/docker/mine/jetty:/opt/sagetv/server/jetty
       - /opt/sagetv/docker/mine/logs:/opt/sagetv/server/logs

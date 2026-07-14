@@ -47,7 +47,7 @@ pwsh ./scripts/safe-stv-edit.ps1 \
   -ReplaceText 'res = true' \
   -Deploy \
   -DeployHost <DEPLOY_HOST_IP> \
-  -Container sagetv-mine
+  -Container sagetv-ng
 ```
 
 ## Notes

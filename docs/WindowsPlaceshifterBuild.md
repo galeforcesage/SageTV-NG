@@ -1,6 +1,6 @@
 # Windows Placeshifter Build
 
-This flow stages runtime files and builds the SageTV Placeshifter installer directly from SageTV-mine.
+This flow stages runtime files and builds the SageTV Placeshifter installer directly from SageTV-NG.
 
 ## Prerequisites
 
