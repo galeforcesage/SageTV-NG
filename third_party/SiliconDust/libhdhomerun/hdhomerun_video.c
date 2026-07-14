@@ -243,7 +243,7 @@ static void hdhomerun_video_parse_rtp(struct hdhomerun_video_sock_t *vs, struct 
 }
 
 /*
- * SageTV-mine: dynamic RTP header parsing.
+ * SageTV-NG: dynamic RTP header parsing.
  *
  * The original libhdhomerun code accepted only two exact datagram sizes:
  *   1316 (raw MPEG-TS, no RTP)            == VIDEO_DATA_PACKET_SIZE
@@ -388,7 +388,7 @@ static void hdhomerun_video_thread_execute(void *arg)
 		hdhomerun_pkt_reset(&pkt);
 
 		/*
-		 * SageTV-mine: ask for up to a full Ethernet MTU rather than the
+		 * SageTV-NG: ask for up to a full Ethernet MTU rather than the
 		 * historical 1328-byte ceiling. The pkt buffer is 3074 bytes so this
 		 * is safe; the previous tight ceiling caused the kernel to truncate
 		 * (or drop) larger RTP datagrams emitted by FLEX 4K firmware

@@ -38,7 +38,7 @@ struct hdhomerun_video_stats_t {
 #define VIDEO_RTP_DATA_PACKET_SIZE ((188 * 7) + 12)
 
 /*
- * SageTV-mine: ATSC 3.0 / FLEX 4K firmware (20260326+) sends RTP datagrams
+ * SageTV-NG: ATSC 3.0 / FLEX 4K firmware (20260326+) sends RTP datagrams
  * larger than VIDEO_RTP_DATA_PACKET_SIZE (1328) -- the device has begun
  * inserting RTP extension headers and/or CSRC lists, producing 1336 / 1340 /
  * 1344-byte packets depending on extension content. The original libhdhomerun

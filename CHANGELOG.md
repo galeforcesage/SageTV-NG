@@ -9,7 +9,7 @@
   TZ parser, MiniPlayer hardening, STV UI symbols).
 
 ## Version 10.0.16 (2026-04-28)
-* Version bump to 10.0.16 (fork versioning: galeforcesage/SageTV-mine)
+* Version bump to 10.0.16 (fork versioning: galeforcesage/SageTV-NG)
 * Java 21 compatibility (finalize suppression, module access)
 * Commercial detection system with profile-based INI resolution
 * Disk I/O Phase 1: sidecar file infrastructure, skip matrix, crypto vectorization
