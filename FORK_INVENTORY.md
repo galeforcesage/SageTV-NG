@@ -1,4 +1,4 @@
-# Fork Inventory — SageTV-mine vs upstream `google/sagetv`
+# Fork Inventory — SageTV-NG vs upstream `google/sagetv`
 
 Reference catalogue of capabilities that exist in this fork but not in
 upstream SageTV. Generated 2026-06-17 against `BUILD_VERSION = 1167`

@@ -1,4 +1,4 @@
-# SageTV-mine Roadmap
+# SageTV-NG Roadmap
 
 Living document of post-modernization work, ordered by priority within
 each track. Items move to a `## Done` section once shipped.
