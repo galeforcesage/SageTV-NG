@@ -1332,6 +1332,14 @@ public class MediaServer implements Runnable
                 + (surfAcodec != null ? " (surface acodec=" + surfAcodec + " ac=" + surfAc + ")" : ""));
             FFMPEGTranscoder fftc = new FFMPEGTranscoder();
             xcoder = fftc;
+            // Pull-xcode (msproxy) delivery consumes the transcode via SIZE/READ.
+            // The transcoder writes fMP4/TS to ffmpeg's stdout pipe, so a drain
+            // thread MUST consume that pipe and advance the virtual transcode
+            // size; otherwise ffmpeg fills the ~64KB pipe buffer and blocks,
+            // SIZE.avail stays 0 forever, the pull client never issues READ, and
+            // the whole pipeline deadlocks. Enabling output buffering starts the
+            // XcodeDataConsumer thread that drains stdout and reports availability.
+            fftc.setEnableOutputBuffering(true);
             if (surfAcodec != null && surfAcodec.length() > 0) fftc.setSurfaceTargetAudioCodec(surfAcodec);
             if (surfAc > 0) fftc.setSurfaceTargetAudioChannels(surfAc);
             fftc.setTranscodeFormat(xcodeMode, null);
