@@ -697,7 +697,7 @@ public class MediaServer implements Runnable
           availSize = xcoder.getVirtualTranscodeSize();
           totalSize = xcoder.isTranscodeDone() ? availSize : getLargeFileSize(currFile.toString());
         }
-        if (remuxer != null)
+        else if (remuxer != null)
         {
           availSize = remuxer.getFileSize();
           totalSize = getLargeFileSize(currFile.toString());
