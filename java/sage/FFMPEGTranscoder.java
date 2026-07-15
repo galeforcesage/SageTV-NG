@@ -3044,6 +3044,18 @@ public class FFMPEGTranscoder implements TranscodeEngine
     transcodeEditDuration = duration;
   }
 
+  /**
+   * Seek the transcode to this source position (milliseconds) before it
+   * launches, emitting {@code -ss} ahead of {@code -i}. Used by the pull-xcode
+   * path (MediaServer XCODE_SETUP {@code ss=<ms>}) so a PWA/MSE seek/FF/REW/skip
+   * that re-opens the /msproxy stream starts at the requested point instead of
+   * restarting the transcode from 0.
+   */
+  public void setTranscodeStartSeekTime(long ms)
+  {
+    transcodeStartSeekTime = (ms > 0) ? ms : 0;
+  }
+
   public void setPass(int x)
   {
     pass = x;

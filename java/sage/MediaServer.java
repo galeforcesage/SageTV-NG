@@ -1307,11 +1307,13 @@ public class MediaServer implements Runnable
             String xcodeArg = tempString.substring(tempString.indexOf(" ") + 1);
             // Protocol 2.1 (option B): "<mode>;k=v;k=v". The base mode is
             // normalized; the ";k=v" suffix carries per-request surface hints
-            // (acodec, ac) so the server honors the decision engine's best
-            // audio target. Keys parsed case-insensitively; values verbatim.
+            // (acodec, ac, ss) so the server honors the decision engine's best
+            // audio target and the pull client's seek position. Keys parsed
+            // case-insensitively; values verbatim.
             String xcodeMode = xcodeArg;
             String surfAcodec = null;
             int surfAc = 0;
+            long surfSs = 0; // pull-xcode seek start position (ms); 0 = from start
             int semi = xcodeArg.indexOf(';');
             if (semi >= 0)
             {
@@ -1326,10 +1328,12 @@ public class MediaServer implements Runnable
                 String v = p.substring(eq + 1).trim();
                 if (k.equals("acodec")) surfAcodec = v;
                 else if (k.equals("ac")) { try { surfAc = Integer.parseInt(v); } catch (NumberFormatException nfe) {} }
+                else if (k.equals("ss")) { try { surfSs = Long.parseLong(v); } catch (NumberFormatException nfe) {} }
               }
             }
             if (Sage.DBG) System.out.println("MediaServer is serving up in transcode mode: " + xcodeMode
-                + (surfAcodec != null ? " (surface acodec=" + surfAcodec + " ac=" + surfAc + ")" : ""));
+                + (surfAcodec != null ? " (surface acodec=" + surfAcodec + " ac=" + surfAc + ")" : "")
+                + (surfSs > 0 ? " (seek ss=" + surfSs + "ms)" : ""));
             FFMPEGTranscoder fftc = new FFMPEGTranscoder();
             xcoder = fftc;
             // Pull-xcode (msproxy) delivery consumes the transcode via SIZE/READ.
@@ -1342,6 +1346,10 @@ public class MediaServer implements Runnable
             fftc.setEnableOutputBuffering(true);
             if (surfAcodec != null && surfAcodec.length() > 0) fftc.setSurfaceTargetAudioCodec(surfAcodec);
             if (surfAc > 0) fftc.setSurfaceTargetAudioChannels(surfAc);
+            // Honor the pull client's requested seek position (PWA seek/FF/REW/skip
+            // re-opens /msproxy with ss=<ms>) so the transcode starts there via -ss
+            // instead of restarting from 0.
+            if (surfSs > 0) fftc.setTranscodeStartSeekTime(surfSs);
             fftc.setTranscodeFormat(xcodeMode, null);
             commBufWrite.clear();
             commBufWrite.put(OK_BYTES).flip();
