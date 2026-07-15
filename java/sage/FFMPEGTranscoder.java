@@ -1667,32 +1667,37 @@ public class FFMPEGTranscoder implements TranscodeEngine
         if ((currToke.equals("-b:v")) && toker.hasMoreTokens())
         {
           currToke = toker.nextToken();
-          try
+          long bps = parseBitrateToBps(currToke);  // FFMPEG takes video in bits/sec now
+          if (bps > 0)
           {
-            currVideoBitrateKbps = Integer.parseInt(currToke);  // FFMPEG takes video in bits/sec now
+            currVideoBitrateKbps = (int)(bps / 1000);
             if (preservedVideoBitrate > 0)
               xcodeParamsVec.add(Integer.toString(preservedVideoBitrate));
             else
-              xcodeParamsVec.add(Integer.toString(currVideoBitrateKbps * 1000));
-          }catch (NumberFormatException e)
+              xcodeParamsVec.add(Long.toString(bps));
+          }
+          else
           {
-            System.out.println("Bad video bitrate parsed of " + currToke + " err:" + e);
+            System.out.println("Bad video bitrate parsed of " + currToke);
             xcodeParamsVec.add(currToke);
           }
         }
         else if (currToke.equals("-b:a") && toker.hasMoreTokens())
         {
           currToke = toker.nextToken();
-          try
+          long bps = parseBitrateToBps(currToke);  // FFMPEG takes audio in bits/sec now
+          if (bps > 0)
           {
-            currAudioBitrateKbps = Integer.parseInt(currToke);  // FFMPEG takes audio in bits/sec now
+            currAudioBitrateKbps = (int)(bps / 1000);
             if (preservedAudioBitrate > 0)
               xcodeParamsVec.add(Integer.toString(preservedAudioBitrate));
             else
-              xcodeParamsVec.add(Integer.toString(currAudioBitrateKbps * 1000));
-          }catch (NumberFormatException e)
+              xcodeParamsVec.add(Long.toString(bps));
+          }
+          else
           {
-            System.out.println("Bad audio bitrate parsed of " + currToke + " err:" + e);
+            System.out.println("Bad audio bitrate parsed of " + currToke);
+            xcodeParamsVec.add(currToke);  // keep the value so the ffmpeg command stays valid
           }
         }
         else if (currToke.equals("-r") && toker.hasMoreTokens())
@@ -2736,6 +2741,32 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (f != null)
     {
       try { f.delete(); } catch (Throwable t) {}
+    }
+  }
+
+  // Parses an ffmpeg bitrate token that may carry a k/M/G suffix (e.g. "384k",
+  // "8M") or be a bare integer. A bare integer is interpreted as kbps for
+  // backward compatibility with SageTV's legacy transcode-quality strings
+  // ("384" and "384k" both mean 384000 bits/sec). Returns bits/sec, or -1 if it
+  // cannot be parsed.
+  private static long parseBitrateToBps(String tok)
+  {
+    if (tok == null || tok.length() == 0) return -1;
+    long mult = 1000L; // bare integer => kbps (legacy Sage convention)
+    String num = tok;
+    char last = tok.charAt(tok.length() - 1);
+    if (last == 'k' || last == 'K') { mult = 1000L; num = tok.substring(0, tok.length() - 1); }
+    else if (last == 'm' || last == 'M') { mult = 1000000L; num = tok.substring(0, tok.length() - 1); }
+    else if (last == 'g' || last == 'G') { mult = 1000000000L; num = tok.substring(0, tok.length() - 1); }
+    try
+    {
+      double v = Double.parseDouble(num);
+      if (v <= 0) return -1;
+      return (long)(v * mult);
+    }
+    catch (NumberFormatException e)
+    {
+      return -1;
     }
   }
 
