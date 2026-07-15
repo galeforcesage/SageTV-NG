@@ -716,7 +716,7 @@ public class MediaServer implements Runnable
             totalSize = getLargeFileSize(currFile.toString());
           }
           else
-            availSize = totalSize = fileChannel.size();
+            availSize = totalSize = (fileChannel != null) ? fileChannel.size() : 0;
         }
         else if (downer != null && (!downer.isComplete() || downer.getCircularDownloadSize() > 0))
         {
@@ -724,7 +724,7 @@ public class MediaServer implements Runnable
           totalSize = downer.isComplete() ? availSize : getLargeFileSize(currFile.toString());
         }
         else
-          availSize = totalSize = fileChannel.size();
+          availSize = totalSize = (fileChannel != null) ? fileChannel.size() : 0;
       }
       commBufWrite.clear();
       if (sizeBuf == null)
