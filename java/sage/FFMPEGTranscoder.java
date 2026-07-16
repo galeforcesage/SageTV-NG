@@ -1116,6 +1116,18 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
     xcodeParamsVec.add("-y");
 
+    // GPU-accelerated DECODE (input option, must precede -i). Set by the
+    // pull-xcode/browserhd path via setHwaccelDecode(). Offloads HEVC/H.264
+    // decode to the GPU (e.g. NVDEC via "cuda"), the main start/seek latency
+    // for high-res HEVC. No -hwaccel_output_format => frames land in system
+    // memory, so the downstream CPU filter graph + encoder are untouched and
+    // ffmpeg falls back to software decode for unsupported codecs.
+    if (hwaccelDecode != null && hwaccelDecode.length() > 0)
+    {
+      xcodeParamsVec.add("-hwaccel");
+      xcodeParamsVec.add(hwaccelDecode);
+    }
+
     if(multiThread) {
       // decode gets one thread, emphasis on encoding...let's try two, should help with H264 decode
       xcodeParamsVec.add("-threads");
@@ -2902,6 +2914,21 @@ public class FFMPEGTranscoder implements TranscodeEngine
   {
     bufferOutput = x;
   }
+
+  /**
+   * GPU-accelerated DECODE hint emitted as {@code -hwaccel <api>} before
+   * {@code -i} (e.g. "cuda" for NVDEC). Offloads HEVC/H.264 decode to the GPU,
+   * which dominates start/seek latency for high-resolution sources. No
+   * {@code -hwaccel_output_format} is set, so decoded frames download to system
+   * memory and the existing CPU filter graph + encoder are unchanged; ffmpeg
+   * falls back to software decode for any codec the GPU cannot handle. Set by
+   * the pull-xcode path (MediaServer XCODE_SETUP). Empty/null = software decode.
+   */
+  public void setHwaccelDecode(String api)
+  {
+    hwaccelDecode = (api != null && api.trim().length() > 0) ? api.trim() : null;
+  }
+  protected String hwaccelDecode;
 
   public void setActiveFile(boolean x)
   {

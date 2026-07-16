@@ -1361,6 +1361,20 @@ public class MediaServer implements Runnable
             // the whole pipeline deadlocks. Enabling output buffering starts the
             // XcodeDataConsumer thread that drains stdout and reports availability.
             fftc.setEnableOutputBuffering(true);
+            // GPU-accelerated decode: offload HEVC/H.264 decode off the CPU
+            // (the dominant start/seek latency for high-res HEVC pull-xcode).
+            // Default "auto" resolves to CUDA/NVDEC only when the chosen H.264
+            // encoder is NVENC (an NVIDIA GPU is present); on CPU-only hosts it
+            // stays software so we never emit -hwaccel the box can't honor.
+            // Override with media_server/browserhd_hwaccel_decode = off | none |
+            // cuda | vaapi | qsv. Harmless for the video-copy modes (ffmpeg
+            // ignores -hwaccel when stream-copying).
+            String hwDec = Sage.get("media_server/browserhd_hwaccel_decode", "auto");
+            if ("auto".equalsIgnoreCase(hwDec))
+              hwDec = (sage.HwEncoder.pick("h264") == sage.HwEncoder.Kind.NVENC) ? "cuda" : "";
+            if (hwDec != null && hwDec.length() > 0
+                && !"off".equalsIgnoreCase(hwDec) && !"none".equalsIgnoreCase(hwDec))
+              fftc.setHwaccelDecode(hwDec);
             if (surfAcodec != null && surfAcodec.length() > 0) fftc.setSurfaceTargetAudioCodec(surfAcodec);
             if (surfAc > 0) fftc.setSurfaceTargetAudioChannels(surfAc);
             // Honor the pull client's requested seek position (PWA seek/FF/REW/skip
