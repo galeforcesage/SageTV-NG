@@ -101,6 +101,23 @@ public class MediaServer implements Runnable
     if (preset != null && preset.length() > 0)
       sb.append(' ').append(sage.HwEncoder.presetFlag(k)).append(' ').append(preset);
     sb.append(" -profile:v high");
+    // Keyframe interval (GOP). With +frag_keyframe, an fMP4 fragment is only
+    // flushed at a keyframe, so the client cannot start (or resume after a
+    // seek/FF/REW) until the FIRST full GOP is encoded. The encoder default
+    // (~250 frames ≈ 8s @30fps) is the dominant startup/seek-resume latency for
+    // MSE pull. A short GOP (~2s) makes the first fragment available quickly and
+    // keeps every subsequent seek cheap. Tunable via media_server/browserhd_gop
+    // (frames; 0 disables the override and restores the encoder default).
+    int gop = Sage.getInt("media_server/browserhd_gop", 60);
+    if (gop > 0)
+    {
+      sb.append(" -g ").append(gop);
+      // NVENC: force real IDR frames at every GOP boundary so each fragment is
+      // independently decodable/seekable (default nvenc GOP frames are IDR, but
+      // make it explicit and robust across driver versions).
+      if (k == sage.HwEncoder.Kind.NVENC)
+        sb.append(" -forced-idr 1");
+    }
     // libx264 gets an explicit level cap for broad browser MSE compatibility;
     // hardware encoders auto-select an appropriate level.
     if (k == sage.HwEncoder.Kind.NONE)
