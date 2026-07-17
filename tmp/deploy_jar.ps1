@@ -7,7 +7,7 @@
 #   -SkipBuild  : reuse existing build/libs/Sage.jar instead of running gradlew sageJar
 #   -Force      : skip the BUILD_VERSION gate (use only when intentionally redeploying same version)
 #
-# Always run from C:\Users\ted\SageTV-mine.
+# Always run from C:\Users\ted\SageTV-NG.
 
 param(
     [switch]$SkipBuild,
@@ -37,7 +37,7 @@ if ((Test-DirtyTree) -and -not $Force) {
 # ---- [0/7] Build (unless -SkipBuild) -----------------------------------------
 if (-not $SkipBuild) {
     Write-Host '=== [0/7] gradle sageJar ===' -ForegroundColor Cyan
-    Push-Location 'C:\Users\ted\SageTV-mine'
+    Push-Location 'C:\Users\ted\SageTV-NG'
     try {
         $env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.10.7-hotspot'
         # PS 5.1 with $ErrorActionPreference='Stop' treats any javac/gradle stderr
@@ -139,7 +139,7 @@ Write-Host ''
 Write-Host '=== [7/7] post-start sanity ===' -ForegroundColor Cyan
 ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker exec sagetv-mine ls -l /opt/sagetv/server/sagetv_0.txt'
 ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker exec sagetv-mine tail -3 /opt/sagetv/server/sagetv_0.txt'
-$sha = (git -C 'C:\Users\ted\SageTV-mine' rev-parse HEAD).Trim()
+$sha = (git -C 'C:\Users\ted\SageTV-NG' rev-parse HEAD).Trim()
 ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr "docker exec sagetv-mine bash -c 'echo $sha > /opt/sagetv/server/DEPLOYED_COMMIT'"
 Write-Host "[ok] stamped DEPLOYED_COMMIT = $sha" -ForegroundColor Green
 Write-Host ''
