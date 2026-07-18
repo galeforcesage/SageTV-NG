@@ -60,6 +60,7 @@ public final class NgPlaybackContextWiring
   private long lastFileSizeRefreshMs;
   private long cachedFileSize;
   private long openGeneration;
+  private long recordingStartEpochMs;
 
   // --- Global singleton provider ---
   private static final NgPlaybackContextProvider GLOBAL_PROVIDER = new NgPlaybackContextProvider();
@@ -128,6 +129,7 @@ public final class NgPlaybackContextWiring
       this.sessionKey = buildSessionKey(clientName, mediaFileId, openGeneration);
       this.fileSizeSupplier = sizeSupplier;
       this.cachedFileSize = initialFileSize;
+      this.recordingStartEpochMs = Math.max(0, recordingStartEpochMs);
       this.lastPushUpdateMs = 0;
       this.lastPullUpdateMs = 0;
       this.lastFileSizeRefreshMs = System.currentTimeMillis();
@@ -163,7 +165,7 @@ public final class NgPlaybackContextWiring
 
       long fileSize = resolveFileSize(knownFileSize, timeshifted, nowMs);
 
-      provider.updateSessionState(sessionKey, serverMediaTimeMs, fileSize, nowMs);
+      provider.updateSessionState(sessionKey, toRelativeMediaTime(serverMediaTimeMs), fileSize, nowMs);
       provider.computeDeltaIfChanged(sessionKey, nowMs);
     }
     catch (Exception e)
@@ -198,7 +200,7 @@ public final class NgPlaybackContextWiring
 
       long fileSize = resolveFileSize(knownFileSize, timeshifted, nowMs);
 
-      provider.updateSessionState(sessionKey, serverMediaTimeMs, fileSize, nowMs);
+      provider.updateSessionState(sessionKey, toRelativeMediaTime(serverMediaTimeMs), fileSize, nowMs);
       provider.computeDeltaIfChanged(sessionKey, nowMs);
     }
     catch (Exception e)
@@ -219,7 +221,7 @@ public final class NgPlaybackContextWiring
     try
     {
       long nowMs = System.currentTimeMillis();
-      provider.notifySeek(sessionKey, seekTimeMs, nowMs);
+      provider.notifySeek(sessionKey, toRelativeMediaTime(seekTimeMs), nowMs);
     }
     catch (Exception e)
     {
@@ -366,5 +368,28 @@ public final class NgPlaybackContextWiring
       if (freshSize > 0) cachedFileSize = freshSize;
     }
     return cachedFileSize;
+  }
+
+  /**
+   * Convert server media time from SageTV's epoch-based timeline to media-relative ms.
+   * <p>
+   * SageTV's internal media time for live/timeshift is epoch-based (MPEG PTS timestamps
+   * reference wall-clock time). NG context needs media-relative time (0 = start of recording).
+   * <p>
+   * If recordingStartEpochMs is known and mediaTimeMs appears to be epoch-based
+   * (i.e., greater than the recording start), the conversion subtracts the start time.
+   * Otherwise, the value is returned as-is (already relative, or unknown).
+   *
+   * @param mediaTimeMs raw media time from MiniPlayer (may be epoch or relative)
+   * @return media-relative time in ms (0 = recording start)
+   */
+  private long toRelativeMediaTime(long mediaTimeMs)
+  {
+    if (recordingStartEpochMs > 0 && mediaTimeMs > recordingStartEpochMs)
+    {
+      return mediaTimeMs - recordingStartEpochMs;
+    }
+    // Already relative, or no recording start known — use as-is
+    return Math.max(0, mediaTimeMs);
   }
 }
