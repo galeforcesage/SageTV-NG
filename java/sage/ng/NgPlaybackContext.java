@@ -34,6 +34,7 @@ public final class NgPlaybackContext
   private final String container;
   private final long durationMs;
   private final long serverMediaTimeMs;
+  private final int streamEpoch;
   private final NgLiveContext live;
   private final NgSeekPolicy seek;
   private final NgIndexContext index;
@@ -42,6 +43,7 @@ public final class NgPlaybackContext
 
   public NgPlaybackContext(String sessionId, long mediaFileId, long airingId,
       String mode, String container, long durationMs, long serverMediaTimeMs,
+      int streamEpoch,
       NgLiveContext live, NgSeekPolicy seek, NgIndexContext index,
       NgSkipContext skip, NgFlowPolicy flow)
   {
@@ -53,6 +55,7 @@ public final class NgPlaybackContext
     this.container = (container != null) ? container : "unknown";
     this.durationMs = Math.max(0, durationMs);
     this.serverMediaTimeMs = Math.max(0, serverMediaTimeMs);
+    this.streamEpoch = Math.max(0, streamEpoch);
     this.live = (live != null) ? live : NgLiveContext.EMPTY;
     this.seek = (seek != null) ? seek : NgSeekPolicy.DEFAULT;
     this.index = (index != null) ? index : NgIndexContext.EMPTY;
@@ -68,6 +71,7 @@ public final class NgPlaybackContext
   public String getContainer() { return container; }
   public long getDurationMs() { return durationMs; }
   public long getServerMediaTimeMs() { return serverMediaTimeMs; }
+  public int getStreamEpoch() { return streamEpoch; }
   public NgLiveContext getLive() { return live; }
   public NgSeekPolicy getSeek() { return seek; }
   public NgIndexContext getIndex() { return index; }

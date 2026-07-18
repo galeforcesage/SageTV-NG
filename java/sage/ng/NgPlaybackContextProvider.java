@@ -131,11 +131,12 @@ public final class NgPlaybackContextProvider
     state.snapshot.serverSideTranscoding = serverSideTranscoding;
     state.snapshot.recordingStartEpochMs = recordingStartEpochMs;
 
-    // Build initial context
-    state.lastContext = NgPlaybackContextBuilder.build(state.snapshot);
-
     // Open the live-window calculator (always, even for non-live — it's a no-op if not used)
     state.calculator.open(recordingStartEpochMs);
+    state.snapshot.streamEpoch = state.calculator.getStreamEpoch();
+
+    // Build initial context
+    state.lastContext = NgPlaybackContextBuilder.build(state.snapshot);
 
     sessions.put(sessionKey, state);
     if (sessionId != null)
@@ -187,6 +188,7 @@ public final class NgPlaybackContextProvider
         state.snapshot.fileSizeRefreshTimeMs = nowMs;
       }
       state.calculator.updateServerState(serverMediaTimeMs, fileSizeBytes, nowMs);
+      state.snapshot.streamEpoch = state.calculator.getStreamEpoch();
       // Rebuild immutable context so getCurrentContext() returns fresh values
       state.lastContext = NgPlaybackContextBuilder.build(state.snapshot);
     }
@@ -289,6 +291,7 @@ public final class NgPlaybackContextProvider
       state.snapshot.serverMediaTimeMs = 0;
       state.snapshot.fileSizeBytes = 0;
       state.calculator.notifyEpochChange(newMediaFileId, newAiringId, recordingStartEpochMs);
+      state.snapshot.streamEpoch = state.calculator.getStreamEpoch();
       state.lastContext = NgPlaybackContextBuilder.build(state.snapshot);
       delta = state.calculator.computeDeltaIfChanged(nowMs);
     }

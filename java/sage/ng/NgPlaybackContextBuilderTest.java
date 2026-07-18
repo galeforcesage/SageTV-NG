@@ -97,7 +97,7 @@ public class NgPlaybackContextBuilderTest
     assertEqualStr(ctx.getMode(), "live", "live: mode");
     assertTrue(ctx.getLive().isLive(), "live: isLive=true");
     assertEqual(ctx.getLive().getGrowthBytes(), 52428800, "live: growthBytes");
-    assertEqual(ctx.getLive().getSafeSeekEndMs(), 45000, "live: safeSeekEnd from serverMediaTime");
+    assertEqual(ctx.getLive().getSafeSeekEndMs(), 40000, "live: safeSeekEnd from serverMediaTime (with 5s margin)");
     assertEqual(ctx.getLive().getSafeSeekStartMs(), 0, "live: safeSeekStart=0");
     assertEqual(ctx.getLive().getLastSizeRefreshMs(), 1689000000000L, "live: lastSizeRefreshMs");
   }
@@ -115,7 +115,7 @@ public class NgPlaybackContextBuilderTest
 
     assertEqualStr(ctx.getMode(), "timeshift", "timeshift: mode");
     assertTrue(ctx.getLive().isLive(), "timeshift: live.isLive=true (actively recording)");
-    assertEqual(ctx.getLive().getSafeSeekEndMs(), 120000, "timeshift: safeSeekEnd");
+    assertEqual(ctx.getLive().getSafeSeekEndMs(), 115000, "timeshift: safeSeekEnd (with 5s margin)");
   }
 
   private static void testBuildUnknownDefaults()
@@ -260,7 +260,7 @@ public class NgPlaybackContextBuilderTest
 
     NgLiveContext live = NgPlaybackContextBuilder.buildLiveContext(snap, 120000);
     assertTrue(live.isLive(), "liveCtx duration: isLive");
-    assertEqual(live.getSafeSeekEndMs(), 120000, "liveCtx duration: uses durationMs");
+    assertEqual(live.getSafeSeekEndMs(), 115000, "liveCtx duration: uses durationMs (with 5s margin)");
   }
 
   private static void testBuildLiveContextWithServerTime()
@@ -272,7 +272,7 @@ public class NgPlaybackContextBuilderTest
 
     // duration=0, so should fall back to serverMediaTimeMs
     NgLiveContext live = NgPlaybackContextBuilder.buildLiveContext(snap, 0);
-    assertEqual(live.getSafeSeekEndMs(), 90000, "liveCtx serverTime: uses serverMediaTimeMs");
+    assertEqual(live.getSafeSeekEndMs(), 85000, "liveCtx serverTime: uses serverMediaTimeMs (with 5s margin)");
   }
 
   private static void testNullSnapshotSafe()

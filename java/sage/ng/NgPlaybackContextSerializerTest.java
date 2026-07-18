@@ -52,6 +52,7 @@ public class NgPlaybackContextSerializerTest
         123456, 789,
         "recording", "ts",
         3612000, 1500000,
+        1, // streamEpoch
         NgLiveContext.EMPTY,
         NgSeekPolicy.DEFAULT,
         NgIndexContext.EMPTY,
@@ -69,6 +70,7 @@ public class NgPlaybackContextSerializerTest
     assertContains(json, "\"container\":\"ts\"", "recording: container");
     assertContains(json, "\"durationMs\":3612000", "recording: durationMs");
     assertContains(json, "\"serverMediaTimeMs\":1500000", "recording: serverMediaTimeMs");
+    assertContains(json, "\"streamEpoch\":1", "recording: streamEpoch");
     assertContains(json, "\"isLive\":false", "recording: live.isLive");
     assertContains(json, "\"requiresServerSeek\":true", "recording: seek.requiresServerSeek");
     assertContains(json, "\"preferredPrebufferBytes\":262144", "recording: flow.preferredPrebufferBytes");
@@ -84,6 +86,7 @@ public class NgPlaybackContextSerializerTest
         99999, 456,
         "live", "ts",
         0, 60000,
+        1, // streamEpoch
         live,
         new NgSeekPolicy(10000, 500, 2000, true, true),
         NgIndexContext.EMPTY,
@@ -107,7 +110,7 @@ public class NgPlaybackContextSerializerTest
   {
     NgPlaybackContext ctx = new NgPlaybackContext(
         "empty-test", 1, 1, "recording", "mp4",
-        1000, 0, null, null, null, null, null
+        1000, 0, 1, null, null, null, null, null
     );
 
     String json = NgPlaybackContextSerializer.toJson(ctx);
@@ -124,7 +127,7 @@ public class NgPlaybackContextSerializerTest
     // Negative duration should clamp to 0
     NgPlaybackContext ctx = new NgPlaybackContext(
         "clamp-test", 1, 1, "recording", "ts",
-        -5000, -100, null, null, null, null, null
+        -5000, -100, 1, null, null, null, null, null
     );
     assertEqual(ctx.getDurationMs(), 0, "clamped: negative duration to 0");
     assertEqual(ctx.getServerMediaTimeMs(), 0, "clamped: negative serverMediaTimeMs to 0");
@@ -155,7 +158,7 @@ public class NgPlaybackContextSerializerTest
   {
     NgPlaybackContext ctx = new NgPlaybackContext(
         "unk-test", 1, 1, null, null,
-        1000, 0, null, null, null, null, null
+        1000, 0, 1, null, null, null, null, null
     );
 
     String json = NgPlaybackContextSerializer.toJson(ctx);
@@ -165,7 +168,7 @@ public class NgPlaybackContextSerializerTest
     // Exotic but valid mode/container pass through as-is
     NgPlaybackContext ctx2 = new NgPlaybackContext(
         "exotic-test", 1, 1, "timeshift", "mkv",
-        1000, 0, null, null, null, null, null
+        1000, 0, 1, null, null, null, null, null
     );
     String json2 = NgPlaybackContextSerializer.toJson(ctx2);
     assertContains(json2, "\"mode\":\"timeshift\"", "exotic: timeshift mode");
@@ -176,7 +179,7 @@ public class NgPlaybackContextSerializerTest
   {
     NgPlaybackContext ctx = new NgPlaybackContext(
         "session-with-\"quotes\"", 1, 1, "recording", "ts",
-        1000, 0, null, null, null, null, null
+        1000, 0, 1, null, null, null, null, null
     );
 
     String json = NgPlaybackContextSerializer.toJson(ctx);
@@ -194,7 +197,7 @@ public class NgPlaybackContextSerializerTest
 
     NgPlaybackContext ctx = new NgPlaybackContext(
         "pts-test", 1, 1, "recording", "ts",
-        30000, 0, null, null, index, null, null
+        30000, 0, 1, null, null, index, null, null
     );
 
     String json = NgPlaybackContextSerializer.toJson(ctx);
@@ -221,7 +224,7 @@ public class NgPlaybackContextSerializerTest
 
     NgPlaybackContext ctx = new NgPlaybackContext(
         "skip-test", 1, 1, "recording", "ts",
-        600000, 0, null, null, null, skip, null
+        600000, 0, 1, null, null, null, skip, null
     );
 
     String json = NgPlaybackContextSerializer.toJson(ctx);

@@ -70,6 +70,8 @@ public final class NgPlaybackContextBuilder
     public boolean isLiveStream = false;
     /** Current server media time in milliseconds */
     public long serverMediaTimeMs = 0;
+    /** Stream epoch — increments on media file change/channel switch within a session */
+    public int streamEpoch = 1;
 
     // --- Live window (only meaningful when timeshifted=true) ---
     /** File length in bytes (for active files, current on-disk size) */
@@ -118,6 +120,7 @@ public final class NgPlaybackContextBuilder
     return new NgPlaybackContext(
         sessionId, snap.mediaFileId, snap.airingId,
         mode, container, durationMs, serverMediaTimeMs,
+        snap.streamEpoch,
         live, seek, index, skip, flow
     );
   }
@@ -164,6 +167,9 @@ public final class NgPlaybackContextBuilder
     return containerFormat.toLowerCase();
   }
 
+  /** Conservative safety margin for live-edge seek targeting (ms) */
+  private static final long LIVE_EDGE_SAFETY_MARGIN_MS = 5000;
+
   /**
    * Build the live context sub-object.
    */
@@ -173,19 +179,18 @@ public final class NgPlaybackContextBuilder
       return NgLiveContext.EMPTY;
 
     long safeSeekStartMs = 0;
-    // Conservative: safe seek end = known duration or server time, whichever is less
-    // For truly live content with no known duration, use serverMediaTimeMs as the safe end
-    long safeSeekEndMs;
-    if (durationMs > 0)
-      safeSeekEndMs = durationMs;
-    else if (snap.serverMediaTimeMs > 0)
-      safeSeekEndMs = snap.serverMediaTimeMs;
-    else
-      safeSeekEndMs = 0;
 
-    // playableEndMs is the furthest point the client could theoretically reach
-    // For live, it's slightly ahead of safeSeekEnd
-    long playableEndMs = safeSeekEndMs;
+    // playableEndMs: the furthest media-relative point the server can serve
+    long playableEndMs;
+    if (durationMs > 0)
+      playableEndMs = durationMs;
+    else if (snap.serverMediaTimeMs > 0)
+      playableEndMs = snap.serverMediaTimeMs;
+    else
+      playableEndMs = 0;
+
+    // safeSeekEndMs: conservatively behind playableEndMs by the safety margin
+    long safeSeekEndMs = Math.max(safeSeekStartMs, playableEndMs - LIVE_EDGE_SAFETY_MARGIN_MS);
 
     return new NgLiveContext(
         true,
