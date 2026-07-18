@@ -163,6 +163,31 @@ public class HTTPLSServer implements Runnable
           continue;
         }
 
+        // --- NG Playback Context read-only endpoints ---
+        if (pageRequest.startsWith("/ng/"))
+        {
+          if ("GET".equals(requestMethod) && sage.ng.NgContextHttpHandler.canHandle(pageRequest))
+          {
+            // Split path and query string
+            String ngPath = pageRequest;
+            String ngQuery = null;
+            int qIdx = pageRequest.indexOf('?');
+            if (qIdx >= 0)
+            {
+              ngPath = pageRequest.substring(0, qIdx);
+              ngQuery = pageRequest.substring(qIdx + 1);
+            }
+            sage.ng.NgContextHttpHandler.Response ngResp = sage.ng.NgContextHttpHandler.handleGet(ngPath, ngQuery);
+            sendHTTPJsonResponse(ngResp.statusCode, httpStatusText(ngResp.statusCode),
+                ngResp.body, ngResp.contentType);
+            continue;
+          }
+          // Unknown /ng/ route
+          sendHTTPJsonResponse(404, "Not Found",
+              "{\"type\":\"NG_ERROR\",\"reason\":\"unknown_route\"}", "application/json");
+          continue;
+        }
+
         // Now determine which type of the 3 requests it is
         if (!pageRequest.startsWith("/iosstream_"))
         {
@@ -2788,6 +2813,18 @@ public class HTTPLSServer implements Runnable
     if (s == null)
       return "recording.bin";
     return s.replace('"', '_').replace('\r', '_').replace('\n', '_');
+  }
+
+  private static String httpStatusText(int code)
+  {
+    switch (code)
+    {
+      case 200: return "OK";
+      case 400: return "Bad Request";
+      case 404: return "Not Found";
+      case 501: return "Not Implemented";
+      default: return "Error";
+    }
   }
 
   // Returns true if a new transcoder was spawned
