@@ -46,6 +46,7 @@ public class NgPlaybackContextProviderTest
     testNullSessionKeySafe();
     testCloseEmitsSessionClosedToListener();
     testNoFilesystemAccess();
+    testGetContextByClientNameReturnsUpdatedValues();
 
     System.out.println("\n=== NgPlaybackContextProviderTest: " + passed + " passed, " + failed + " failed ===");
     if (failed > 0) System.exit(1);
@@ -444,6 +445,36 @@ public class NgPlaybackContextProviderTest
     provider.closeSession("sess-noio", 1689000060000L);
     passed++;
     System.out.println("  PASS: noio: entire lifecycle with zero filesystem access");
+  }
+
+  // --- Client-name lookup returns updated live values ---
+
+  static void testGetContextByClientNameReturnsUpdatedValues()
+  {
+    NgPlaybackContextProvider provider = new NgPlaybackContextProvider();
+
+    provider.openSession("key-clu", "myPwaClient", "sess-clu", 100, 200,
+        "MPEG2-PS", 0, true, true, false, System.currentTimeMillis() - 30000);
+
+    // Before update
+    NgPlaybackContext before = provider.getContextByClientName("myPwaClient");
+    assertTrue(before != null, "clientName lookup: initial context exists");
+    assertEqual(before.getServerMediaTimeMs(), 0, "clientName lookup: initial serverMediaTimeMs is 0");
+
+    // Update session state (simulates pull-mode tick)
+    long now = System.currentTimeMillis();
+    provider.updateSessionState("key-clu", 25000, 4000000, now);
+
+    // After update — getContextByClientName should reflect the new values
+    NgPlaybackContext after = provider.getContextByClientName("myPwaClient");
+    assertTrue(after != null, "clientName lookup: context exists after update");
+    assertEqual(after.getServerMediaTimeMs(), 25000, "clientName lookup: updated serverMediaTimeMs");
+    assertTrue(after.getLive().getSafeSeekEndMs() > 0,
+        "clientName lookup: safeSeekEndMs > 0 after update with 25s media time");
+
+    provider.closeSession("key-clu", now);
+    passed++;
+    System.out.println("  PASS: clientName lookup returns updated live values");
   }
 
   // --- Recording listener helper ---

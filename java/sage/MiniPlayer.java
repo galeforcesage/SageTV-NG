@@ -431,6 +431,9 @@ public class MiniPlayer implements DVDMediaPlayer
     {
       // We can't trust the Sigma driver in this case so we need to guess from the MPEG parser
       rv = transcoded ? tcSrc.getLastParsedTimeMillis() : mpegSrc.getLastParsedTimeMillis();
+      // --- NG Context wiring: pull-mode metadata update ---
+      if (!pushMode) ngContextWiring.onPullModeTick(rv, finalLength, timeshifted);
+      // --- end NG Context wiring ---
       return rv;
     }
     if (detailedPushBufferStats && pushMode && rpSrc == null)
@@ -445,7 +448,11 @@ public class MiniPlayer implements DVDMediaPlayer
       lastMediaTimeCacheTime = Sage.eventTime();
       return lastMediaTime;
     }
-    return getNativeMediaTimeNoSync();
+    rv = getNativeMediaTimeNoSync();
+    // --- NG Context wiring: pull-mode metadata update ---
+    if (!pushMode) ngContextWiring.onPullModeTick(rv, finalLength, timeshifted);
+    // --- end NG Context wiring ---
+    return rv;
   }
 
   private long getNativeMediaTimeNoSync()
