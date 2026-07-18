@@ -187,6 +187,8 @@ public final class NgPlaybackContextProvider
         state.snapshot.fileSizeRefreshTimeMs = nowMs;
       }
       state.calculator.updateServerState(serverMediaTimeMs, fileSizeBytes, nowMs);
+      // Rebuild immutable context so getCurrentContext() returns fresh values
+      state.lastContext = NgPlaybackContextBuilder.build(state.snapshot);
     }
   }
 
@@ -233,6 +235,7 @@ public final class NgPlaybackContextProvider
     {
       state.snapshot.serverMediaTimeMs = newMediaTimeMs;
       state.calculator.notifySeek(newMediaTimeMs);
+      state.lastContext = NgPlaybackContextBuilder.build(state.snapshot);
       delta = state.calculator.computeDeltaIfChanged(nowMs);
     }
 
@@ -255,6 +258,7 @@ public final class NgPlaybackContextProvider
     synchronized (state)
     {
       state.calculator.notifyFlush();
+      state.lastContext = NgPlaybackContextBuilder.build(state.snapshot);
       delta = state.calculator.computeDeltaIfChanged(nowMs);
     }
 
@@ -285,6 +289,7 @@ public final class NgPlaybackContextProvider
       state.snapshot.serverMediaTimeMs = 0;
       state.snapshot.fileSizeBytes = 0;
       state.calculator.notifyEpochChange(newMediaFileId, newAiringId, recordingStartEpochMs);
+      state.lastContext = NgPlaybackContextBuilder.build(state.snapshot);
       delta = state.calculator.computeDeltaIfChanged(nowMs);
     }
 

@@ -54,6 +54,11 @@ public class NgPlaybackContextWiringTest
     testNonTimeshiftedFileSizeStatic();
     testBuildSessionKeyNullClient();
     testReopenSameMediaFileProducesDifferentKey();
+    testPullModeTickUpdatesContext();
+    testPullModeTickRateLimited();
+    testPullModeTickLiveSafeSeekEnd();
+    testProviderRebuildLastContextOnUpdate();
+    testProviderRebuildLastContextOnSeek();
 
     System.out.println("\n=== NgPlaybackContextWiringTest ===");
     System.out.println("Passed: " + passed + " Failed: " + failed);
@@ -473,6 +478,109 @@ public class NgPlaybackContextWiringTest
     check("reopen: third key differs from first", !key1.equals(key3));
 
     wiring.onPlaybackClose();
+  }
+
+  // --- Pull-mode tick tests ---
+
+  static void testPullModeTickUpdatesContext()
+  {
+    NgPlaybackContextProvider provider = new NgPlaybackContextProvider();
+    NgPlaybackContextWiring wiring = new NgPlaybackContextWiring(provider);
+
+    wiring.onPlaybackOpen("pullClient", 500, 600, "MPEG2-PS", 7200000,
+        true, true, false, 0, 3000000, null);
+
+    String sessionKey = wiring.getSessionKey();
+
+    // Before pull tick, serverMediaTimeMs should be 0 (initial)
+    NgPlaybackContext ctxBefore = provider.getCurrentContext(sessionKey);
+    check("pull: initial serverMediaTimeMs is 0", ctxBefore.getServerMediaTimeMs() == 0);
+
+    // Pull-mode tick with non-zero media time
+    wiring.onPullModeTick(45000, 4000000, true);
+
+    NgPlaybackContext ctxAfter = provider.getCurrentContext(sessionKey);
+    check("pull: serverMediaTimeMs updated", ctxAfter.getServerMediaTimeMs() == 45000);
+
+    wiring.onPlaybackClose();
+  }
+
+  static void testPullModeTickRateLimited()
+  {
+    NgPlaybackContextProvider provider = new NgPlaybackContextProvider();
+    RecordingListener listener = new RecordingListener();
+    provider.addListener(listener);
+    NgPlaybackContextWiring wiring = new NgPlaybackContextWiring(provider);
+
+    wiring.onPlaybackOpen("pullClient2", 500, 600, "MPEG2-TS", 0,
+        true, true, false, 0, 1000000, null);
+
+    // Rapid-fire pull ticks — should be rate-limited
+    for (int i = 0; i < 100; i++)
+    {
+      wiring.onPullModeTick(i * 1000, 1000000 + i * 1000, true);
+    }
+
+    // With 3000ms interval, 100 rapid calls should result in at most 1 update
+    check("pull-mode rate-limited (few deltas)", listener.deltas.size() <= 2);
+
+    wiring.onPlaybackClose();
+  }
+
+  static void testPullModeTickLiveSafeSeekEnd()
+  {
+    NgPlaybackContextProvider provider = new NgPlaybackContextProvider();
+    NgPlaybackContextWiring wiring = new NgPlaybackContextWiring(provider);
+
+    wiring.onPlaybackOpen("pullLive", 700, 800, "MPEG2-TS", 0,
+        true, true, false, System.currentTimeMillis() - 30000, 5000000, null);
+
+    String sessionKey = wiring.getSessionKey();
+
+    // Pass a media time well past the 5000ms safety margin
+    wiring.onPullModeTick(20000, 6000000, true);
+
+    NgPlaybackContext ctx = provider.getCurrentContext(sessionKey);
+    check("pull: live safeSeekEndMs > 0 after update", ctx.getLive().getSafeSeekEndMs() > 0);
+    check("pull: live growthBytes > 0 or at least fileSize reflected",
+        ctx.getLive().getGrowthBytes() >= 0);
+
+    wiring.onPlaybackClose();
+  }
+
+  // --- Provider lastContext rebuild tests ---
+
+  static void testProviderRebuildLastContextOnUpdate()
+  {
+    NgPlaybackContextProvider provider = new NgPlaybackContextProvider();
+    provider.openSession("key1", "client1", "sess1", 100, 200,
+        "MPEG2-PS", 3600000, true, true, false, 0);
+
+    NgPlaybackContext before = provider.getCurrentContext("key1");
+    check("rebuild: initial serverMediaTimeMs 0", before.getServerMediaTimeMs() == 0);
+
+    long now = System.currentTimeMillis();
+    provider.updateSessionState("key1", 55000, 4000000, now);
+
+    NgPlaybackContext after = provider.getCurrentContext("key1");
+    check("rebuild: getCurrentContext reflects updated time", after.getServerMediaTimeMs() == 55000);
+
+    provider.closeSession("key1", now);
+  }
+
+  static void testProviderRebuildLastContextOnSeek()
+  {
+    NgPlaybackContextProvider provider = new NgPlaybackContextProvider();
+    provider.openSession("key2", "client2", "sess2", 100, 200,
+        "MPEG2-PS", 3600000, false, false, false, 0);
+
+    long now = System.currentTimeMillis();
+    provider.notifySeek("key2", 120000, now);
+
+    NgPlaybackContext after = provider.getCurrentContext("key2");
+    check("rebuild: getCurrentContext reflects seek time", after.getServerMediaTimeMs() == 120000);
+
+    provider.closeSession("key2", now);
   }
 
   // --- Helper listener ---

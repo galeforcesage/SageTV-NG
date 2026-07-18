@@ -45,6 +45,9 @@ public final class NgPlaybackContextWiring
   /** Minimum interval between push-loop updates (ms). Avoids per-buffer overhead. */
   private static final long PUSH_LOOP_UPDATE_INTERVAL_MS = 2000;
 
+  /** Minimum interval between pull-mode metadata updates (ms). */
+  private static final long PULL_MODE_UPDATE_INTERVAL_MS = 3000;
+
   /** Minimum interval between file-size polls (ms). Rate-limits any external size supplier. */
   private static final long FILE_SIZE_REFRESH_INTERVAL_MS = 3000;
 
@@ -53,6 +56,7 @@ public final class NgPlaybackContextWiring
   private volatile String sessionId;
   private volatile boolean active;
   private long lastPushUpdateMs;
+  private long lastPullUpdateMs;
   private long lastFileSizeRefreshMs;
   private long cachedFileSize;
   private long openGeneration;
@@ -125,6 +129,7 @@ public final class NgPlaybackContextWiring
       this.fileSizeSupplier = sizeSupplier;
       this.cachedFileSize = initialFileSize;
       this.lastPushUpdateMs = 0;
+      this.lastPullUpdateMs = 0;
       this.lastFileSizeRefreshMs = System.currentTimeMillis();
       this.active = true;
 
@@ -166,6 +171,41 @@ public final class NgPlaybackContextWiring
       // Never propagate into push loop
       if (Boolean.getBoolean("sage.ng.debug"))
         System.err.println("NgPlaybackContextWiring.onPushLoopTick: " + e);
+    }
+  }
+
+  /**
+   * Called during pull-mode playback when the server reports or queries
+   * the current media time. Rate-limited to PULL_MODE_UPDATE_INTERVAL_MS
+   * so it adds negligible overhead to the getMediaTimeMillis() path.
+   * <p>
+   * This is the pull-mode equivalent of {@link #onPushLoopTick}: it feeds
+   * the NG context with the latest server-known media time and file size
+   * so that live-window values are populated for pull-mode clients (PWA).
+   *
+   * @param serverMediaTimeMs current server/client media time in ms
+   * @param knownFileSize     already-cached file size from MiniPlayer (e.g. finalLength), 0 if unknown
+   * @param timeshifted       true if file is still active (live/recording)
+   */
+  public void onPullModeTick(long serverMediaTimeMs, long knownFileSize, boolean timeshifted)
+  {
+    if (!active) return;
+    try
+    {
+      long nowMs = System.currentTimeMillis();
+      if (nowMs - lastPullUpdateMs < PULL_MODE_UPDATE_INTERVAL_MS) return;
+      lastPullUpdateMs = nowMs;
+
+      long fileSize = resolveFileSize(knownFileSize, timeshifted, nowMs);
+
+      provider.updateSessionState(sessionKey, serverMediaTimeMs, fileSize, nowMs);
+      provider.computeDeltaIfChanged(sessionKey, nowMs);
+    }
+    catch (Exception e)
+    {
+      // Never propagate into media time query path
+      if (Boolean.getBoolean("sage.ng.debug"))
+        System.err.println("NgPlaybackContextWiring.onPullModeTick: " + e);
     }
   }
 
