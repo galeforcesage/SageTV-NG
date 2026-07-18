@@ -59,6 +59,10 @@ public class NgPlaybackContextWiringTest
     testPullModeTickLiveSafeSeekEnd();
     testProviderRebuildLastContextOnUpdate();
     testProviderRebuildLastContextOnSeek();
+    testEpochMediaTimeConvertedToRelative();
+    testRelativeMediaTimePassedThrough();
+    testEpochSeekTimeConvertedToRelative();
+    testSafeSeekEndNeverNegative();
 
     System.out.println("\n=== NgPlaybackContextWiringTest ===");
     System.out.println("Passed: " + passed + " Failed: " + failed);
@@ -581,6 +585,105 @@ public class NgPlaybackContextWiringTest
     check("rebuild: getCurrentContext reflects seek time", after.getServerMediaTimeMs() == 120000);
 
     provider.closeSession("key2", now);
+  }
+
+  // --- Epoch→relative conversion tests ---
+
+  static void testEpochMediaTimeConvertedToRelative()
+  {
+    NgPlaybackContextProvider provider = new NgPlaybackContextProvider();
+    NgPlaybackContextWiring wiring = new NgPlaybackContextWiring(provider);
+
+    // Simulate live TV: recording started at epoch 1784345347603 (wall clock)
+    long recStart = 1784345347603L;
+    wiring.onPlaybackOpen("epochClient", 500, 600, "MPEG2-TS", 0,
+        true, true, false, recStart, 5000000, null);
+
+    String sessionKey = wiring.getSessionKey();
+
+    // Simulate MiniPlayer reporting epoch-based media time (600s into recording)
+    long epochMediaTime = recStart + 600000; // 600s past recording start
+    wiring.onPullModeTick(epochMediaTime, 6000000, true);
+
+    NgPlaybackContext ctx = provider.getCurrentContext(sessionKey);
+    // Should be 600000 (relative), NOT the epoch value
+    check("epoch→relative: serverMediaTimeMs is relative (600000)",
+        ctx.getServerMediaTimeMs() == 600000);
+    check("epoch→relative: serverMediaTimeMs is NOT epoch",
+        ctx.getServerMediaTimeMs() < 1_000_000_000_000L);
+    // Builder uses serverMediaTimeMs directly for safeSeekEndMs (no safety margin in static context)
+    check("epoch→relative: safeSeekEndMs = 600000",
+        ctx.getLive().getSafeSeekEndMs() == 600000);
+    check("epoch→relative: playableEndMs = 600000",
+        ctx.getLive().getPlayableEndMs() == 600000);
+
+    wiring.onPlaybackClose();
+  }
+
+  static void testRelativeMediaTimePassedThrough()
+  {
+    NgPlaybackContextProvider provider = new NgPlaybackContextProvider();
+    NgPlaybackContextWiring wiring = new NgPlaybackContextWiring(provider);
+
+    // Completed recording: recordingStartEpochMs = 0, media time already relative
+    wiring.onPlaybackOpen("relClient", 501, 601, "MPEG2-PS", 3600000,
+        false, false, false, 0, 4000000, null);
+
+    String sessionKey = wiring.getSessionKey();
+
+    // Media time is already relative (30 minutes in)
+    wiring.onPullModeTick(1800000, 4000000, false);
+
+    NgPlaybackContext ctx = provider.getCurrentContext(sessionKey);
+    check("relative: serverMediaTimeMs passed through unchanged (1800000)",
+        ctx.getServerMediaTimeMs() == 1800000);
+
+    wiring.onPlaybackClose();
+  }
+
+  static void testEpochSeekTimeConvertedToRelative()
+  {
+    NgPlaybackContextProvider provider = new NgPlaybackContextProvider();
+    NgPlaybackContextWiring wiring = new NgPlaybackContextWiring(provider);
+
+    long recStart = 1784345347603L;
+    wiring.onPlaybackOpen("seekClient", 500, 600, "MPEG2-TS", 0,
+        true, true, false, recStart, 5000000, null);
+
+    String sessionKey = wiring.getSessionKey();
+
+    // Seek target is epoch-based (120s into recording)
+    wiring.onSeek(recStart + 120000);
+
+    NgPlaybackContext ctx = provider.getCurrentContext(sessionKey);
+    check("epoch seek: serverMediaTimeMs is relative (120000)",
+        ctx.getServerMediaTimeMs() == 120000);
+
+    wiring.onPlaybackClose();
+  }
+
+  static void testSafeSeekEndNeverNegative()
+  {
+    NgPlaybackContextProvider provider = new NgPlaybackContextProvider();
+    NgPlaybackContextWiring wiring = new NgPlaybackContextWiring(provider);
+
+    long recStart = 1784345347603L;
+    wiring.onPlaybackOpen("safeClient", 500, 600, "MPEG2-TS", 0,
+        true, true, false, recStart, 1000000, null);
+
+    String sessionKey = wiring.getSessionKey();
+
+    // Media time only 2s into recording (less than 5s safety margin)
+    wiring.onPullModeTick(recStart + 2000, 1000000, true);
+
+    NgPlaybackContext ctx = provider.getCurrentContext(sessionKey);
+    check("safe: serverMediaTimeMs = 2000", ctx.getServerMediaTimeMs() == 2000);
+    check("safe: safeSeekEndMs >= 0", ctx.getLive().getSafeSeekEndMs() >= 0);
+    // With 2s media time and 5s safety margin, safeSeekEndMs should be clamped
+    check("safe: safeSeekEndMs <= serverMediaTimeMs",
+        ctx.getLive().getSafeSeekEndMs() <= ctx.getServerMediaTimeMs());
+
+    wiring.onPlaybackClose();
   }
 
   // --- Helper listener ---

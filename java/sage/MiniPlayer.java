@@ -2659,7 +2659,7 @@ public class MiniPlayer implements DVDMediaPlayer
         String ngContainer = (ngMF != null) ? ngMF.getContainerFormat() : null;
         long ngDuration = getDurationMillis();
         boolean ngIsLive = timeshifted && (SeekerSelector.getInstance().getCurrRecordFileForClient(uiMgr, false) != null);
-        long ngRecStart = 0;
+        long ngRecStart = (ngMF != null) ? ngMF.getRecordTime() : 0;
         long ngInitialSize = finalLength;
         sage.ng.NgPlaybackContextWiring.FileSizeSupplier ngSizeSupplier = null;
         if (timeshifted && mpegSrc != null)
