@@ -293,6 +293,10 @@ public class MiniPlayer implements DVDMediaPlayer
 
   public synchronized void free()
   {
+    // --- NG Context wiring: close provider session ---
+    ngContextWiring.onPlaybackClose();
+    // --- end NG Context wiring ---
+
     persistSessionBandwidthFromTranscoder();
     if (uiMgr != null)
       uiMgr.putFloat("miniplayer/last_volume", curVolume);
@@ -608,6 +612,22 @@ public class MiniPlayer implements DVDMediaPlayer
       }
     }
     timeshifted = serverSideTranscoding;
+
+    // --- NG Context wiring: file is no longer active ---
+    try
+    {
+      MediaFile ngMF = VideoFrame.getMediaFileForPlayer(MiniPlayer.this);
+      long ngMFId = (ngMF != null) ? ngMF.getID() : -1;
+      long ngAirId = -1;
+      if (ngMF != null && ngMF.getContentAiring() != null)
+        ngAirId = ngMF.getContentAiring().getID();
+      ngContextWiring.onInactiveFile(ngMFId, ngAirId, finalLength);
+    }
+    catch (Exception ngEx)
+    {
+      if (Sage.DBG) System.out.println("NG context inactiveFile failed (non-fatal): " + ngEx);
+    }
+    // --- end NG Context wiring ---
   }
   
   void checkForByteBasedSeeking(java.io.File file) {
@@ -2621,6 +2641,38 @@ public class MiniPlayer implements DVDMediaPlayer
 
       currState = LOADED_STATE;
 
+      // --- NG Context wiring: open provider session ---
+      try
+      {
+        MediaFile ngMF = VideoFrame.getMediaFileForPlayer(MiniPlayer.this);
+        long ngMediaFileId = (ngMF != null) ? ngMF.getID() : -1;
+        long ngAiringId = -1;
+        if (ngMF != null && ngMF.getContentAiring() != null)
+          ngAiringId = ngMF.getContentAiring().getID();
+        String ngContainer = (ngMF != null) ? ngMF.getContainerFormat() : null;
+        long ngDuration = getDurationMillis();
+        boolean ngIsLive = timeshifted && (SeekerSelector.getInstance().getCurrRecordFileForClient(uiMgr, false) != null);
+        long ngRecStart = 0;
+        long ngInitialSize = finalLength;
+        sage.ng.NgPlaybackContextWiring.FileSizeSupplier ngSizeSupplier = null;
+        if (timeshifted && mpegSrc != null)
+        {
+          final FastMpeg2Reader ngReader = mpegSrc;
+          ngSizeSupplier = new sage.ng.NgPlaybackContextWiring.FileSizeSupplier() {
+            public long getFileSize() { return ngReader.length(); }
+          };
+        }
+        String ngClientName = (uiMgr != null) ? uiMgr.getLocalUIClientName() : "EXTERNAL";
+        ngContextWiring.onPlaybackOpen(ngClientName, ngMediaFileId, ngAiringId,
+            ngContainer, ngDuration, timeshifted, ngIsLive, serverSideTranscoding,
+            ngRecStart, ngInitialSize, ngSizeSupplier);
+      }
+      catch (Exception ngEx)
+      {
+        if (Sage.DBG) System.out.println("NG context open failed (non-fatal): " + ngEx);
+      }
+      // --- end NG Context wiring ---
+
       currHintMajorType = majorTypeHint;
       currHintMinorType = minorTypeHint;
       currHintEncoding = encodingHint;
@@ -3295,6 +3347,12 @@ public class MiniPlayer implements DVDMediaPlayer
               try{
                 decoderLock.notifyAll();
                 decoderLock.wait(10);}catch(Exception e){}
+              // --- NG Context wiring: periodic live-window update ---
+              ngContextWiring.onPushLoopTick(
+                  lastParserTimestamp - timestampOffset,
+                  finalLength,
+                  timeshifted);
+              // --- end NG Context wiring ---
             }
           }
         }
@@ -3531,6 +3589,9 @@ public class MiniPlayer implements DVDMediaPlayer
         finally
         {
           waitingForSeek = false;
+          // --- NG Context wiring: notify seek ---
+          ngContextWiring.onSeek(seekTimeMillis);
+          // --- end NG Context wiring ---
 
         }
       }
@@ -4541,6 +4602,9 @@ public class MiniPlayer implements DVDMediaPlayer
         connectionError();
       }
     }
+    // --- NG Context wiring: notify flush ---
+    ngContextWiring.onFlush();
+    // --- end NG Context wiring ---
     return false;
   }
   private long lastTime = -1;
@@ -5513,6 +5577,10 @@ public class MiniPlayer implements DVDMediaPlayer
 
   private boolean hdhrPrimeSpecial;
   private int autoRemuxFailureCount;
+
+  /** NG Playback Context wiring — lifecycle bridge to provider. Never null. */
+  private final sage.ng.NgPlaybackContextWiring ngContextWiring =
+      new sage.ng.NgPlaybackContextWiring(sage.ng.NgPlaybackContextWiring.getGlobalProvider());
 
   /**
    * Attempt auto-remux on playback failure if the client profile permits it.
