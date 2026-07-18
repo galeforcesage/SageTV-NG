@@ -611,9 +611,9 @@ public class NgPlaybackContextWiringTest
         ctx.getServerMediaTimeMs() == 600000);
     check("epoch→relative: serverMediaTimeMs is NOT epoch",
         ctx.getServerMediaTimeMs() < 1_000_000_000_000L);
-    // Builder uses serverMediaTimeMs directly for safeSeekEndMs (no safety margin in static context)
-    check("epoch→relative: safeSeekEndMs = 600000",
-        ctx.getLive().getSafeSeekEndMs() == 600000);
+    // Builder applies 5000ms safety margin: safeSeekEndMs = 600000 - 5000 = 595000
+    check("epoch→relative: safeSeekEndMs = 595000",
+        ctx.getLive().getSafeSeekEndMs() == 595000);
     check("epoch→relative: playableEndMs = 600000",
         ctx.getLive().getPlayableEndMs() == 600000);
 

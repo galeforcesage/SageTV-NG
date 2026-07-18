@@ -40,6 +40,7 @@ public final class NgPlaybackContextSerializer
     sb.append(','); appendKey(sb, "container"); appendString(sb, ctx.getContainer());
     sb.append(','); appendKey(sb, "durationMs"); sb.append(ctx.getDurationMs());
     sb.append(','); appendKey(sb, "serverMediaTimeMs"); sb.append(ctx.getServerMediaTimeMs());
+    sb.append(','); appendKey(sb, "streamEpoch"); sb.append(ctx.getStreamEpoch());
     sb.append(','); appendKey(sb, "live"); appendLive(sb, ctx.getLive());
     sb.append(','); appendKey(sb, "seek"); appendSeek(sb, ctx.getSeek());
     sb.append(','); appendKey(sb, "index"); appendIndex(sb, ctx.getIndex());
