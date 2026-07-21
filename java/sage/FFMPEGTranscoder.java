@@ -2035,12 +2035,27 @@ public class FFMPEGTranscoder implements TranscodeEngine
         xcodeParamsVec.add("passthrough");
       if (!audioIsCopy)
       {
+        String asyncVal = Sage.get("ffmpeg/aresample_async", "1");
+        boolean isAc4Source = sourceFormat != null &&
+            sage.media.format.MediaFormat.AC4.equals(sourceFormat.getPrimaryAudioFormat());
+        int acIdx = xcodeParamsVec.indexOf("-ac");
+        boolean isDownmixToStereo = acIdx >= 0 && acIdx + 1 < xcodeParamsVec.size() &&
+            "2".equals(xcodeParamsVec.get(acIdx + 1));
         xcodeParamsVec.add("-af");
-        xcodeParamsVec.add("aresample=async=1");
+        if (isAc4Source && isDownmixToStereo)
+        {
+          // Explicit stereo downmix before resampler for cleaner AC-4 5.1->stereo conversion
+          xcodeParamsVec.add("aformat=channel_layouts=stereo,aresample=async=" + asyncVal);
+          if (Sage.DBG) System.out.println("FFMPEGTranscoder: AC-4 downmix filter: aformat=channel_layouts=stereo,aresample=async=" + asyncVal);
+        }
+        else
+        {
+          xcodeParamsVec.add("aresample=async=" + asyncVal);
+        }
       }
       else if (Sage.DBG)
       {
-        System.out.println("FFMPEGTranscoder: skipping -af aresample=async=1 (audio is -acodec copy)");
+        System.out.println("FFMPEGTranscoder: skipping -af aresample=async (audio is -acodec copy)");
       }
     }
     else //if (xcodeParams.indexOf("-f mp4") != -1 || xcodeParams.indexOf("-f 3gp") != -1 || xcodeParams.indexOf("-f psp") != -1)
@@ -2049,12 +2064,26 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add("cfr");
       if (!audioIsCopy)
       {
+        String asyncVal = Sage.get("ffmpeg/aresample_async", "1");
+        boolean isAc4Source = sourceFormat != null &&
+            sage.media.format.MediaFormat.AC4.equals(sourceFormat.getPrimaryAudioFormat());
+        int acIdx = xcodeParamsVec.indexOf("-ac");
+        boolean isDownmixToStereo = acIdx >= 0 && acIdx + 1 < xcodeParamsVec.size() &&
+            "2".equals(xcodeParamsVec.get(acIdx + 1));
         xcodeParamsVec.add("-af");
-        xcodeParamsVec.add("aresample=async=100");
+        if (isAc4Source && isDownmixToStereo)
+        {
+          xcodeParamsVec.add("aformat=channel_layouts=stereo,aresample=async=" + asyncVal);
+          if (Sage.DBG) System.out.println("FFMPEGTranscoder: AC-4 downmix filter: aformat=channel_layouts=stereo,aresample=async=" + asyncVal);
+        }
+        else
+        {
+          xcodeParamsVec.add("aresample=async=" + asyncVal);
+        }
       }
       else if (Sage.DBG)
       {
-        System.out.println("FFMPEGTranscoder: skipping -af aresample=async=100 (audio is -acodec copy)");
+        System.out.println("FFMPEGTranscoder: skipping -af aresample=async (audio is -acodec copy)");
       }
     }
 
