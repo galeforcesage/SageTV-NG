@@ -861,12 +861,29 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
    */
   private String pickVariantTuningLocator(String channel, String encodeFile)
   {
-    if (channel == null || channel.length() == 0) return channel;
+    if (channel == null || channel.length() == 0)
+    {
+      if (Sage.DBG) System.out.println("ATSC3: pickVariant skipped — channel is null/empty");
+      return channel;
+    }
     String policy = Sage.get("mmc/atsc3/recording_policy", "prefer_atsc3");
-    if ("explicit".equalsIgnoreCase(policy)) return channel;
+    if ("explicit".equalsIgnoreCase(policy))
+    {
+      if (Sage.DBG) System.out.println("ATSC3: pickVariant skipped — policy=explicit for channel=" + channel);
+      return channel;
+    }
 
     int sid = resolveStationID(channel);
-    if (sid <= 0) return channel;
+    if (sid <= 0)
+    {
+      if (Sage.DBG) System.out.println("ATSC3: pickVariant skipped — resolveStationID returned "
+          + sid + " for channel=" + channel + " providerID="
+          + (activeSource != null ? activeSource.getProviderID() : "null"));
+      return channel;
+    }
+
+    if (Sage.DBG) System.out.println("ATSC3: pickVariant channel=" + channel
+        + " resolved stationID=" + sid + " policy=" + policy);
 
     java.util.List<ChannelVariant> vars = ChannelVariants.forStation(sid);
     if (vars.isEmpty())
@@ -893,7 +910,12 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
           if (Sage.DBG) System.out.println("ATSC3: lazy lineup refresh failed: " + t);
         }
       }
-      if (vars.isEmpty()) return channel;
+      if (vars.isEmpty())
+      {
+        if (Sage.DBG) System.out.println("ATSC3: pickVariant skipped — no variants for stationID="
+            + sid + " channel=" + channel);
+        return channel;
+      }
     }
 
     boolean wantAtsc3 = !"prefer_atsc1".equalsIgnoreCase(policy);
@@ -972,14 +994,36 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
     try
     {
       EPG epg = EPG.getInstance();
-      if (epg == null || activeSource == null) return 0;
+      if (epg == null || activeSource == null)
+      {
+        if (Sage.DBG) System.out.println("ATSC3: resolveStationID — epg="
+            + (epg != null) + " activeSource=" + (activeSource != null));
+        return 0;
+      }
       long provID = activeSource.getProviderID();
-      if (provID == 0) return 0;
+      if (Sage.DBG) System.out.println("ATSC3: resolveStationID channel=" + channel
+          + " activeSource.providerID=" + provID + " device=" + captureDeviceName);
+
+      // If this input has no provider (providerID==0), try to borrow one from
+      // a sibling tuner on the same physical HDHR device. All tuners on one
+      // device share the same lineup, but only the tuner used during lineup
+      // setup gets the providerID persisted.
+      if (provID == 0)
+      {
+        provID = findSiblingProviderID();
+        if (Sage.DBG) System.out.println("ATSC3: resolveStationID sibling fallback providerID=" + provID);
+      }
+
       // Tune strings may arrive as "35-66-1" (RF-major-minor from .frq lookup)
       // OR "66.1" depending on where in the pipeline we're invoked. EPG only
       // recognizes "66" or "66.1", never the RF-prefixed form, so normalize.
       String normalized = stripRfPrefix(channel);
+      if (Sage.DBG && !normalized.equals(channel))
+        System.out.println("ATSC3: resolveStationID normalized '" + channel + "' -> '" + normalized + "'");
+
       int sid = epg.guessStationID(provID, normalized);
+      if (Sage.DBG) System.out.println("ATSC3: resolveStationID guessStationID("
+          + provID + ", \"" + normalized + "\") = " + sid);
       if (sid > 0) return sid;
       // Fall back to major-only ("66.1" -> "66") for stations registered only
       // by the base virtual channel number.
@@ -987,6 +1031,8 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
       if (dot > 0)
       {
         sid = epg.guessStationID(provID, normalized.substring(0, dot));
+        if (Sage.DBG) System.out.println("ATSC3: resolveStationID major-only guess("
+            + provID + ", \"" + normalized.substring(0, dot) + "\") = " + sid);
         if (sid > 0) return sid;
       }
       return 0;
@@ -997,6 +1043,55 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
           + channel + ": " + t);
       return 0;
     }
+  }
+
+  /**
+   * Find a non-zero providerID from a sibling tuner on the same physical
+   * HDHR device. All tuners on one HDHR box share the same lineup, but
+   * typically only the tuner used during initial lineup setup gets the
+   * providerID persisted in its CaptureDeviceInput properties. This
+   * fallback allows the other tuners to resolve station IDs correctly.
+   */
+  private long findSiblingProviderID()
+  {
+    String myHexId = parseHexDeviceId(captureDeviceName);
+    if (myHexId == null) return 0;
+    MMC mmc = MMC.getInstance();
+    if (mmc == null) return 0;
+    CaptureDevice[] allDevs = mmc.getCaptureDevices();
+    for (int d = 0; d < allDevs.length; d++)
+    {
+      if (allDevs[d] == this) continue;
+      String otherHex = parseHexDeviceId(allDevs[d].getName());
+      if (myHexId.equals(otherHex))
+      {
+        CaptureDeviceInput[] inputs = allDevs[d].getInputs();
+        for (int i = 0; i < inputs.length; i++)
+        {
+          long prov = inputs[i].getProviderID();
+          if (prov != 0)
+          {
+            if (Sage.DBG) System.out.println("ATSC3: borrowed providerID=" + prov
+                + " from sibling " + allDevs[d].getName());
+            return prov;
+          }
+        }
+      }
+    }
+    // Also check our own other inputs (multi-input on the same CaptureDevice)
+    CaptureDeviceInput[] myInputs = getInputs();
+    for (int i = 0; i < myInputs.length; i++)
+    {
+      if (myInputs[i] == activeSource) continue;
+      long prov = myInputs[i].getProviderID();
+      if (prov != 0)
+      {
+        if (Sage.DBG) System.out.println("ATSC3: borrowed providerID=" + prov
+            + " from own input " + myInputs[i]);
+        return prov;
+      }
+    }
+    return 0;
   }
 
   /**
