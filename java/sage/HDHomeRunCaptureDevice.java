@@ -954,7 +954,37 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
     }
 
     String loc = chosen.getTuningLocator();
-    return (loc == null || loc.length() == 0) ? channel : loc;
+    if (loc == null || loc.length() == 0) return channel;
+
+    // Guard: verify this device can actually tune the chosen variant's channel.
+    // If the ATSC3 channel (e.g. 109.1) isn't in this device's lineup, the tune
+    // would fail with "no signal". Fall back to the ATSC1 variant instead.
+    if (!loc.equals(channel) && chosen.isAtsc3())
+    {
+      String host = resolveLineupHost();
+      if (host != null)
+      {
+        HDHomeRunLineup lu = HDHomeRunLineup.forHost(host);
+        if (lu != null)
+        {
+          HDHomeRunLineup.Entry entry = lu.lookup(loc);
+          if (entry == null)
+          {
+            if (Sage.DBG) System.out.println("ATSC3: device " + captureDeviceName
+                + " cannot tune ATSC3 channel " + loc
+                + " (not in lineup) — falling back to ATSC1");
+            if (atsc1Fallback != null)
+            {
+              String fallbackLoc = atsc1Fallback.getTuningLocator();
+              return (fallbackLoc == null || fallbackLoc.length() == 0) ? channel : fallbackLoc;
+            }
+            return channel;
+          }
+        }
+      }
+    }
+
+    return loc;
   }
 
   /**
