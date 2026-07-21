@@ -1381,7 +1381,7 @@ public class MediaServer implements Runnable
             // re-opens /msproxy with ss=<ms>) so the transcode starts there via -ss
             // instead of restarting from 0.
             if (surfSs > 0) fftc.setTranscodeStartSeekTime(surfSs);
-            fftc.setTranscodeFormat(xcodeMode, null);
+            fftc.setTranscodeFormat(xcodeMode, currMF != null ? currMF.getFileFormat() : null);
             commBufWrite.clear();
             commBufWrite.put(OK_BYTES).flip();
             int numWritten = s.write(commBufWrite);
