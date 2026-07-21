@@ -861,12 +861,26 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
    */
   private String pickVariantTuningLocator(String channel, String encodeFile)
   {
-    if (channel == null || channel.length() == 0) return channel;
+    if (channel == null || channel.length() == 0)
+    {
+      if (Sage.DBG) System.out.println("ATSC3: pickVariant skipped — channel is null/empty");
+      return channel;
+    }
     String policy = Sage.get("mmc/atsc3/recording_policy", "prefer_atsc3");
-    if ("explicit".equalsIgnoreCase(policy)) return channel;
+    if ("explicit".equalsIgnoreCase(policy))
+    {
+      if (Sage.DBG) System.out.println("ATSC3: pickVariant skipped — policy=explicit for channel=" + channel);
+      return channel;
+    }
 
     int sid = resolveStationID(channel);
-    if (sid <= 0) return channel;
+    if (sid <= 0)
+    {
+      if (Sage.DBG) System.out.println("ATSC3: pickVariant skipped — resolveStationID returned "
+          + sid + " for channel=" + channel + " providerID="
+          + (activeSource != null ? activeSource.getProviderID() : "null"));
+      return channel;
+    }
 
     java.util.List<ChannelVariant> vars = ChannelVariants.forStation(sid);
     if (vars.isEmpty())
@@ -893,7 +907,12 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
           if (Sage.DBG) System.out.println("ATSC3: lazy lineup refresh failed: " + t);
         }
       }
-      if (vars.isEmpty()) return channel;
+      if (vars.isEmpty())
+      {
+        if (Sage.DBG) System.out.println("ATSC3: pickVariant skipped — no variants found for channel="
+            + channel + " sid=" + sid + " (even after lineup refresh)");
+        return channel;
+      }
     }
 
     boolean wantAtsc3 = !"prefer_atsc1".equalsIgnoreCase(policy);
@@ -972,23 +991,50 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
     try
     {
       EPG epg = EPG.getInstance();
-      if (epg == null || activeSource == null) return 0;
+      if (epg == null || activeSource == null)
+      {
+        if (Sage.DBG) System.out.println("ATSC3: resolveStationID — epg="
+            + (epg != null ? "ok" : "null") + " activeSource="
+            + (activeSource != null ? activeSource : "null") + " for channel=" + channel);
+        return 0;
+      }
       long provID = activeSource.getProviderID();
-      if (provID == 0) return 0;
+      if (provID == 0)
+      {
+        // The active input has no provider configured. Try to borrow a
+        // provider ID from a sibling input on the same capture device — all
+        // tuners on one HDHR box share the same lineup.
+        provID = borrowSiblingProviderID();
+        if (Sage.DBG) System.out.println("ATSC3: resolveStationID — activeSource providerID=0"
+            + ", borrowed providerID=" + provID + " for channel=" + channel);
+        if (provID == 0) return 0;
+      }
       // Tune strings may arrive as "35-66-1" (RF-major-minor from .frq lookup)
       // OR "66.1" depending on where in the pipeline we're invoked. EPG only
       // recognizes "66" or "66.1", never the RF-prefixed form, so normalize.
       String normalized = stripRfPrefix(channel);
       int sid = epg.guessStationID(provID, normalized);
-      if (sid > 0) return sid;
+      if (sid > 0)
+      {
+        if (Sage.DBG) System.out.println("ATSC3: resolveStationID — providerID=" + provID
+            + " normalized=" + normalized + " -> sid=" + sid);
+        return sid;
+      }
       // Fall back to major-only ("66.1" -> "66") for stations registered only
       // by the base virtual channel number.
       int dot = normalized.indexOf('.');
       if (dot > 0)
       {
         sid = epg.guessStationID(provID, normalized.substring(0, dot));
-        if (sid > 0) return sid;
+        if (sid > 0)
+        {
+          if (Sage.DBG) System.out.println("ATSC3: resolveStationID — providerID=" + provID
+              + " major-only=" + normalized.substring(0, dot) + " -> sid=" + sid);
+          return sid;
+        }
       }
+      if (Sage.DBG) System.out.println("ATSC3: resolveStationID — no stationID found for providerID="
+          + provID + " normalized=" + normalized + " channel=" + channel);
       return 0;
     }
     catch (Throwable t)
@@ -997,6 +1043,47 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
           + channel + ": " + t);
       return 0;
     }
+  }
+
+  /**
+   * When the active input has no provider ID configured (providerID=0), scan
+   * sibling inputs on this capture device and then sibling HDHR capture devices
+   * for one that does. All tuners on the same HDHR box share a single lineup,
+   * so any configured sibling's provider ID is valid for station lookups.
+   */
+  private long borrowSiblingProviderID()
+  {
+    // 1. Check other inputs on this same capture device
+    for (int i = 0; i < srcConfigs.size(); i++)
+    {
+      CaptureDeviceInput cdi = srcConfigs.get(i);
+      if (cdi != activeSource && cdi.getProviderID() != 0)
+        return cdi.getProviderID();
+    }
+
+    // 2. Check sibling HDHR capture devices (same physical box = same hex ID prefix)
+    String myHex = parseHexDeviceId(captureDeviceName);
+    if (myHex != null)
+    {
+      CaptureDevice[] allDevs = MMC.getInstance().getCaptureDevices();
+      for (int d = 0; d < allDevs.length; d++)
+      {
+        if (allDevs[d] == this) continue;
+        if (!(allDevs[d] instanceof HDHomeRunCaptureDevice)) continue;
+        String otherHex = parseHexDeviceId(allDevs[d].captureDeviceName);
+        if (myHex.equals(otherHex))
+        {
+          CaptureDeviceInput[] inputs = allDevs[d].getInputs();
+          for (int j = 0; j < inputs.length; j++)
+          {
+            if (inputs[j].getProviderID() != 0)
+              return inputs[j].getProviderID();
+          }
+        }
+      }
+    }
+
+    return 0;
   }
 
   /**
