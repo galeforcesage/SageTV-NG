@@ -418,6 +418,15 @@ public abstract class CaptureDevice
   public abstract void freeDevice();
   public abstract long getRecordedBytes();
 
+  /**
+   * Returns true if this device can tune an ATSC3 variant for the given station.
+   * Default returns false; HDHomeRunCaptureDevice overrides to check its lineup.
+   */
+  public boolean canTuneAtsc3ForStation(int stationID)
+  {
+    return false;
+  }
+
   public final void tuneToChannel(String tuneString)
   {
     if (activeSource == null) return;
