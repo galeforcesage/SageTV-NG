@@ -1192,16 +1192,17 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
     String videoCodec = "";
 
-    // AC-4 in MPEG-TS: the MPEG-TS demuxer has no AC-4 parser, so packet
-    // timestamps may be wrong ("parser not found for codec ac4, packets or
-    // times may be invalid"). Regenerate PTS to prevent periodic audio clicks.
+    // AC-4 in MPEG-TS: the demuxer has no AC-4 parser, so stream-level
+    // timestamps may drift. Use demuxer timebase (-copytb 0) for more
+    // reliable timing, and disable the initial audio/video start-time gap
+    // that causes A/V desync in fragmented MP4 output.
     if (sourceFormat != null
         && sage.media.format.MediaFormat.MPEG2_TS.equals(sourceFormat.getFormatName())
         && sage.media.format.MediaFormat.AC4.equals(sourceFormat.getPrimaryAudioFormat()))
     {
-      xcodeParamsVec.add("-fflags");
-      xcodeParamsVec.add("+genpts");
-      if (Sage.DBG) System.out.println("FFMPEGTranscoder: AC-4 in MPEG-TS — adding -fflags +genpts (no AC-4 TS parser)");
+      xcodeParamsVec.add("-copytb");
+      xcodeParamsVec.add("0");
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: AC-4 in MPEG-TS — adding -copytb 0 (no AC-4 TS parser)");
     }
 
     xcodeParamsVec.add("-i");
@@ -2047,9 +2048,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
         xcodeParamsVec.add("passthrough");
       if (!audioIsCopy)
       {
-        String asyncVal = Sage.get("ffmpeg/aresample_async", "1");
         boolean isAc4Source = sourceFormat != null &&
             sage.media.format.MediaFormat.AC4.equals(sourceFormat.getPrimaryAudioFormat());
+        String defaultAsync = isAc4Source ? "0" : "1";
+        String asyncVal = Sage.get("ffmpeg/aresample_async", defaultAsync);
         int acIdx = xcodeParamsVec.indexOf("-ac");
         boolean isDownmixToStereo = acIdx >= 0 && acIdx + 1 < xcodeParamsVec.size() &&
             "2".equals(xcodeParamsVec.get(acIdx + 1));
@@ -2076,9 +2078,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add("cfr");
       if (!audioIsCopy)
       {
-        String asyncVal = Sage.get("ffmpeg/aresample_async", "1");
         boolean isAc4Source = sourceFormat != null &&
             sage.media.format.MediaFormat.AC4.equals(sourceFormat.getPrimaryAudioFormat());
+        String defaultAsync = isAc4Source ? "0" : "1";
+        String asyncVal = Sage.get("ffmpeg/aresample_async", defaultAsync);
         int acIdx = xcodeParamsVec.indexOf("-ac");
         boolean isDownmixToStereo = acIdx >= 0 && acIdx + 1 < xcodeParamsVec.size() &&
             "2".equals(xcodeParamsVec.get(acIdx + 1));
