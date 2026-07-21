@@ -4618,6 +4618,35 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
     if (Sage.DBG) System.out.println("findBestEncoderForNow(" + theAir + " record=" + recordIt
         + " host=" + requestor + ")");
     Set<EncoderState> tryUs = new HashSet<EncoderState>(encoderStateMap.values());
+
+    // ATSC3-aware tuner preference: when prefer_atsc3 is set and the station
+    // has non-DRM ATSC3 variants, filter to only encoders whose device lineup
+    // includes the ATSC3 channel. If no ATSC3-capable encoder is available
+    // (busy, not present, etc.), fall back to the full set (ATSC1 recording).
+    boolean atsc3Preferred = false;
+    if (ChannelVariants.hasAtsc3(theAir.stationID)
+        && "prefer_atsc3".equalsIgnoreCase(Sage.get("mmc/atsc3/recording_policy", "prefer_atsc3")))
+    {
+      Set<EncoderState> atsc3Set = new HashSet<EncoderState>();
+      for (EncoderState es : tryUs)
+      {
+        if (es.capDev.canTuneAtsc3ForStation(theAir.stationID))
+          atsc3Set.add(es);
+      }
+      if (!atsc3Set.isEmpty())
+      {
+        if (Sage.DBG) System.out.println("ATSC3: prefer_atsc3 — narrowing to "
+            + atsc3Set.size() + " ATSC3-capable encoder(s) for stationID=" + theAir.stationID);
+        tryUs = atsc3Set;
+        atsc3Preferred = true;
+      }
+      else if (Sage.DBG)
+      {
+        System.out.println("ATSC3: prefer_atsc3 — no ATSC3-capable encoder available for stationID="
+            + theAir.stationID + ", falling back to ATSC1");
+      }
+    }
+
     int desireLevel = 0;
     EncoderState iKnowIWantThisEncoder = null;
     MediaFile mf = wiz.getFileForAiring(theAir);

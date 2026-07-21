@@ -1130,6 +1130,35 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
   }
 
   /**
+   * Check if this device's HDHomeRun lineup includes the ATSC3 variant channel
+   * for the given station. Used by the scheduler to prefer ATSC3-capable tuners
+   * when the recording policy is prefer_atsc3.
+   */
+  @Override
+  public boolean canTuneAtsc3ForStation(int stationID)
+  {
+    java.util.List<ChannelVariant> vars = ChannelVariants.forStation(stationID);
+    for (ChannelVariant v : vars)
+    {
+      if (v.isAtsc3() && !v.isDrm())
+      {
+        String loc = v.getTuningLocator();
+        if (loc != null && loc.length() > 0)
+        {
+          String host = resolveLineupHost();
+          if (host != null)
+          {
+            HDHomeRunLineup lu = HDHomeRunLineup.forHost(host);
+            if (lu != null && lu.lookup(loc) != null)
+              return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
    * Probe an ATSC 3.0 capture (HEVC + AC-4 in MPEG-TS) using ffprobe and
    * return a populated ContainerFormat. As of the FFmpeg unification work
    * (see docs/FFMPEG_UNIFICATION_PLAN.md) the unified SageTV ffprobe at
