@@ -1010,8 +1010,9 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
         if (provID == 0) return 0;
       }
       // Tune strings may arrive as "35-66-1" (RF-major-minor from .frq lookup)
-      // OR "66.1" depending on where in the pipeline we're invoked. EPG only
-      // recognizes "66" or "66.1", never the RF-prefixed form, so normalize.
+      // OR "66.1" depending on where in the pipeline we're invoked. EPG lineups
+      // may store channels as "66.1" (dot) or "66-1" (dash) depending on the
+      // provider type, so try both forms.
       String normalized = stripRfPrefix(channel);
       int sid = epg.guessStationID(provID, normalized);
       if (sid > 0)
@@ -1019,6 +1020,18 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
         if (Sage.DBG) System.out.println("ATSC3: resolveStationID — providerID=" + provID
             + " normalized=" + normalized + " -> sid=" + sid);
         return sid;
+      }
+      // Try the dash form: "9.1" -> "9-1" (HDHR OTA lineups use dashes)
+      String dashForm = normalized.replace('.', '-');
+      if (!dashForm.equals(normalized))
+      {
+        sid = epg.guessStationID(provID, dashForm);
+        if (sid > 0)
+        {
+          if (Sage.DBG) System.out.println("ATSC3: resolveStationID — providerID=" + provID
+              + " dashForm=" + dashForm + " -> sid=" + sid);
+          return sid;
+        }
       }
       // Fall back to major-only ("66.1" -> "66") for stations registered only
       // by the base virtual channel number.
