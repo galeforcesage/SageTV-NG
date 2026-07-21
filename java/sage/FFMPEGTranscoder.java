@@ -1192,6 +1192,18 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
     String videoCodec = "";
 
+    // AC-4 in MPEG-TS: the MPEG-TS demuxer has no AC-4 parser, so packet
+    // timestamps may be wrong ("parser not found for codec ac4, packets or
+    // times may be invalid"). Regenerate PTS to prevent periodic audio clicks.
+    if (sourceFormat != null
+        && sage.media.format.MediaFormat.MPEG2_TS.equals(sourceFormat.getFormatName())
+        && sage.media.format.MediaFormat.AC4.equals(sourceFormat.getPrimaryAudioFormat()))
+    {
+      xcodeParamsVec.add("-fflags");
+      xcodeParamsVec.add("+genpts");
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: AC-4 in MPEG-TS — adding -fflags +genpts (no AC-4 TS parser)");
+    }
+
     xcodeParamsVec.add("-i");
     if (currServer == null || currServer.length() == 0)
       xcodeParamsVec.add(IOUtils.getLibAVFilenameString(currFile.toString()));
