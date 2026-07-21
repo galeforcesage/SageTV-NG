@@ -1528,6 +1528,12 @@ public class PlaybackDecisionEngine
   private static boolean surfaceWantsFmp4(PlaybackSurface s)
   {
     if (s == null) return true;
+    // Explicit container declarations take priority over route heuristic.
+    boolean mp4 = s.supportsContainer("MP4");
+    boolean ts = s.supportsContainer("MPEG2-TS");
+    if (mp4 && !ts) return true;
+    if (ts && !mp4) return false;
+    // Both or neither declared -- fall back to route name heuristic.
     String route = s.getRoute();
     if (route != null)
     {
@@ -1535,10 +1541,6 @@ public class PlaybackDecisionEngine
       if (r.contains("mse")) return true;
       if (r.contains("native") || r.contains("avplay")) return false;
     }
-    boolean mp4 = s.supportsContainer("MP4");
-    boolean ts = s.supportsContainer("MPEG2-TS");
-    if (mp4 && !ts) return true;
-    if (ts && !mp4) return false;
     return true;
   }
 
