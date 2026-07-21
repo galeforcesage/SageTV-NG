@@ -629,8 +629,14 @@ public class MediaServer implements Runnable
       {
         if (xcoder != null)
         {
+          // Stop any in-flight transcode before starting a new one for the new file.
+          // Without this, the old ffmpeg process is orphaned forever.
+          if (xcoder.isTranscoding())
+            xcoder.stopTranscode();
           if ((currMF != null && currMF.isRecording()) || (downer != null && !downer.isComplete()))
             xcoder.setActiveFile(true);
+          else
+            xcoder.setActiveFile(false);
           xcoder.setSourceFile(null, currFile);
           xcoder.startTranscode();
         }
@@ -1351,6 +1357,12 @@ public class MediaServer implements Runnable
             if (Sage.DBG) System.out.println("MediaServer is serving up in transcode mode: " + xcodeMode
                 + (surfAcodec != null ? " (surface acodec=" + surfAcodec + " ac=" + surfAc + ")" : "")
                 + (surfSs > 0 ? " (seek ss=" + surfSs + "ms)" : ""));
+            // Stop previous transcoder if still running (prevents ffmpeg zombie leak)
+            if (xcoder != null)
+            {
+              xcoder.stopTranscode();
+              xcoder = null;
+            }
             FFMPEGTranscoder fftc = new FFMPEGTranscoder();
             xcoder = fftc;
             // Pull-xcode (msproxy) delivery consumes the transcode via SIZE/READ.
