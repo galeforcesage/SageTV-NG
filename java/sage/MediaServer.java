@@ -637,6 +637,11 @@ public class MediaServer implements Runnable
             xcoder.setActiveFile(true);
           else
             xcoder.setActiveFile(false);
+          // Update sourceFormat now that currMF is resolved (XCODE_SETUP runs
+          // before OPENFILE, so currMF was unknown when setTranscodeFormat was
+          // called — sourceFormat may be null or stale).
+          if (currMF != null)
+            xcoder.setSourceFormat(currMF.getFileFormat());
           xcoder.setSourceFile(null, currFile);
           xcoder.startTranscode();
         }

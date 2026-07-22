@@ -38,4 +38,5 @@ public interface TranscodeEngine
   public void readFullyTranscodedData(byte[] buf, int inOffset, int inLength) throws java.io.IOException;
   public void readFullyTranscodedData(java.nio.ByteBuffer buf) throws java.io.IOException;
   public void setActiveFile(boolean x);
+  public void setSourceFormat(sage.media.format.ContainerFormat sourceFormat);
 }

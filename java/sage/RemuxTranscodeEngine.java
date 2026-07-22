@@ -330,6 +330,11 @@ public class RemuxTranscodeEngine implements TranscodeEngine
     }
   }
 
+  public void setSourceFormat(sage.media.format.ContainerFormat fmt)
+  {
+    // RemuxTranscodeEngine does not use sourceFormat for codec-specific logic
+  }
+
   public boolean isTranscoding()
   {
     return muxy != null && !xcodeDone;
