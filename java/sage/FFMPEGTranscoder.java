@@ -1210,6 +1210,20 @@ public class FFMPEGTranscoder implements TranscodeEngine
       if (Sage.DBG) System.out.println("FFMPEGTranscoder: AC-4 in MPEG-TS — adding -copytb 0 (no AC-4 TS parser)");
     }
 
+    // For live/active files, reduce probe time to minimize channel-change
+    // latency. Default probesize (5MB) can take 5-11s on ATSC3 streams.
+    // 1MB + 1.5s analyzeduration is enough for HEVC+AC-4 detection.
+    if (activeFile)
+    {
+      long probeSize = Sage.getLong("ffmpeg/live_probesize", 1000000);
+      long analyzeDur = Sage.getLong("ffmpeg/live_analyzeduration", 1500000);
+      xcodeParamsVec.add("-probesize");
+      xcodeParamsVec.add(Long.toString(probeSize));
+      xcodeParamsVec.add("-analyzeduration");
+      xcodeParamsVec.add(Long.toString(analyzeDur));
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: active file — probesize=" + probeSize + " analyzeduration=" + analyzeDur);
+    }
+
     xcodeParamsVec.add("-i");
     if (currServer == null || currServer.length() == 0)
       xcodeParamsVec.add(IOUtils.getLibAVFilenameString(currFile.toString()));
