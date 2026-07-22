@@ -5321,13 +5321,15 @@ public class MiniPlayer implements DVDMediaPlayer
       in.close();
     }
 
-    // These are the only 3 read calls we use
-    public byte readByte() throws java.io.IOException
+    // These are the only 3 read calls we use.
+    // Must be synchronized to prevent the async PusherReply thread from
+    // racing on the shared bb ByteBuffer while we read a command reply.
+    public synchronized byte readByte() throws java.io.IOException
     {
       checkLazies();
       return readByteX();
     }
-    public int readInt() throws java.io.IOException
+    public synchronized int readInt() throws java.io.IOException
     {
       checkLazies();
       return readIntX();
@@ -5373,7 +5375,7 @@ public class MiniPlayer implements DVDMediaPlayer
       bb.flip();
       return bb.getInt();
     }
-    public short readShort() throws java.io.IOException
+    public synchronized short readShort() throws java.io.IOException
     {
       checkLazies();
       bb.clear().limit(2);
