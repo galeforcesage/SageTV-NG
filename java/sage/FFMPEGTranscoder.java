@@ -2063,7 +2063,6 @@ public class FFMPEGTranscoder implements TranscodeEngine
         xcodeParamsVec.add("-af");
         if (isAc4Source && isDownmixToStereo)
         {
-          // Explicit stereo downmix before resampler for cleaner AC-4 5.1->stereo conversion
           xcodeParamsVec.add("aformat=channel_layouts=stereo,aresample=async=" + asyncVal);
           if (Sage.DBG) System.out.println("FFMPEGTranscoder: AC-4 downmix filter: aformat=channel_layouts=stereo,aresample=async=" + asyncVal);
         }
