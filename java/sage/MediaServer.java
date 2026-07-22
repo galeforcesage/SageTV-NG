@@ -165,7 +165,7 @@ public class MediaServer implements Runnable
     //   only the unplayable audio (e.g. AC-3/E-AC-3 from cable/QAM H.264, IPTV, library
     //   mkv/mp4) to AAC-LC. No needless video re-encode.
     Sage.put(XCODE_QUALITIES_PROPERTY_ROOT + "browserhd_copyv",
-        "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof -c:v copy -acodec aac -ac 2 -ar 48000 -b:a 128k");
+        "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof -c:v copy -tag:v hvc1 -acodec aac -ac 2 -ar 48000 -b:a 128k");
     // browserhd_remux -- pwa_mse REMUX: codecs already decodable by the browser, only the
     //   container needs changing. Copy video + audio into fragmented MP4. Zero transcode.
     Sage.put(XCODE_QUALITIES_PROPERTY_ROOT + "browserhd_remux",
