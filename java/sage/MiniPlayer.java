@@ -1259,7 +1259,7 @@ public class MiniPlayer implements DVDMediaPlayer
               effectiveProfile, mediaContainer, mediaVideo, mediaAudio,
               mediaW, mediaH, isHDx00, sourceBitrateKbps, availableBwKbps,
               defaultPlayerTag, altPlayerTag,
-              primaryC, altC, srcInterlaced, isPushTransport, clientCaps);
+              primaryC, altC, srcInterlaced, isPushTransport, clientCaps, ngSession);
           if (Sage.DBG) System.out.println("MiniPlayer profile decision: " + profileDecision
               + " clientReports[container=" + crContainer + " video=" + crVideo + " audio=" + crAudio + "]");
         }

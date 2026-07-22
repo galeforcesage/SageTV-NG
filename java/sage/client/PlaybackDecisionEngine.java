@@ -241,26 +241,10 @@ public class PlaybackDecisionEngine
   {
     return evaluate(profile, mediaContainer, mediaVideoCodec, mediaAudioCodec,
         mediaWidth, mediaHeight, isHDx00Extender, sourceBitrateKbps, availableBandwidthKbps,
-        constraints, sourceInterlaced, isPushTransport, null);
+        constraints, sourceInterlaced, isPushTransport, null, false);
   }
 
-  /**
-   * Full evaluator with the LEGACY client-report intersection.
-   *
-   * <p>{@code clientCaps} carries the client's ACTUAL reported support for the
-   * source container / video / audio (from the coarse {@code VIDEO_CODECS} /
-   * {@code AUDIO_CODECS} / {@code PULL_AV_CONTAINERS} / {@code PUSH_AV_CONTAINERS}
-   * lists via {@code MiniClientSageRenderer.isSupported*}). This is the
-   * upstream google/SageTV honor model: the server never direct-plays a
-   * container/codec the client did not report it can handle.
-   *
-   * <p>The static profile is demoted to a GUARD RAIL: a codec/container is
-   * "OK" only when BOTH the profile allows it AND the client reported it
-   * ({@code profileAllows && clientReports}). The profile can therefore only
-   * RESTRICT, never GRANT a capability the client did not claim. When
-   * {@code clientCaps} is null (callers that haven't been updated), behavior is
-   * unchanged (profile-only), preserving backward compatibility.
-   */
+  /** Backward-compatible overload without {@code isNgClient} (defaults to legacy). */
   public static PlaybackDecision evaluate(ClientProfile profile,
       String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
       int mediaWidth, int mediaHeight, boolean isHDx00Extender,
@@ -268,17 +252,58 @@ public class PlaybackDecisionEngine
       ClientConstraints constraints, boolean sourceInterlaced, boolean isPushTransport,
       ClientReportedCaps clientCaps)
   {
+    return evaluate(profile, mediaContainer, mediaVideoCodec, mediaAudioCodec,
+        mediaWidth, mediaHeight, isHDx00Extender, sourceBitrateKbps, availableBandwidthKbps,
+        constraints, sourceInterlaced, isPushTransport, clientCaps, false);
+  }
+
+  /**
+   * Full evaluator with client-report honor model.
+   *
+   * <p>{@code clientCaps} carries the client's ACTUAL reported support for the
+   * source container / video / audio (from the coarse {@code VIDEO_CODECS} /
+   * {@code AUDIO_CODECS} / {@code PULL_AV_CONTAINERS} / {@code PUSH_AV_CONTAINERS}
+   * lists via {@code MiniClientSageRenderer.isSupported*}).
+   *
+   * <p>Conflict resolution depends on {@code isNgClient}:
+   * <ul>
+   *   <li><b>NG clients</b> ({@code isNgClient=true}): the client's self-report
+   *       wins on conflict with the profile. If the client reports a codec
+   *       (e.g. AC-4) that the profile excludes, the client wins and the
+   *       dimension is treated as supported. This is safe because NG clients
+   *       provide accurate self-reports.</li>
+   *   <li><b>Legacy clients</b> ({@code isNgClient=false}): the conjunctive
+   *       (AND) model — both the profile AND the client must agree for direct
+   *       play. The profile can only restrict, never grant. This guards
+   *       against legacy clients that may over-report.</li>
+   * </ul>
+   *
+   * <p>When {@code clientCaps} is null (callers that haven't been updated),
+   * behavior is unchanged (profile-only), preserving backward compatibility.
+   */
+  public static PlaybackDecision evaluate(ClientProfile profile,
+      String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
+      int mediaWidth, int mediaHeight, boolean isHDx00Extender,
+      int sourceBitrateKbps, int availableBandwidthKbps,
+      ClientConstraints constraints, boolean sourceInterlaced, boolean isPushTransport,
+      ClientReportedCaps clientCaps, boolean isNgClient)
+  {
     if (profile == null)
       return new PlaybackDecision(Decision.DIRECT_PLAY, "No profile (legacy path)", null, null, null);
 
-    // Guard-rail intersection: profile allowance AND the client's actual
-    // reported support. clientCaps==null (unupdated caller) => profile-only.
-    boolean containerOK = profile.isContainerAllowed(mediaContainer)
-        && (clientCaps == null || clientCaps.container);
-    boolean videoOK = profile.isVideoCodecAllowed(mediaVideoCodec)
-        && (clientCaps == null || clientCaps.video);
-    boolean audioOK = profile.isAudioCodecAllowed(mediaAudioCodec)
-        && (clientCaps == null || clientCaps.audio);
+    // NG clients are trusted for accurate self-reports: client wins on
+    // conflict with the profile (e.g. client reports AC-4 support but
+    // profile excludes it).  Legacy clients may over-report, so profile
+    // wins (conjunction — both must agree).
+    boolean containerOK = isNgClient && clientCaps != null
+        ? (clientCaps.container || profile.isContainerAllowed(mediaContainer))
+        : (profile.isContainerAllowed(mediaContainer) && (clientCaps == null || clientCaps.container));
+    boolean videoOK = isNgClient && clientCaps != null
+        ? (clientCaps.video || profile.isVideoCodecAllowed(mediaVideoCodec))
+        : (profile.isVideoCodecAllowed(mediaVideoCodec) && (clientCaps == null || clientCaps.video));
+    boolean audioOK = isNgClient && clientCaps != null
+        ? (clientCaps.audio || profile.isAudioCodecAllowed(mediaAudioCodec))
+        : (profile.isAudioCodecAllowed(mediaAudioCodec) && (clientCaps == null || clientCaps.audio));
 
     // --- Schema v2 capability-constraints gates ---
     // Applied only when the client negotiated schema v2.
@@ -650,7 +675,7 @@ public class PlaybackDecisionEngine
   {
     return evaluateWithPlayerSwitch(profile, mediaContainer, mediaVideoCodec, mediaAudioCodec,
         mediaWidth, mediaHeight, isHDx00Extender, sourceBitrateKbps, availableBandwidthKbps,
-        defaultPlayer, altPlayer, primary, alternate, sourceInterlaced, isPushTransport, null);
+        defaultPlayer, altPlayer, primary, alternate, sourceInterlaced, isPushTransport, null, false);
   }
 
   /** Player-switch evaluator with the legacy client-report intersection. */
@@ -663,10 +688,25 @@ public class PlaybackDecisionEngine
       boolean sourceInterlaced, boolean isPushTransport,
       ClientReportedCaps clientCaps)
   {
+    return evaluateWithPlayerSwitch(profile, mediaContainer, mediaVideoCodec, mediaAudioCodec,
+        mediaWidth, mediaHeight, isHDx00Extender, sourceBitrateKbps, availableBandwidthKbps,
+        defaultPlayer, altPlayer, primary, alternate, sourceInterlaced, isPushTransport, clientCaps, false);
+  }
+
+  /** Player-switch evaluator with NG client-report honor model. */
+  public static PlaybackDecision evaluateWithPlayerSwitch(ClientProfile profile,
+      String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
+      int mediaWidth, int mediaHeight, boolean isHDx00Extender,
+      int sourceBitrateKbps, int availableBandwidthKbps,
+      String defaultPlayer, String altPlayer,
+      ClientConstraints primary, ClientConstraints alternate,
+      boolean sourceInterlaced, boolean isPushTransport,
+      ClientReportedCaps clientCaps, boolean isNgClient)
+  {
     PlaybackDecision primaryResult = evaluate(profile, mediaContainer, mediaVideoCodec,
         mediaAudioCodec, mediaWidth, mediaHeight, isHDx00Extender,
         sourceBitrateKbps, availableBandwidthKbps,
-        primary, sourceInterlaced, isPushTransport, clientCaps);
+        primary, sourceInterlaced, isPushTransport, clientCaps, isNgClient);
 
     // No switch possible / needed.
     if (primaryResult.decision == Decision.DIRECT_PLAY) return primaryResult;
@@ -677,7 +717,7 @@ public class PlaybackDecisionEngine
     PlaybackDecision altResult = evaluate(profile, mediaContainer, mediaVideoCodec,
         mediaAudioCodec, mediaWidth, mediaHeight, isHDx00Extender,
         sourceBitrateKbps, availableBandwidthKbps,
-        alternate, sourceInterlaced, isPushTransport, clientCaps);
+        alternate, sourceInterlaced, isPushTransport, clientCaps, isNgClient);
 
     if (altResult.decision == Decision.DIRECT_PLAY)
     {
