@@ -59,8 +59,31 @@ The decision log line includes
 
 ## NG vs. Legacy Clients
 
-- **NG clients** are trusted for their accurate self-reports.
-- **Legacy clients** are honored through the conjunctive intersection above.
+- **NG clients** (`ngVersion ≥ 1.0`, `isNgClient=true`): the client's
+  self-report **wins on conflict** with the profile. If the client reports a
+  codec (e.g. AC-4) that the profile excludes, the client wins and the dimension
+  is treated as supported. This is safe because NG clients provide accurate,
+  fine-grained capability reports.
+
+  ```
+  containerOK = caps.container || profile.isContainerAllowed(x)
+  videoOK     = caps.video     || profile.isVideoCodecAllowed(x)
+  audioOK     = caps.audio     || profile.isAudioCodecAllowed(x)
+  ```
+
+- **Legacy clients** (`isNgClient=false`): the conjunctive (AND) intersection
+  — both the profile AND the client must agree for direct play. The profile can
+  only restrict, never grant. This guards against legacy clients that may
+  over-report.
+
+  ```
+  containerOK = profile.isContainerAllowed(x) && (caps == null || caps.container)
+  videoOK     = profile.isVideoCodecAllowed(x) && (caps == null || caps.video)
+  audioOK     = profile.isAudioCodecAllowed(x) && (caps == null || caps.audio)
+  ```
+
+- `MiniPlayer` passes `ngSession` (derived from the NG handshake) as the
+  `isNgClient` flag to `evaluateWithPlayerSwitch()`.
 - A **transport-force safety net** remains in `MiniPlayer`: for a legacy client
   with a non-`DIRECT_PLAY` decision and `clientDoesPull` set, `clientDoesPull`
   is cleared to force push mode. NG clients are excluded from this fallback.
