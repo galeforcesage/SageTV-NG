@@ -422,6 +422,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
     currServer = server;
   }
 
+  public void setSourceFormat(sage.media.format.ContainerFormat fmt)
+  {
+    sourceFormat = fmt;
+  }
+
   /**
    * Optional source file used for caption extraction when the transcode input
    * is an intermediate (for example AI-upscale phase 2).
