@@ -784,6 +784,9 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         synchronized (queueLock)
         {
           queueLock.notifyAll();
+          // If kicked but nothing in the queue, the kick was a no-op — allow sleep
+          if (kicked && watchQueue.isEmpty())
+            kicked = false;
           // 7/25/03 Changed the 1000 to be 250. This is more or less just wasting time so
           // we're not being inneffecient continually checking for data in the file, so don't
           // be too wasteful
@@ -820,7 +823,8 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
               baseTime + " eos=" + eos);
           if (currFile.isAnyLiveStream())
           {
-            // No seaming for live playback
+            // No seaming for live playback; throttle idle polling to avoid spin loop
+            waitTime = 250;
             continue;
           }
           else if (!currFile.isDVD() && !currFile.isBluRay() && (segment < currFile.getNumSegments() - 1) && isPlayin())
