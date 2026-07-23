@@ -1,22 +1,44 @@
-# NG Pull-Mode Format Hint (`ng_fmt`)
+# NG Stream Format Hint (`ng_fmt`)
 
 ## Protocol Change Summary
 
-In pull mode (direct play), the SageTV server now appends a `ng_fmt` query parameter to the `openURL` message for NG-capable sessions. This provides container, video, and audio MIME type information so the client can configure its decoder pipeline immediately without probing/sniffing the stream (which previously added 15-20 seconds of latency).
+The SageTV server now appends an `ng_fmt` MIME format hint to `openURL` messages for NG-capable sessions in **both** push and pull modes. This provides container, video, and audio MIME type information so the client can configure its decoder pipeline immediately without probing/sniffing the stream (which previously added 15-20 seconds of latency).
 
-Push mode is unaffected — it already sends format metadata in its own syntax.
+### Pull Mode
 
-## Format of `ng_fmt` Parameter
+The MIME triplet is appended as a query parameter to the playback URL:
 
 ```
 ?ng_fmt=containerMime,videoMime,audioMime
 ```
 
-- Comma-separated triplet, positional
-- Any field may be empty if the server cannot determine the format
 - Appended with `?` if the URL has no existing query string, or `&` if one exists
 
+### Push Mode
+
+The MIME triplet is appended after the SageTV format string, separated by `|`:
+
+```
+push:f=MPEG2-TS;[bf=vid;f=HEVC;][bf=aud;f=AC-4;]|ng_fmt=video/mp2t,video/hevc,audio/ac4
+```
+
+- Uses `|` as separator (since the format string uses `;` internally and `?` could be ambiguous)
+- The MIME types are derived from the **wire format** (i.e., transcoded output when transcoding), not the source file
+
+### Common Format
+
+In both modes, the value is a comma-separated positional triplet:
+
+```
+containerMime,videoMime,audioMime
+```
+
+- Any field may be empty if the server cannot determine the format
+- Fields are positional — always 3 parts separated by 2 commas
+
 ## Example URLs
+
+### Pull Mode
 
 ```
 stv://192.168.0.75/path/file.ts?ng_fmt=video/mp2t,video/hevc,audio/ac4
@@ -28,7 +50,17 @@ stv://192.168.0.75/path/file.ts?ng_fmt=video/mp2t,video/hevc,
 
 The last example shows an empty audio field (server couldn't determine audio format).
 
+### Push Mode
+
+```
+push:f=MPEG2-TS;[bf=vid;f=HEVC;][bf=aud;f=AC-4;]|ng_fmt=video/mp2t,video/hevc,audio/ac4
+push:f=MPEG2-TS;[bf=vid;f=H.264;][bf=aud;f=EAC3;]|ng_fmt=video/mp2t,video/avc,audio/eac3
+push:f=MPEG2-TS;dur=3600;[bf=vid;f=HEVC;][bf=aud;f=AAC;]|ng_fmt=video/mp2t,video/hevc,audio/mp4a-latm
+```
+
 ## Client Parsing Pseudocode
+
+### Pull Mode (URL with `ng_fmt` query param)
 
 ```
 url = received openURL string
@@ -40,6 +72,24 @@ if url contains "?ng_fmt=" or "&ng_fmt=":
     audioMime = parts[2] if non-empty else null
     // Strip ng_fmt from the URL before passing to the media player
     playbackUrl = url with ng_fmt param removed
+```
+
+### Push Mode (format string with `|ng_fmt=` suffix)
+
+```
+openUrlArg = received openURL argument (starts with "push:")
+formatAndHint = openUrlArg.removePrefix("push:")
+if formatAndHint contains "|ng_fmt=":
+    pipeIdx = formatAndHint.indexOf("|ng_fmt=")
+    formatString = formatAndHint.substring(0, pipeIdx)
+    mimeStr = formatAndHint.substring(pipeIdx + 8)  // length of "|ng_fmt="
+    parts = mimeStr.split(",")
+    containerMime = parts[0] if non-empty else null
+    videoMime = parts[1] if non-empty else null
+    audioMime = parts[2] if non-empty else null
+else:
+    formatString = formatAndHint
+    // no MIME hint available, use SageTV format string as before
 ```
 
 ## ExoPlayer (Android) Usage
