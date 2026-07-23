@@ -2510,6 +2510,29 @@ public class MiniPlayer implements DVDMediaPlayer
           theURL = "stv://" + clientSocket.socket().getLocalAddress().getHostAddress() + "/" + file.getAbsolutePath();
         else
           theURL = file.getAbsolutePath();
+        // NG pull-mode format hint: append MIME triplet so client skips probing
+        if (ngSession && theURL != null && !theURL.startsWith("dvd") && currMF != null)
+        {
+          sage.media.format.ContainerFormat ngCf = currMF.getFileFormat();
+          if (ngCf != null)
+          {
+            String cMime = toMimeType(ngCf.getFormatName());
+            String vMime = null;
+            String aMime = null;
+            sage.media.format.VideoFormat ngVf = ngCf.getVideoFormat();
+            if (ngVf != null) vMime = toMimeType(ngVf.getFormatName());
+            sage.media.format.AudioFormat ngAf = ngCf.getAudioFormat();
+            if (ngAf != null) aMime = toMimeType(ngAf.getFormatName());
+            if (cMime != null || vMime != null || aMime != null)
+            {
+              String sep = theURL.contains("?") ? "&" : "?";
+              theURL += sep + "ng_fmt=" + (cMime != null ? cMime : "") + ","
+                  + (vMime != null ? vMime : "") + ","
+                  + (aMime != null ? aMime : "");
+              if (Sage.DBG) System.out.println("MiniPlayer: NG pull-mode format hint -> " + theURL);
+            }
+          }
+        }
         if (!openURL0(theURL))
           throw new PlaybackException();
       }
@@ -5624,5 +5647,40 @@ public class MiniPlayer implements DVDMediaPlayer
     String ffmpegPath = System.getProperty("user.dir") + java.io.File.separator + "ffmpeg";
     sage.client.AutoRemuxer remuxer = sage.client.AutoRemuxer.getInstance();
     return remuxer.onPlaybackFailure(profile, sourceFile, targetContainer, ffmpegPath);
+  }
+
+  private static String toMimeType(String fmt)
+  {
+    if (fmt == null) return null;
+    switch (fmt)
+    {
+      // Containers
+      case "MPEG2-TS": return "video/mp2t";
+      case "MPEG2-PS": return "video/mpeg";
+      case "MATROSKA": return "video/x-matroska";
+      case "MP4": return "video/mp4";
+      case "AVI": return "video/x-msvideo";
+      case "Quicktime": return "video/quicktime";
+      // Video
+      case "HEVC": return "video/hevc";
+      case "H.264": return "video/avc";
+      case "MPEG2-Video": return "video/mpeg2";
+      case "MPEG4-Video": return "video/mp4v-es";
+      case "VC1": return "video/x-ms-wmv";
+      // Audio
+      case "AC-4": return "audio/ac4";
+      case "EAC3": return "audio/eac3";
+      case "AC3": return "audio/ac3";
+      case "AAC": return "audio/mp4a-latm";
+      case "MP3": return "audio/mpeg";
+      case "MP2": return "audio/mpeg-L2";
+      case "FLAC": return "audio/flac";
+      case "DTS": return "audio/vnd.dts";
+      case "DTS-HD": return "audio/vnd.dts.hd";
+      case "DTS-MA": return "audio/vnd.dts.hd";
+      case "Vorbis": return "audio/vorbis";
+      case "ALAC": return "audio/alac";
+      default: return null;
+    }
   }
 }
