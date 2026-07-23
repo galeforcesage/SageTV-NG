@@ -2467,6 +2467,43 @@ public class MiniPlayer implements DVDMediaPlayer
             }
           }
         }
+        // NG push-mode format hint: append MIME triplet parsed from the wire-format descriptor
+        if (ngSession && formatString != null && formatString.length() > 0)
+        {
+          String cMime = null;
+          String vMime = null;
+          String aMime = null;
+          // Container: first "f=XXX;" not inside a bf= block
+          int fIdx = formatString.indexOf("f=");
+          if (fIdx >= 0)
+          {
+            int fEnd = formatString.indexOf(';', fIdx);
+            if (fEnd > fIdx) cMime = toMimeType(formatString.substring(fIdx + 2, fEnd));
+          }
+          // Video: "bf=vid;f=XXX;"
+          int vIdx = formatString.indexOf("bf=vid;f=");
+          if (vIdx >= 0)
+          {
+            int vStart = vIdx + 9; // length of "bf=vid;f="
+            int vEnd = formatString.indexOf(';', vStart);
+            if (vEnd > vStart) vMime = toMimeType(formatString.substring(vStart, vEnd));
+          }
+          // Audio: "bf=aud;f=XXX;"
+          int aIdx = formatString.indexOf("bf=aud;f=");
+          if (aIdx >= 0)
+          {
+            int aStart = aIdx + 9; // length of "bf=aud;f="
+            int aEnd = formatString.indexOf(';', aStart);
+            if (aEnd > aStart) aMime = toMimeType(formatString.substring(aStart, aEnd));
+          }
+          if (cMime != null || vMime != null || aMime != null)
+          {
+            formatString += "|ng_fmt=" + (cMime != null ? cMime : "") + ","
+                + (vMime != null ? vMime : "") + ","
+                + (aMime != null ? aMime : "");
+            if (Sage.DBG) System.out.println("MiniPlayer: NG push-mode format hint -> " + formatString);
+          }
+        }
         if (!openURL0("push:" + formatString))
           throw new PlaybackException();
       }
