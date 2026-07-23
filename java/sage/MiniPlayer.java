@@ -1255,6 +1255,9 @@ public class MiniPlayer implements DVDMediaPlayer
 
         if (profileDecision == null)
         {
+          if (Sage.DBG) System.out.println("MiniPlayer: calling evaluateWithPlayerSwitch ngSession=" + ngSession 
+              + " clientCaps=[c=" + crContainer + " v=" + crVideo + " a=" + crAudio + "]"
+              + " mediaAudio=" + mediaAudio);
           profileDecision = sage.client.PlaybackDecisionEngine.evaluateWithPlayerSwitch(
               effectiveProfile, mediaContainer, mediaVideo, mediaAudio,
               mediaW, mediaH, isHDx00, sourceBitrateKbps, availableBwKbps,

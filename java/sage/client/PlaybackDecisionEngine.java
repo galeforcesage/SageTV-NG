@@ -305,6 +305,11 @@ public class PlaybackDecisionEngine
         ? (clientCaps.audio || profile.isAudioCodecAllowed(mediaAudioCodec))
         : (profile.isAudioCodecAllowed(mediaAudioCodec) && (clientCaps == null || clientCaps.audio));
 
+    if (sage.Sage.DBG) System.out.println("PlaybackDecisionEngine.evaluate: isNgClient=" + isNgClient
+        + " clientCaps=" + (clientCaps != null ? "[c=" + clientCaps.container + " v=" + clientCaps.video + " a=" + clientCaps.audio + "]" : "null")
+        + " containerOK=" + containerOK + " videoOK=" + videoOK + " audioOK=" + audioOK
+        + " audio=" + mediaAudioCodec + " profileAllowsAudio=" + profile.isAudioCodecAllowed(mediaAudioCodec));
+
     // --- Schema v2 capability-constraints gates ---
     // Applied only when the client negotiated schema v2.
     //
