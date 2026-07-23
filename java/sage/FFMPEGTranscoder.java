@@ -1207,7 +1207,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
     {
       xcodeParamsVec.add("-copytb");
       xcodeParamsVec.add("0");
-      if (Sage.DBG) System.out.println("FFMPEGTranscoder: AC-4 in MPEG-TS — adding -copytb 0 (no AC-4 TS parser)");
+      // When copying video but re-encoding audio (browserhd_copyv), the
+      // start times of the two streams may differ, causing A/V desync in
+      // fragmented MP4. -start_at_zero normalizes both to the same origin.
+      xcodeParamsVec.add("-start_at_zero");
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: AC-4 in MPEG-TS — adding -copytb 0 -start_at_zero (no AC-4 TS parser)");
     }
 
     // For live/active files, reduce probe time to minimize channel-change
@@ -2069,8 +2073,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
       {
         boolean isAc4Source = sourceFormat != null &&
             sage.media.format.MediaFormat.AC4.equals(sourceFormat.getPrimaryAudioFormat());
-        String defaultAsync = isAc4Source ? "0" : "1";
-        String asyncVal = Sage.get("ffmpeg/aresample_async", defaultAsync);
+        String asyncVal = isAc4Source
+            ? Sage.get("ffmpeg/aresample_async_ac4", Sage.get("ffmpeg/aresample_async", "0"))
+            : Sage.get("ffmpeg/aresample_async", "1");
         int acIdx = xcodeParamsVec.indexOf("-ac");
         boolean isDownmixToStereo = acIdx >= 0 && acIdx + 1 < xcodeParamsVec.size() &&
             "2".equals(xcodeParamsVec.get(acIdx + 1));
@@ -2098,8 +2103,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
       {
         boolean isAc4Source = sourceFormat != null &&
             sage.media.format.MediaFormat.AC4.equals(sourceFormat.getPrimaryAudioFormat());
-        String defaultAsync = isAc4Source ? "0" : "1";
-        String asyncVal = Sage.get("ffmpeg/aresample_async", defaultAsync);
+        String asyncVal = isAc4Source
+            ? Sage.get("ffmpeg/aresample_async_ac4", Sage.get("ffmpeg/aresample_async", "0"))
+            : Sage.get("ffmpeg/aresample_async", "1");
         int acIdx = xcodeParamsVec.indexOf("-ac");
         boolean isDownmixToStereo = acIdx >= 0 && acIdx + 1 < xcodeParamsVec.size() &&
             "2".equals(xcodeParamsVec.get(acIdx + 1));
