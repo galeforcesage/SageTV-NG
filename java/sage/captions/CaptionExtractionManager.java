@@ -53,6 +53,12 @@ import java.util.concurrent.Executors;
  *   caption_extraction/stpp_window_overlap_seconds - seconds of overlap re-read before the
  *                                              incremental cursor so no STPP packet is skipped
  *                                              at a window boundary (default 4)
+ *   caption_extraction/suppress_live_buffer_sidecar - suppress the growing SRT sidecar write
+ *                                              during live recording (ephemeral timeshift
+ *                                              buffers), avoiding SSD write churn; delivery then
+ *                                              relies on the in-memory caption push path
+ *                                              (default false; a kept recording still gets a
+ *                                              full canonical SRT at recording-stop)
  */
 public class CaptionExtractionManager
 {
@@ -484,14 +490,29 @@ public class CaptionExtractionManager
         return false;
       }
 
-      // Compose the display sidecar: all finalized cues plus the current
-      // provisional (still-rolling) sentence(s) for lowest latency. The final
-      // post-recording pass overwrites this with the canonical full extract.
+      // The in-memory finalized list (+ provisional tail) is the single source
+      // of truth. (Phase 3) push result.newlyFinalized to VideoFrame here so an
+      // ephemeral buffer renders captions with no disk round-trip.
+      boolean haveNewFinalized = result != null && !result.newlyFinalized.isEmpty();
+
+      // Persistence-policy seam: for an ephemeral live-buffer the sidecar write
+      // is suppressed entirely (no SSD write churn); delivery then relies solely
+      // on the in-memory push path. Defaults to persist (today's behavior).
+      if (!shouldPersistSidecar())
+        return true;
+
+      // Persisting (keeper): only (re)write the sidecar when a sentence has
+      // newly finalized this pass — skip redundant per-cycle rewrites, which are
+      // themselves SSD write churn on throwaway content. The still-rolling
+      // provisional sentence rides along in that write for live display.
+      if (!haveNewFinalized)
+        return true;
+
       java.util.List<CaptionEvent> display = stppState.finalizedSnapshot();
-      if (result != null && result.provisionalTail != null)
+      if (result.provisionalTail != null)
         display.addAll(result.provisionalTail);
       if (display.isEmpty())
-        return true; // STPP present but nothing decoded yet; keep waiting.
+        return true;
 
       java.util.Collections.sort(display);
       File sidecar = sidecarFor(recFile);
@@ -507,11 +528,29 @@ public class CaptionExtractionManager
       }
 
       if (Sage.DBG) System.out.println("CaptionExtractionManager: incremental STPP pass wrote " + sidecar
-          + " (" + display.size() + " cues, +" + (result == null ? 0 : result.newlyFinalized.size())
+          + " (" + display.size() + " cues, +" + result.newlyFinalized.size()
           + " newly finalized)");
 
       try { mf.checkForSubtitles(); } catch (Throwable ignore) {}
       fireListeners();
+      return true;
+    }
+
+    /**
+     * Persistence-policy seam: whether the growing caption sidecar should be
+     * written to disk this pass. Defaults to {@code true} (persist), preserving
+     * today's behavior. The sibling write-side redesign wires the real
+     * "ephemeral live-buffer" determination here so temp timeshift buffers (kept
+     * only until viewed) suppress the SRT write entirely — eliminating per-cycle
+     * SSD write churn — and rely on the in-memory {@link CaptionEvent} push path
+     * for delivery. A kept recording still gets byte-identical canonical SRT from
+     * the full post-recording pass.
+     */
+    private boolean shouldPersistSidecar()
+    {
+      // Config escape hatch until the sibling provides a real ephemeral predicate.
+      if (Sage.getBoolean("caption_extraction/suppress_live_buffer_sidecar", false))
+        return false;
       return true;
     }
   }
