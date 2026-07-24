@@ -87,16 +87,17 @@ class CaptionExtractionJob implements Runnable
         return;
       }
 
-      // NOTE (future convergence, not done here): unlike the ATSC3/STPP path
-      // above, the 608/708 passes below write SRT directly (ccextractor/ffmpeg
-      // -> SRT) without ever going through CaptionEvent. To make CaptionEvent
-      // the canonical model for *every* source, these SRT outputs could be
-      // parsed back into CaptionEvent[] and re-serialized via
-      // SrtCaptionWriter. Deliberately deferred: this path has multiple
-      // interdependent passes (CC1, 708 svc1, CC2/Spanish, phantom-file
-      // cleanup) that are working and well-tested, and round-tripping them
-      // through CaptionEvent isn't required for the STPP deliverable, so it's
-      // left as-is to avoid destabilizing it.
+      // NOTE: the 608/708 passes below still shell ccextractor/ffmpeg the
+      // same way they always have (including their sibling .vtt output,
+      // which is untouched legacy ccextractor-native output, not routed
+      // through CaptionEvent — SRT is the only sidecar format
+      // CaptionEvent-based writers ever produce). What *is* new: once each
+      // pass's SRT sidecar is written, convergeThroughCaptionEvent() parses
+      // it straight back into CaptionEvent[] and re-serializes it via
+      // SrtCaptionWriter, so the on-disk SRT for every caption source (ATSC1
+      // 608/708 and ATSC3 STPP alike) is canonically CaptionEvent's own
+      // serialization, not a source-specific format. This is a deliberate
+      // round-trip no-op on cue content — see convergeThroughCaptionEvent().
       String ccextractor = Sage.get("caption_extraction/ccextractor_path", "ccextractor");
       boolean useCce = Sage.getBoolean("caption_extraction/use_ccextractor", true) && which(ccextractor);
       if (useCce)
@@ -147,7 +148,7 @@ class CaptionExtractionJob implements Runnable
 
     try
     {
-      new SrtCaptionWriter().write(events, sidecar);
+      new SrtCaptionWriter().writeGrouped(events, sidecar);
       if (Sage.DBG) System.out.println("CaptionExtractionJob: wrote " + sidecar + " (" + events.size() +
           " cues, source=ATSC3_STPP)");
     }
@@ -231,6 +232,8 @@ class CaptionExtractionJob implements Runnable
           }
           if (Sage.DBG) System.out.println("CaptionExtractionJob: wrote " + srtPrimary +
               " (" + srtPrimary.length() + " bytes, source=" + winnerKind + ")");
+          convergeThroughCaptionEvent(srtPrimary, "eng",
+              "708svc1".equals(winnerKind) ? CaptionEvent.SERVICE_708_SVC1 : CaptionEvent.SERVICE_CC1);
         }
       }
       catch (IOException e)
@@ -277,6 +280,7 @@ class CaptionExtractionJob implements Runnable
             }
             if (Sage.DBG) System.out.println("CaptionExtractionJob: wrote CC2 sidecar " + srtSpa +
                 " (" + srtSpa.length() + " bytes)");
+            convergeThroughCaptionEvent(srtSpa, "spa", CaptionEvent.SERVICE_CC2);
           }
         }
         catch (IOException e)
@@ -564,6 +568,7 @@ class CaptionExtractionJob implements Runnable
 
       Files.move(tmp.toPath(), sidecar.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
       if (Sage.DBG) System.out.println("CaptionExtractionJob: wrote sidecar " + sidecar + " (" + sidecar.length() + " bytes)");
+      convergeThroughCaptionEvent(sidecar, "eng", CaptionEvent.SERVICE_CC1);
     }
     catch (IOException | InterruptedException e)
     {
@@ -589,6 +594,43 @@ class CaptionExtractionJob implements Runnable
       sb.append(c);
     }
     return sb.toString();
+  }
+
+  /**
+   * Parses an already-written SRT sidecar back into {@link CaptionEvent}s
+   * (tagged with {@code language}/{@code service}, since plain SRT carries
+   * neither) and re-serializes it via {@link SrtCaptionWriter}, in place.
+   *
+   * <p>This is a deliberate round-trip no-op on cue content: its only
+   * purpose is convergence — making {@link CaptionEvent} the canonical
+   * in-memory/on-disk representation for <em>every</em> caption source
+   * (ATSC1 608/708 here, ATSC3 STPP in {@link #runAtsc3StppIfPresent()}),
+   * not just the ones that happen to produce it natively. The ccextractor
+   * invocation, its 3 interdependent passes, and its sibling .vtt output
+   * are completely unaffected — this only touches the already-finalized
+   * SRT file after it's in place.
+   *
+   * <p>Failures here are non-fatal: the ccextractor-produced SRT is left
+   * exactly as-is (it's already a valid, complete sidecar) and only a debug
+   * line is logged, so a parsing edge case can never regress the working
+   * 608/708 extraction.
+   */
+  private static void convergeThroughCaptionEvent(File srtFile, String language, String service)
+  {
+    try
+    {
+      List<CaptionEvent> events = SrtCaptionReader.read(srtFile, language, service);
+      if (!events.isEmpty())
+      {
+        java.util.Collections.sort(events);
+        new SrtCaptionWriter().write(events, srtFile);
+      }
+    }
+    catch (IOException e)
+    {
+      if (Sage.DBG) System.out.println("CaptionExtractionJob: SRT->CaptionEvent round-trip failed for " +
+          srtFile + ", leaving ccextractor output as-is: " + e);
+    }
   }
 
   /**
