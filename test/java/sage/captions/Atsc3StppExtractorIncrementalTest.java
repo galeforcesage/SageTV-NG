@@ -195,6 +195,37 @@ public class Atsc3StppExtractorIncrementalTest
     assertEquals(r2.provisionalTail.get(0).getText(), "Next sentence");
   }
 
+  @Test
+  public void finalizedStateRespectsSafetyCeiling()
+  {
+    Atsc3StppExtractor.StppIncrementalState state = new Atsc3StppExtractor.StppIncrementalState();
+
+    // One window with more distinct sentences than the ceiling. Each is a single
+    // non-extending cue, so coalesce keeps them separate; all but the last close.
+    int n = Atsc3StppExtractor.MAX_FINALIZED_CUES + 50;
+    List<CaptionEvent> window = new ArrayList<>(n);
+    for (int i = 0; i < n; i++)
+    {
+      double t = 100.0 + i * 2.0;
+      window.add(raw(t, t + 0.5, "sentence number " + i));
+    }
+
+    Atsc3StppExtractor.processWindowRaw(window, state);
+
+    // Retained finalized cues must be capped, and dedupe keys must track them.
+    assertEquals(state.finalizedCues.size(), Atsc3StppExtractor.MAX_FINALIZED_CUES,
+        "finalized cues must be capped at the safety ceiling");
+    assertEquals(state.emittedKeys.size(), state.finalizedCues.size(),
+        "dedupe keys must stay in lockstep with retained cues");
+
+    // Oldest cues were evicted; the newest retained ones are still present.
+    assertEquals(state.finalizedCues.get(0).getText(), "sentence number 49",
+        "oldest cues should have been dropped first");
+    CaptionEvent lastRetained = state.finalizedCues.get(state.finalizedCues.size() - 1);
+    assertEquals(lastRetained.getText(), "sentence number " + (n - 2),
+        "the most recent finalized cue should be retained");
+  }
+
   private static CaptionEvent find(List<CaptionEvent> list, CaptionEvent ref)
   {
     for (CaptionEvent e : list)

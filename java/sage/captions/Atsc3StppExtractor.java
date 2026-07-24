@@ -739,6 +739,13 @@ public final class Atsc3StppExtractor
       }
     }
 
+    // Safety ceiling: a long-running live buffer must not grow the retained
+    // finalized state without bound. Drop oldest cues (and their dedupe keys)
+    // once past the cap. Safe because the resume cursor only ever moves forward,
+    // so dropped cues are never re-extracted; and a kept recording still gets a
+    // complete canonical SRT from the full post-recording pass.
+    enforceCeiling(state);
+
     // Resume from the earliest open sentence (or, if none, the latest finalized end).
     double resume = Double.MAX_VALUE;
     for (CaptionEvent t : tailByTrack.values())
@@ -774,6 +781,24 @@ public final class Atsc3StppExtractor
   {
     long beginMs = Math.round(e.getBeginSeconds() * 1000.0);
     return (e.getService() == null ? "" : e.getService()) + '\u0000' + beginMs + '\u0000' + e.getText();
+  }
+
+  /**
+   * Safety ceiling on retained finalized cues so an indefinitely-running live
+   * incremental state can't grow without bound (~a few hours of TV at typical
+   * cue rates). When exceeded, the oldest cues are evicted along with their
+   * dedupe keys.
+   */
+  static final int MAX_FINALIZED_CUES = 10000;
+
+  private static void enforceCeiling(StppIncrementalState state)
+  {
+    if (MAX_FINALIZED_CUES <= 0) return;
+    while (state.finalizedCues.size() > MAX_FINALIZED_CUES)
+    {
+      CaptionEvent old = state.finalizedCues.remove(0);
+      state.emittedKeys.remove(keyOf(old));
+    }
   }
 
   /**
