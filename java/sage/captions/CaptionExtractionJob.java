@@ -56,6 +56,14 @@ class CaptionExtractionJob implements Runnable
   private volatile Process proc;
   private volatile boolean cancelled;
 
+  // Piece C v1 (bootstrap-gap live push): optional hook fired, STPP path
+  // only, with the freshly-coalesced CaptionEvents right after each
+  // extraction pass — before writeGrouped() persists them — so a caller
+  // (CaptionExtractionManager's live-tail loop) can push them straight into
+  // an active VideoFrame while no sidecar/SubtitleHandler exists yet. Never
+  // invoked for the 608/708 path. Unset (null) by default; a no-op then.
+  private volatile java.util.function.Consumer<List<CaptionEvent>> liveEventSink;
+
   CaptionExtractionJob(MediaFile mf, File recFile, File sidecar, Runnable onComplete)
   {
     this(mf, recFile, sidecar, onComplete, false);
@@ -68,6 +76,12 @@ class CaptionExtractionJob implements Runnable
     this.sidecar = sidecar;
     this.onComplete = onComplete;
     this.onDemand = onDemand;
+  }
+
+  /** See {@link #liveEventSink}. */
+  void setLiveEventSink(java.util.function.Consumer<List<CaptionEvent>> sink)
+  {
+    this.liveEventSink = sink;
   }
 
   void cancel()
@@ -144,6 +158,16 @@ class CaptionExtractionJob implements Runnable
     {
       if (Sage.DBG) System.out.println("CaptionExtractionJob: STPP stream present but no cues extracted for " + recFile);
       return true;
+    }
+
+    // Piece C v1: fire the live bootstrap-push hook (if wired) with the raw
+    // coalesced events *before* persisting them, so the caller can decide
+    // for itself which subset (e.g. primary-service-only, lag-by-one-cue) is
+    // safe to display in-memory. This never affects the sidecar write below.
+    java.util.function.Consumer<List<CaptionEvent>> sink = liveEventSink;
+    if (sink != null)
+    {
+      try { sink.accept(events); } catch (Throwable ignore) {}
     }
 
     try

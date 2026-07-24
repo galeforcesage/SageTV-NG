@@ -15,6 +15,7 @@
  */
 package sage;
 
+import sage.captions.CaptionEvent;
 import sage.media.sub.RollupAnimation;
 
 import java.util.ArrayList;
@@ -5983,6 +5984,66 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     catch (Throwable t)
     {
       if (Sage.DBG) System.out.println("ERROR in VideoFrame subtitle handling of: " + t);
+      if (Sage.DBG) t.printStackTrace();
+    }
+  }
+
+  /**
+   * Piece C v1 (bootstrap-gap push): pushes {@link CaptionEvent}s produced by
+   * a live in-progress extraction (ATSC3 STPP today, via
+   * {@code CaptionExtractionManager}'s live-tail loop) directly into this
+   * VideoFrame's subtitle display, closing the gap before any sidecar file
+   * — and therefore any {@code SubtitleHandler} — exists yet.
+   *
+   * <p>This is strictly additive and touches no {@code sage.media.sub.*}
+   * code: it lazily creates a plain {@link sage.media.sub.RawSubtitleHandler}
+   * (the same trivial concrete handler already used for arbitrary raw text)
+   * and forwards each event through the already-public
+   * {@code SubtitleHandler.postSubtitleInfo}/{@code insertEntryForPostedInfo}
+   * path — the exact in-memory insertion mechanism push-mode CC already
+   * uses.
+   *
+   * <p>Deliberately narrow in scope: if {@link #subHandler} is already
+   * non-null — whether because this method already ran once, or because
+   * {@code reloadExternalSubHandlerAndApplyCC} already installed the real
+   * sidecar-backed handler once extraction catches up — this becomes a
+   * no-op. It never overwrites an existing handler, so it can't fight with
+   * the normal reload lifecycle; once the real SRT sidecar exists, the
+   * existing 10s reload-and-replace mechanism takes over exactly as it does
+   * today and this method is simply never useful again for this playback.
+   *
+   * @param events primary-track CaptionEvents to push, in chronological
+   *               order (caller is expected to have already filtered to the
+   *               primary/default service and to have dropped any cue still
+   *               subject to revision on the next extraction pass)
+   */
+  public void postCaptionEvents(List<CaptionEvent> events)
+  {
+    if (events == null || events.isEmpty()) return;
+    if (currFile == null) return;
+    if (subHandler != null) return; // already have a handler (ours or the real one); never fight it
+
+    try
+    {
+      sage.media.sub.SubtitleHandler rsh = new sage.media.sub.RawSubtitleHandler();
+      rsh.setEnabled(true);
+      subHandler = rsh;
+      embeddedSubStreamType = null;
+
+      boolean needsKick = false;
+      for (CaptionEvent e : events)
+      {
+        long startMs = Math.round(e.getBeginSeconds() * 1000.0);
+        long durMs = Math.max(0L, Math.round(e.getDurationSeconds() * 1000.0));
+        byte[] textBytes = e.getText().getBytes(Sage.I18N_CHARSET);
+        if (subHandler.postSubtitleInfo(startMs, durMs, textBytes, 0))
+          needsKick = true;
+      }
+      if (needsKick) kick();
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("ERROR in VideoFrame.postCaptionEvents: " + t);
       if (Sage.DBG) t.printStackTrace();
     }
   }
