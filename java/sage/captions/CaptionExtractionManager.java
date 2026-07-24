@@ -44,29 +44,9 @@ import java.util.concurrent.Executors;
  *   caption_extraction/post_recording_delay_ms - pause after stop before run (default 5000)
  *   caption_extraction/extract_seconds       - cap extraction at N seconds (0 = whole file)
  *   caption_extraction/live_interval_ms      - tail re-extract period while recording is in
- *                                              progress (default 10000); governs the
- *                                              full-rescan / 608-708 fallback path
- *   caption_extraction/stpp_live_interval_ms - tail re-extract period for the incremental
- *                                              ATSC3 STPP path only (default 5000). Tighter
- *                                              cadence is affordable because each incremental
- *                                              pass reads only the ~window of new stream data,
- *                                              not the whole growing file. Realistic first-
- *                                              appearance latency is ~2-5s (STPP packets arrive
- *                                              ~every 2s and we lag by one coalesced cue).
+ *                                              progress (default 10000)
  *   caption_extraction/live_min_file_bytes   - skip live extract until source has at least N
  *                                              bytes on disk (default 524288)
- *   caption_extraction/stpp_incremental      - use incremental (windowed) ATSC3 STPP tail
- *                                              extraction during live recording instead of a
- *                                              full re-scan each cycle (default true)
- *   caption_extraction/stpp_window_overlap_seconds - seconds of overlap re-read before the
- *                                              incremental cursor so no STPP packet is skipped
- *                                              at a window boundary (default 4)
- *   caption_extraction/suppress_live_buffer_sidecar - suppress the growing SRT sidecar write
- *                                              during live recording (ephemeral timeshift
- *                                              buffers), avoiding SSD write churn; delivery then
- *                                              relies on the in-memory caption push path
- *                                              (default false; a kept recording still gets a
- *                                              full canonical SRT at recording-stop)
  */
 public class CaptionExtractionManager
 {
@@ -366,14 +346,6 @@ public class CaptionExtractionManager
     private final java.util.List<Runnable> listeners = new java.util.concurrent.CopyOnWriteArrayList<>();
     private volatile boolean stopped;
 
-    // Incremental ATSC3 STPP state (cursor + finalized accumulator). Reused
-    // across tail passes so cost stays proportional to newly-arrived data
-    // rather than the whole growing recording. Non-STPP files disable this and
-    // fall back to the full-rescan runOnce() path.
-    private final Atsc3StppExtractor.StppIncrementalState stppState =
-        new Atsc3StppExtractor.StppIncrementalState();
-    private boolean stppDisabled;
-
     LiveExtractor(MediaFile mf, File recFile)
     {
       this.mf = mf;
@@ -401,24 +373,19 @@ public class CaptionExtractionManager
     @Override
     public void run()
     {
+      long intervalMs = Math.max(2000L, Sage.getLong("caption_extraction/live_interval_ms", 10000L));
       long minBytes = Math.max(0L, Sage.getLong("caption_extraction/live_min_file_bytes", 524288L));
       final int id = mf.getID();
       try
       {
         while (!stopped && mf.isRecording())
         {
-          try { Thread.sleep(currentLiveIntervalMs()); } catch (InterruptedException e) { return; }
+          try { Thread.sleep(intervalMs); } catch (InterruptedException e) { return; }
           if (stopped) return;
           if (!recFile.exists() || recFile.length() < minBytes) continue;
-          // Cheap incremental STPP tail pass when applicable; otherwise the
-          // legacy full re-extract.
-          if (!tryIncrementalStppPass())
-            runOnce();
+          runOnce();
         }
         // Recording finished while we were running: do one final clean pass.
-        // Always a FULL extract so the on-disk sidecar is byte-identical to a
-        // one-shot extraction (the canonical serialization), regardless of
-        // whether the live passes were incremental.
         if (!stopped && recFile.exists())
         {
           // Brief delay to let the writer flush.
@@ -432,28 +399,6 @@ public class CaptionExtractionManager
         liveExtractors.remove(id, this);
         if (Sage.DBG) System.out.println("CaptionExtractionManager: live extractor finished for MF " + id);
       }
-    }
-
-    /**
-     * The live tail-pass cadence for the current mode. The tighter STPP cadence
-     * ({@code stpp_live_interval_ms}, default 5s) is used while the incremental
-     * STPP path is in play — affordable only because each incremental pass costs
-     * ∝ the ~5s new-data window, not the whole growing file, and (for ephemeral
-     * buffers) drives an in-memory push with no per-cycle SSD write. Once a file
-     * is known non-STPP (or incremental is disabled) we revert to the slower
-     * {@code live_interval_ms} (default 10s) so the full-rescan fallback never
-     * doubles SSD reads on the growing buffer.
-     *
-     * <p>Before the first pass, {@code stppDisabled} is false, so we optimistically
-     * use the tighter interval — giving ATSC3/STPP live TV its ~5s first-appearance
-     * target; a non-STPP file simply takes one earlier pass before settling back
-     * to the 10s cadence.
-     */
-    private long currentLiveIntervalMs()
-    {
-      if (stppDisabled)
-        return Math.max(2000L, Sage.getLong("caption_extraction/live_interval_ms", 10000L));
-      return Math.max(2000L, Sage.getLong("caption_extraction/stpp_live_interval_ms", 5000L));
     }
 
     /** Run a synchronous extract pass on the current file state and fire listeners on success. */
@@ -475,112 +420,6 @@ public class CaptionExtractionManager
         try { mf.checkForSubtitles(); } catch (Throwable ignore) {}
         fireListeners();
       }
-    }
-
-    /**
-     * Attempts a low-cost incremental ATSC3 STPP tail pass: extracts only the
-     * newly-arrived window of the STPP stream, appends any newly-finalized cues
-     * to the running accumulator, and rewrites the sidecar (finalized cues plus
-     * the current in-progress sentence) via the canonical
-     * {@link CaptionEvent}/{@link SrtCaptionWriter} serialization. Fires
-     * listeners on success so the player reloads the fresh sidecar.
-     *
-     * @return true if this file is STPP and the incremental pass handled it;
-     *         false if the file has no STPP stream (or incremental mode is
-     *         disabled), signalling the caller to use the full-rescan path.
-     */
-    private boolean tryIncrementalStppPass()
-    {
-      if (stppDisabled) return false;
-      if (!Sage.getBoolean("caption_extraction/stpp_incremental", true))
-      {
-        stppDisabled = true;
-        return false;
-      }
-
-      String ffmpeg = Sage.get("caption_extraction/ffmpeg_path", sage.FFMPEGTranscoder.getTranscoderPath());
-      Atsc3StppExtractor.IncrementalResult result;
-      try
-      {
-        result = Atsc3StppExtractor.extractIncremental(recFile, ffmpeg, stppState);
-      }
-      catch (Throwable t)
-      {
-        if (Sage.DBG) System.out.println("CaptionExtractionManager: incremental STPP pass failed, "
-            + "falling back to full extract: " + t);
-        stppDisabled = true;
-        return false;
-      }
-
-      if (stppState.hasNoStream())
-      {
-        // Not an ATSC3/STPP recording — let the legacy 608/708 path own it.
-        stppDisabled = true;
-        return false;
-      }
-
-      // The in-memory finalized list (+ provisional tail) is the single source
-      // of truth. (Phase 3) push result.newlyFinalized to VideoFrame here so an
-      // ephemeral buffer renders captions with no disk round-trip.
-      boolean haveNewFinalized = result != null && !result.newlyFinalized.isEmpty();
-
-      // Persistence-policy seam: for an ephemeral live-buffer the sidecar write
-      // is suppressed entirely (no SSD write churn); delivery then relies solely
-      // on the in-memory push path. Defaults to persist (today's behavior).
-      if (!shouldPersistSidecar())
-        return true;
-
-      // Persisting (keeper): only (re)write the sidecar when a sentence has
-      // newly finalized this pass — skip redundant per-cycle rewrites, which are
-      // themselves SSD write churn on throwaway content. The still-rolling
-      // provisional sentence rides along in that write for live display.
-      if (!haveNewFinalized)
-        return true;
-
-      java.util.List<CaptionEvent> display = stppState.finalizedSnapshot();
-      if (result.provisionalTail != null)
-        display.addAll(result.provisionalTail);
-      if (display.isEmpty())
-        return true;
-
-      java.util.Collections.sort(display);
-      File sidecar = sidecarFor(recFile);
-      try
-      {
-        new SrtCaptionWriter().writeGrouped(display, sidecar);
-      }
-      catch (java.io.IOException e)
-      {
-        if (Sage.DBG) System.out.println("CaptionExtractionManager: failed to write incremental STPP sidecar "
-            + sidecar + ": " + e);
-        return true;
-      }
-
-      if (Sage.DBG) System.out.println("CaptionExtractionManager: incremental STPP pass wrote " + sidecar
-          + " (" + display.size() + " cues, +" + result.newlyFinalized.size()
-          + " newly finalized)");
-
-      try { mf.checkForSubtitles(); } catch (Throwable ignore) {}
-      fireListeners();
-      return true;
-    }
-
-    /**
-     * Persistence-policy seam: whether the growing caption sidecar should be
-     * written to disk this pass. Defaults to {@code true} (persist), preserving
-     * today's behavior. The sibling write-side redesign wires the real
-     * "ephemeral live-buffer" determination here so temp timeshift buffers (kept
-     * only until viewed) suppress the SRT write entirely — eliminating per-cycle
-     * SSD write churn — and rely on the in-memory {@link CaptionEvent} push path
-     * for delivery. A kept recording still gets byte-identical canonical SRT from
-     * the full post-recording pass.
-     */
-    private boolean shouldPersistSidecar()
-    {
-      // Config escape hatch until the sibling provides a real ephemeral predicate.
-      if (Sage.getBoolean("caption_extraction/suppress_live_buffer_sidecar", false))
-        return false;
-      return true;
     }
   }
 }
