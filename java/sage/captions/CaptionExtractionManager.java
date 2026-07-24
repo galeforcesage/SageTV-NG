@@ -44,7 +44,15 @@ import java.util.concurrent.Executors;
  *   caption_extraction/post_recording_delay_ms - pause after stop before run (default 5000)
  *   caption_extraction/extract_seconds       - cap extraction at N seconds (0 = whole file)
  *   caption_extraction/live_interval_ms      - tail re-extract period while recording is in
- *                                              progress (default 10000)
+ *                                              progress (default 10000); governs the
+ *                                              full-rescan / 608-708 fallback path
+ *   caption_extraction/stpp_live_interval_ms - tail re-extract period for the incremental
+ *                                              ATSC3 STPP path only (default 5000). Tighter
+ *                                              cadence is affordable because each incremental
+ *                                              pass reads only the ~window of new stream data,
+ *                                              not the whole growing file. Realistic first-
+ *                                              appearance latency is ~2-5s (STPP packets arrive
+ *                                              ~every 2s and we lag by one coalesced cue).
  *   caption_extraction/live_min_file_bytes   - skip live extract until source has at least N
  *                                              bytes on disk (default 524288)
  *   caption_extraction/stpp_incremental      - use incremental (windowed) ATSC3 STPP tail
@@ -393,14 +401,13 @@ public class CaptionExtractionManager
     @Override
     public void run()
     {
-      long intervalMs = Math.max(2000L, Sage.getLong("caption_extraction/live_interval_ms", 10000L));
       long minBytes = Math.max(0L, Sage.getLong("caption_extraction/live_min_file_bytes", 524288L));
       final int id = mf.getID();
       try
       {
         while (!stopped && mf.isRecording())
         {
-          try { Thread.sleep(intervalMs); } catch (InterruptedException e) { return; }
+          try { Thread.sleep(currentLiveIntervalMs()); } catch (InterruptedException e) { return; }
           if (stopped) return;
           if (!recFile.exists() || recFile.length() < minBytes) continue;
           // Cheap incremental STPP tail pass when applicable; otherwise the
@@ -425,6 +432,28 @@ public class CaptionExtractionManager
         liveExtractors.remove(id, this);
         if (Sage.DBG) System.out.println("CaptionExtractionManager: live extractor finished for MF " + id);
       }
+    }
+
+    /**
+     * The live tail-pass cadence for the current mode. The tighter STPP cadence
+     * ({@code stpp_live_interval_ms}, default 5s) is used while the incremental
+     * STPP path is in play — affordable only because each incremental pass costs
+     * ∝ the ~5s new-data window, not the whole growing file, and (for ephemeral
+     * buffers) drives an in-memory push with no per-cycle SSD write. Once a file
+     * is known non-STPP (or incremental is disabled) we revert to the slower
+     * {@code live_interval_ms} (default 10s) so the full-rescan fallback never
+     * doubles SSD reads on the growing buffer.
+     *
+     * <p>Before the first pass, {@code stppDisabled} is false, so we optimistically
+     * use the tighter interval — giving ATSC3/STPP live TV its ~5s first-appearance
+     * target; a non-STPP file simply takes one earlier pass before settling back
+     * to the 10s cadence.
+     */
+    private long currentLiveIntervalMs()
+    {
+      if (stppDisabled)
+        return Math.max(2000L, Sage.getLong("caption_extraction/live_interval_ms", 10000L));
+      return Math.max(2000L, Sage.getLong("caption_extraction/stpp_live_interval_ms", 5000L));
     }
 
     /** Run a synchronous extract pass on the current file state and fire listeners on success. */
