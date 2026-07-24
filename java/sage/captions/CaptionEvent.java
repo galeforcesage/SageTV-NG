@@ -10,8 +10,11 @@
 package sage.captions;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * A single normalized caption cue, the universal intermediate representation
@@ -226,17 +229,27 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
    * (a genuinely new sentence/cue), the buffered cue is flushed and a new
    * one starts.
    *
-   * <p>On flush, any cue shorter than {@link #MIN_CUE_DURATION_SECONDS} has
-   * its end time extended to {@code begin + MIN_CUE_DURATION_SECONDS} so it
-   * remains legible.
+   * <p>Once grouped, cues belonging to the same track (same
+   * language/service/region — i.e. the ones that could ever actually be
+   * displayed at the same time) are post-processed so consecutive cues
+   * never overlap: raw broadcaster STPP packet windows are not always
+   * disjoint, which otherwise leaves ~200-300ms of overlap between
+   * consecutive coalesced cues. Each cue's end is clamped to at most the
+   * next cue's begin, and only then is the {@link #MIN_CUE_DURATION_SECONDS}
+   * floor applied (also capped at the next cue's begin) — overlap avoidance
+   * takes priority over the duration floor, since a cue on screen for
+   * slightly under a second beats two cues visibly double-displaying at
+   * once. Different tracks (e.g. a secondary-language service) are
+   * processed independently, since they're never displayed simultaneously.
    *
    * @param events input events, assumed sorted by begin time
-   * @return a new, coalesced list of events (input list is left untouched)
+   * @return a new, coalesced list of events (input list is left untouched),
+   *         sorted by begin time
    */
   public static List<CaptionEvent> coalesce(List<CaptionEvent> events)
   {
-    List<CaptionEvent> out = new ArrayList<>();
-    if (events == null || events.isEmpty()) return out;
+    List<CaptionEvent> grouped = new ArrayList<>();
+    if (events == null || events.isEmpty()) return grouped;
 
     Builder current = null;
     for (CaptionEvent e : events)
@@ -258,12 +271,13 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
       }
       else
       {
-        out.add(finish(current));
+        grouped.add(current.build());
         current = startFrom(e);
       }
     }
-    if (current != null) out.add(finish(current));
-    return out;
+    if (current != null) grouped.add(current.build());
+
+    return clampOverlapsAndEnforceMinDuration(grouped);
   }
 
   private static boolean sameLanguageRegionAndService(Builder current, CaptionEvent e)
@@ -285,10 +299,61 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
         .service(e.service);
   }
 
-  private static CaptionEvent finish(Builder b)
+  /**
+   * Groups {@code grouped} by track (language+service+region), then within
+   * each track: clamps every cue's end to at most the next same-track cue's
+   * begin (removing overlap), then extends any still-too-short cue up to
+   * {@link #MIN_CUE_DURATION_SECONDS}, capped at that same neighbor's begin
+   * so the floor can never re-introduce the overlap it just removed. Returns
+   * the result merged back into a single begin-time-sorted list.
+   */
+  private static List<CaptionEvent> clampOverlapsAndEnforceMinDuration(List<CaptionEvent> grouped)
   {
-    if (b.endSeconds - b.beginSeconds < MIN_CUE_DURATION_SECONDS)
-      b.endSeconds(b.beginSeconds + MIN_CUE_DURATION_SECONDS);
-    return b.build();
+    Map<String, List<CaptionEvent>> byTrack = new LinkedHashMap<>();
+    for (CaptionEvent e : grouped)
+    {
+      byTrack.computeIfAbsent(trackKey(e), k -> new ArrayList<>()).add(e);
+    }
+
+    List<CaptionEvent> out = new ArrayList<>(grouped.size());
+    for (List<CaptionEvent> track : byTrack.values())
+    {
+      for (int i = 0; i < track.size(); i++)
+      {
+        CaptionEvent e = track.get(i);
+        CaptionEvent next = (i + 1 < track.size()) ? track.get(i + 1) : null;
+
+        double begin = e.beginSeconds;
+        double end = e.endSeconds;
+        if (next != null && end > next.beginSeconds)
+        {
+          end = next.beginSeconds;
+        }
+        if (end - begin < MIN_CUE_DURATION_SECONDS)
+        {
+          double floored = begin + MIN_CUE_DURATION_SECONDS;
+          end = (next != null) ? Math.min(floored, next.beginSeconds) : floored;
+        }
+        if (end < begin) end = begin;
+
+        out.add(builder()
+            .language(e.language)
+            .beginSeconds(begin)
+            .endSeconds(end)
+            .text(e.text)
+            .region(e.region)
+            .service(e.service)
+            .build());
+      }
+    }
+    Collections.sort(out);
+    return out;
+  }
+
+  private static String trackKey(CaptionEvent e)
+  {
+    return (e.language == null ? "" : e.language) + '\u0000' +
+        (e.service == null ? "" : e.service) + '\u0000' +
+        (e.region == null ? "" : e.region);
   }
 }

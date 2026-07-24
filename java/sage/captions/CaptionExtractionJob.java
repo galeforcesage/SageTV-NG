@@ -475,8 +475,21 @@ class CaptionExtractionJob implements Runnable
       //
       // ffmpeg is picky about characters in the lavfi filter graph; escape
       // backslashes, single quotes, colons, and commas in the path.
+      //
+      // seek_point/output_ts_offset: HDHomeRun-tuned recordings (live 608/708
+      // path only — this is the ffmpeg fallback, not ccextractor) start with a
+      // few seconds of corrupt/incomplete tuner-startup frames that otherwise
+      // make ffmpeg's subcc decode abort after ~5s and produce a near-empty
+      // (~70 byte) SRT. Seeking the movie filter past that startup window
+      // avoids the corrupt frames; output_ts_offset then shifts the resulting
+      // cue timestamps back by the same amount so they still line up with
+      // true media-relative time (0 = start of the recording), not the
+      // post-seek decode position. Both default to 8s, tunable/disable-able
+      // (0) via caption_extraction/ffmpeg_seek_seconds.
       String escapedPath = escapeForLavfi(recFile.getAbsolutePath());
-      String filterInput = "movie=" + escapedPath + "[out0+subcc]";
+      int seekSeconds = Sage.getInt("caption_extraction/ffmpeg_seek_seconds", 8);
+      String filterInput = "movie=" + escapedPath +
+          (seekSeconds > 0 ? ":seek_point=" + seekSeconds : "") + "[out0+subcc]";
 
       List<String> cmd = new ArrayList<>();
       // Wrap in ionice (idle class) + nice (lowest CPU priority) so extraction
@@ -502,6 +515,11 @@ class CaptionExtractionJob implements Runnable
       cmd.add(filterInput);
       cmd.add("-map");
       cmd.add("0:1");
+      if (seekSeconds > 0)
+      {
+        cmd.add("-output_ts_offset");
+        cmd.add(Integer.toString(seekSeconds));
+      }
       cmd.add("-c:s");
       cmd.add("srt");
       // Explicit muxer so the `.tmp` suffix doesn't break format inference.
