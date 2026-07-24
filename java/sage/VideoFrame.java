@@ -2592,10 +2592,14 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
                     ((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine()).hasSubtitleSupport())
                 {
                   subHandler = sage.media.sub.SubtitleHandler.createSubtitleHandler(this, currFile);
+                  subHandlerIsCaptionPush = false;
                 }
               }
               else
+              {
                 subHandler = sage.media.sub.SubtitleHandler.createSubtitleHandler(this, currFile);
+                subHandlerIsCaptionPush = false;
+              }
               if (subHandler != null)
                 subHandler.setDelay(subtitleDelay);
             }
@@ -3815,6 +3819,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       catch (Throwable ignore) {}
     }
     subHandler = null;
+    subHandlerIsCaptionPush = false;
     chapterPoints = null;
     ccHandler = null;
     lastSubType = null;
@@ -4312,6 +4317,17 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   {
     MediaFile mf = currFile;
     if (mf == null) return;
+    // Piece C v2: while the in-memory live push (postCaptionEvents) owns
+    // display for this MediaFile -- an in-progress recording with at least
+    // one CC-enabled viewer, see CaptionExtractionManager.LiveExtractor --
+    // this reload path is a no-op. There must be exactly one caption
+    // source at a time; letting this proceed here would install a real
+    // sidecar-backed handler alongside (or clobbering, then losing) the
+    // push handler and risk double-display / fighting the push's own
+    // append cadence. Once the push extractor stops (last viewer gone, or
+    // the file got promoted+persisted and push handed off), this gate
+    // opens back up and the normal reload behaves exactly as before.
+    if (sage.captions.CaptionExtractionManager.getInstance().isLiveCaptionPushActive(mf)) return;
     try
     {
       mf.checkForSubtitles();
@@ -4335,6 +4351,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       {
         fresh.setDelay(subtitleDelay);
         subHandler = fresh;
+        subHandlerIsCaptionPush = false;
         if (old != null && old != fresh)
         {
           try { old.cleanup(); } catch (Throwable ignore) {}
@@ -5964,6 +5981,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
           if (Sage.DBG) System.out.println("Detected change in embedded subtitle stream type; load a new subtitle handler");
           subHandler.cleanup();
           subHandler = null;
+          subHandlerIsCaptionPush = false;
           lastSubType = null;
           embeddedSubStreamType = null;
           if (rawText.length == 0)
@@ -5973,6 +5991,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         if (subHandler == null && currFile != null)
         {
           subHandler = sage.media.sub.SubtitleHandler.createSubtitleHandlerDirect(this, rawText, flags, currFile.getFileFormat(), currSubFormat);
+          subHandlerIsCaptionPush = false;
           // When we get subtitle messages; we always display the content. The messages will stop if we should no longer display it.
           subHandler.setEnabled(true);
           embeddedSubStreamType = currSubFormat;
@@ -5989,11 +6008,14 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   }
 
   /**
-   * Piece C v1 (bootstrap-gap push): pushes {@link CaptionEvent}s produced by
-   * a live in-progress extraction (ATSC3 STPP today, via
+   * Piece C v2 (steady-state single-owner push): pushes {@link CaptionEvent}s
+   * produced by a live in-progress extraction (ATSC3 STPP today, via
    * {@code CaptionExtractionManager}'s live-tail loop) directly into this
-   * VideoFrame's subtitle display, closing the gap before any sidecar file
-   * — and therefore any {@code SubtitleHandler} — exists yet.
+   * VideoFrame's subtitle display. For an ephemeral live-buffer recording
+   * this is the *entire* display path for the whole session (no sidecar is
+   * ever written); for an in-progress keeper recording it is the display
+   * path until the rare periodic/final SRT flush lands and
+   * {@code reloadExternalSubHandlerAndApplyCC} takes over.
    *
    * <p>This is strictly additive and touches no {@code sage.media.sub.*}
    * code: it lazily creates a plain {@link sage.media.sub.RawSubtitleHandler}
@@ -6001,34 +6023,46 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
    * and forwards each event through the already-public
    * {@code SubtitleHandler.postSubtitleInfo}/{@code insertEntryForPostedInfo}
    * path — the exact in-memory insertion mechanism push-mode CC already
-   * uses.
+   * uses. That path never auto-prunes and is binary-searched by media time,
+   * so repeatedly appending new deltas here naturally keeps every earlier
+   * cue seekable/rewindable with zero {@code sage.media.sub.*} changes.
    *
-   * <p>Deliberately narrow in scope: if {@link #subHandler} is already
-   * non-null — whether because this method already ran once, or because
-   * {@code reloadExternalSubHandlerAndApplyCC} already installed the real
-   * sidecar-backed handler once extraction catches up — this becomes a
-   * no-op. It never overwrites an existing handler, so it can't fight with
-   * the normal reload lifecycle; once the real SRT sidecar exists, the
-   * existing 10s reload-and-replace mechanism takes over exactly as it does
-   * today and this method is simply never useful again for this playback.
+   * <p>Single-owner gate: on first call (subHandler == null) this method
+   * creates and takes ownership of the push handler, marking
+   * {@link #subHandlerIsCaptionPush} true. On every subsequent call while
+   * still the owner, it appends the new delta. If some other assignment
+   * site has since replaced subHandler with a real sidecar-backed handler
+   * (subHandlerIsCaptionPush == false), this becomes a no-op — it never
+   * fights the normal reload lifecycle. Conversely,
+   * {@code reloadExternalSubHandlerAndApplyCC} is gated (see its own
+   * comment) to never run while
+   * {@code CaptionExtractionManager.isLiveCaptionPushActive(currFile)} is
+   * true, so there is exactly one caption source active at any time.
    *
-   * @param events primary-track CaptionEvents to push, in chronological
-   *               order (caller is expected to have already filtered to the
-   *               primary/default service and to have dropped any cue still
-   *               subject to revision on the next extraction pass)
+   * @param events new (not-yet-delivered-to-this-VideoFrame) primary-track
+   *               CaptionEvents to append, in chronological order (caller
+   *               is expected to have already filtered to the
+   *               primary/default service, deduped per-viewer high-water
+   *               mark, and dropped any cue still subject to revision on
+   *               the next extraction pass)
    */
   public void postCaptionEvents(List<CaptionEvent> events)
   {
     if (events == null || events.isEmpty()) return;
     if (currFile == null) return;
-    if (subHandler != null) return; // already have a handler (ours or the real one); never fight it
+    // Already have a *real* (non-push) handler -- never fight it.
+    if (subHandler != null && !subHandlerIsCaptionPush) return;
 
     try
     {
-      sage.media.sub.SubtitleHandler rsh = new sage.media.sub.RawSubtitleHandler();
-      rsh.setEnabled(true);
-      subHandler = rsh;
-      embeddedSubStreamType = null;
+      if (subHandler == null)
+      {
+        sage.media.sub.SubtitleHandler rsh = new sage.media.sub.RawSubtitleHandler();
+        rsh.setEnabled(true);
+        subHandler = rsh;
+        subHandlerIsCaptionPush = true;
+        embeddedSubStreamType = null;
+      }
 
       boolean needsKick = false;
       for (CaptionEvent e : events)
@@ -6454,6 +6488,15 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   private ZLabel subtitleComp;
   private ZCCLabel ccComp;
   private sage.media.sub.SubtitleHandler subHandler;
+  // Piece C v2: true iff `subHandler` is the push-mode RawSubtitleHandler
+  // created/owned by postCaptionEvents (below), as opposed to a real
+  // sidecar-backed handler installed by reloadExternalSubHandlerAndApplyCC
+  // or the other subHandler-assignment sites. Reset to false at every OTHER
+  // subHandler assignment site so postCaptionEvents can tell "no handler
+  // yet" apart from "our own handler, keep appending" apart from "some
+  // other handler now owns display, never touch it again" -- see
+  // postCaptionEvents()'s guard.
+  private boolean subHandlerIsCaptionPush;
   private boolean externalSubsBoundToCC;
   private sage.media.sub.CCSubtitleHandler ccHandler;
   private byte[] subpicBuff;
