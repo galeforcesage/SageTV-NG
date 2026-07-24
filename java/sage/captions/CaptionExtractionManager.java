@@ -10,6 +10,7 @@
 package sage.captions;
 
 import sage.MediaFile;
+import sage.MediaPlayer;
 import sage.Pooler;
 import sage.Sage;
 import sage.Wizard;
@@ -47,6 +48,18 @@ import java.util.concurrent.Executors;
  *                                              progress (default 10000)
  *   caption_extraction/live_min_file_bytes   - skip live extract until source has at least N
  *                                              bytes on disk (default 524288)
+ *   caption_extraction/live_buffer_max_cues  - safety-ceiling backstop on the in-memory live
+ *                                              caption list per stream, drop-oldest beyond it
+ *                                              (default 10000)
+ *   caption_extraction/srt_flush_interval_ms - Piece C v2: for an in-progress KEEPER recording
+ *                                              only, minimum time between periodic sidecar
+ *                                              flushes while live extraction is pushing
+ *                                              captions in-memory every cycle (default 30000).
+ *                                              Never applies to ephemeral live buffers, which
+ *                                              are never flushed until/unless promoted.
+ *   caption_extraction/srt_flush_cue_count   - companion to the above: also flush once at
+ *                                              least this many new cues have accumulated since
+ *                                              the last flush, whichever comes first (default 50)
  */
 public class CaptionExtractionManager
 {
@@ -59,6 +72,15 @@ public class CaptionExtractionManager
   // MediaFile ids that had on-demand (partial) extraction during playback
   // and need a full extraction once playback stops.
   private final Set<Integer> pendingFullExtraction = ConcurrentHashMap.newKeySet();
+  // Piece C v2: MediaFile ids for which the in-memory live push
+  // (VideoFrame.postCaptionEvents) currently owns caption display for every
+  // viewer of that recording. While a file's id is in this set,
+  // VideoFrame.reloadExternalSubHandlerAndApplyCC() is a no-op for it, so
+  // the normal sidecar-reload path never fights the push (single source of
+  // truth). Int-keyed (mf.getID()), not keyed by MediaFile object, so this
+  // set can never itself pin a MediaFile in memory. Added/removed every
+  // LiveExtractor cycle based on live viewer state -- never left stale.
+  private final Set<Integer> liveCaptionPushActive = ConcurrentHashMap.newKeySet();
 
   private CaptionExtractionManager()
   {
@@ -84,6 +106,51 @@ public class CaptionExtractionManager
     return Sage.getBoolean("caption_extraction/enabled", true);
   }
 
+  /**
+   * Piece C v2 ephemeral-vs-keeper classification. {@code true} means this
+   * MediaFile is still a temporary, likely-to-be-discarded live/timeshift
+   * buffer: safe to render captions purely in-memory and never write an SRT
+   * sidecar. {@code false} means it's a real (or now-promoted) recording
+   * that should get the exact same on-disk sidecar behavior as today.
+   *
+   * <p>{@code MediaFile.generalType} (what {@code isLiveBufferedStream()}
+   * checks) never changes away from {@code MEDIAFILE_LIVE_BUFFERED_STREAM}
+   * even after a live buffer is promoted to a keeper (user hits record, or
+   * it converts into a scheduled recording) -- so that alone can't detect
+   * promotion. The actual signal SageTV flips at promotion time is
+   * {@code acquisitionTech} (see every {@code setAcquisitionTech(...)} call
+   * site): it starts at {@code ACQUISITION_WATCH_BUFFER} while still just a
+   * live buffer, and moves to {@code ACQUISITION_MANUAL} /
+   * {@code ACQUISITION_FAVORITE} / {@code ACQUISITION_INTELLIGENT} once it's
+   * a real recording. There is no dedicated "buffer became permanent" event
+   * anywhere in {@code PluginEventManager} to hook, so this is deliberately
+   * polled once per {@link LiveExtractor} cycle rather than pushed.
+   *
+   * <p>Only {@code MEDIAFILE_LIVE_BUFFERED_STREAM} files are ever
+   * classified ephemeral; a plain completed/scheduled recording (the
+   * overwhelmingly common case) is never ephemeral, matching "keeper
+   * behavior unchanged".
+   */
+  static boolean isEphemeral(MediaFile mf)
+  {
+    if (mf == null) return false;
+    return mf.isLiveBufferedStream() && mf.getAcquistionTech() == MediaFile.ACQUISITION_WATCH_BUFFER;
+  }
+
+  /**
+   * Piece C v2 single-owner gate. Returns true while the in-memory live
+   * caption push ({@code VideoFrame.postCaptionEvents}) owns display for
+   * every current viewer of this MediaFile -- see {@link LiveExtractor}.
+   * While true, {@code VideoFrame.reloadExternalSubHandlerAndApplyCC} must
+   * treat itself as a no-op for this file so there is never more than one
+   * active caption source. Backed by an int-keyed set (mf.getID()), so it
+   * can never itself pin a MediaFile in memory.
+   */
+  public boolean isLiveCaptionPushActive(MediaFile mf)
+  {
+    return mf != null && liveCaptionPushActive.contains(mf.getID());
+  }
+
   // ── Recording lifecycle hooks (called from Seeker) ──
 
   /**
@@ -95,7 +162,20 @@ public class CaptionExtractionManager
     if (!isEnabled()) return;
     if (!Sage.getBoolean("caption_extraction/run_on_recording_stop", true)) return;
     if (mf == null) return;
-    if (mf.isAnyLiveStream()) return;
+    // Pure live streams (no seekable backing file, e.g. raw passthrough) --
+    // never anything to extract from. Unchanged from before.
+    if (mf.isLiveStream()) return;
+    // Live-buffered (timeshift) streams: MediaFile.generalType never changes
+    // away from MEDIAFILE_LIVE_BUFFERED_STREAM even after the buffer is
+    // promoted to a keeper (user hit record / it converted to a scheduled
+    // recording) -- isAnyLiveStream() alone can't distinguish "still an
+    // ephemeral live buffer" from "was a live buffer, now a real recording".
+    // Only skip here while still ephemeral; once promoted, fall through to
+    // the normal one-shot extraction path below like any other recording.
+    // (Piece C v2's LiveExtractor also does its own promotion catch-up
+    // write the moment it detects the flip, so this is a second/backup
+    // durability net, not the only path -- see LiveExtractor.runOnce().)
+    if (mf.isLiveBufferedStream() && isEphemeral(mf)) return;
 
     final int id = mf.getID();
     if (activeJobs.containsKey(id)) return;
@@ -333,11 +413,42 @@ public class CaptionExtractionManager
   }
 
   /**
-   * Tail-extract loop for an in-progress recording: wakes every
-   * caption_extraction/live_interval_ms (default 10s), runs a forced one-shot
-   * extract on the growing source file, fires listeners after each successful
-   * pass so VideoFrame can reload its SubtitleHandler. Exits and does one
-   * final full pass once the MediaFile reports !isRecording().
+   * Tail-extract loop for an in-progress recording (live-buffer or normal
+   * scheduled/manual recording that's still writing). Wakes every
+   * caption_extraction/live_interval_ms (default 10s) and re-derives the
+   * current caption set from the growing source file.
+   *
+   * <p>Piece C v2: this class is now also the single owner of the whole
+   * live-caption delivery + persistence-policy seam for a MediaFile:
+   * <ul>
+   *   <li>Exactly one {@code LiveExtractor} (and one ffmpeg cycle) exists
+   *       per MediaFile regardless of viewer count -- already guaranteed by
+   *       {@link #ensureExtractionRunning}'s {@code liveExtractors}
+   *       putIfAbsent/addListener logic (unchanged).</li>
+   *   <li>Each cycle, the current set of CC-enabled viewers of this exact
+   *       file ({@link sage.VideoFrame#getVFsUsingMediaFile}, filtered to
+   *       {@code getCCState() != CC_DISABLED}) is polled fresh -- no extra
+   *       hooks needed, since both of those already reflect reality
+   *       immediately (see class javadoc references below).</li>
+   *   <li>Per-viewer delivery high-water-marks ({@link #perViewerHwm}) make
+   *       sure a viewer that enables CC late still gets every earlier cue
+   *       (backfill), while an already-caught-up viewer only gets the new
+   *       delta -- fixing the "per-MediaFile HWM misses late joiners" bug.
+   *       The map is pruned to exactly the current eligible set every
+   *       cycle, so it can never grow past the current viewer count.</li>
+   *   <li>SRT persistence is fully decoupled from both extraction and
+   *       display: never written for an ephemeral live buffer (see
+   *       {@link CaptionExtractionManager#isEphemeral}); written on a rare
+   *       cadence (every {@code srt_flush_interval_ms} or
+   *       {@code srt_flush_cue_count} new cues, whichever first) for an
+   *       in-progress keeper; and a fresh full catch-up write fires exactly
+   *       once at the ephemeral-&gt;keeper promotion instant.</li>
+   *   <li>Zero-consumer teardown: the moment no eligible viewer remains,
+   *       this extractor flushes once (if a keeper had unpersisted cues)
+   *       and stops itself -- see {@link #runOnce}.</li>
+   * </ul>
+   * Exits (and does one final full pass) once the MediaFile reports
+   * {@code !isRecording()} in the ordinary case, same as before.
    */
   private class LiveExtractor implements Runnable
   {
@@ -345,6 +456,29 @@ public class CaptionExtractionManager
     private final File recFile;
     private final java.util.List<Runnable> listeners = new java.util.concurrent.CopyOnWriteArrayList<>();
     private volatile boolean stopped;
+
+    // Piece C v2 per-viewer delivery high-water-mark: for each currently
+    // eligible VideoFrame, the end time (seconds) of the last CaptionEvent
+    // already pushed to it. Read/written only from this extractor's own
+    // thread (single-threaded access -- runOnce() is never invoked
+    // concurrently with itself), so no external synchronization is needed.
+    // Pruned to the live eligible-viewer set every cycle in runOnce(), so
+    // it can never accumulate entries for VideoFrames that have since
+    // closed/changed files/disabled CC -- that pruning *is* the map-shrink
+    // guarantee (no separate close hook required, since the eligible set
+    // itself is derived fresh from ground truth every cycle).
+    private final java.util.Map<sage.VideoFrame, Double> perViewerHwm = new java.util.HashMap<>();
+
+    // Most recent full coalesced event list (already capped to
+    // live_buffer_max_cues), kept only for the zero-consumer durability
+    // flush in runOnce(). Not a separately-growing accumulation: today's
+    // extraction is a full rescan every cycle, so this is simply replaced
+    // (not appended to) each time -- see runOnce()'s doc for how this seam
+    // stays valid once the incremental extractor is wired in later.
+    private volatile java.util.List<CaptionEvent> lastEvents = new java.util.ArrayList<>();
+    private boolean wasEphemeral = true;
+    private long lastSrtFlushMs;
+    private int cuesAtLastFlush;
 
     LiveExtractor(MediaFile mf, File recFile)
     {
@@ -386,6 +520,9 @@ public class CaptionExtractionManager
           runOnce();
         }
         // Recording finished while we were running: do one final clean pass.
+        // Skipped if runOnce() already stopped us (zero-consumer teardown,
+        // which already did its own durability flush) or if an explicit
+        // stopLiveExtraction() call set `stopped`.
         if (!stopped && recFile.exists())
         {
           // Brief delay to let the writer flush.
@@ -397,79 +534,170 @@ public class CaptionExtractionManager
       finally
       {
         liveExtractors.remove(id, this);
+        liveCaptionPushActive.remove(id);
         if (Sage.DBG) System.out.println("CaptionExtractionManager: live extractor finished for MF " + id);
       }
     }
 
-    /** Run a synchronous extract pass on the current file state and fire listeners on success. */
+    /**
+     * Run a synchronous extract pass on the current file state, push
+     * per-viewer deltas, and apply the decoupled SRT-flush policy. See the
+     * class javadoc for the full picture; this is the method where each
+     * piece is actually wired together every cycle.
+     */
     private void runOnce()
     {
+      // Piece C v2 Gap 1/2: poll the ground-truth eligible-viewer set fresh
+      // every cycle. getVFsUsingMediaFile() already only returns
+      // VideoFrames whose currFile == mf and whose player is actually
+      // active; getCCState() reflects a CC-disable the instant
+      // VideoFrame.setCCState() writes it. No new close/disable hooks are
+      // needed on the VideoFrame side for this to be correct and current.
+      java.util.ArrayList vfsRaw = sage.VideoFrame.getVFsUsingMediaFile(mf);
+      java.util.List<sage.VideoFrame> eligible = new java.util.ArrayList<>(vfsRaw.size());
+      for (Object o : vfsRaw)
+      {
+        sage.VideoFrame vf = (sage.VideoFrame) o;
+        if (vf.getCCState() != MediaPlayer.CC_DISABLED) eligible.add(vf);
+      }
+
+      boolean ephemeralNow = isEphemeral(mf);
+
+      if (eligible.isEmpty())
+      {
+        // Gap 2: zero-consumer teardown. Free every resource tied to this
+        // MediaFile's id: the perViewerHwm map is discarded with `this`
+        // (about to fall out of scope), the liveExtractors map entry is
+        // removed by run()'s finally block, and the single-owner push gate
+        // is cleared right here.
+        if (!ephemeralNow && !lastEvents.isEmpty())
+        {
+          // Durability net: a keeper recording had push-only cues that
+          // hadn't hit the rare flush cadence yet. Write them now instead
+          // of waiting for the next viewer to reopen the file (which would
+          // just force a fresh extraction anyway -- captions are always
+          // re-derivable from the recording, so nothing is ever truly at
+          // risk of being lost, but this keeps the sidecar current).
+          try
+          {
+            new SrtCaptionWriter().writeGrouped(lastEvents, sidecarFor(recFile));
+            mf.checkForSubtitles();
+          }
+          catch (Throwable ignore) {}
+        }
+        liveCaptionPushActive.remove(mf.getID());
+        stop();
+        return;
+      }
+
+      liveCaptionPushActive.add(mf.getID());
+      // Shrink the per-viewer map to exactly today's eligible set.
+      perViewerHwm.keySet().retainAll(eligible);
+
       File sidecar = sidecarFor(recFile);
-      File tmpScratch = new File(sidecar.getAbsolutePath() + ".live.tmp");
-      // Use a one-off job that writes directly to the real sidecar path (force=true).
-      // We deliberately do NOT route through submitJob() to avoid contending with
-      // the activeJobs map (which a recording-stop hook might also touch).
-      final boolean[] ok = { false };
-      CaptionExtractionJob job = new CaptionExtractionJob(mf, recFile, sidecar, () -> {
-        if (sidecar.isFile() && sidecar.length() > 8) ok[0] = true;
-      });
-
-      // Piece C v1 (bootstrap-gap push): while no usable sidecar exists yet
-      // for this recording, wire the STPP-only live-event hook so any active
-      // VideoFrame playing this in-progress recording gets captions in
-      // memory before the first sidecar/SubtitleHandler shows up. Once a
-      // real sidecar exists, the existing reload-and-replace mechanism
-      // (fireListeners() below, already wired to
-      // VideoFrame.reloadExternalSubHandlerAndApplyCC) is what actually
-      // drives display from then on, so we stop bothering to wire this.
-      // VideoFrame.postCaptionEvents() is itself idempotent (no-ops once its
-      // subHandler is non-null), so this is safe even if called every cycle.
-      if (!(sidecar.isFile() && sidecar.length() > 8))
-      {
-        job.setLiveEventSink(events -> pushBootstrapCaptionEvents(mf, events));
-      }
-
+      final java.util.List<CaptionEvent>[] holder = new java.util.List[1];
+      CaptionExtractionJob job = new CaptionExtractionJob(mf, recFile, sidecar, () -> {});
+      // Buffer-fill is extraction-method-agnostic: today Atsc3StppExtractor
+      // always does a full rescan, so `events` is the complete authoritative
+      // list every cycle. At final integration this is expected to be
+      // swapped for the incremental core's extractIncremental() (returning
+      // just the new tail against a held StppIncrementalState) -- everything
+      // downstream here (capping, per-viewer delta math, flush cadence)
+      // already treats `events` as "current authoritative full list" and
+      // does not need to change for that swap.
+      job.setLiveEventSink(events -> holder[0] = events);
+      // This LiveExtractor -- not the job -- owns persistence timing.
+      job.setPersistSidecar(false);
       job.run();
-      if (tmpScratch.exists()) tmpScratch.delete();
-      if (ok[0])
+
+      java.util.List<CaptionEvent> events = holder[0];
+      if (events == null) return;
+
+      // Safety-ceiling backstop (drop-oldest) against pathological 24/7 live
+      // sessions, independent of the lifecycle teardown above.
+      int maxCues = Math.max(100, Sage.getInt("caption_extraction/live_buffer_max_cues", 10000));
+      if (events.size() > maxCues)
+        events = events.subList(events.size() - maxCues, events.size());
+      lastEvents = events;
+
+      // Promotion detection: ephemeral -> keeper transition since last cycle.
+      boolean promoted = wasEphemeral && !ephemeralNow;
+      wasEphemeral = ephemeralNow;
+
+      pushDeltaToViewers(events, eligible);
+
+      if (promoted)
       {
-        try { mf.checkForSubtitles(); } catch (Throwable ignore) {}
-        fireListeners();
+        // Gap 4: persist using *this* cycle's already-fresh full-rescan
+        // `events` -- equivalent to "a fresh full extract() right now" (not
+        // a separately-tracked, possibly-stale accumulation), since
+        // Atsc3StppExtractor.extract() always does a complete rescan today.
+        // This makes the on-disk SRT byte-identical to today's keeper
+        // output at the moment of promotion.
+        try
+        {
+          new SrtCaptionWriter().writeGrouped(events, sidecar);
+          lastSrtFlushMs = System.currentTimeMillis();
+          cuesAtLastFlush = events.size();
+          mf.checkForSubtitles();
+          fireListeners();
+        }
+        catch (Throwable ignore) {}
       }
-    }
-  }
-
-  /**
-   * Piece C v1 helper: filters a raw coalesced CaptionEvent list down to the
-   * primary/default service only (the track a viewer would see by default;
-   * see {@link SrtCaptionWriter#isPrimaryService(String)}) and drops the
-   * final cue, which may still be revised (extended text/end time) on the
-   * next live extraction pass — pushing it now risks displaying a cue that
-   * then silently changes underneath the viewer. The remainder, if any, is
-   * pushed to every {@link sage.VideoFrame} currently playing {@code mf} via
-   * the additive {@code VideoFrame.postCaptionEvents} hook.
-   */
-  private static void pushBootstrapCaptionEvents(MediaFile mf, java.util.List<CaptionEvent> events)
-  {
-    if (events == null || events.size() < 2) return; // nothing safe to push yet (lag-by-one)
-
-    java.util.List<CaptionEvent> primary = new java.util.ArrayList<>();
-    for (int i = 0; i < events.size() - 1; i++)
-    {
-      CaptionEvent e = events.get(i);
-      if (SrtCaptionWriter.isPrimaryService(e.getService()))
-        primary.add(e);
-    }
-    if (primary.isEmpty()) return;
-
-    java.util.ArrayList vfs = sage.VideoFrame.getVFsUsingMediaFile(mf);
-    for (int i = 0; i < vfs.size(); i++)
-    {
-      try
+      else if (!ephemeralNow)
       {
-        ((sage.VideoFrame) vfs.get(i)).postCaptionEvents(primary);
+        long flushIntervalMs = Math.max(1000L, Sage.getLong("caption_extraction/srt_flush_interval_ms", 30000L));
+        int flushCueCount = Math.max(1, Sage.getInt("caption_extraction/srt_flush_cue_count", 50));
+        long now = System.currentTimeMillis();
+        if (now - lastSrtFlushMs >= flushIntervalMs || (events.size() - cuesAtLastFlush) >= flushCueCount)
+        {
+          try
+          {
+            new SrtCaptionWriter().writeGrouped(events, sidecar);
+            lastSrtFlushMs = now;
+            cuesAtLastFlush = events.size();
+            mf.checkForSubtitles();
+            fireListeners();
+          }
+          catch (Throwable ignore) {}
+        }
       }
-      catch (Throwable ignore) {}
+      // else: still ephemeral -- push-only, never write.
+    }
+
+    /**
+     * Push each eligible viewer only the primary-track cues it hasn't
+     * already received (Gap 1 fix): a newly-attached/late-CC-enabled
+     * VideoFrame starts at HWM 0 and gets the full backfill of everything
+     * extracted so far; an already-caught-up viewer only gets new cues.
+     * Always lags the single latest cue by one, since a full-rescan pass
+     * may still revise it (extend text/end time) on the very next cycle.
+     */
+    private void pushDeltaToViewers(java.util.List<CaptionEvent> events, java.util.List<sage.VideoFrame> eligible)
+    {
+      int safeCount = events.size() - 1; // lag-by-one
+      if (safeCount <= 0) return;
+
+      for (sage.VideoFrame vf : eligible)
+      {
+        Double hwmBoxed = perViewerHwm.get(vf);
+        double hwm = hwmBoxed == null ? 0.0 : hwmBoxed;
+        java.util.List<CaptionEvent> delta = new java.util.ArrayList<>();
+        double newHwm = hwm;
+        for (int i = 0; i < safeCount; i++)
+        {
+          CaptionEvent e = events.get(i);
+          if (!SrtCaptionWriter.isPrimaryService(e.getService())) continue;
+          if (e.getBeginSeconds() < hwm) continue; // already delivered to this viewer
+          delta.add(e);
+          if (e.getEndSeconds() > newHwm) newHwm = e.getEndSeconds();
+        }
+        if (!delta.isEmpty())
+        {
+          try { vf.postCaptionEvents(delta); } catch (Throwable ignore) {}
+          perViewerHwm.put(vf, newHwm);
+        }
+      }
     }
   }
 }

@@ -56,13 +56,24 @@ class CaptionExtractionJob implements Runnable
   private volatile Process proc;
   private volatile boolean cancelled;
 
-  // Piece C v1 (bootstrap-gap live push): optional hook fired, STPP path
-  // only, with the freshly-coalesced CaptionEvents right after each
-  // extraction pass — before writeGrouped() persists them — so a caller
-  // (CaptionExtractionManager's live-tail loop) can push them straight into
-  // an active VideoFrame while no sidecar/SubtitleHandler exists yet. Never
-  // invoked for the 608/708 path. Unset (null) by default; a no-op then.
+  // Piece C v2 (live push + ephemeral write-suppression): optional hook
+  // fired, STPP path only, with the freshly-coalesced CaptionEvents right
+  // after each extraction pass — before writeGrouped() persists them — so a
+  // caller (CaptionExtractionManager's live-tail loop) can push them
+  // straight into active VideoFrames every cycle, not just before a sidecar
+  // first exists. Never invoked for the 608/708 path. Unset (null) by
+  // default; a no-op then.
   private volatile java.util.function.Consumer<List<CaptionEvent>> liveEventSink;
+
+  // Piece C v2: when false, the STPP path skips its own writeGrouped() call
+  // entirely (the caller — CaptionExtractionManager.LiveExtractor — owns
+  // persistence timing instead: never for ephemeral live buffers, on a rare
+  // decoupled cadence for in-progress keepers). Defaults to true so every
+  // other caller (one-shot completed-recording jobs, backfill, on-demand)
+  // keeps writing the sidecar exactly as before. Never affects the 608/708
+  // fallback path, which is out of scope for this revision and always
+  // writes its own SRT directly as it always has.
+  private volatile boolean persistSidecar = true;
 
   CaptionExtractionJob(MediaFile mf, File recFile, File sidecar, Runnable onComplete)
   {
@@ -82,6 +93,12 @@ class CaptionExtractionJob implements Runnable
   void setLiveEventSink(java.util.function.Consumer<List<CaptionEvent>> sink)
   {
     this.liveEventSink = sink;
+  }
+
+  /** See {@link #persistSidecar}. */
+  void setPersistSidecar(boolean persist)
+  {
+    this.persistSidecar = persist;
   }
 
   void cancel()
@@ -160,14 +177,26 @@ class CaptionExtractionJob implements Runnable
       return true;
     }
 
-    // Piece C v1: fire the live bootstrap-push hook (if wired) with the raw
-    // coalesced events *before* persisting them, so the caller can decide
-    // for itself which subset (e.g. primary-service-only, lag-by-one-cue) is
-    // safe to display in-memory. This never affects the sidecar write below.
+    // Piece C v2: fire the live-push hook (if wired) with the raw coalesced
+    // events *before* persisting them, every cycle (not just before a
+    // sidecar first exists) — the caller decides which subset (e.g.
+    // primary-service-only, lag-by-one-cue) is safe to display in-memory,
+    // and whether to persist at all. This never affects the sidecar write
+    // below.
     java.util.function.Consumer<List<CaptionEvent>> sink = liveEventSink;
     if (sink != null)
     {
       try { sink.accept(events); } catch (Throwable ignore) {}
+    }
+
+    if (!persistSidecar)
+    {
+      // Ephemeral live buffer, or the caller (LiveExtractor) is managing its
+      // own decoupled flush cadence and this cycle isn't a flush cycle:
+      // skip the write entirely. The liveEventSink above already delivered
+      // the fresh events for in-memory display.
+      if (Sage.DBG) System.out.println("CaptionExtractionJob: persistSidecar=false, skipping sidecar write for " + sidecar);
+      return true;
     }
 
     try
