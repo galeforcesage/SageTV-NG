@@ -413,6 +413,22 @@ public class CaptionExtractionManager
       CaptionExtractionJob job = new CaptionExtractionJob(mf, recFile, sidecar, () -> {
         if (sidecar.isFile() && sidecar.length() > 8) ok[0] = true;
       });
+
+      // Piece C v1 (bootstrap-gap push): while no usable sidecar exists yet
+      // for this recording, wire the STPP-only live-event hook so any active
+      // VideoFrame playing this in-progress recording gets captions in
+      // memory before the first sidecar/SubtitleHandler shows up. Once a
+      // real sidecar exists, the existing reload-and-replace mechanism
+      // (fireListeners() below, already wired to
+      // VideoFrame.reloadExternalSubHandlerAndApplyCC) is what actually
+      // drives display from then on, so we stop bothering to wire this.
+      // VideoFrame.postCaptionEvents() is itself idempotent (no-ops once its
+      // subHandler is non-null), so this is safe even if called every cycle.
+      if (!(sidecar.isFile() && sidecar.length() > 8))
+      {
+        job.setLiveEventSink(events -> pushBootstrapCaptionEvents(mf, events));
+      }
+
       job.run();
       if (tmpScratch.exists()) tmpScratch.delete();
       if (ok[0])
@@ -420,6 +436,40 @@ public class CaptionExtractionManager
         try { mf.checkForSubtitles(); } catch (Throwable ignore) {}
         fireListeners();
       }
+    }
+  }
+
+  /**
+   * Piece C v1 helper: filters a raw coalesced CaptionEvent list down to the
+   * primary/default service only (the track a viewer would see by default;
+   * see {@link SrtCaptionWriter#isPrimaryService(String)}) and drops the
+   * final cue, which may still be revised (extended text/end time) on the
+   * next live extraction pass — pushing it now risks displaying a cue that
+   * then silently changes underneath the viewer. The remainder, if any, is
+   * pushed to every {@link sage.VideoFrame} currently playing {@code mf} via
+   * the additive {@code VideoFrame.postCaptionEvents} hook.
+   */
+  private static void pushBootstrapCaptionEvents(MediaFile mf, java.util.List<CaptionEvent> events)
+  {
+    if (events == null || events.size() < 2) return; // nothing safe to push yet (lag-by-one)
+
+    java.util.List<CaptionEvent> primary = new java.util.ArrayList<>();
+    for (int i = 0; i < events.size() - 1; i++)
+    {
+      CaptionEvent e = events.get(i);
+      if (SrtCaptionWriter.isPrimaryService(e.getService()))
+        primary.add(e);
+    }
+    if (primary.isEmpty()) return;
+
+    java.util.ArrayList vfs = sage.VideoFrame.getVFsUsingMediaFile(mf);
+    for (int i = 0; i < vfs.size(); i++)
+    {
+      try
+      {
+        ((sage.VideoFrame) vfs.get(i)).postCaptionEvents(primary);
+      }
+      catch (Throwable ignore) {}
     }
   }
 }

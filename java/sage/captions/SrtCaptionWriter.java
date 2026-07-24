@@ -102,6 +102,19 @@ public class SrtCaptionWriter implements CaptionWriter
   }
 
   /**
+   * Returns true when {@code service} belongs on the primary/default sidecar
+   * (see {@link #writeGrouped}) rather than a secondary-language one.
+   * Exposed for callers outside this class — e.g. the live bootstrap-push
+   * path in {@code CaptionExtractionManager} — that need to filter down to
+   * just the track a viewer would see by default before pushing events
+   * in-memory.
+   */
+  public static boolean isPrimaryService(String service)
+  {
+    return suffixFor(service) == null;
+  }
+
+  /**
    * Maps a {@link CaptionEvent#getService()} value to a sidecar filename
    * suffix, or {@code null} if it belongs in the primary sidecar. See
    * {@link #writeGrouped} for the convention.
