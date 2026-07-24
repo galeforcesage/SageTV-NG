@@ -47,6 +47,12 @@ import java.util.concurrent.Executors;
  *                                              progress (default 10000)
  *   caption_extraction/live_min_file_bytes   - skip live extract until source has at least N
  *                                              bytes on disk (default 524288)
+ *   caption_extraction/stpp_incremental      - use incremental (windowed) ATSC3 STPP tail
+ *                                              extraction during live recording instead of a
+ *                                              full re-scan each cycle (default true)
+ *   caption_extraction/stpp_window_overlap_seconds - seconds of overlap re-read before the
+ *                                              incremental cursor so no STPP packet is skipped
+ *                                              at a window boundary (default 4)
  */
 public class CaptionExtractionManager
 {
@@ -346,6 +352,14 @@ public class CaptionExtractionManager
     private final java.util.List<Runnable> listeners = new java.util.concurrent.CopyOnWriteArrayList<>();
     private volatile boolean stopped;
 
+    // Incremental ATSC3 STPP state (cursor + finalized accumulator). Reused
+    // across tail passes so cost stays proportional to newly-arrived data
+    // rather than the whole growing recording. Non-STPP files disable this and
+    // fall back to the full-rescan runOnce() path.
+    private final Atsc3StppExtractor.StppIncrementalState stppState =
+        new Atsc3StppExtractor.StppIncrementalState();
+    private boolean stppDisabled;
+
     LiveExtractor(MediaFile mf, File recFile)
     {
       this.mf = mf;
@@ -383,9 +397,15 @@ public class CaptionExtractionManager
           try { Thread.sleep(intervalMs); } catch (InterruptedException e) { return; }
           if (stopped) return;
           if (!recFile.exists() || recFile.length() < minBytes) continue;
-          runOnce();
+          // Cheap incremental STPP tail pass when applicable; otherwise the
+          // legacy full re-extract.
+          if (!tryIncrementalStppPass())
+            runOnce();
         }
         // Recording finished while we were running: do one final clean pass.
+        // Always a FULL extract so the on-disk sidecar is byte-identical to a
+        // one-shot extraction (the canonical serialization), regardless of
+        // whether the live passes were incremental.
         if (!stopped && recFile.exists())
         {
           // Brief delay to let the writer flush.
@@ -420,6 +440,79 @@ public class CaptionExtractionManager
         try { mf.checkForSubtitles(); } catch (Throwable ignore) {}
         fireListeners();
       }
+    }
+
+    /**
+     * Attempts a low-cost incremental ATSC3 STPP tail pass: extracts only the
+     * newly-arrived window of the STPP stream, appends any newly-finalized cues
+     * to the running accumulator, and rewrites the sidecar (finalized cues plus
+     * the current in-progress sentence) via the canonical
+     * {@link CaptionEvent}/{@link SrtCaptionWriter} serialization. Fires
+     * listeners on success so the player reloads the fresh sidecar.
+     *
+     * @return true if this file is STPP and the incremental pass handled it;
+     *         false if the file has no STPP stream (or incremental mode is
+     *         disabled), signalling the caller to use the full-rescan path.
+     */
+    private boolean tryIncrementalStppPass()
+    {
+      if (stppDisabled) return false;
+      if (!Sage.getBoolean("caption_extraction/stpp_incremental", true))
+      {
+        stppDisabled = true;
+        return false;
+      }
+
+      String ffmpeg = Sage.get("caption_extraction/ffmpeg_path", sage.FFMPEGTranscoder.getTranscoderPath());
+      Atsc3StppExtractor.IncrementalResult result;
+      try
+      {
+        result = Atsc3StppExtractor.extractIncremental(recFile, ffmpeg, stppState);
+      }
+      catch (Throwable t)
+      {
+        if (Sage.DBG) System.out.println("CaptionExtractionManager: incremental STPP pass failed, "
+            + "falling back to full extract: " + t);
+        stppDisabled = true;
+        return false;
+      }
+
+      if (stppState.hasNoStream())
+      {
+        // Not an ATSC3/STPP recording — let the legacy 608/708 path own it.
+        stppDisabled = true;
+        return false;
+      }
+
+      // Compose the display sidecar: all finalized cues plus the current
+      // provisional (still-rolling) sentence(s) for lowest latency. The final
+      // post-recording pass overwrites this with the canonical full extract.
+      java.util.List<CaptionEvent> display = stppState.finalizedSnapshot();
+      if (result != null && result.provisionalTail != null)
+        display.addAll(result.provisionalTail);
+      if (display.isEmpty())
+        return true; // STPP present but nothing decoded yet; keep waiting.
+
+      java.util.Collections.sort(display);
+      File sidecar = sidecarFor(recFile);
+      try
+      {
+        new SrtCaptionWriter().writeGrouped(display, sidecar);
+      }
+      catch (java.io.IOException e)
+      {
+        if (Sage.DBG) System.out.println("CaptionExtractionManager: failed to write incremental STPP sidecar "
+            + sidecar + ": " + e);
+        return true;
+      }
+
+      if (Sage.DBG) System.out.println("CaptionExtractionManager: incremental STPP pass wrote " + sidecar
+          + " (" + display.size() + " cues, +" + (result == null ? 0 : result.newlyFinalized.size())
+          + " newly finalized)");
+
+      try { mf.checkForSubtitles(); } catch (Throwable ignore) {}
+      fireListeners();
+      return true;
     }
   }
 }
