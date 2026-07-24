@@ -82,6 +82,11 @@ class CaptionExtractionJob implements Runnable
   {
     try
     {
+      if (runAtsc3StppIfPresent())
+      {
+        return;
+      }
+
       String ccextractor = Sage.get("caption_extraction/ccextractor_path", "ccextractor");
       boolean useCce = Sage.getBoolean("caption_extraction/use_ccextractor", true) && which(ccextractor);
       if (useCce)
@@ -97,6 +102,50 @@ class CaptionExtractionJob implements Runnable
     {
       try { if (onComplete != null) onComplete.run(); } catch (Throwable ignore) {}
     }
+  }
+
+  // ── ATSC 3.0 STPP/IMSC1 path ────────────────────────────────────────────
+
+  /**
+   * ATSC 3.0 recordings carry captions as a clean STPP/IMSC1 (TTML) data
+   * stream instead of 608/708 user data, so caption handling here is
+   * source-driven rather than codec-driven: if such a stream is present we
+   * extract it exclusively (via {@link Atsc3StppExtractor}) and skip the
+   * ccextractor/ffmpeg 608/708 passes entirely, since ATSC3 broadcasts carry
+   * STPP <em>instead of</em> 608/708, not in addition to it.
+   *
+   * @return true if an STPP stream was detected and handled (regardless of
+   *         whether any cues were actually written), false if no STPP
+   *         stream was found and the caller should fall back to the legacy
+   *         608/708 extraction path.
+   */
+  private boolean runAtsc3StppIfPresent()
+  {
+    String ffmpeg = Sage.get("caption_extraction/ffmpeg_path", sage.FFMPEGTranscoder.getTranscoderPath());
+    Atsc3StppExtractor.StppStream stream = Atsc3StppExtractor.detectStppStream(recFile, ffmpeg);
+    if (stream == null) return false;
+
+    if (Sage.DBG) System.out.println("CaptionExtractionJob: ATSC3 STPP stream detected (index=" +
+        stream.streamIndex + ", lang=" + stream.language + ") for " + recFile + "; using TTML pipeline");
+
+    List<CaptionEvent> events = Atsc3StppExtractor.extract(recFile, ffmpeg);
+    if (events.isEmpty())
+    {
+      if (Sage.DBG) System.out.println("CaptionExtractionJob: STPP stream present but no cues extracted for " + recFile);
+      return true;
+    }
+
+    try
+    {
+      new SrtCaptionWriter().write(events, sidecar);
+      if (Sage.DBG) System.out.println("CaptionExtractionJob: wrote " + sidecar + " (" + events.size() +
+          " cues, source=ATSC3_STPP)");
+    }
+    catch (IOException e)
+    {
+      if (Sage.DBG) System.out.println("CaptionExtractionJob: failed to write STPP sidecar " + sidecar + ": " + e);
+    }
+    return true;
   }
 
   // ── ccextractor path (preferred) ───────────────────────────────────────
