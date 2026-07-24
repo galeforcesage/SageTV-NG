@@ -16,8 +16,11 @@ import java.util.Locale;
 /**
  * A single normalized caption cue, the universal intermediate representation
  * that every caption source (CEA-608/708, ATSC3 STPP/IMSC1, external
- * WebVTT/SRT) is converted into before being written out as an SRT/VTT
- * sidecar. This decouples caption <em>rendering</em> from caption
+ * WebVTT/SRT) is converted into before being written out as an SRT
+ * sidecar (the only sidecar format SageTV-NG persists: captions are
+ * rendered server-side and pushed to every client as drawing ops, so a
+ * client-side format like VTT has no consumer). This decouples caption
+ * <em>rendering</em> from caption
  * <em>source</em>: nothing downstream of a {@code List<CaptionEvent>} needs
  * to know whether the cue originated from line-21 user data, a TTML document,
  * or an internet subtitle file.

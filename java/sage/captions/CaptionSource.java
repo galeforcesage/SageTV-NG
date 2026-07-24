@@ -13,9 +13,11 @@ package sage.captions;
  * Identifies where a {@link CaptionEvent} stream originated from. Caption
  * handling in SageTV-NG is source-driven rather than codec-driven: each
  * source has its own extraction pipeline, but all of them converge on the
- * same {@link CaptionEvent} model before being written out as SRT/VTT
- * sidecars, so playback and rendering code never needs to care which of
- * these produced a given cue.
+ * same {@link CaptionEvent} model before being written out as an SRT
+ * sidecar (SageTV-NG's sole sidecar format; captions render server-side and
+ * are pushed to clients as drawing ops, so no client-facing format like
+ * VTT is ever needed), so playback and rendering code never needs to care
+ * which of these produced a given cue.
  */
 public enum CaptionSource
 {

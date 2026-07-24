@@ -87,6 +87,16 @@ class CaptionExtractionJob implements Runnable
         return;
       }
 
+      // NOTE (future convergence, not done here): unlike the ATSC3/STPP path
+      // above, the 608/708 passes below write SRT directly (ccextractor/ffmpeg
+      // -> SRT) without ever going through CaptionEvent. To make CaptionEvent
+      // the canonical model for *every* source, these SRT outputs could be
+      // parsed back into CaptionEvent[] and re-serialized via
+      // SrtCaptionWriter. Deliberately deferred: this path has multiple
+      // interdependent passes (CC1, 708 svc1, CC2/Spanish, phantom-file
+      // cleanup) that are working and well-tested, and round-tripping them
+      // through CaptionEvent isn't required for the STPP deliverable, so it's
+      // left as-is to avoid destabilizing it.
       String ccextractor = Sage.get("caption_extraction/ccextractor_path", "ccextractor");
       boolean useCce = Sage.getBoolean("caption_extraction/use_ccextractor", true) && which(ccextractor);
       if (useCce)
