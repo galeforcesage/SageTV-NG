@@ -462,12 +462,15 @@ public class CaptionExtractionManager
     // already pushed to it. Read/written only from this extractor's own
     // thread (single-threaded access -- runOnce() is never invoked
     // concurrently with itself), so no external synchronization is needed.
-    // Pruned to the live eligible-viewer set every cycle in runOnce(), so
-    // it can never accumulate entries for VideoFrames that have since
-    // closed/changed files/disabled CC -- that pruning *is* the map-shrink
-    // guarantee (no separate close hook required, since the eligible set
-    // itself is derived fresh from ground truth every cycle).
-    private final java.util.Map<sage.VideoFrame, Double> perViewerHwm = new java.util.HashMap<>();
+    // Pruned to the live eligible-viewer set every cycle in runOnce()
+    // (perViewerHwm.keySet().retainAll(eligible)), so under normal
+    // operation it never holds an entry for a VideoFrame that's since
+    // closed/changed files/disabled CC. WeakHashMap is a belt-and-suspenders
+    // backstop on top of that explicit pruning: even if a VideoFrame were
+    // somehow dropped without going through a pruning cycle (e.g. this
+    // LiveExtractor itself gets torn down first), a VideoFrame key can
+    // still be GC'd and never pins this map's memory.
+    private final java.util.Map<sage.VideoFrame, Double> perViewerHwm = new java.util.WeakHashMap<>();
 
     // Most recent full coalesced event list (already capped to
     // live_buffer_max_cues), kept only for the zero-consumer durability
@@ -517,18 +520,22 @@ public class CaptionExtractionManager
           try { Thread.sleep(intervalMs); } catch (InterruptedException e) { return; }
           if (stopped) return;
           if (!recFile.exists() || recFile.length() < minBytes) continue;
-          runOnce();
+          runOnce(false);
         }
-        // Recording finished while we were running: do one final clean pass.
+        // Recording finished while we were running: do one final,
+        // forced-write pass so a keeper's on-disk SRT is authoritative and
+        // byte-identical to today's (pre-v2) behavior at recording-stop --
+        // it must NOT wait for the next periodic flush-cadence trigger,
+        // since this is the last cycle this LiveExtractor will ever run.
         // Skipped if runOnce() already stopped us (zero-consumer teardown,
-        // which already did its own durability flush) or if an explicit
-        // stopLiveExtraction() call set `stopped`.
+        // which already did its own forced durability flush) or if an
+        // explicit stopLiveExtraction() call set `stopped`.
         if (!stopped && recFile.exists())
         {
           // Brief delay to let the writer flush.
           long finalDelay = Math.max(0L, Sage.getLong("caption_extraction/post_recording_delay_ms", 5000L));
           try { Thread.sleep(finalDelay); } catch (InterruptedException ignore) {}
-          runOnce();
+          runOnce(true);
         }
       }
       finally
@@ -544,8 +551,17 @@ public class CaptionExtractionManager
      * per-viewer deltas, and apply the decoupled SRT-flush policy. See the
      * class javadoc for the full picture; this is the method where each
      * piece is actually wired together every cycle.
+     *
+     * @param forceFlush true only for the single final pass run right
+     *                    after the recording has stopped (see run()):
+     *                    bypasses the periodic flush-interval/cue-count
+     *                    cadence so a keeper's last write is authoritative
+     *                    or -- if a keeper never got its rare cadence
+     *                    trigger before recording-stop, its final on-disk
+     *                    SRT would otherwise be missing the last cycle's
+     *                    cues. Never overrides the ephemeral no-write rule.
      */
-    private void runOnce()
+    private void runOnce(boolean forceFlush)
     {
       // Piece C v2 Gap 1/2: poll the ground-truth eligible-viewer set fresh
       // every cycle. getVFsUsingMediaFile() already only returns
@@ -649,7 +665,8 @@ public class CaptionExtractionManager
         long flushIntervalMs = Math.max(1000L, Sage.getLong("caption_extraction/srt_flush_interval_ms", 30000L));
         int flushCueCount = Math.max(1, Sage.getInt("caption_extraction/srt_flush_cue_count", 50));
         long now = System.currentTimeMillis();
-        if (now - lastSrtFlushMs >= flushIntervalMs || (events.size() - cuesAtLastFlush) >= flushCueCount)
+        boolean cadenceHit = now - lastSrtFlushMs >= flushIntervalMs || (events.size() - cuesAtLastFlush) >= flushCueCount;
+        if (forceFlush || cadenceHit)
         {
           try
           {
@@ -662,7 +679,9 @@ public class CaptionExtractionManager
           catch (Throwable ignore) {}
         }
       }
-      // else: still ephemeral -- push-only, never write.
+      // else: still ephemeral -- push-only, never write, even if forceFlush
+      // (a never-promoted live buffer's final pass writes nothing, exactly
+      // as the ephemeral-suppression policy requires).
     }
 
     /**
