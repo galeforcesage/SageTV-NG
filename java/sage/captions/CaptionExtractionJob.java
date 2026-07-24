@@ -65,6 +65,18 @@ class CaptionExtractionJob implements Runnable
   // default; a no-op then.
   private volatile java.util.function.Consumer<List<CaptionEvent>> liveEventSink;
 
+  // Incremental-extraction integration: when set (STPP path only), the job
+  // calls Atsc3StppExtractor.extractIncremental(state) instead of the full
+  // extract(File, String) rescan, then reconstructs the same "complete
+  // authoritative list" shape every downstream consumer (liveEventSink,
+  // writeGrouped) expects by concatenating state.finalizedSnapshot() with
+  // the pass's provisional tail. Cost is proportional to newly-arrived data
+  // (a bounded ffmpeg -ss window), not total file length, while every line
+  // below this class stays unaware of the swap. Null (default) keeps the
+  // original full-rescan behavior -- the escape hatch used by every caller
+  // except CaptionExtractionManager.LiveExtractor's STPP branch.
+  private volatile Atsc3StppExtractor.StppIncrementalState incrementalState;
+
   // Piece C v2: when false, the STPP path skips its own writeGrouped() call
   // entirely (the caller — CaptionExtractionManager.LiveExtractor — owns
   // persistence timing instead: never for ephemeral live buffers, on a rare
@@ -99,6 +111,12 @@ class CaptionExtractionJob implements Runnable
   void setPersistSidecar(boolean persist)
   {
     this.persistSidecar = persist;
+  }
+
+  /** See {@link #incrementalState}. */
+  void setIncrementalState(Atsc3StppExtractor.StppIncrementalState state)
+  {
+    this.incrementalState = state;
   }
 
   void cancel()
@@ -170,7 +188,25 @@ class CaptionExtractionJob implements Runnable
     if (Sage.DBG) System.out.println("CaptionExtractionJob: ATSC3 STPP stream detected (index=" +
         stream.streamIndex + ", lang=" + stream.language + ") for " + recFile + "; using TTML pipeline");
 
-    List<CaptionEvent> events = Atsc3StppExtractor.extract(recFile, ffmpeg);
+    List<CaptionEvent> events;
+    Atsc3StppExtractor.StppIncrementalState st = incrementalState;
+    if (st != null)
+    {
+      // Incremental path: cost proportional to newly-arrived data. Every
+      // downstream consumer of `events` (liveEventSink below, writeGrouped
+      // if persistSidecar) expects the complete authoritative list, so
+      // reconstruct it from the state's finalized cues plus the current
+      // pass's still-open provisional tail rather than passing along just
+      // the newly-finalized delta.
+      Atsc3StppExtractor.IncrementalResult inc = Atsc3StppExtractor.extractIncremental(recFile, ffmpeg, st);
+      List<CaptionEvent> full = new ArrayList<>(st.finalizedSnapshot());
+      if (inc.provisionalTail != null) full.addAll(inc.provisionalTail);
+      events = full;
+    }
+    else
+    {
+      events = Atsc3StppExtractor.extract(recFile, ffmpeg);
+    }
     if (events.isEmpty())
     {
       if (Sage.DBG) System.out.println("CaptionExtractionJob: STPP stream present but no cues extracted for " + recFile);

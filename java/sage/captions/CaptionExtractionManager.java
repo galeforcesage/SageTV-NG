@@ -483,6 +483,18 @@ public class CaptionExtractionManager
     private long lastSrtFlushMs;
     private int cuesAtLastFlush;
 
+    // Incremental-extraction integration: one persistent cursor/accumulator
+    // for this extractor's entire life, so each cycle's ffmpeg pass costs
+    // roughly what's new since the last pass instead of rescanning the whole
+    // recording. Created with this LiveExtractor (first-viewer/CC-enable)
+    // and freed simply by falling out of scope on teardown (this instance is
+    // discarded when perViewerHwm/lastEvents are, and liveExtractors.remove
+    // in run()'s finally drops the last reference) -- no separate
+    // create/free bookkeeping needed. STPP-only; the 608/708 fallback path
+    // never touches this and stays on full-rescan regardless.
+    private final Atsc3StppExtractor.StppIncrementalState stppState =
+        new Atsc3StppExtractor.StppIncrementalState();
+
     LiveExtractor(MediaFile mf, File recFile)
     {
       this.mf = mf;
@@ -613,17 +625,22 @@ public class CaptionExtractionManager
       File sidecar = sidecarFor(recFile);
       final java.util.List<CaptionEvent>[] holder = new java.util.List[1];
       CaptionExtractionJob job = new CaptionExtractionJob(mf, recFile, sidecar, () -> {});
-      // Buffer-fill is extraction-method-agnostic: today Atsc3StppExtractor
-      // always does a full rescan, so `events` is the complete authoritative
-      // list every cycle. At final integration this is expected to be
-      // swapped for the incremental core's extractIncremental() (returning
-      // just the new tail against a held StppIncrementalState) -- everything
+      // Buffer-fill is extraction-method-agnostic: the job internally
+      // reconstructs "current authoritative full list" whether it's doing a
+      // full rescan or an incremental pass against stppState (see
+      // CaptionExtractionJob.runAtsc3StppIfPresent()) -- everything
       // downstream here (capping, per-viewer delta math, flush cadence)
-      // already treats `events` as "current authoritative full list" and
-      // does not need to change for that swap.
+      // already treats `events` as that full list and needed no changes for
+      // this swap.
       job.setLiveEventSink(events -> holder[0] = events);
       // This LiveExtractor -- not the job -- owns persistence timing.
       job.setPersistSidecar(false);
+      // Config escape hatch: default on, but flippable back to the original
+      // full-rescan-every-cycle behavior instantly (no code change, no
+      // restart of anything else) if the incremental path ever needs to be
+      // ruled out during the live smoke test.
+      if (Sage.getBoolean("caption_extraction/stpp_incremental", true))
+        job.setIncrementalState(stppState);
       job.run();
 
       java.util.List<CaptionEvent> events = holder[0];
