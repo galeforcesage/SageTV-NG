@@ -226,6 +226,115 @@ public class Atsc3StppExtractorIncrementalTest
         "the most recent finalized cue should be retained");
   }
 
+  // ── Media-time-0 anchor calibration ──────────────────────────────────
+
+  /**
+   * Silent-open case: the recording opens with several seconds of no captions,
+   * so the first cue-bearing packet is not packet 0. The calibrated anchor must
+   * land the first cue at its true media time N (from container PTS), NOT at 0.
+   */
+  @Test
+  public void calibratedAnchorLandsFirstCueAtMediaTimeN()
+  {
+    // Video starts at container time 100.0; STPP packets every 2s from there.
+    double videoStart = 100.0;
+    double[] pts = new double[16];
+    for (int i = 0; i < pts.length; i++) pts[i] = videoStart + i * 2.0;
+
+    // First caption doesn't appear until packet 3 → media time N = 6.0s.
+    int firstDoc = 3;
+    double N = pts[firstDoc] - videoStart; // 6.0
+    double firstBegin = 50000.0;            // absolute broadcast wall-clock
+    // Second cue-bearing doc one packet later, TTML clock advancing 1:1.
+    int secondDoc = 4;
+    double secondBegin = firstBegin + (pts[secondDoc] - pts[firstDoc]); // +2.0
+
+    Double offset = Atsc3StppExtractor.calibrateOffset(videoStart, pts, firstDoc, firstBegin, secondDoc, secondBegin);
+    assertNotNull(offset, "calibration should succeed for a clean 1:1 pairing");
+
+    // Drive one window through processWindowRaw with the calibrated offset and
+    // assert the first finalized cue sits at N, not 0.
+    Atsc3StppExtractor.StppIncrementalState state = new Atsc3StppExtractor.StppIncrementalState();
+    List<CaptionEvent> window = new ArrayList<>();
+    window.add(raw(firstBegin, firstBegin + 0.5, "first sentence"));
+    window.add(raw(secondBegin, secondBegin + 0.5, "second sentence"));
+    window.add(raw(secondBegin + 2.0, secondBegin + 2.5, "third sentence")); // closes the second
+
+    Atsc3StppExtractor.processWindowRaw(window, state, offset);
+    List<CaptionEvent> finalized = state.finalizedSnapshot();
+    assertFalse(finalized.isEmpty(), "expected at least one finalized cue");
+    assertEquals(finalized.get(0).getBeginSeconds(), N, EPS,
+        "calibrated anchor must place the first cue at its true media time, not 0");
+  }
+
+  /**
+   * Fallback case: when no calibrated offset is available (null), the anchor
+   * must reproduce today's min-begin behaviour exactly — first cue at 0.
+   */
+  @Test
+  public void nullCalibrationReproducesMinBeginBehaviour()
+  {
+    double firstBegin = 50000.0;
+    Atsc3StppExtractor.StppIncrementalState state = new Atsc3StppExtractor.StppIncrementalState();
+    List<CaptionEvent> window = new ArrayList<>();
+    window.add(raw(firstBegin, firstBegin + 0.5, "first sentence"));
+    window.add(raw(firstBegin + 2.0, firstBegin + 2.5, "second sentence"));
+    window.add(raw(firstBegin + 4.0, firstBegin + 4.5, "third sentence"));
+
+    Atsc3StppExtractor.processWindowRaw(window, state, null);
+    List<CaptionEvent> finalized = state.finalizedSnapshot();
+    assertFalse(finalized.isEmpty());
+    assertEquals(finalized.get(0).getBeginSeconds(), 0.0, EPS,
+        "min-begin fallback must place the earliest cue at 0 (historical behaviour)");
+    assertEquals(state.epochOffsetSeconds, firstBegin, EPS,
+        "fallback offset must equal the minimum raw begin");
+  }
+
+  /** Guard: a first cue-bearing doc beyond the probed packet window → reject (null). */
+  @Test
+  public void calibrationRejectsIndexBeyondProbedWindow()
+  {
+    double[] pts = new double[12];
+    for (int i = 0; i < pts.length; i++) pts[i] = i * 2.0;
+    // First cue-bearing doc index 20 is past the 12-packet probe window.
+    Double offset = Atsc3StppExtractor.calibrateOffset(0.0, pts, 20, 1000.0, null, null);
+    assertNull(offset, "out-of-window doc index must fall back to min-begin");
+  }
+
+  /** Guard: unavailable PTS (NaN) at the first cue-bearing doc → reject (null). */
+  @Test
+  public void calibrationRejectsNaNPts()
+  {
+    double[] pts = { 0.0, 2.0, Double.NaN, 6.0 };
+    Double offset = Atsc3StppExtractor.calibrateOffset(0.0, pts, 2, 1000.0, null, null);
+    assertNull(offset, "NaN PTS at the anchor packet must fall back to min-begin");
+  }
+
+  /** Guard: TTML clock not advancing 1:1 with container PTS → reject (null). */
+  @Test
+  public void calibrationRejectsNonUnitySlope()
+  {
+    double[] pts = new double[16];
+    for (int i = 0; i < pts.length; i++) pts[i] = i * 2.0;
+    // Second cue's begin advances 4s while PTS advances 2s → slope 2.0 (skew).
+    Double offset = Atsc3StppExtractor.calibrateOffset(0.0, pts, 0, 1000.0, 1, 1004.0);
+    assertNull(offset, "clock/PTS skew must invalidate the doc-packet pairing");
+  }
+
+  /** Guard: implausibly large implied media time → reject (null). */
+  @Test
+  public void calibrationRejectsImplausibleMediaTime()
+  {
+    double[] pts = { 0.0, 2.0, 4.0 };
+    // videoStart far in the future vs pts ⇒ media time hugely negative → reject;
+    // and the positive-but-absurd direction:
+    double[] ptsBig = { 100000.0, 100002.0 };
+    assertNull(Atsc3StppExtractor.calibrateOffset(0.0, ptsBig, 0, 1000.0, null, null),
+        "absurdly large media time must be rejected");
+    assertNull(Atsc3StppExtractor.calibrateOffset(50.0, pts, 0, 1000.0, null, null),
+        "strongly negative media time must be rejected");
+  }
+
   private static CaptionEvent find(List<CaptionEvent> list, CaptionEvent ref)
   {
     for (CaptionEvent e : list)

@@ -665,7 +665,16 @@ public final class Atsc3StppExtractor
       List<CaptionEvent> flat = parseTtmlPackets(raw, state.language);
       if (flat.isEmpty()) return empty;
 
-      return processWindowRaw(flat, state);
+      // On the first non-empty pass, try to anchor cue times to media-time 0
+      // (first video frame) via container PTS, rather than assuming the first
+      // caption coincides with media-0. Returns null (→ min-begin fallback) if
+      // PTS is unavailable or any pairing/plausibility guard fails.
+      Double calibrated = null;
+      if (!state.epochSet)
+      {
+        calibrated = calibrateAnchor(input, ffmpegPath, state.streamIndex, state.language, raw);
+      }
+      return processWindowRaw(flat, state, calibrated);
     }
     catch (IOException e)
     {
@@ -689,6 +698,24 @@ public final class Atsc3StppExtractor
    */
   static IncrementalResult processWindowRaw(List<CaptionEvent> rawWindowCues, StppIncrementalState state)
   {
+    return processWindowRaw(rawWindowCues, state, null);
+  }
+
+  /**
+   * As {@link #processWindowRaw(List, StppIncrementalState)}, but accepts a
+   * pre-computed media-time-0 anchor offset (see
+   * {@link #calibrateOffset(double, double[], int, double, Integer, Double)}).
+   * When {@code calibratedOffset} is non-null it is used verbatim as the frozen
+   * epoch anchor; when null the anchor falls back to the minimum begin in this
+   * batch (byte-identical to the historical behaviour, which assumes the first
+   * caption coincides with media-time 0).
+   *
+   * @param calibratedOffset media-time anchor offset in raw-TTML seconds, or
+   *                         null to use the min-begin approximation
+   */
+  static IncrementalResult processWindowRaw(List<CaptionEvent> rawWindowCues, StppIncrementalState state,
+      Double calibratedOffset)
+  {
     IncrementalResult empty = new IncrementalResult(
         java.util.Collections.<CaptionEvent>emptyList(),
         java.util.Collections.<CaptionEvent>emptyList());
@@ -699,7 +726,7 @@ public final class Atsc3StppExtractor
     // that same offset so normalized times match a full rescan.
     if (!state.epochSet)
     {
-      state.epochOffsetSeconds = findMinBegin(flat);
+      state.epochOffsetSeconds = (calibratedOffset != null) ? calibratedOffset : findMinBegin(flat);
       state.epochSet = true;
     }
     applyEpochOffset(flat, state.epochOffsetSeconds);
@@ -798,6 +825,231 @@ public final class Atsc3StppExtractor
     {
       CaptionEvent old = state.finalizedCues.remove(0);
       state.emittedKeys.remove(keyOf(old));
+    }
+  }
+
+  // ── Media-time-0 anchor calibration ──────────────────────────────────
+  //
+  // The TTML clock carried in STPP packets is an absolute broadcast wall-clock
+  // (observed ~17838h on real WGN captions), unrelated to media time. The
+  // container, however, carries real per-packet PTS on the STPP stream that
+  // share the video stream's start_time — but `ffmpeg -f data -c copy` strips
+  // those timestamps, so we recover them with a cheap, one-time ffprobe pass
+  // over just the first few packets. This lets us anchor cue times to
+  // media-time 0 (first video frame) instead of assuming the first caption
+  // coincides with media-0 (which shifts programs that open with several
+  // seconds of no captions early). If PTS is unavailable or any guard fails we
+  // fall back to the historical min-begin approximation (byte-identical output).
+
+  /** Number of leading STPP packets probed for PTS during anchor calibration. */
+  static final int MAX_CALIB_PROBE_PACKETS = 16;
+  /** Upper bound on a plausible first-caption media time (s); beyond this, reject calibration. */
+  static final double MAX_PLAUSIBLE_MEDIA_SECONDS = 6.0 * 3600.0;
+  /** Tolerance on the TTML-clock-vs-container-PTS slope (should be ~1.0). */
+  static final double CALIB_SLOPE_TOLERANCE = 0.05;
+
+  /**
+   * Attempts to compute a media-time-0 anchor offset for the first non-empty
+   * pass. Runs only when the window starts at byte 0 (so parsed-doc index i
+   * lines up with STPP packet index i). Returns null — meaning "use the
+   * min-begin fallback" — whenever ffprobe/PTS is unavailable or any pairing or
+   * plausibility guard in {@link #calibrateOffset} fails.
+   *
+   * @param raw the already-extracted first-window .bin (reused, no extra ffmpeg)
+   */
+  static Double calibrateAnchor(File input, String ffmpegPath, int streamIndex, String language, File raw)
+  {
+    try
+    {
+      String ffprobe = resolveFfprobePath(ffmpegPath);
+      if (ffprobe == null) return null;
+
+      Double videoStart = probeVideoStartSeconds(ffprobe, input);
+      if (videoStart == null) return null;
+
+      double[] pts = probePacketPtsWindow(ffprobe, input, streamIndex, MAX_CALIB_PROBE_PACKETS);
+      if (pts == null || pts.length == 0) return null;
+
+      double[] docs = firstTwoCueBearingDocs(raw, language);
+      if (docs == null) return null;
+
+      int firstIdx = (int) docs[0];
+      double firstBegin = docs[1];
+      Integer secondIdx = Double.isNaN(docs[2]) ? null : Integer.valueOf((int) docs[2]);
+      Double secondBegin = Double.isNaN(docs[3]) ? null : Double.valueOf(docs[3]);
+
+      Double offset = calibrateOffset(videoStart, pts, firstIdx, firstBegin, secondIdx, secondBegin);
+      if (Sage.DBG)
+      {
+        if (offset == null)
+          System.out.println("Atsc3StppExtractor: anchor calibration skipped (guard failed); "
+              + "assuming first-cue \u2248 media-0 (min-begin)");
+        else
+          System.out.println("Atsc3StppExtractor: anchor calibrated offset=" + offset
+              + " (videoStart=" + videoStart + ", firstCuePacket=" + firstIdx + ")");
+      }
+      return offset;
+    }
+    catch (Exception e)
+    {
+      if (Sage.DBG) System.out.println("Atsc3StppExtractor: anchor calibration error: " + e);
+      return null;
+    }
+  }
+
+  /**
+   * Pure media-time-0 anchor computation with robustness guards, factored out
+   * for unit testing. Given the video stream start, the leading STPP packet
+   * PTS window, and the (doc-index, raw-TTML-begin) of the first — and
+   * optionally second — cue-bearing document, returns the offset to subtract
+   * from raw TTML begins so the first cue lands at its true media time
+   * {@code pts[firstCueDocIndex] - videoStart}. Returns null (→ caller uses the
+   * min-begin fallback) when:
+   * <ul>
+   *   <li>the packet window is empty;</li>
+   *   <li>the first cue-bearing doc index is out of the probed window (guards
+   *       against an out-of-bounds pairing when the first cue is beyond the
+   *       probed packets) or its PTS is unavailable (NaN);</li>
+   *   <li>the implied media time is implausible (negative beyond jitter, or
+   *       absurdly large);</li>
+   *   <li>a second cue-bearing doc shows the TTML clock does not advance ~1:1
+   *       with container PTS (validates the doc\u2194packet pairing).</li>
+   * </ul>
+   */
+  static Double calibrateOffset(double videoStartSeconds, double[] packetPts,
+      int firstCueDocIndex, double firstCueBegin, Integer secondCueDocIndex, Double secondCueBegin)
+  {
+    if (packetPts == null || packetPts.length == 0) return null;
+    if (firstCueDocIndex < 0 || firstCueDocIndex >= packetPts.length) return null;
+
+    double firstPts = packetPts[firstCueDocIndex];
+    if (Double.isNaN(firstPts)) return null;
+
+    double mediaTime = firstPts - videoStartSeconds;
+    if (mediaTime < -0.5 || mediaTime > MAX_PLAUSIBLE_MEDIA_SECONDS) return null;
+    if (mediaTime < 0.0) mediaTime = 0.0; // clamp sub-frame negative jitter
+
+    if (secondCueDocIndex != null && secondCueBegin != null
+        && secondCueDocIndex.intValue() >= 0 && secondCueDocIndex.intValue() < packetPts.length
+        && secondCueDocIndex.intValue() != firstCueDocIndex
+        && !Double.isNaN(packetPts[secondCueDocIndex.intValue()]))
+    {
+      double dPts = packetPts[secondCueDocIndex.intValue()] - firstPts;
+      double dBegin = secondCueBegin.doubleValue() - firstCueBegin;
+      if (dPts <= 0.0) return null;
+      double slope = dBegin / dPts;
+      if (Math.abs(slope - 1.0) > CALIB_SLOPE_TOLERANCE) return null;
+    }
+
+    return firstCueBegin - mediaTime;
+  }
+
+  /** Video stream (v:0) start_time in seconds, or null if unavailable. */
+  private static Double probeVideoStartSeconds(String ffprobe, File input)
+  {
+    String out = runAndCapture(new String[] {
+        ffprobe, "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=start_time", "-of", "csv=p=0",
+        input.getAbsolutePath()
+    });
+    if (out == null) return null;
+    for (String line : out.split("\\R"))
+    {
+      line = line.trim();
+      if (line.isEmpty()) continue;
+      try { return Double.valueOf(Double.parseDouble(line)); }
+      catch (NumberFormatException ignore) {}
+    }
+    return null;
+  }
+
+  /**
+   * PTS (seconds) of the first {@code maxPackets} packets of the STPP stream,
+   * positionally indexed (index i == packet i). Non-numeric ("N/A") entries
+   * become NaN so indices stay aligned. Uses {@code -read_intervals "%+#N"} so
+   * only the leading packets are read — preserving the incremental SSD-read win.
+   */
+  private static double[] probePacketPtsWindow(String ffprobe, File input, int streamIndex, int maxPackets)
+  {
+    String out = runAndCapture(new String[] {
+        ffprobe, "-v", "error", "-select_streams", String.valueOf(streamIndex),
+        "-read_intervals", "%+#" + maxPackets,
+        "-show_entries", "packet=pts_time", "-of", "csv=p=0",
+        input.getAbsolutePath()
+    });
+    if (out == null) return null;
+    List<Double> vals = new ArrayList<>();
+    for (String line : out.split("\\R"))
+    {
+      line = line.trim();
+      if (line.isEmpty()) continue;
+      try { vals.add(Double.valueOf(Double.parseDouble(line))); }
+      catch (NumberFormatException e) { vals.add(Double.valueOf(Double.NaN)); }
+    }
+    double[] arr = new double[vals.size()];
+    for (int i = 0; i < arr.length; i++) arr[i] = vals.get(i).doubleValue();
+    return arr;
+  }
+
+  /**
+   * Scans the first-window raw .bin for the first two cue-bearing TTML
+   * documents, returning {@code {firstIdx, firstBegin, secondIdx, secondBegin}}
+   * where indices are document (== packet) positions and begins are raw TTML
+   * seconds. Missing second doc yields NaN for its two slots. Returns null when
+   * no cue-bearing document is found.
+   */
+  private static double[] firstTwoCueBearingDocs(File raw, String language) throws IOException
+  {
+    byte[] bytes = Files.readAllBytes(raw.toPath());
+    String content = new String(bytes, StandardCharsets.UTF_8);
+    List<String> docs = splitXmlDocuments(content);
+    DocumentBuilderFactory dbf = newHardenedDbf();
+
+    int firstIdx = -1;
+    double firstBegin = Double.NaN;
+    int secondIdx = -1;
+    double secondBegin = Double.NaN;
+    for (int i = 0; i < docs.size(); i++)
+    {
+      List<CaptionEvent> cues = parseOneDocString(dbf, docs.get(i), language);
+      if (cues.isEmpty()) continue;
+      double minB = Double.MAX_VALUE;
+      for (CaptionEvent c : cues) if (c.getBeginSeconds() < minB) minB = c.getBeginSeconds();
+      if (firstIdx < 0) { firstIdx = i; firstBegin = minB; }
+      else { secondIdx = i; secondBegin = minB; break; }
+    }
+    if (firstIdx < 0) return null;
+    return new double[] {
+        firstIdx, firstBegin,
+        secondIdx < 0 ? Double.NaN : secondIdx,
+        secondIdx < 0 ? Double.NaN : secondBegin
+    };
+  }
+
+  /** DocumentBuilderFactory hardened against XXE, matching {@link #parseTtmlPackets}. */
+  private static DocumentBuilderFactory newHardenedDbf()
+  {
+    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+    try { dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true); }
+    catch (Exception ignore) {}
+    dbf.setNamespaceAware(false);
+    dbf.setExpandEntityReferences(false);
+    return dbf;
+  }
+
+  private static List<CaptionEvent> parseOneDocString(DocumentBuilderFactory dbf, String doc, String language)
+  {
+    try
+    {
+      DocumentBuilder builder = dbf.newDocumentBuilder();
+      Document dom = builder.parse(new InputSource(new java.io.StringReader(doc)));
+      List<CaptionEvent> out = new ArrayList<>();
+      parseOneDocument(dom, language, out);
+      return out;
+    }
+    catch (Exception e)
+    {
+      return java.util.Collections.emptyList();
     }
   }
 
