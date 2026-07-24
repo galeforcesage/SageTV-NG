@@ -29,11 +29,25 @@ import java.util.Locale;
  */
 public final class CaptionEvent implements Comparable<CaptionEvent>
 {
+  /**
+   * Well-known {@link #getService()} values for CEA-608/CEA-708 sources
+   * (see {@code CaptionExtractionJob}'s ccextractor passes). ATSC3 STPP
+   * sources have no discrete channel/slot concept — captions are simply
+   * multiplexed per language — so that path uses the uppercased normalized
+   * language tag as the service instead (e.g. {@code "ENG"}, {@code "SPA"}).
+   * Either convention lets {@link SrtCaptionWriter} decide which sidecar a
+   * track belongs in without callers needing source-specific knowledge.
+   */
+  public static final String SERVICE_CC1 = "CC1";
+  public static final String SERVICE_CC2 = "CC2";
+  public static final String SERVICE_708_SVC1 = "708-1";
+
   private final String language;
   private final double beginSeconds;
   private final double endSeconds;
   private final String text;
   private final String region;
+  private final String service;
 
   private CaptionEvent(Builder b)
   {
@@ -42,6 +56,7 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
     this.endSeconds = b.endSeconds;
     this.text = b.text;
     this.region = b.region;
+    this.service = b.service;
   }
 
   /** BCP-47/ISO-639-ish language tag, e.g. "eng", "spa". May be {@code null}/"und" if unknown. */
@@ -74,6 +89,18 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
     return region;
   }
 
+  /**
+   * Source-driven channel/track tag (e.g. {@link #SERVICE_CC1},
+   * {@link #SERVICE_CC2}, {@link #SERVICE_708_SVC1}, or — for STPP —
+   * an uppercased language tag like {@code "ENG"}/{@code "SPA"}). Drives
+   * which sidecar file {@link SrtCaptionWriter#writeGrouped} routes a cue
+   * to; may be {@code null} if the source doesn't distinguish tracks.
+   */
+  public String getService()
+  {
+    return service;
+  }
+
   public double getDurationSeconds()
   {
     return endSeconds - beginSeconds;
@@ -89,7 +116,8 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
   public String toString()
   {
     return "CaptionEvent{[" + formatSrtTime(beginSeconds) + " --> " + formatSrtTime(endSeconds) +
-        "] lang=" + language + " region=" + region + " text=" + text.replace("\n", "\\n") + "}";
+        "] lang=" + language + " service=" + service + " region=" + region +
+        " text=" + text.replace("\n", "\\n") + "}";
   }
 
   /**
@@ -134,6 +162,7 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
     private double endSeconds;
     private String text = "";
     private String region;
+    private String service;
 
     public Builder language(String language)
     {
@@ -162,6 +191,12 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
     public Builder region(String region)
     {
       this.region = region;
+      return this;
+    }
+
+    public Builder service(String service)
+    {
+      this.service = service;
       return this;
     }
 
@@ -214,7 +249,7 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
       String bufferedText = current.text;
       String candidateText = e.text;
       boolean sameGroup = candidateText.startsWith(bufferedText) &&
-          sameLanguageAndRegion(current, e);
+          sameLanguageRegionAndService(current, e);
       if (sameGroup)
       {
         // Extend: same sentence continuing to roll up character-by-character.
@@ -231,11 +266,12 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
     return out;
   }
 
-  private static boolean sameLanguageAndRegion(Builder current, CaptionEvent e)
+  private static boolean sameLanguageRegionAndService(Builder current, CaptionEvent e)
   {
     boolean langOk = (current.language == null) ? e.language == null : current.language.equals(e.language);
     boolean regionOk = (current.region == null) ? e.region == null : current.region.equals(e.region);
-    return langOk && regionOk;
+    boolean serviceOk = (current.service == null) ? e.service == null : current.service.equals(e.service);
+    return langOk && regionOk && serviceOk;
   }
 
   private static Builder startFrom(CaptionEvent e)
@@ -245,7 +281,8 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
         .beginSeconds(e.beginSeconds)
         .endSeconds(e.endSeconds)
         .text(e.text)
-        .region(e.region);
+        .region(e.region)
+        .service(e.service);
   }
 
   private static CaptionEvent finish(Builder b)

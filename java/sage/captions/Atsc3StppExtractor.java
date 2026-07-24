@@ -384,6 +384,11 @@ public final class Atsc3StppExtractor
     String lang = root.getAttribute("xml:lang");
     if (lang == null || lang.isEmpty()) lang = fallbackLanguage;
     lang = normalizeLanguage(lang);
+    // STPP has no CC1/CC2/708-service concept — captions are simply
+    // multiplexed per language — so the uppercased language tag doubles as
+    // the CaptionEvent "service", giving SrtCaptionWriter.writeGrouped a
+    // uniform way to route both STPP and 608/708 tracks to sidecar files.
+    String service = lang.toUpperCase(Locale.ROOT);
 
     NodeList pNodes = dom.getElementsByTagName("p");
     for (int i = 0; i < pNodes.getLength(); i++)
@@ -412,6 +417,7 @@ public final class Atsc3StppExtractor
           .endSeconds(end)
           .text(text)
           .region(region)
+          .service(service)
           .build());
     }
   }
@@ -526,6 +532,7 @@ public final class Atsc3StppExtractor
           .endSeconds(e.getEndSeconds() - minBegin)
           .text(e.getText())
           .region(e.getRegion())
+          .service(e.getService())
           .build());
     }
   }
