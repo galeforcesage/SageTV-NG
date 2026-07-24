@@ -14,11 +14,16 @@ import java.io.IOException;
 import java.util.List;
 
 /**
- * Writes a normalized {@link CaptionEvent} stream out to a sidecar file in
- * some concrete subtitle format (SRT, VTT, ...). Implementations are
- * expected to write atomically (temp file + rename) so a partially written
- * sidecar never confuses a subtitle loader that is concurrently polling the
- * output path.
+ * Writes a normalized {@link CaptionEvent} stream out to a sidecar file.
+ * SageTV-NG renders captions server-side for every client (MiniClient,
+ * extenders, PlaceShifter, PWA) via {@code sage.media.sub.SubtitleHandler}
+ * and pushes the active cue as drawing ops, so SRT is the only sidecar
+ * format that has a consumer — this interface exists to keep the
+ * extraction pipeline decoupled from that one format, not to invite
+ * additional (e.g. client-side VTT) writers.
+ * Implementations are expected to write atomically (temp file + rename) so
+ * a partially written sidecar never confuses a subtitle loader that is
+ * concurrently polling the output path.
  */
 public interface CaptionWriter
 {
