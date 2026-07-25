@@ -642,6 +642,14 @@ public class CaptionExtractionManager
       perViewerHwm.keySet().retainAll(eligible);
 
       File sidecar = sidecarFor(recFile);
+      // Regression fix (Item A follow-up, see d8dcaad7): capture the
+      // sidecar's length *before* this cycle's job runs so the legacy
+      // 608/708 fallback below -- which writes the sidecar directly and
+      // bypasses `events`/liveEventSink entirely -- can still be detected
+      // and notified to listeners, restoring the source-agnostic
+      // fireListeners() behavior this class had prior to the Piece C v1
+      // STPP in-memory push rewrite.
+      long prevLen = sidecar.isFile() ? sidecar.length() : -1L;
       final java.util.List<CaptionEvent>[] holder = new java.util.List[1];
       CaptionExtractionJob job = new CaptionExtractionJob(mf, recFile, sidecar, () -> {});
       // Buffer-fill is extraction-method-agnostic: the job internally
@@ -674,6 +682,26 @@ public class CaptionExtractionManager
         // VideoFrame.reloadExternalSubHandlerAndApplyCC() is free to run its
         // normal sidecar-reload path instead of silently no-op'ing.
         liveCaptionPushActive.remove(mf.getID());
+
+        // Regression fix (Item A follow-up): the legacy 608/708 fallback
+        // wrote the sidecar directly above (outside `events`/liveEventSink),
+        // so detect that here by re-reading the sidecar's length. If it now
+        // has real content and it actually changed since before this cycle's
+        // job ran, this was a genuine new legacy extraction pass -- notify
+        // listeners exactly as the pre-Piece-C `runOnce()` did unconditionally
+        // for every successful sidecar write, so
+        // VideoFrame.reloadExternalSubHandlerAndApplyCC() actually re-reads
+        // the growing sidecar instead of the CC toggle silently no-op'ing.
+        // Skip the notification when the sidecar is unchanged/empty to avoid
+        // spamming a reload every idle cycle.
+        long curLen = sidecar.isFile() ? sidecar.length() : -1L;
+        if (curLen > 8 && curLen != prevLen)
+        {
+          if (Sage.DBG) System.out.println("CaptionExtractionManager: legacy sidecar updated (prevLen=" +
+              prevLen + " curLen=" + curLen + "), firing reload listeners for MF " + mf.getID());
+          try { mf.checkForSubtitles(); } catch (Throwable ignore) {}
+          fireListeners();
+        }
         return;
       }
 
