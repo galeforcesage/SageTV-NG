@@ -495,6 +495,18 @@ public class CaptionExtractionManager
     private final Atsc3StppExtractor.StppIncrementalState stppState =
         new Atsc3StppExtractor.StppIncrementalState();
 
+    // Lag-by-one staleness tracking (see pushDeltaToViewers): the tail cue
+    // is normally withheld until a following cue confirms it's final, but a
+    // stream that goes quiet (or only ever produces a single cue before
+    // teardown) would then withhold that cue forever. Track the current
+    // candidate tail's identity + how long it's been unchanged so it can be
+    // released once it's old enough that no further revision is expected.
+    private String pendingTailKey;
+    private long pendingTailFirstSeenMs;
+    // Set once at the top of run(); read by pushDeltaToViewers to size the
+    // staleness threshold relative to this extractor's own cycle cadence.
+    private volatile long intervalMs = 10000L;
+
     LiveExtractor(MediaFile mf, File recFile)
     {
       this.mf = mf;
@@ -522,17 +534,27 @@ public class CaptionExtractionManager
     @Override
     public void run()
     {
-      long intervalMs = Math.max(2000L, Sage.getLong("caption_extraction/live_interval_ms", 10000L));
+      intervalMs = Math.max(2000L, Sage.getLong("caption_extraction/live_interval_ms", 10000L));
       long minBytes = Math.max(0L, Sage.getLong("caption_extraction/live_min_file_bytes", 524288L));
       final int id = mf.getID();
       try
       {
+        // Run the very first cycle immediately (subject only to the
+        // min-file-bytes gate) instead of sleeping a full interval first.
+        // Live-buffer MediaFiles for some capture methods (e.g. ATSC3
+        // HTTP-pull's provisional-format-refinement/subfile churn) can be
+        // torn down and replaced with a fresh MediaFile id within a single
+        // interval window; sleeping first meant a fast-churning MediaFile
+        // could have its LiveExtractor start and stop without runOnce()
+        // ever executing even once, so the STPP in-memory push never got a
+        // chance to run at all. Subsequent cycles still wait the full
+        // interval as before.
         while (!stopped && mf.isRecording())
         {
-          try { Thread.sleep(intervalMs); } catch (InterruptedException e) { return; }
+          if (recFile.exists() && recFile.length() >= minBytes)
+            runOnce(false);
           if (stopped) return;
-          if (!recFile.exists() || recFile.length() < minBytes) continue;
-          runOnce(false);
+          try { Thread.sleep(intervalMs); } catch (InterruptedException e) { return; }
         }
         // Recording finished while we were running: do one final,
         // forced-write pass so a keeper's on-disk SRT is authoritative and
@@ -724,11 +746,35 @@ public class CaptionExtractionManager
      * VideoFrame starts at HWM 0 and gets the full backfill of everything
      * extracted so far; an already-caught-up viewer only gets new cues.
      * Always lags the single latest cue by one, since a full-rescan pass
-     * may still revise it (extend text/end time) on the very next cycle.
+     * may still revise it (extend text/end time) on the very next cycle --
+     * UNLESS that tail cue has already sat unchanged for at least twice
+     * this extractor's cycle interval, in which case no further revision
+     * is expected and it's released too. Without this, a stream that only
+     * ever produces a single coalesced cue (or goes quiet after one) would
+     * withhold that cue forever: safeCount would stay 0 and
+     * postCaptionEvents would never fire for it, exactly producing "showed
+     * once [via some other path], then never again".
      */
     private void pushDeltaToViewers(java.util.List<CaptionEvent> events, java.util.List<sage.VideoFrame> eligible)
     {
       int safeCount = events.size() - 1; // lag-by-one
+      if (!events.isEmpty())
+      {
+        CaptionEvent tail = events.get(events.size() - 1);
+        String key = tail.getBeginSeconds() + "|" + tail.getEndSeconds() + "|" + tail.getText();
+        long now = System.currentTimeMillis();
+        if (key.equals(pendingTailKey))
+        {
+          long staleAfterMs = Math.max(4000L, intervalMs * 2);
+          if (now - pendingTailFirstSeenMs >= staleAfterMs)
+            safeCount = events.size(); // tail has been stable long enough: release it too
+        }
+        else
+        {
+          pendingTailKey = key;
+          pendingTailFirstSeenMs = now;
+        }
+      }
       if (safeCount <= 0) return;
 
       for (sage.VideoFrame vf : eligible)
