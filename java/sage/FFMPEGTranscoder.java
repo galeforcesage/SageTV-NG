@@ -2069,8 +2069,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
       {
         boolean isAc4Source = sourceFormat != null &&
             sage.media.format.MediaFormat.AC4.equals(sourceFormat.getPrimaryAudioFormat());
-        String defaultAsync = isAc4Source ? "0" : "1";
-        String asyncVal = Sage.get("ffmpeg/aresample_async", defaultAsync);
+        String asyncVal = isAc4Source
+            ? Sage.get("ffmpeg/aresample_async_ac4", Sage.get("ffmpeg/aresample_async", "1000"))
+            : Sage.get("ffmpeg/aresample_async", "1");
         int acIdx = xcodeParamsVec.indexOf("-ac");
         boolean isDownmixToStereo = acIdx >= 0 && acIdx + 1 < xcodeParamsVec.size() &&
             "2".equals(xcodeParamsVec.get(acIdx + 1));
@@ -2098,8 +2099,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
       {
         boolean isAc4Source = sourceFormat != null &&
             sage.media.format.MediaFormat.AC4.equals(sourceFormat.getPrimaryAudioFormat());
-        String defaultAsync = isAc4Source ? "0" : "1";
-        String asyncVal = Sage.get("ffmpeg/aresample_async", defaultAsync);
+        String asyncVal = isAc4Source
+            ? Sage.get("ffmpeg/aresample_async_ac4", Sage.get("ffmpeg/aresample_async", "1000"))
+            : Sage.get("ffmpeg/aresample_async", "1");
         int acIdx = xcodeParamsVec.indexOf("-ac");
         boolean isDownmixToStereo = acIdx >= 0 && acIdx + 1 < xcodeParamsVec.size() &&
             "2".equals(xcodeParamsVec.get(acIdx + 1));

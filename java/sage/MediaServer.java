@@ -164,12 +164,15 @@ public class MediaServer implements Runnable
     // browserhd_copyv  -- pwa_mse AUDIO_TRANSCODE: copy the decodable H.264 video, transcode
     //   only the unplayable audio (e.g. AC-3/E-AC-3 from cable/QAM H.264, IPTV, library
     //   mkv/mp4) to AAC-LC. No needless video re-encode.
+    //   -frag_duration 500000: force fragments every 500ms to keep audio/video tightly
+    //   interleaved (frag_keyframe alone waits for source keyframes, 2-4s on ATSC3 HEVC,
+    //   letting audio fragments race ahead and causing A/V desync on buffer underruns).
     Sage.put(XCODE_QUALITIES_PROPERTY_ROOT + "browserhd_copyv",
-        "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof -c:v copy -tag:v hvc1 -acodec aac -ac 2 -ar 48000 -b:a 128k");
+        "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof -frag_duration 500000 -c:v copy -tag:v hvc1 -acodec aac -ac 2 -ar 48000 -b:a 128k");
     // browserhd_remux -- pwa_mse REMUX: codecs already decodable by the browser, only the
     //   container needs changing. Copy video + audio into fragmented MP4. Zero transcode.
     Sage.put(XCODE_QUALITIES_PROPERTY_ROOT + "browserhd_remux",
-        "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof -c:v copy -c:a copy");
+        "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof -frag_duration 500000 -c:v copy -c:a copy");
     // mpeg2tsremux -- TV/AVPlay REMUX: copy video + audio into MPEG-TS (Chromium MSE cannot
     //   demux TS, so this is the TV surface's remux, never the browser's). Server-native now.
     Sage.put(XCODE_QUALITIES_PROPERTY_ROOT + "mpeg2tsremux",
