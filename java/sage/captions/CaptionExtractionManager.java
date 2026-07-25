@@ -618,7 +618,6 @@ public class CaptionExtractionManager
         return;
       }
 
-      liveCaptionPushActive.add(mf.getID());
       // Shrink the per-viewer map to exactly today's eligible set.
       perViewerHwm.keySet().retainAll(eligible);
 
@@ -644,7 +643,25 @@ public class CaptionExtractionManager
       job.run();
 
       java.util.List<CaptionEvent> events = holder[0];
-      if (events == null) return;
+      if (events == null)
+      {
+        // This cycle produced no in-memory STPP push (either it took the
+        // legacy 608/708 ffmpeg/subcc fallback, which writes its own sidecar
+        // and expects VideoFrame's normal reload to pick it up, or it's an
+        // STPP file with no cues extracted yet). Either way, nothing is
+        // being pushed to viewers right now, so the single-owner gate must
+        // not be held for this mf -- clear it so
+        // VideoFrame.reloadExternalSubHandlerAndApplyCC() is free to run its
+        // normal sidecar-reload path instead of silently no-op'ing.
+        liveCaptionPushActive.remove(mf.getID());
+        return;
+      }
+
+      // Genuine STPP cues were delivered via the in-memory push this cycle:
+      // claim single-owner status so VideoFrame's legacy reload backs off
+      // and doesn't install a competing sidecar-backed handler that would
+      // fight (or silently lose to) this push's own append cadence.
+      liveCaptionPushActive.add(mf.getID());
 
       // Safety-ceiling backstop (drop-oldest) against pathological 24/7 live
       // sessions, independent of the lifecycle teardown above.
