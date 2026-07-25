@@ -599,6 +599,17 @@ public final class Atsc3StppExtractor
     {
       return new ArrayList<>(finalizedCues);
     }
+
+    /**
+     * Count of cues finalized so far, without copying the list. A finalized
+     * cue's begin/end/text is closed for good -- no later incremental pass
+     * can ever revise it -- so callers can use this as a cheap, exact
+     * "safe to deliver now" cursor instead of a time-based heuristic.
+     */
+    public int finalizedCount()
+    {
+      return finalizedCues.size();
+    }
   }
 
   /** Result of one incremental pass. */

@@ -495,17 +495,15 @@ public class CaptionExtractionManager
     private final Atsc3StppExtractor.StppIncrementalState stppState =
         new Atsc3StppExtractor.StppIncrementalState();
 
-    // Lag-by-one staleness tracking (see pushDeltaToViewers): the tail cue
-    // is normally withheld until a following cue confirms it's final, but a
-    // stream that goes quiet (or only ever produces a single cue before
-    // teardown) would then withhold that cue forever. Track the current
-    // candidate tail's identity + how long it's been unchanged so it can be
-    // released once it's old enough that no further revision is expected.
-    private String pendingTailKey;
-    private long pendingTailFirstSeenMs;
-    // Set once at the top of run(); read by pushDeltaToViewers to size the
-    // staleness threshold relative to this extractor's own cycle cadence.
+    // Set once at the top of run(); used only to size the sleep between
+    // cycles.
     private volatile long intervalMs = 10000L;
+
+    // Lag-by-one tail-release tracking (see pushDeltaToViewers): identity
+    // key of the tail cue as of the last cycle it was seen. Single-threaded
+    // field -- runOnce() (hence pushDeltaToViewers()) is only ever invoked
+    // from this extractor's own run() loop, never concurrently.
+    private String pendingTailKey;
 
     LiveExtractor(MediaFile mf, File recFile)
     {
@@ -745,15 +743,23 @@ public class CaptionExtractionManager
      * already received (Gap 1 fix): a newly-attached/late-CC-enabled
      * VideoFrame starts at HWM 0 and gets the full backfill of everything
      * extracted so far; an already-caught-up viewer only gets new cues.
-     * Always lags the single latest cue by one, since a full-rescan pass
-     * may still revise it (extend text/end time) on the very next cycle --
-     * UNLESS that tail cue has already sat unchanged for at least twice
-     * this extractor's cycle interval, in which case no further revision
-     * is expected and it's released too. Without this, a stream that only
-     * ever produces a single coalesced cue (or goes quiet after one) would
-     * withhold that cue forever: safeCount would stay 0 and
-     * postCaptionEvents would never fire for it, exactly producing "showed
-     * once [via some other path], then never again".
+     * <p>
+     * Lags the single latest (tail) cue by one, since either extraction mode
+     * may still revise it on the very next pass: a full rescan can extend a
+     * still-open sentence's text/end time, and the incremental path's
+     * `provisionalTail` is explicitly still-open by definition. The tail is
+     * released once a SUBSEQUENT extraction cycle has actually completed and
+     * reproduced the exact same (begin, end, text) for it -- i.e. that
+     * cycle's fresh pass over the source had the opportunity to revise the
+     * cue and didn't, so it cannot be revised any further. This is a cursor
+     * on extraction progress, not a wall-clock timer: it needs no mapping
+     * between media time and real time (which would be fragile for a live
+     * stream's anchor), and it naturally scales with however often runOnce()
+     * actually executes. Without this, a stream that only ever produces a
+     * single coalesced cue (or goes quiet after one) would withhold that cue
+     * forever: safeCount would stay 0 and postCaptionEvents would never fire
+     * for it, exactly producing "showed once [via some other path], then
+     * never again".
      */
     private void pushDeltaToViewers(java.util.List<CaptionEvent> events, java.util.List<sage.VideoFrame> eligible)
     {
@@ -762,17 +768,17 @@ public class CaptionExtractionManager
       {
         CaptionEvent tail = events.get(events.size() - 1);
         String key = tail.getBeginSeconds() + "|" + tail.getEndSeconds() + "|" + tail.getText();
-        long now = System.currentTimeMillis();
         if (key.equals(pendingTailKey))
         {
-          long staleAfterMs = Math.max(4000L, intervalMs * 2);
-          if (now - pendingTailFirstSeenMs >= staleAfterMs)
-            safeCount = events.size(); // tail has been stable long enough: release it too
+          // A prior cycle already saw this exact tail and a subsequent
+          // extraction pass (this one) has now completed without revising
+          // it -- it cannot change further, safe to release even though
+          // it's the only/last cue.
+          safeCount = events.size();
         }
         else
         {
           pendingTailKey = key;
-          pendingTailFirstSeenMs = now;
         }
       }
       if (safeCount <= 0) return;
