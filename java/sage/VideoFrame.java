@@ -4289,11 +4289,31 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       if (rec == null) return;
       java.io.File sidecar = sage.captions.CaptionExtractionManager.sidecarFor(rec);
       // If the sidecar already exists on disk but the handler hasn't picked
-      // it up yet (e.g. it was written after playback started), reload now.
-      if (sidecar != null && sidecar.isFile() && sidecar.length() > 0)
+      // it up yet (e.g. it was written after playback started), reload now
+      // so any already-extracted cues show up immediately.
+      boolean sidecarExists = sidecar != null && sidecar.isFile() && sidecar.length() > 0;
+      if (sidecarExists)
       {
         reloadExternalSubHandlerAndApplyCC(ccState);
-        return;
+        if (!mf.isRecording())
+        {
+          // Completed recording: the sidecar is final and authoritative --
+          // nothing more will ever be extracted for this file, so we're done.
+          return;
+        }
+        // In-progress (live/timeshift) recording: the sidecar we just
+        // reloaded may be a stale/partial snapshot -- e.g. left over from an
+        // earlier viewing of this same in-progress file (its name is keyed
+        // off the recording, not the playback session), or written before
+        // the bulk of the show's dialogue captions ever aired. Bugfix: this
+        // used to `return` here unconditionally, which meant re-enabling CC
+        // on a live recording that already had *any* sidecar (even a stale
+        // one from a prior test/viewing) would show only that stale content
+        // forever and never attach to the live tail-extract loop below, so
+        // new captions from the ongoing broadcast were silently never
+        // extracted or displayed. Fall through so we still (re)attach to the
+        // live loop -- ensureExtractionRunning() dedupes per-MediaFile, so
+        // this is a cheap no-op if a loop is already running for it.
       }
       if (Sage.DBG) System.out.println("VideoFrame: requesting on-demand CC extraction for " + mf + " (live=" + mf.isRecording() + ")");
       sage.captions.CaptionExtractionManager.getInstance().ensureExtractionRunning(mf, () -> {
