@@ -117,6 +117,74 @@ public class FFMPEGTranscoderTest
     }
   }
 
+  @Test
+  public void testIsVideoCopyToFmp4() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder transcoder = new FFMPEGTranscoder();
+
+    // browserhd_copyv (HEVC/H.264 video-copy + audio transcode into fMP4)
+    transcoder.xcodeParams = "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof"
+        + " -frag_duration 500000 -c:v copy -tag:v hvc1 -acodec aac -ac 2 -ar 48000 -b:a 128k";
+    assertTrue(transcoder.isVideoCopyToFmp4());
+
+    // browserhd_remux (video + audio copy into fMP4)
+    transcoder.xcodeParams = "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof"
+        + " -frag_duration 500000 -c:v copy -c:a copy";
+    assertTrue(transcoder.isVideoCopyToFmp4());
+
+    // legacy spelling
+    transcoder.xcodeParams = "-f mp4 -vcodec copy -acodec aac";
+    assertTrue(transcoder.isVideoCopyToFmp4());
+
+    // TS copy (not fMP4) -> false
+    transcoder.xcodeParams = "-f mpegts -c:v copy -c:a copy -copyts";
+    assertFalse(transcoder.isVideoCopyToFmp4());
+
+    // fMP4 but video re-encode -> false (encoder supplies dimensions)
+    transcoder.xcodeParams = "-f mp4 -c:v libx264 -acodec aac";
+    assertFalse(transcoder.isVideoCopyToFmp4());
+
+    transcoder.xcodeParams = null;
+    assertFalse(transcoder.isVideoCopyToFmp4());
+  }
+
+  @Test
+  public void testMaybeStripInapplicableHvc1Tag() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder transcoder = new FFMPEGTranscoder();
+
+    // Non-HEVC (H.264) source: the hvc1 tag must be stripped (ffmpeg would abort).
+    transcoder.sourceFormat = new ContainerFormat();
+    VideoFormat h264 = new VideoFormat();
+    h264.setFormatName(sage.media.format.MediaFormat.H264);
+    transcoder.sourceFormat.setStreamFormats(new BitstreamFormat[] {h264});
+
+    java.util.ArrayList params = new java.util.ArrayList(java.util.Arrays.asList(
+        "-c:v", "copy", "-tag:v", "hvc1", "-acodec", "aac"));
+    transcoder.maybeStripInapplicableHvc1Tag(params);
+    assertFalse(params.contains("-tag:v"), "-tag:v flag should be removed for H.264 source");
+    assertFalse(params.contains("hvc1"), "hvc1 value should be removed for H.264 source");
+    // The rest of the command is preserved.
+    assertTrue(params.contains("-c:v"));
+    assertTrue(params.contains("copy"));
+    assertTrue(params.contains("-acodec"));
+    assertTrue(params.contains("aac"));
+
+    // HEVC source: the tag is correct and must be left untouched.
+    transcoder.sourceFormat = new ContainerFormat();
+    VideoFormat hevc = new VideoFormat();
+    hevc.setFormatName(sage.media.format.MediaFormat.HEVC);
+    transcoder.sourceFormat.setStreamFormats(new BitstreamFormat[] {hevc});
+
+    java.util.ArrayList hevcParams = new java.util.ArrayList(java.util.Arrays.asList(
+        "-c:v", "copy", "-tag:v", "hvc1", "-acodec", "aac"));
+    transcoder.maybeStripInapplicableHvc1Tag(hevcParams);
+    assertTrue(hevcParams.contains("-tag:v"), "-tag:v must be kept for HEVC source");
+    assertTrue(hevcParams.contains("hvc1"), "hvc1 must be kept for HEVC source");
+  }
+
     private void expectSize(int[] sizes, int w, int h)
   {
     assertEquals(sizes[0], w);
