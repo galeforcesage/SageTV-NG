@@ -190,4 +190,41 @@ public class FFMPEGTranscoderTest
     assertEquals(sizes[0], w);
     assertEquals(sizes[1], h);
   }
+
+  @Test
+  public void testVideoCopyKeyframeAlignSeek() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    Sage.remove("ffmpeg/videocopy_kf_align_seek");
+    FFMPEGTranscoder transcoder = new FFMPEGTranscoder();
+
+    // Video-copy into fMP4 with no pre-existing seek: a small keyframe-align seek
+    // is emitted so the orphan pre-keyframe audio is dropped (fixes the ~2s A/V
+    // desync on a mid-GOP tune-in).
+    transcoder.xcodeParams = "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof"
+        + " -frag_duration 500000 -c:v copy -tag:v hvc1 -acodec aac -ac 2 -ar 48000 -b:a 128k";
+    transcoder.transcodeStartSeekTime = 0;
+    assertEquals(transcoder.videoCopyKeyframeAlignSeek(), "0.1");
+
+    // Already seeking elsewhere: don't add a second seek.
+    transcoder.transcodeStartSeekTime = 30000;
+    assertNull(transcoder.videoCopyKeyframeAlignSeek());
+    transcoder.transcodeStartSeekTime = 0;
+
+    // Not a video-copy fMP4 path (full transcode / TS remux): no keyframe-align seek.
+    transcoder.xcodeParams = "-f mp4 -c:v libx264 -acodec aac";
+    assertNull(transcoder.videoCopyKeyframeAlignSeek());
+    transcoder.xcodeParams = "-f mpegts -c:v copy -c:a copy -copyts";
+    assertNull(transcoder.videoCopyKeyframeAlignSeek());
+
+    // Disabled via property (0 / non-positive) -> no seek.
+    transcoder.xcodeParams = "-f mp4 -c:v copy -acodec aac";
+    Sage.put("ffmpeg/videocopy_kf_align_seek", "0");
+    assertNull(transcoder.videoCopyKeyframeAlignSeek());
+
+    // Custom positive value is honored verbatim.
+    Sage.put("ffmpeg/videocopy_kf_align_seek", "0.25");
+    assertEquals(transcoder.videoCopyKeyframeAlignSeek(), "0.25");
+    Sage.remove("ffmpeg/videocopy_kf_align_seek");
+  }
 }

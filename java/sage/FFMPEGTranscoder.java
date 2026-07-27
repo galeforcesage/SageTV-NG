@@ -1094,6 +1094,32 @@ public class FFMPEGTranscoder implements TranscodeEngine
     }
   }
 
+  /**
+   * The keyframe-align input seek value (seconds, as a string) for the video-copy
+   * fMP4 path, or {@code null} when no such seek should be added. On a live mid-GOP
+   * tune-in the audio decodes from the stream-join point while the COPIED video can
+   * only begin at the first keyframe (2-4s later on ATSC3 HEVC); ffmpeg emits the
+   * leading pre-keyframe audio and movenc ({@code +empty_moov}) zeroes each track's
+   * first-fragment {@code tfdt} independently, so that ~1-GOP offset is dropped and
+   * audio plays ~2s ahead of video. A small keyframe-snapped input seek
+   * ({@code -ss <v> -noaccurate_seek}) discards the orphan pre-keyframe audio so both
+   * tracks share the first video keyframe as their common origin;
+   * {@code -noaccurate_seek} snaps to the keyframe (not the exact time) so an
+   * already-aligned stream loses nothing. Only applied for {@link #isVideoCopyToFmp4()}
+   * and when we are not already seeking ({@link #transcodeStartSeekTime} == 0).
+   * Configurable via {@code ffmpeg/videocopy_kf_align_seek}; set to {@code 0} (or a
+   * non-positive/invalid value) to disable.
+   */
+  String videoCopyKeyframeAlignSeek()
+  {
+    if (!isVideoCopyToFmp4()) return null;
+    if (transcodeStartSeekTime != 0) return null;
+    String kfAlign = Sage.get("ffmpeg/videocopy_kf_align_seek", "0.1");
+    double kfAlignVal;
+    try { kfAlignVal = Double.parseDouble(kfAlign); } catch (NumberFormatException e) { return null; }
+    return kfAlignVal > 0 ? kfAlign : null;
+  }
+
   public void startTranscode() throws java.io.IOException
   {
     xcodeBufferBaseNum = 0;
@@ -1295,6 +1321,38 @@ public class FFMPEGTranscoder implements TranscodeEngine
       if (Sage.DBG) System.out.println("FFMPEGTranscoder: active file — probesize=" + probeSize
           + " analyzeduration=" + analyzeDur + (videoCopyFmp4 ? " (video-copy fMP4: enlarged so"
           + " source parameter sets/dimensions are parsed before the empty_moov init segment)" : ""));
+
+      // A/V-sync on the video-copy fMP4 path: on a live mid-GOP tune-in the audio
+      // decodes from the stream-join point, but the COPIED video can only begin at
+      // the first keyframe — 2-4s later on ATSC3 HEVC. ffmpeg emits that leading
+      // pre-keyframe audio, and movenc (+empty_moov+default_base_moof) zeroes EACH
+      // track's first-fragment baseMediaDecodeTime (tfdt) independently, so the
+      // ~1-GOP gap between audio-start and the first video keyframe is dropped: the
+      // keyframe is stamped at media-time 0 alongside audio that is really ~2s
+      // older, and the leading audio-only fragments let the client start audio
+      // before any video — the reported "audio ~2s ahead of video". A small
+      // keyframe-snapped input seek makes ffmpeg discard the orphan pre-keyframe
+      // audio so BOTH tracks share the first video keyframe as their common origin.
+      // -noaccurate_seek snaps to the keyframe (not the exact -ss time), so an
+      // already-aligned stream (keyframe at/near the start) loses nothing and no
+      // NEW mid-GOP desync is introduced — verified: aligned input keeps all
+      // samples, tune-in input drops only the orphan audio. Costs no extra startup
+      // latency (+frag_keyframe won't flush the first fragment until the keyframe
+      // anyway). Only applied when we aren't already seeking (transcodeStartSeekTime
+      // == 0). Set ffmpeg/videocopy_kf_align_seek=0 to disable.
+      if (videoCopyFmp4 && transcodeStartSeekTime == 0)
+      {
+        String kfAlign = videoCopyKeyframeAlignSeek();
+        if (kfAlign != null)
+        {
+          xcodeParamsVec.add("-ss");
+          xcodeParamsVec.add(kfAlign);
+          xcodeParamsVec.add("-noaccurate_seek");
+          if (Sage.DBG) System.out.println("FFMPEGTranscoder: video-copy fMP4 — adding -ss " + kfAlign
+              + " -noaccurate_seek to anchor audio to the first video keyframe (drops pre-keyframe"
+              + " orphan audio that would otherwise play ~1 GOP ahead of video on a mid-GOP tune-in)");
+        }
+      }
     }
 
     xcodeParamsVec.add("-i");
