@@ -791,10 +791,27 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
           // 7/25/03 Changed the 1000 to be 250. This is more or less just wasting time so
           // we're not being inneffecient continually checking for data in the file, so don't
           // be too wasteful
-          if ((watchQueue.isEmpty() || waitQueueSize == watchQueue.size()) && waitTime >= 0 && !kicked)
+          if ((watchQueue.isEmpty() || waitQueueSize == watchQueue.size()) && !kicked)
           {
-            if (Sage.DBG) System.out.println("VF thread is now waiting for " + Sage.durFormatMillis(waitTime));
-            try { queueLock.wait(waitTime); } catch(InterruptedException e){}
+            // A negative waitTime used to skip this wait() call entirely (the
+            // old guard required waitTime >= 0 just to enter this block),
+            // which is fine for the call sites that intentionally want an
+            // immediate re-loop -- but every one of those sites already
+            // inserts a new VFJob before looping, which makes the queue-size
+            // check above false on its own. If waitTime ends up negative
+            // WITHOUT any new work queued (e.g. a stale/unrefreshed
+            // getRealDurMillis() vs. a still-advancing live media clock, or
+            // any other duration subtraction that can go permanently
+            // negative), the old code would busy-spin this loop as fast as
+            // possible with no sleep at all -- starving the CPU for any
+            // concurrent transcode/playback work. Floor it instead so we
+            // always yield at least a little time between iterations. Note
+            // waitTime == 0 is intentionally left alone: queueLock.wait(0)
+            // means "wait indefinitely until notified," which several call
+            // sites rely on.
+            long sleepTime = (waitTime < 0) ? 50L : waitTime;
+            if (Sage.DBG) System.out.println("VF thread is now waiting for " + Sage.durFormatMillis(sleepTime));
+            try { queueLock.wait(sleepTime); } catch(InterruptedException e){}
           }
           kicked = false;
           if (!watchQueue.isEmpty())
