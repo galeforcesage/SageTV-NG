@@ -907,6 +907,74 @@ public class FFMPEGTranscoder implements TranscodeEngine
   }
 
   /**
+   * Hardware-decode input flags for the native placeshifter ATSC 3.0 HEVC path.
+   *
+   * <p>Live ATSC 3.0 broadcasts (1080p HEVC Main10 in MPEG2-TS) make the software
+   * HEVC decoder emit continuous {@code Error constructing the frame RPS} /
+   * {@code Could not find ref with POC} errors on missing references, which shows
+   * up as video freezes/jitter. NVIDIA's cuvid decoder tolerates those missing
+   * refs. Routing decode through {@code -hwaccel cuda -c:v hevc_cuvid} (placed
+   * before {@code -i}) fixes the artifacts. No {@code -hwaccel_output_format} is
+   * set, so cuvid auto-downloads frames to system memory and the existing
+   * software {@code mpeg4} encoder / {@code -f dvd} output are unchanged — the
+   * native client keeps its exact current wire format.
+   *
+   * <p>Guards (all must hold, else an empty list is returned and the caller keeps
+   * the current software-decode path):
+   * <ul>
+   *   <li>source container is MPEG2-TS and primary video is HEVC (the ATSC3 case);</li>
+   *   <li>{@link #hwaccelDecode} is not already set — the browserhd/pull-xcode path
+   *       manages its own {@code -hwaccel}, so we leave it untouched;</li>
+   *   <li>not the HLS ({@link #httplsMode}) or H.264-push ({@link #pushH264}) path,
+   *       so PWA and h264 profiles are not affected;</li>
+   *   <li>property {@code multimedia/hwaccel/atsc3_hevc_decode} enables it:
+   *       {@code off}/{@code none}/{@code false} disables; {@code cuda} forces it;
+   *       {@code auto} (default) engages only when an NVENC-capable NVIDIA GPU is
+   *       detected (implies cuvid in the unified ffmpeg build).</li>
+   * </ul>
+   *
+   * AC-4 audio is intentionally out of scope (no HW AC-4 decode exists); the
+   * {@code ac4 -> ac3} software audio handling and {@code -copytb 0} block are
+   * untouched.
+   *
+   * @return the decoder input args (e.g. {@code [-hwaccel, cuda, -c:v, hevc_cuvid]}),
+   *         or an empty list when HW decode should not be engaged.
+   */
+  java.util.List<String> nativeHevcHwDecodeArgs()
+  {
+    java.util.List<String> out = new java.util.ArrayList<String>();
+    if (sourceFormat == null) return out;
+    if (!sage.media.format.MediaFormat.MPEG2_TS.equals(sourceFormat.getFormatName())) return out;
+    if (!sage.media.format.MediaFormat.HEVC.equals(sourceFormat.getPrimaryVideoFormat())) return out;
+    // Leave the browserhd/pull-xcode path (it sets its own -hwaccel) and the
+    // PWA/HLS + H.264-push paths untouched — scope to the native placeshifter.
+    if (hwaccelDecode != null && hwaccelDecode.length() > 0) return out;
+    if (httplsMode || pushH264) return out;
+
+    String mode = Sage.get("multimedia/hwaccel/atsc3_hevc_decode", "auto");
+    if (mode == null) mode = "auto";
+    mode = mode.trim();
+    if ("off".equalsIgnoreCase(mode) || "none".equalsIgnoreCase(mode) || "false".equalsIgnoreCase(mode))
+      return out;
+
+    boolean engage;
+    if ("cuda".equalsIgnoreCase(mode))
+      engage = true; // explicit force (also used by unit tests)
+    else // "auto" (or any other value) -> engage only when NVENC/NVIDIA present
+      engage = (sage.HwEncoder.pick("h264") == sage.HwEncoder.Kind.NVENC);
+
+    if (!engage) return out;
+
+    out.add("-hwaccel");
+    out.add("cuda");
+    out.add("-c:v");
+    out.add("hevc_cuvid");
+    if (Sage.DBG) System.out.println("FFMPEGTranscoder: native ATSC3 HEVC -> hardware decode "
+        + "(-hwaccel cuda -c:v hevc_cuvid); mode=" + mode);
+    return out;
+  }
+
+  /**
    * If the source's primary audio is AC-4 and a client-preferred codec was set
    * via {@link #setAc4SourceAudioCodec(String)}, rewrite the audio codec in the
    * assembled ffmpeg parameter list. Accepts both legacy ({@code -acodec}) and
@@ -1131,6 +1199,14 @@ public class FFMPEGTranscoder implements TranscodeEngine
     {
       xcodeParamsVec.add("-hwaccel");
       xcodeParamsVec.add(hwaccelDecode);
+    }
+    else
+    {
+      // Native placeshifter ATSC 3.0 HEVC path: route decode through NVDEC
+      // cuvid so the missing-reference (RPS/POC) errors the software HEVC
+      // decoder throws on live ATSC 3.0 broadcasts no longer cause freezes.
+      // Empty (no-op) unless the source is MPEG2-TS/HEVC and HW is available.
+      xcodeParamsVec.addAll(nativeHevcHwDecodeArgs());
     }
 
     if(multiThread) {
