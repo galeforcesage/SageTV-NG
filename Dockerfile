@@ -245,6 +245,15 @@ COPY --from=builder /src/build/elf/ /tmp/builder-elf/
 # to that path and SageTV passes transcoder/ai_upscale_binary at invocation.
 COPY bin/sage-ai-upscale.sh /opt/sagetv/server/bin/sage-ai-upscale.sh
 
+# State-managed supervisor entrypoint. Folding this into the image means a
+# single reproducible `docker build` produces the COMPLETE production image
+# (state supervisor + unified ffmpeg) with no post-build `docker commit` step.
+# The script is PII-free and env-driven: per-install identity/state files
+# (Sage.properties, Wiz.bin, SageTVLocator keys, sdauth, plugins, clients/...)
+# are provided at RUNTIME via mounted state (STATE_DIR), never baked here.
+# With no STATE_DIR/CONTAINER_NAME set it falls back to running java directly.
+COPY --chmod=0755 docker/entrypoint-state.sh /usr/local/bin/entrypoint-state.sh
+
 WORKDIR /opt/sagetv/server
 
 # FFmpeg setup — install the unified SageTV-patched + AC-4-capable binary at
@@ -296,8 +305,11 @@ ENV LD_LIBRARY_PATH=/opt/sagetv/server:/opt/sagetv/server/lib:/opt/sagetv/server
 # Run as sagetv user
 USER sagetv
 
-# Use tini as PID 1 for proper signal handling and zombie reaping
-ENTRYPOINT ["/usr/bin/tini", "--"]
+# Use tini as PID 1 for proper signal handling and zombie reaping, and hand
+# off to the state-managed supervisor which spawns/respawns Sage in-place and
+# stages state from STATE_DIR (or runs java directly in standalone mode). The
+# java command below is passed through to the supervisor as "$@".
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint-state.sh"]
 
 # Start SageTV in headless server mode
 # --add-opens flags required for bundled GSON library which uses sun.misc.Unsafe
