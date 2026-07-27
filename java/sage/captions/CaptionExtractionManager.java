@@ -809,20 +809,6 @@ public class CaptionExtractionManager
           pendingTailKey = key;
         }
       }
-      // TEMP DIAGNOSTIC (Priority 2, ATSC3 "1 cue then none" investigation):
-      // confirm/refute whether a continuously-scrolling/never-finalizing
-      // ticker-style tail cue permanently stalls safeCount at 0 (events.size()
-      // never growing past 1, and the tail's (begin,end,text) key never
-      // stabilizing cycle-to-cycle). Remove once the hypothesis is settled.
-      if (Sage.DBG)
-      {
-        CaptionEvent dbgTail = events.isEmpty() ? null : events.get(events.size() - 1);
-        String dbgTailText = dbgTail == null ? "" :
-            dbgTail.getText().substring(0, Math.min(60, dbgTail.getText().length()));
-        System.out.println("CaptionExtractionManager: pushDeltaToViewers events.size()=" + events.size() +
-            " safeCount=" + safeCount + " tail=" + (dbgTail == null ? "<none>" :
-            ("[" + dbgTail.getBeginSeconds() + "-" + dbgTail.getEndSeconds() + "] \"" + dbgTailText + "\"")));
-      }
       if (safeCount <= 0) return;
 
       for (sage.VideoFrame vf : eligible)
