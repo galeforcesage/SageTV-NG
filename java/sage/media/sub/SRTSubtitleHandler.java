@@ -133,6 +133,23 @@ public class SRTSubtitleHandler extends SubtitleHandler
     else
     {
       monitoringFile = true;
+      // Prime subEntries synchronously on the CALLER's thread before handing
+      // this handler off for use. Without this, a caller that immediately
+      // starts querying getTimeTillUpdate()/getSubtitleText() on this fresh
+      // handler (e.g. VideoFrame.reloadExternalSubHandlerAndApplyCC(), which
+      // assigns this handler for playback use right after this method
+      // returns) can catch subEntries still empty -- getTimeTillUpdate()
+      // then returns NO_MORE_SUBS_LONG_WAIT (~1 week), so the "update the
+      // subtitle text" branch never runs and whatever text was already on
+      // screen from the PREVIOUS handler just sits there frozen until the
+      // background poll thread below gets scheduled and completes its first
+      // pass. Doing one read here (a small, fast local sidecar read) closes
+      // that race; the background thread's subsequent polls just pick up
+      // incrementally from where this one left off via the same readers[].
+      synchronized (srtLock)
+      {
+        loadSubtitlesFromFiles();
+      }
       // Since we are creating a new thread either way, load the subtitles asynchronously.
       Runnable execute = new Runnable()
       {
