@@ -748,16 +748,40 @@ class CaptionExtractionJob implements Runnable
    */
   static void cleanSrtFile(File f) throws IOException
   {
-    // Use ISO_8859_1 to avoid MalformedInputException from ccextractor's
-    // occasional non-UTF-8 bytes (e.g. raw CEA-708 data leaking through).
-    // ISO_8859_1 is lossless for all byte values; the regex-based cleanSrtLine
-    // strips any stray high-byte sequences anyway.
-    java.util.List<String> lines = Files.readAllLines(f.toPath(), java.nio.charset.StandardCharsets.ISO_8859_1);
-    StringBuilder out = new StringBuilder((int) Math.min(f.length() + 64, Integer.MAX_VALUE));
-    for (String line : lines)
+    // ccextractor/ffmpeg normally emit valid UTF-8 (both default to UTF-8 for
+    // their SRT/WebVTT output, including proper curly quotes and other chars
+    // decoded from the CEA-608/708 special character sets). Try a STRICT
+    // UTF-8 decode first so those bytes aren't mis-split into mojibake (a
+    // permissive/replacing decode -- or worse, decoding as a single-byte
+    // charset -- turns a 3-byte UTF-8 apostrophe into "\u00e2\u0080\u0099",
+    // which then survives as visible garbage once re-written as UTF-8, e.g.
+    // "can't" -> "canat"). Only fall back to a lossless ISO_8859_1 read
+    // (which can't itself throw) if the bytes are genuinely not valid UTF-8
+    // (e.g. raw CEA-708 data leaking through); the regex-based cleanSrtLine
+    // strips any stray high-byte sequences in that fallback case anyway.
+    byte[] raw = Files.readAllBytes(f.toPath());
+    String content;
+    try
     {
-      String s = cleanSrtLine(line);
-      out.append(s).append('\n');
+      java.nio.charset.CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
+          .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+          .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT);
+      content = decoder.decode(java.nio.ByteBuffer.wrap(raw)).toString();
+    }
+    catch (java.nio.charset.CharacterCodingException e)
+    {
+      if (Sage.DBG) System.out.println("CaptionExtractionJob: cleanSrtFile: ffmpeg/ccextractor output for " +
+          f + " was not valid UTF-8 (" + e + "), falling back to ISO-8859-1");
+      content = new String(raw, java.nio.charset.StandardCharsets.ISO_8859_1);
+    }
+    StringBuilder out = new StringBuilder((int) Math.min(f.length() + 64, Integer.MAX_VALUE));
+    try (BufferedReader br = new BufferedReader(new java.io.StringReader(content)))
+    {
+      String line;
+      while ((line = br.readLine()) != null)
+      {
+        out.append(cleanSrtLine(line)).append('\n');
+      }
     }
     Files.write(f.toPath(), out.toString().getBytes(StandardCharsets.UTF_8));
   }
