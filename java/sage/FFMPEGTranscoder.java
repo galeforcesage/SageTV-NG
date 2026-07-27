@@ -1040,6 +1040,60 @@ public class FFMPEGTranscoder implements TranscodeEngine
     return false;
   }
 
+  /**
+   * True when this transcode COPIES the video track into an MP4-family
+   * (fragmented) output — i.e. the {@code browserhd_copyv} / {@code browserhd_remux}
+   * pull-xcode modes. On these paths the output track's width/height and the
+   * {@code hvcC}/{@code avcC} decoder config come ENTIRELY from the source
+   * stream's in-band parameter sets (VPS/SPS/PPS for HEVC), because there is no
+   * encoder to supply them. Detected from the verbatim preset string
+   * ({@link #xcodeParams}) since the streaming path writes to stdout (so
+   * {@link #isMp4FamilyOutput()}, which keys off the output filename, is false).
+   */
+  boolean isVideoCopyToFmp4()
+  {
+    if (xcodeParams == null) return false;
+    boolean videoCopy = xcodeParams.indexOf("-c:v copy") != -1
+        || xcodeParams.indexOf("-vcodec copy") != -1;
+    boolean mp4Out = xcodeParams.indexOf("-f mp4") != -1;
+    return videoCopy && mp4Out;
+  }
+
+  /**
+   * The shared {@code browserhd_copyv} pull-xcode preset hardcodes
+   * {@code -tag:v hvc1} because its primary user is HEVC/ATSC3 video-copy (Chromium
+   * MSE requires the {@code hvc1} sample-entry tag — parameter sets out-of-band in
+   * {@code hvcC} — to decode HEVC in fragmented MP4). But the same preset is
+   * selected for ANY {@code AUDIO_TRANSCODE} decision, including an H.264 source
+   * (e.g. cable/QAM H.264 + AC-3). Forcing the {@code hvc1} tag onto a copied
+   * H.264 track makes ffmpeg abort before writing a single byte:
+   * "Tag hvc1 incompatible with output codec id '27' (avc1) ... Could not write
+   * header". Strip the tag whenever the source video codec is not HEVC so the
+   * copy still muxes with its native (avc1) sample entry. Only removes the tag
+   * for a non-HEVC source; the HEVC path is left untouched.
+   */
+  void maybeStripInapplicableHvc1Tag(java.util.ArrayList xcodeParamsVec)
+  {
+    if (xcodeParamsVec == null || sourceFormat == null) return;
+    String srcVideo = sourceFormat.getPrimaryVideoFormat();
+    if (sage.media.format.MediaFormat.HEVC.equals(srcVideo)) return; // tag is correct for HEVC
+    for (int i = 0; i < xcodeParamsVec.size() - 1; i++)
+    {
+      Object o = xcodeParamsVec.get(i);
+      if (!(o instanceof String)) continue;
+      String tok = (String) o;
+      if ((tok.equals("-tag:v") || tok.equals("-vtag") || tok.equals("-codec_tag:v"))
+          && "hvc1".equalsIgnoreCase(String.valueOf(xcodeParamsVec.get(i + 1))))
+      {
+        if (Sage.DBG) System.out.println("FFMPEGTranscoder: stripping inapplicable '-tag:v hvc1'"
+            + " (source video codec is " + srcVideo + ", not HEVC) to avoid ffmpeg header failure");
+        xcodeParamsVec.remove(i + 1);
+        xcodeParamsVec.remove(i);
+        return;
+      }
+    }
+  }
+
   public void startTranscode() throws java.io.IOException
   {
     xcodeBufferBaseNum = 0;
@@ -1215,13 +1269,32 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // 1MB + 1.5s analyzeduration is enough for HEVC+AC-4 detection.
     if (activeFile)
     {
-      long probeSize = Sage.getLong("ffmpeg/live_probesize", 1000000);
-      long analyzeDur = Sage.getLong("ffmpeg/live_analyzeduration", 1500000);
+      // Video-COPY into fMP4 is the exception: the copied track's width/height
+      // and hvcC/avcC decoder config come ENTIRELY from the source stream's
+      // in-band parameter sets (VPS/SPS/PPS). With +empty_moov the fMP4 init
+      // segment (moov) is written UP FRONT, so if find_stream_info hasn't yet
+      // parsed a keyframe carrying those parameter sets (e.g. a live HEVC/ATSC3
+      // tune-in that lands mid-GOP), ffmpeg writes a malformed init segment
+      // ("dimensions not set", empty hvcC) — or fails the header — and the MSE
+      // client reports videoWidth=0 (audio still works). Unlike the transcode
+      // path there is no encoder to supply dimensions and no keyframe-resync
+      // fallback, so use a larger probe window to guarantee the parameter sets
+      // are found first. This costs NO extra startup latency: +frag_keyframe
+      // won't flush the first fragment until the first keyframe anyway.
+      boolean videoCopyFmp4 = isVideoCopyToFmp4();
+      long probeSize = videoCopyFmp4
+          ? Sage.getLong("ffmpeg/live_probesize_videocopy", 8000000)
+          : Sage.getLong("ffmpeg/live_probesize", 1000000);
+      long analyzeDur = videoCopyFmp4
+          ? Sage.getLong("ffmpeg/live_analyzeduration_videocopy", 5000000)
+          : Sage.getLong("ffmpeg/live_analyzeduration", 1500000);
       xcodeParamsVec.add("-probesize");
       xcodeParamsVec.add(Long.toString(probeSize));
       xcodeParamsVec.add("-analyzeduration");
       xcodeParamsVec.add(Long.toString(analyzeDur));
-      if (Sage.DBG) System.out.println("FFMPEGTranscoder: active file — probesize=" + probeSize + " analyzeduration=" + analyzeDur);
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: active file — probesize=" + probeSize
+          + " analyzeduration=" + analyzeDur + (videoCopyFmp4 ? " (video-copy fMP4: enlarged so"
+          + " source parameter sets/dimensions are parsed before the empty_moov init segment)" : ""));
     }
 
     xcodeParamsVec.add("-i");
@@ -2198,6 +2271,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // sync, channels) intact and avoids forking every transcode profile.
     maybeOverrideAc4AudioCodec(xcodeParamsVec);
     maybeOverrideSurfaceAudio(xcodeParamsVec);
+    maybeStripInapplicableHvc1Tag(xcodeParamsVec);
     String[] xcodeParamArray = (String[]) xcodeParamsVec.toArray(Pooler.EMPTY_STRING_ARRAY);
     // Always log the FFmpeg command line for diagnosability (disable with xcode_cmdline_debug=FALSE)
     if (Sage.DBG && !"FALSE".equals(Sage.get("xcode_cmdline_debug", "TRUE"))) System.out.println("Executing xcoding process with args: " + java.util.Arrays.asList(xcodeParamArray));
