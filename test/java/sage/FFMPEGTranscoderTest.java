@@ -227,4 +227,70 @@ public class FFMPEGTranscoderTest
     assertEquals(transcoder.videoCopyKeyframeAlignSeek(), "0.25");
     Sage.remove("ffmpeg/videocopy_kf_align_seek");
   }
+
+    private FFMPEGTranscoder hevcTsTranscoder()
+    {
+      FFMPEGTranscoder t = new FFMPEGTranscoder();
+      ContainerFormat cf = new ContainerFormat();
+      cf.setFormatName(sage.media.format.MediaFormat.MPEG2_TS);
+      VideoFormat vf = new VideoFormat();
+      vf.setFormatName(sage.media.format.MediaFormat.HEVC);
+      vf.setPrimary(true);
+      cf.setStreamFormats(new BitstreamFormat[] { vf });
+      t.sourceFormat = cf;
+      return t;
+    }
+
+    @Test
+    public void testNativeHevcHwDecodeArgs() throws Throwable
+    {
+      TestUtils.initializeSageTVForTesting();
+      final String PROP = "multimedia/hwaccel/atsc3_hevc_decode";
+      try
+      {
+        // Explicit "cuda" forces the cuvid decode args on the native ATSC3 HEVC path.
+        Sage.put(PROP, "cuda");
+        FFMPEGTranscoder t = hevcTsTranscoder();
+        assertEquals(t.nativeHevcHwDecodeArgs(),
+            java.util.Arrays.asList("-hwaccel", "cuda", "-c:v", "hevc_cuvid"));
+
+        // "off" disables (falls back to software decode).
+        Sage.put(PROP, "off");
+        assertTrue(hevcTsTranscoder().nativeHevcHwDecodeArgs().isEmpty());
+        Sage.put(PROP, "none");
+        assertTrue(hevcTsTranscoder().nativeHevcHwDecodeArgs().isEmpty());
+
+        // Non-HEVC source is never engaged, even with "cuda".
+        Sage.put(PROP, "cuda");
+        FFMPEGTranscoder h264 = new FFMPEGTranscoder();
+        ContainerFormat cf = new ContainerFormat();
+        cf.setFormatName(sage.media.format.MediaFormat.MPEG2_TS);
+        VideoFormat vf = new VideoFormat();
+        vf.setFormatName(sage.media.format.MediaFormat.H264);
+        vf.setPrimary(true);
+        cf.setStreamFormats(new BitstreamFormat[] { vf });
+        h264.sourceFormat = cf;
+        assertTrue(h264.nativeHevcHwDecodeArgs().isEmpty());
+
+        // No source format -> empty.
+        assertTrue(new FFMPEGTranscoder().nativeHevcHwDecodeArgs().isEmpty());
+
+        // browserhd/pull-xcode path (hwaccelDecode set) is left untouched.
+        FFMPEGTranscoder browserhd = hevcTsTranscoder();
+        browserhd.setHwaccelDecode("cuda");
+        assertTrue(browserhd.nativeHevcHwDecodeArgs().isEmpty());
+
+        // PWA/HLS and H.264-push paths are excluded.
+        FFMPEGTranscoder hls = hevcTsTranscoder();
+        hls.httplsMode = true;
+        assertTrue(hls.nativeHevcHwDecodeArgs().isEmpty());
+        FFMPEGTranscoder push = hevcTsTranscoder();
+        push.pushH264 = true;
+        assertTrue(push.nativeHevcHwDecodeArgs().isEmpty());
+      }
+      finally
+      {
+        Sage.remove(PROP);
+      }
+    }
 }
