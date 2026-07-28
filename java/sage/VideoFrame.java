@@ -1064,8 +1064,32 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
               }
               else
               {
+                // Live-playback caption/subtitle timestamp sync fix: for a LIVE_CAP
+                // player, getBaseMediaTimeMillis() (which fed baseTime, above) returns
+                // Sage.time() - fileStart -- a naive wall-clock estimate with NO
+                // encode/transcode/network/client-buffer latency compensation --
+                // instead of querying the player's actual decode/display position
+                // (mp.getMediaTimeMillis(), used for every other, non-live-playback
+                // case, which already reflects real client-feedback-based position).
+                // Subtitle/caption lookups using that raw baseTime therefore run AHEAD
+                // of what's actually on screen by the full encode-to-playback pipeline
+                // delay -- getEncodeToPlaybackDelay() already exists and is used
+                // elsewhere (e.g. the near-live-edge skip/rewind guards) for exactly
+                // this latency, but was never applied to caption/subtitle timing. A
+                // caption whose true window is [begin,end] on the media timeline was
+                // shown, and then hidden, that many seconds too early relative to the
+                // dialogue it corresponds to. This is a distinct root cause from cue
+                // dwell-duration (Issue B, governs how long a correctly-timed cue
+                // stays up) or STPP-to-PTS anchoring (Atsc3StppExtractor.calibrateOffset,
+                // governs where a cue's begin/end land on the media timeline): this is
+                // a constant lead/lag bias on WHEN a correctly-positioned cue is
+                // actually displayed, present only during live viewing.
+                long liveSubDelayMs = computeLiveCaptionDelayCompensationMs(
+                    Sage.getBoolean("captions/live_display_delay_compensation_enabled", true),
+                    player != null && (player.getPlaybackCaps() & MediaPlayer.LIVE_CAP) != 0,
+                    getEncodeToPlaybackDelay());
                 // bitmap subtitles want to be prebuffered on the client, so send them 2 seconds ahead
-                final long subTime = baseTime + (subHandler.areTextBased() ? 0 : 2000);
+                final long subTime = Math.max(0L, baseTime - liveSubDelayMs) + (subHandler.areTextBased() ? 0 : 2000);
                 long ttu = subHandler.getTimeTillUpdate(subTime);
                 if (Sage.DBG) System.out.println("VF ttu for sub=" + ttu);
                 if (ttu <= 0)
@@ -1684,6 +1708,22 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         public void run() { goodbye0(); }
       });
     }
+  }
+
+  /**
+   * Pure decision logic for the live-playback caption/subtitle delay
+   * compensation (see the call site in the subtitle-update block of the main
+   * polling loop), factored out as a package-visible static method so it is
+   * unit-testable without a fully-constructed, UIManager-coupled VideoFrame
+   * instance. Returns 0 (no compensation) unless the property is enabled AND
+   * the current player reports {@code LIVE_CAP}; otherwise returns the
+   * supplied encode-to-playback delay verbatim (never negative).
+   */
+  static long computeLiveCaptionDelayCompensationMs(boolean compensationEnabled,
+      boolean isLiveCapPlayer, long encodeToPlaybackDelayMs)
+  {
+    if (!compensationEnabled || !isLiveCapPlayer) return 0;
+    return Math.max(0L, encodeToPlaybackDelayMs);
   }
 
   private long getEncodeToPlaybackDelay()
