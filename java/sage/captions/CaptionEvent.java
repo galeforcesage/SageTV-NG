@@ -216,6 +216,30 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
   public static final double MIN_CUE_DURATION_SECONDS = 1.0;
 
   /**
+   * Reading-speed floor, in characters per second, used by {@link #readingSpeedFloorSeconds}
+   * to compute a length-aware minimum dwell time on top of the flat
+   * {@link #MIN_CUE_DURATION_SECONDS}. A one-word cue and a two-line, 80-character cue are not
+   * equally readable in the same 1.0s -- broadcast captioning practice generally targets roughly
+   * 15-17 characters/second as a comfortable reading speed; 16 is used here as the midpoint.
+   */
+  public static final double MIN_READING_CPS = 16.0;
+
+  /**
+   * The effective minimum dwell time for a cue containing {@code text}: the greater of the flat
+   * {@link #MIN_CUE_DURATION_SECONDS} and a reading-speed-derived duration
+   * ({@code text.length() / MIN_READING_CPS}). For short cues (the common case) this is
+   * identical to the flat floor -- e.g. a 10-character line needs only 0.625s by reading speed,
+   * so the 1.0s flat floor still governs. Longer cues (e.g. a dense two-line dialogue exchange)
+   * get a proportionally longer floor instead of being cut off at a flat 1 second regardless of
+   * how much there is to read.
+   */
+  static double readingSpeedFloorSeconds(String text)
+  {
+    int len = (text == null) ? 0 : text.length();
+    return Math.max(MIN_CUE_DURATION_SECONDS, len / MIN_READING_CPS);
+  }
+
+  /**
    * Coalesces a sequence of fine-grained (e.g. character-by-character
    * roll-up) caption events into sentence-level cues.
    *
@@ -315,8 +339,10 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
    *       once, so any overlap here would visibly double-display two
    *       different lines of dialogue rather than just show one a little
    *       longer.</li>
-   *   <li><b>Minimum on-screen dwell</b>: every cue should stay up for at
-   *       least {@link #MIN_CUE_DURATION_SECONDS} so it's actually readable.
+   *   <li><b>Minimum on-screen dwell</b>: every cue should stay up long enough to actually be
+   *       read -- at least {@link #MIN_CUE_DURATION_SECONDS}, and longer still for a longer line
+   *       of text via {@link #readingSpeedFloorSeconds} (a flat 1.0s floor is not enough for an
+   *       80-character two-line cue just because it was enough for a 3-word one).
    *       Real broadcast captioning is very often back-to-back with little
    *       or no forward gap, so a floor that can only ever push the cue's
    *       <em>end</em> later (capped at the next cue's begin, to respect the
@@ -354,6 +380,7 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
 
         double begin = e.beginSeconds;
         double end = e.endSeconds;
+        double floorSeconds = readingSpeedFloorSeconds(e.text);
 
         // Never overlap the next cue.
         if (next != null && end > next.beginSeconds)
@@ -361,18 +388,18 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
           end = next.beginSeconds;
         }
         // Try forward slack first (unchanged from the original behavior).
-        if (end - begin < MIN_CUE_DURATION_SECONDS)
+        if (end - begin < floorSeconds)
         {
-          double floored = begin + MIN_CUE_DURATION_SECONDS;
+          double floored = begin + floorSeconds;
           end = (next != null) ? Math.min(floored, next.beginSeconds) : floored;
         }
         // Still short (the common back-to-back-dialogue case): reclaim
         // whatever slack exists before this cue instead, bounded by the
         // previous cue's already-adjusted end.
-        if (end - begin < MIN_CUE_DURATION_SECONDS)
+        if (end - begin < floorSeconds)
         {
           double earliestBegin = Math.max(0.0, prevAdjustedEnd);
-          begin = Math.max(earliestBegin, end - MIN_CUE_DURATION_SECONDS);
+          begin = Math.max(earliestBegin, end - floorSeconds);
         }
         if (end < begin) end = begin;
 
