@@ -235,11 +235,15 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
    * never overlap: raw broadcaster STPP packet windows are not always
    * disjoint, which otherwise leaves ~200-300ms of overlap between
    * consecutive coalesced cues. Each cue's end is clamped to at most the
-   * next cue's begin, and only then is the {@link #MIN_CUE_DURATION_SECONDS}
-   * floor applied (also capped at the next cue's begin) — overlap avoidance
-   * takes priority over the duration floor, since a cue on screen for
-   * slightly under a second beats two cues visibly double-displaying at
-   * once. Different tracks (e.g. a secondary-language service) are
+   * next cue's begin (this always takes priority — see
+   * {@link #clampOverlapsAndEnforceMinDuration} for why overlap can never be
+   * allowed), then the {@link #MIN_CUE_DURATION_SECONDS} floor is applied
+   * using whichever side has slack: first any room after the cue (capped at
+   * the next cue's begin), and if that's not enough — the common
+   * back-to-back-dialogue case — room before the cue is reclaimed instead
+   * (capped at the previous cue's already-adjusted end), so a short cue
+   * still gets a fair chance at a readable dwell time even with no forward
+   * gap. Different tracks (e.g. a secondary-language service) are
    * processed independently, since they're never displayed simultaneously.
    *
    * @param events input events, assumed sorted by begin time
@@ -301,11 +305,35 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
 
   /**
    * Groups {@code grouped} by track (language+service+region), then within
-   * each track: clamps every cue's end to at most the next same-track cue's
-   * begin (removing overlap), then extends any still-too-short cue up to
-   * {@link #MIN_CUE_DURATION_SECONDS}, capped at that same neighbor's begin
-   * so the floor can never re-introduce the overlap it just removed. Returns
-   * the result merged back into a single begin-time-sorted list.
+   * each track enforces two hard invariants in priority order:
+   * <ol>
+   *   <li><b>Never overlap</b>: a cue's end is always clamped to at most the
+   *       next same-track cue's begin. This is a hard requirement, not a
+   *       style preference — {@code sage.media.sub.SubtitleHandler}'s
+   *       renderer (used for every sidecar/live-push consumer) concatenates
+   *       every simultaneously-active entry it finds onto the screen at
+   *       once, so any overlap here would visibly double-display two
+   *       different lines of dialogue rather than just show one a little
+   *       longer.</li>
+   *   <li><b>Minimum on-screen dwell</b>: every cue should stay up for at
+   *       least {@link #MIN_CUE_DURATION_SECONDS} so it's actually readable.
+   *       Real broadcast captioning is very often back-to-back with little
+   *       or no forward gap, so a floor that can only ever push the cue's
+   *       <em>end</em> later (capped at the next cue's begin, to respect the
+   *       no-overlap rule) frequently has no room to work with and silently
+   *       does nothing — the original bug this method fixes. Instead, the
+   *       floor first tries to use any forward slack (unchanged from the
+   *       original logic), and if that's insufficient, reclaims whatever
+   *       slack exists <em>before</em> the cue by pulling its begin earlier,
+   *       bounded by the previous (already-adjusted) same-track cue's end so
+   *       it can never overlap backwards either. This mirrors how
+   *       professional caption timing tools extend a too-short line's
+   *       display window using whichever side has room. Only when there is
+   *       truly no slack on either side (continuous back-to-back dialogue)
+   *       does a cue keep its natural, possibly-sub-floor duration — which
+   *       is still strictly no worse than before this fix.</li>
+   * </ol>
+   * Returns the result merged back into a single begin-time-sorted list.
    */
   private static List<CaptionEvent> clampOverlapsAndEnforceMinDuration(List<CaptionEvent> grouped)
   {
@@ -318,6 +346,7 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
     List<CaptionEvent> out = new ArrayList<>(grouped.size());
     for (List<CaptionEvent> track : byTrack.values())
     {
+      double prevAdjustedEnd = 0.0;
       for (int i = 0; i < track.size(); i++)
       {
         CaptionEvent e = track.get(i);
@@ -325,14 +354,25 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
 
         double begin = e.beginSeconds;
         double end = e.endSeconds;
+
+        // Never overlap the next cue.
         if (next != null && end > next.beginSeconds)
         {
           end = next.beginSeconds;
         }
+        // Try forward slack first (unchanged from the original behavior).
         if (end - begin < MIN_CUE_DURATION_SECONDS)
         {
           double floored = begin + MIN_CUE_DURATION_SECONDS;
           end = (next != null) ? Math.min(floored, next.beginSeconds) : floored;
+        }
+        // Still short (the common back-to-back-dialogue case): reclaim
+        // whatever slack exists before this cue instead, bounded by the
+        // previous cue's already-adjusted end.
+        if (end - begin < MIN_CUE_DURATION_SECONDS)
+        {
+          double earliestBegin = Math.max(0.0, prevAdjustedEnd);
+          begin = Math.max(earliestBegin, end - MIN_CUE_DURATION_SECONDS);
         }
         if (end < begin) end = begin;
 
@@ -344,6 +384,8 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
             .region(e.region)
             .service(e.service)
             .build());
+
+        prevAdjustedEnd = end;
       }
     }
     Collections.sort(out);

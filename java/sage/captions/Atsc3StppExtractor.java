@@ -587,6 +587,26 @@ public final class Atsc3StppExtractor
     // on top when seeking.
     double resumeSeconds;
 
+    // Issue B fix (duplicate/truncated-begin cue bug): per-track high-water
+    // mark of the latest already-finalized cue's end time. A later window's
+    // seek (resumeSeconds - overlap) must never be allowed to land before
+    // this point for that same track -- otherwise it can re-encounter that
+    // track's already-finalized raw <p> elements, re-coalesce just the
+    // fragment this particular window happens to capture (missing the true
+    // sentence start, since coalesce() has no visibility outside its own
+    // window), and mistakenly finalize a second, truncated-begin duplicate
+    // of an already-closed cue (keyOf() depends on begin time, so a
+    // differently-truncated begin looks like a brand new cue). See
+    // reconcile() and the seek-floor clamp in extractIncremental().
+    final java.util.Map<String, Double> lastFinalizedEndByTrack = new java.util.HashMap<>();
+
+    // Monotonic floor for the next seek point (normalized seconds), derived
+    // from lastFinalizedEndByTrack for whichever track resumeSeconds was
+    // computed from. Kept separate from resumeSeconds itself (which stays
+    // the semantically-meaningful "earliest open tail begin") so existing
+    // callers/tests that only care about resumeSeconds are unaffected.
+    double resumeFloorSeconds;
+
     // All cues finalized (closed) so far, in emit order, plus their dedupe keys.
     final List<CaptionEvent> finalizedCues = new ArrayList<>();
     final java.util.Set<String> emittedKeys = new java.util.HashSet<>();
@@ -662,7 +682,13 @@ public final class Atsc3StppExtractor
     if (state.noStream) return empty;
 
     double overlap = Math.max(0.0, Sage.getFloat("caption_extraction/stpp_window_overlap_seconds", 4.0f));
-    double seekSeconds = Math.max(0.0, state.resumeSeconds - overlap);
+    // Issue B fix: the overlap look-back must never drag the seek point
+    // before whatever's already been finalized for the track we're
+    // resuming (state.resumeFloorSeconds) -- see the field javadoc on
+    // StppIncrementalState and reconcile() for why an unclamped look-back
+    // can re-derive and duplicate an already-closed sentence.
+    double seekSeconds = Math.max(state.resumeFloorSeconds, state.resumeSeconds - overlap);
+    seekSeconds = Math.max(0.0, seekSeconds);
 
     File raw = null;
     try
@@ -753,7 +779,11 @@ public final class Atsc3StppExtractor
    * cues against what's already been emitted, appends the genuinely-new ones to
    * {@code state}, and advances {@code state.resumeSeconds} to the earliest
    * provisional tail begin so the next window re-derives every open sentence
-   * from its start.
+   * from its start. Also advances {@code state.resumeFloorSeconds} to the
+   * relevant track's already-finalized end, so the overlap look-back in
+   * {@link #extractIncremental} can never seek back into content that's
+   * already been finalized (which would otherwise re-derive and duplicate it
+   * with a truncated begin — see {@link StppIncrementalState#lastFinalizedEndByTrack}).
    */
   private static IncrementalResult reconcile(List<CaptionEvent> coalesced, StppIncrementalState state)
   {
@@ -774,6 +804,12 @@ public final class Atsc3StppExtractor
       {
         state.finalizedCues.add(e);
         newlyFinalized.add(e);
+        // Track each track's own high-water mark of finalized end time --
+        // see StppIncrementalState.lastFinalizedEndByTrack's javadoc.
+        String tk = trackKey(e);
+        Double prevEnd = state.lastFinalizedEndByTrack.get(tk);
+        if (prevEnd == null || e.getEndSeconds() > prevEnd)
+          state.lastFinalizedEndByTrack.put(tk, e.getEndSeconds());
       }
     }
 
@@ -784,11 +820,23 @@ public final class Atsc3StppExtractor
     // complete canonical SRT from the full post-recording pass.
     enforceCeiling(state);
 
-    // Resume from the earliest open sentence (or, if none, the latest finalized end).
+    // Resume from the earliest open sentence (or, if none, the latest finalized end),
+    // but never before that same track's own already-finalized end (resumeFloor) --
+    // this is the floor extractIncremental()'s overlap look-back must also respect,
+    // so a later window can never re-derive and duplicate an already-closed cue.
     double resume = Double.MAX_VALUE;
-    for (CaptionEvent t : tailByTrack.values())
+    double resumeFloor = 0.0;
+    for (java.util.Map.Entry<String, CaptionEvent> te : tailByTrack.entrySet())
     {
-      if (t.getBeginSeconds() < resume) resume = t.getBeginSeconds();
+      CaptionEvent t = te.getValue();
+      Double floorForTrack = state.lastFinalizedEndByTrack.get(te.getKey());
+      double tailBegin = t.getBeginSeconds();
+      double candidate = (floorForTrack != null) ? Math.max(tailBegin, floorForTrack) : tailBegin;
+      if (candidate < resume)
+      {
+        resume = candidate;
+        resumeFloor = (floorForTrack != null) ? floorForTrack : 0.0;
+      }
     }
     if (resume == Double.MAX_VALUE)
     {
@@ -796,11 +844,17 @@ public final class Atsc3StppExtractor
       {
         if (e.getEndSeconds() > state.resumeSeconds) state.resumeSeconds = e.getEndSeconds();
       }
+      // No open tail at all right now: the floor is simply the furthest any
+      // track has been finalized to, so a later window's overlap look-back
+      // can't re-derive stale content once new dialogue resumes.
+      for (double end : state.lastFinalizedEndByTrack.values())
+        if (end > resumeFloor) resumeFloor = end;
     }
     else
     {
       state.resumeSeconds = Math.max(state.resumeSeconds, resume);
     }
+    state.resumeFloorSeconds = Math.max(state.resumeFloorSeconds, resumeFloor);
 
     List<CaptionEvent> provisional = new ArrayList<>(tailByTrack.values());
     java.util.Collections.sort(provisional);
