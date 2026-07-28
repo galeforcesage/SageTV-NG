@@ -228,6 +228,72 @@ public class FFMPEGTranscoderTest
     Sage.remove("ffmpeg/videocopy_kf_align_seek");
   }
 
+  @Test
+  public void testResolveAudioResampleAsyncFloorsZeroOnVideoCopy() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    Sage.remove("ffmpeg/aresample_async");
+    Sage.remove("ffmpeg/aresample_async_ac4");
+    Sage.remove("ffmpeg/videocopy_aresample_async_floor");
+    Sage.remove("ffmpeg/videocopy_allow_async_zero");
+    try
+    {
+      FFMPEGTranscoder transcoder = new FFMPEGTranscoder();
+      transcoder.xcodeParams = "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof"
+          + " -frag_duration 500000 -c:v copy -tag:v hvc1 -acodec aac -ac 2 -ar 48000 -b:a 128k";
+
+      // Not a video-copy path: an explicit 0 override is honored verbatim (no floor).
+      transcoder.xcodeParams = "-f mp4 -c:v libx264 -acodec aac";
+      Sage.put("ffmpeg/aresample_async", "0");
+      assertEquals(transcoder.resolveAudioResampleAsync(false), "0");
+      Sage.remove("ffmpeg/aresample_async");
+
+      // Video-copy fMP4 path, no override configured: normal defaults (1 / 1000) pass
+      // through untouched -- the floor only engages when the resolved value is <= 0.
+      // NOTE: Sage.get(name, default) persists the default on first access
+      // (SageProperties.STORE_DEFAULTS), so each independent "no override" probe below
+      // removes both keys immediately beforehand -- otherwise the first probe's
+      // Sage.get("ffmpeg/aresample_async", "1") call would permanently write "1" and
+      // poison the AC-4 probe's inner Sage.get("ffmpeg/aresample_async", "1000") fallback.
+      transcoder.xcodeParams = "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof"
+          + " -frag_duration 500000 -c:v copy -tag:v hvc1 -acodec aac -ac 2 -ar 48000 -b:a 128k";
+      Sage.remove("ffmpeg/aresample_async");
+      Sage.remove("ffmpeg/aresample_async_ac4");
+      assertEquals(transcoder.resolveAudioResampleAsync(false), "1");
+      Sage.remove("ffmpeg/aresample_async");
+      Sage.remove("ffmpeg/aresample_async_ac4");
+      assertEquals(transcoder.resolveAudioResampleAsync(true), "1000");
+
+      // Video-copy fMP4 path with an inherited/legacy 0 override (the exact live-server
+      // condition that silently disabled all audio drift correction on an AC-4 downmix
+      // session): the value must be floored back up to a working default.
+      Sage.remove("ffmpeg/aresample_async");
+      Sage.put("ffmpeg/aresample_async_ac4", "0");
+      assertEquals(transcoder.resolveAudioResampleAsync(true), "1000");
+      Sage.remove("ffmpeg/aresample_async_ac4");
+      Sage.put("ffmpeg/aresample_async", "0");
+      assertEquals(transcoder.resolveAudioResampleAsync(false), "1000");
+
+      // Custom floor value is honored.
+      Sage.put("ffmpeg/videocopy_aresample_async_floor", "500");
+      assertEquals(transcoder.resolveAudioResampleAsync(false), "500");
+      assertEquals(transcoder.resolveAudioResampleAsync(true), "500");
+      Sage.remove("ffmpeg/videocopy_aresample_async_floor");
+
+      // Explicit kill-switch: operator can still force 0 through on the video-copy path.
+      Sage.put("ffmpeg/videocopy_allow_async_zero", "true");
+      assertEquals(transcoder.resolveAudioResampleAsync(false), "0");
+      assertEquals(transcoder.resolveAudioResampleAsync(true), "0");
+    }
+    finally
+    {
+      Sage.remove("ffmpeg/aresample_async");
+      Sage.remove("ffmpeg/aresample_async_ac4");
+      Sage.remove("ffmpeg/videocopy_aresample_async_floor");
+      Sage.remove("ffmpeg/videocopy_allow_async_zero");
+    }
+  }
+
     private FFMPEGTranscoder hevcTsTranscoder()
     {
       FFMPEGTranscoder t = new FFMPEGTranscoder();
