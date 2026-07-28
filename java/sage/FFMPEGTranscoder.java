@@ -1188,6 +1188,53 @@ public class FFMPEGTranscoder implements TranscodeEngine
     return kfAlignVal > 0 ? kfAlign : null;
   }
 
+  /**
+   * Resolves the {@code -af aresample=async=N} drift-correction value to use for
+   * the current transcode's audio re-encode. Reads {@code ffmpeg/aresample_async_ac4}
+   * (falling back to {@code ffmpeg/aresample_async}, then {@code 1000}) for an AC-4
+   * source being downmixed, or {@code ffmpeg/aresample_async} (default {@code 1}) for
+   * everything else -- these are legacy properties tuned for the fixed-rate mpeg4
+   * re-encode placeshifting ladder.
+   * <p>
+   * On {@link #isVideoCopyToFmp4()} sessions the copied video track's PTS comes
+   * straight from the source -- there is no encoder to re-time it -- so audio
+   * resample-based drift correction is the ONLY mechanism keeping the two tracks
+   * aligned over a long live session; unlike a full re-encode there is no fallback.
+   * A configured value of {@code <= 0} (no correction at all) silently defeats
+   * that, and in production has been observed getting through as an inherited
+   * {@code ffmpeg/aresample_async}-family property value that predates this
+   * copy-through path and was tuned for a different (fixed-rate re-encode) use
+   * case -- not a deliberate "disable A/V sync" choice. Since there's no
+   * self-correcting alternative here, floor it back up to a working value
+   * ({@code ffmpeg/videocopy_aresample_async_floor}, default {@code 1000}) UNLESS
+   * the operator explicitly opts out via the dedicated
+   * {@code ffmpeg/videocopy_allow_async_zero=true} kill-switch (for troubleshooting
+   * only -- expect growing A/V drift on a long live session if set).
+   */
+  String resolveAudioResampleAsync(boolean isAc4Source)
+  {
+    String asyncVal = isAc4Source
+        ? Sage.get("ffmpeg/aresample_async_ac4", Sage.get("ffmpeg/aresample_async", "1000"))
+        : Sage.get("ffmpeg/aresample_async", "1");
+    if (isVideoCopyToFmp4() && !Sage.getBoolean("ffmpeg/videocopy_allow_async_zero", false))
+    {
+      double v;
+      try { v = Double.parseDouble(asyncVal); } catch (NumberFormatException e) { v = -1; }
+      if (v <= 0)
+      {
+        String floorVal = Sage.get("ffmpeg/videocopy_aresample_async_floor", "1000");
+        if (Sage.DBG) System.out.println("FFMPEGTranscoder: configured aresample_async"
+            + (isAc4Source ? "_ac4" : "") + "=" + asyncVal + " disables audio drift"
+            + " correction, which is unsafe on the video-copy fMP4 path (video PTS is"
+            + " fixed by the source -- only audio resampling can track it); flooring"
+            + " to " + floorVal + ". Set ffmpeg/videocopy_allow_async_zero=true to"
+            + " explicitly force it off for troubleshooting.");
+        asyncVal = floorVal;
+      }
+    }
+    return asyncVal;
+  }
+
   public void startTranscode() throws java.io.IOException
   {
     xcodeBufferBaseNum = 0;
@@ -2276,9 +2323,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
       {
         boolean isAc4Source = sourceFormat != null &&
             sage.media.format.MediaFormat.AC4.equals(sourceFormat.getPrimaryAudioFormat());
-        String asyncVal = isAc4Source
-            ? Sage.get("ffmpeg/aresample_async_ac4", Sage.get("ffmpeg/aresample_async", "1000"))
-            : Sage.get("ffmpeg/aresample_async", "1");
+        String asyncVal = resolveAudioResampleAsync(isAc4Source);
         int acIdx = xcodeParamsVec.indexOf("-ac");
         boolean isDownmixToStereo = acIdx >= 0 && acIdx + 1 < xcodeParamsVec.size() &&
             "2".equals(xcodeParamsVec.get(acIdx + 1));
@@ -2306,9 +2351,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
       {
         boolean isAc4Source = sourceFormat != null &&
             sage.media.format.MediaFormat.AC4.equals(sourceFormat.getPrimaryAudioFormat());
-        String asyncVal = isAc4Source
-            ? Sage.get("ffmpeg/aresample_async_ac4", Sage.get("ffmpeg/aresample_async", "1000"))
-            : Sage.get("ffmpeg/aresample_async", "1");
+        String asyncVal = resolveAudioResampleAsync(isAc4Source);
         int acIdx = xcodeParamsVec.indexOf("-ac");
         boolean isDownmixToStereo = acIdx >= 0 && acIdx + 1 < xcodeParamsVec.size() &&
             "2".equals(xcodeParamsVec.get(acIdx + 1));
