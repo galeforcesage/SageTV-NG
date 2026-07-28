@@ -1893,7 +1893,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
       else
       {
         if (currVideoBitrateKbps == -1)
-          currVideoBitrateKbps = Math.min(getDynamicMaxVideoKbps(), (int)estimatedBandwidth/2000);//192;//384;
+          currVideoBitrateKbps = selectDynamicVideoBitrateKbps(estimatedBandwidth);
         if (currAudioBitrateKbps == -1)
           currAudioBitrateKbps = 128; // There's issues with using 96Kbps audio encoding I discovered
         fdkAacProfile = "aac_low"; // LC-AAC is best at >=128kbps
@@ -3328,7 +3328,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
    * same ~1 Mbps cap as a genuinely bandwidth-constrained WAN client, discarding
    * real headroom the bandwidth-feedback loop had already discovered.
    * <p>
-   * Returns {@code ffmpeg/dynamic_max_video_kbps_lan} (default 8000) when
+   * Returns {@code ffmpeg/dynamic_max_video_kbps_lan} (default 5000) when
    * {@link #localClient} is true (set via {@link #setLocalClient}), otherwise
    * {@code ffmpeg/dynamic_max_video_kbps_wan} (default 1500, preserving the
    * pre-existing WAN ceiling exactly). Either is still bounded below by whatever
@@ -3347,12 +3347,29 @@ public class FFMPEGTranscoder implements TranscodeEngine
   public int getDynamicMaxVideoKbps()
   {
     int ceiling = localClient
-        ? Sage.getInt("ffmpeg/dynamic_max_video_kbps_lan", 8000)
+        ? Sage.getInt("ffmpeg/dynamic_max_video_kbps_lan", 5000)
         : Sage.getInt("ffmpeg/dynamic_max_video_kbps_wan", 1500);
     int sourceKbps = getSourceBitrateKbps();
     if (sourceKbps > 0 && sourceKbps < ceiling)
       return sourceKbps;
     return ceiling;
+  }
+
+  /**
+   * Top-tier video bitrate (Kbps) for the legacy mpeg4 "dynamic" placeshifter ladder,
+   * once the client's measured link is comfortably above the 900Kbps tier breakpoint.
+   * This is where the "best A/V for the actual network" adaptive model is enforced for
+   * the legacy path: the result is bandwidth-BOUNDED (never invents bits the measured
+   * link doesn't have -- {@code estimatedBandwidthBps/2000} approximates half the
+   * measured link in Kbps, reserving headroom for audio/overhead/burst) AND ceiling-
+   * BOUNDED by {@link #getDynamicMaxVideoKbps()} (LAN-aware, itself hard-capped at
+   * source bitrate -- never upscale/never exceed source). Whichever is lower wins, so
+   * neither a generous LAN ceiling nor a fast-but-not-infinite measured link alone can
+   * push the output past what's actually appropriate.
+   */
+  int selectDynamicVideoBitrateKbps(long estimatedBandwidthBps)
+  {
+    return Math.min(getDynamicMaxVideoKbps(), (int) (estimatedBandwidthBps / 2000));
   }
 
   /**

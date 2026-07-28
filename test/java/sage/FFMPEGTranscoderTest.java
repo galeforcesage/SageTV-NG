@@ -312,7 +312,7 @@ public class FFMPEGTranscoderTest
       // A LAN client (mcsr.isLocalConnection()==true, wired via MiniPlayer.setLocalClient())
       // gets a substantially higher ceiling by default.
       transcoder.setLocalClient(true);
-      assertEquals(transcoder.getDynamicMaxVideoKbps(), 8000);
+      assertEquals(transcoder.getDynamicMaxVideoKbps(), 5000);
 
       // Both ceilings are independently operator-configurable without a code change.
       Sage.put("ffmpeg/dynamic_max_video_kbps_lan", "12000");
@@ -378,7 +378,7 @@ public class FFMPEGTranscoderTest
       transcoder.setLocalClient(true);
 
       // No source format known: falls back to the plain LAN ceiling (existing behavior).
-      assertEquals(transcoder.getDynamicMaxVideoKbps(), 8000);
+      assertEquals(transcoder.getDynamicMaxVideoKbps(), 5000);
 
       // Source format known but a genuine multi-Mbps HEVC broadcast (e.g. ~12Mbps):
       // well above the LAN ceiling, so the ceiling itself still governs -- recompressing
@@ -386,7 +386,7 @@ public class FFMPEGTranscoderTest
       ContainerFormat cf = new ContainerFormat();
       cf.setBitrate(12_000_000);
       transcoder.sourceFormat = cf;
-      assertEquals(transcoder.getDynamicMaxVideoKbps(), 8000);
+      assertEquals(transcoder.getDynamicMaxVideoKbps(), 5000);
 
       // Source is a genuinely LOW-bitrate program (e.g. a lightly-encoded SD feed at
       // 3Mbps): never target an OUTPUT bitrate above what the source itself carried --
@@ -400,6 +400,60 @@ public class FFMPEGTranscoderTest
       // pre-existing behavior).
       transcoder.setLocalClient(false);
       assertEquals(transcoder.getDynamicMaxVideoKbps(), 1500);
+    }
+    finally
+    {
+      Sage.remove("ffmpeg/dynamic_max_video_kbps_lan");
+      Sage.remove("ffmpeg/dynamic_max_video_kbps_wan");
+    }
+  }
+
+  @Test
+  public void testSelectDynamicVideoBitrateKbpsIsBandwidthBoundedAndLanAware() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    Sage.remove("ffmpeg/dynamic_max_video_kbps_lan");
+    Sage.remove("ffmpeg/dynamic_max_video_kbps_wan");
+    try
+    {
+      FFMPEGTranscoder transcoder = new FFMPEGTranscoder();
+      transcoder.setLocalClient(true);
+
+      // LAN client, ~10Mbps measured link: bandwidth-derived (10_000_000/2000 = 5000)
+      // and the LAN ceiling (5000 default) coincide here -- exactly the real-world
+      // reading that drove this fix (a placeshifter on a healthy LAN link).
+      assertEquals(transcoder.selectDynamicVideoBitrateKbps(10_000_000L), 5000);
+
+      // LAN client, but a much SLOWER measured link (~3Mbps, e.g. a busy/degraded LAN
+      // segment or Wi-Fi): must NOT get the full 5Mbps ceiling -- the measured
+      // bandwidth still governs, so this client gets ~1500 Kbps, not 5000. Adaptive
+      // means bounded by what's actually available, not a blind constant bump.
+      assertEquals(transcoder.selectDynamicVideoBitrateKbps(3_000_000L), 1500);
+
+      // LAN client on an extremely fast link (e.g. 100Mbps): the LAN ceiling still
+      // caps it at 5000 -- bandwidth headroom alone never lets the legacy mpeg4 path
+      // exceed its configured/source-capped ceiling.
+      assertEquals(transcoder.selectDynamicVideoBitrateKbps(100_000_000L), 5000);
+
+      // Never-exceed-source correctness composes here too: a modest-bitrate source
+      // (e.g. 2Mbps) caps the ceiling below the LAN default, so even a fast LAN link
+      // only pushes toward genuine source quality, not invented detail.
+      ContainerFormat cf = new ContainerFormat();
+      cf.setBitrate(2_000_000);
+      transcoder.sourceFormat = cf;
+      assertEquals(transcoder.selectDynamicVideoBitrateKbps(100_000_000L), 2000);
+      transcoder.sourceFormat = null;
+
+      // WAN client: unchanged, much lower ceiling governs regardless of a generous
+      // (unlikely on a real WAN) measured bandwidth reading.
+      transcoder.setLocalClient(false);
+      assertEquals(transcoder.selectDynamicVideoBitrateKbps(10_000_000L), 1500);
+
+      // Operator can retune the LAN ceiling without a rebuild; the bandwidth bound
+      // still applies on top of it.
+      transcoder.setLocalClient(true);
+      Sage.put("ffmpeg/dynamic_max_video_kbps_lan", "3000");
+      assertEquals(transcoder.selectDynamicVideoBitrateKbps(10_000_000L), 3000);
     }
     finally
     {
