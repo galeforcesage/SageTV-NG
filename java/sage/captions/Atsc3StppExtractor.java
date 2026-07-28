@@ -611,6 +611,16 @@ public final class Atsc3StppExtractor
     final List<CaptionEvent> finalizedCues = new ArrayList<>();
     final java.util.Set<String> emittedKeys = new java.util.HashSet<>();
 
+    // Defense-in-depth dedupe (on top of the root-cause resumeFloorSeconds fix above):
+    // keyOf() dedupes on an EXACT (service, roundedBeginMs, text) tuple, so a truncated
+    // duplicate that differs only in its begin time (the exact failure mode the
+    // resumeFloorSeconds fix targets) would still slip past it if some other, not-yet-
+    // anticipated seek/window edge case ever produced one. This tracks, per (track, text)
+    // pair, the [begin,end] of the last finalized instance of that exact text; a new
+    // candidate for the same track+text whose begin falls within FUZZY_DEDUPE_TOLERANCE_SECONDS
+    // of that instance's span is treated as a duplicate and dropped, independent of keyOf().
+    final java.util.Map<String, double[]> lastFinalizedSpanByTrackText = new java.util.HashMap<>();
+
     /** True once an STPP stream has been confirmed absent for this file. */
     public boolean hasNoStream() { return noStream; }
 
@@ -800,17 +810,19 @@ public final class Atsc3StppExtractor
     {
       if (tails.contains(e)) continue; // provisional; do not finalize yet
       String key = keyOf(e);
-      if (state.emittedKeys.add(key))
-      {
-        state.finalizedCues.add(e);
-        newlyFinalized.add(e);
-        // Track each track's own high-water mark of finalized end time --
-        // see StppIncrementalState.lastFinalizedEndByTrack's javadoc.
-        String tk = trackKey(e);
-        Double prevEnd = state.lastFinalizedEndByTrack.get(tk);
-        if (prevEnd == null || e.getEndSeconds() > prevEnd)
-          state.lastFinalizedEndByTrack.put(tk, e.getEndSeconds());
-      }
+      if (state.emittedKeys.contains(key)) continue;
+      if (isFuzzyDuplicate(e, state)) continue; // defense-in-depth; see lastFinalizedSpanByTrackText javadoc
+      state.emittedKeys.add(key);
+      state.finalizedCues.add(e);
+      newlyFinalized.add(e);
+      // Track each track's own high-water mark of finalized end time --
+      // see StppIncrementalState.lastFinalizedEndByTrack's javadoc.
+      String tk = trackKey(e);
+      Double prevEnd = state.lastFinalizedEndByTrack.get(tk);
+      if (prevEnd == null || e.getEndSeconds() > prevEnd)
+        state.lastFinalizedEndByTrack.put(tk, e.getEndSeconds());
+      state.lastFinalizedSpanByTrackText.put(tk + '\u0000' + e.getText(),
+          new double[] { e.getBeginSeconds(), e.getEndSeconds() });
     }
 
     // Safety ceiling: a long-running live buffer must not grow the retained
@@ -876,10 +888,46 @@ public final class Atsc3StppExtractor
   }
 
   /**
+   * Tolerance (seconds) for the fuzzy defense-in-depth dedupe in {@link #isFuzzyDuplicate}: a
+   * same-track candidate whose text exactly matches an already-finalized cue's text is treated
+   * as a duplicate if its begin falls within this many seconds of that prior cue's span. Set
+   * comfortably wider than the incremental window's overlap look-back
+   * ({@code caption_extraction/stpp_window_overlap_seconds}, default 4.0s at line ~694) so any
+   * truncated re-derivation within a single overlap window is always caught, while a genuine
+   * repeat of the same line of dialogue much later in the broadcast (a real, distinct
+   * occurrence) is never wrongly suppressed.
+   */
+  static final double FUZZY_DEDUPE_TOLERANCE_SECONDS = 6.0;
+
+  /**
+   * Defense-in-depth duplicate check layered on top of {@link #keyOf}'s exact-match dedupe (see
+   * {@code StppIncrementalState.lastFinalizedSpanByTrackText}'s javadoc for the failure mode this
+   * guards against: a truncated re-derivation of an already-finalized cue that differs only in
+   * its begin time, which would otherwise evade {@link #keyOf}'s exact begin-ms match). The
+   * root-cause fix is {@code resumeFloorSeconds} (see {@link #reconcile}), which should make this
+   * unreachable in practice; this exists purely as a safety net for any not-yet-anticipated
+   * seek/window edge case that produces the same symptom.
+   */
+  private static boolean isFuzzyDuplicate(CaptionEvent e, StppIncrementalState state)
+  {
+    String tk = trackKey(e);
+    double[] prevSpan = state.lastFinalizedSpanByTrackText.get(tk + '\u0000' + e.getText());
+    if (prevSpan == null) return false;
+    double prevBegin = prevSpan[0];
+    double prevEnd = prevSpan[1];
+    return e.getBeginSeconds() >= prevBegin - FUZZY_DEDUPE_TOLERANCE_SECONDS
+        && e.getBeginSeconds() <= prevEnd + FUZZY_DEDUPE_TOLERANCE_SECONDS;
+  }
+
+  /**
    * Safety ceiling on retained finalized cues so an indefinitely-running live
    * incremental state can't grow without bound (~a few hours of TV at typical
    * cue rates). When exceeded, the oldest cues are evicted along with their
-   * dedupe keys.
+   * dedupe keys. {@code lastFinalizedSpanByTrackText} is deliberately NOT evicted
+   * in lockstep -- it's keyed by (track, text content), not cue identity, so its
+   * size is bounded by the variety of distinct dialogue lines ever seen (typically
+   * far smaller than the cue count for real broadcast content), not by how many
+   * cues have been finalized.
    */
   static final int MAX_FINALIZED_CUES = 10000;
 

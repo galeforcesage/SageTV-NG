@@ -432,6 +432,51 @@ public class Atsc3StppExtractorIncrementalTest
         "the single finalized cue must retain its TRUE begin, not a truncated one");
   }
 
+  /**
+   * Defense-in-depth: {@link Atsc3StppExtractor#isFuzzyDuplicate} (accessed here indirectly via
+   * {@code processWindowRaw}/{@code reconcile}) must catch a truncated duplicate even in a
+   * scenario the root-cause {@code resumeFloorSeconds} fix wasn't designed for -- e.g. a
+   * hypothetical future seek/window edge case that re-derives an already-finalized cue with a
+   * begin time that happens to fall outside {@link Atsc3StppExtractor#keyOf}'s exact-match
+   * tolerance (a different millisecond-rounded begin defeats that exact key) but still lands
+   * within a few seconds of the original cue's true span. This is simulated directly (bypassing
+   * the normal seek-floor path entirely) by feeding a second window whose coalesced cue shares
+   * the first window's exact text but a slightly different begin/end.
+   */
+  @Test
+  public void fuzzyDedupeCatchesTruncatedDuplicateEvadingExactKey()
+  {
+    // Window 1: finalizes "Hello there" (begin=10.0, end=12.0 raw == normalized, since this
+    // window's first raw begin becomes the frozen epoch anchor).
+    CaptionEvent raw1a = raw(10.0, 10.5, "Hello");
+    CaptionEvent raw1b = raw(10.5, 12.0, "Hello there");
+    CaptionEvent raw1Next = raw(13.0, 13.5, "Bye"); // closes "Hello there" as non-tail
+
+    Atsc3StppExtractor.StppIncrementalState state = new Atsc3StppExtractor.StppIncrementalState();
+    Atsc3StppExtractor.IncrementalResult r1 = Atsc3StppExtractor.processWindowRaw(
+        new ArrayList<>(List.of(raw1a, raw1b, raw1Next)), state);
+
+    assertEquals(r1.newlyFinalized.size(), 1);
+    assertEquals(r1.newlyFinalized.get(0).getText(), "Hello there");
+    assertEquals(state.finalizedCues.size(), 1);
+
+    // Window 2 (simulating an unanticipated edge case, NOT a normal seeked re-scan): a
+    // near-duplicate of "Hello there" with a begin ~0.3s later -- close enough to be the same
+    // real cue, but far enough to produce a DIFFERENT keyOf() (different rounded begin-ms), so
+    // the exact-match dedupe alone would NOT catch it. A different following sentence closes it.
+    CaptionEvent raw2a = raw(10.3, 10.8, "Hello");
+    CaptionEvent raw2b = raw(10.8, 12.3, "Hello there");
+    CaptionEvent raw2Next = raw(14.0, 14.5, "Goodnight");
+
+    Atsc3StppExtractor.IncrementalResult r2 = Atsc3StppExtractor.processWindowRaw(
+        new ArrayList<>(List.of(raw2a, raw2b, raw2Next)), state);
+
+    assertTrue(r2.newlyFinalized.isEmpty(),
+        "fuzzy dedupe should suppress the near-duplicate 'Hello there' cue: " + r2.newlyFinalized);
+    assertEquals(state.finalizedCues.size(), 1,
+        "no second 'Hello there' cue should be finalized");
+  }
+
   private static CaptionEvent find(List<CaptionEvent> list, CaptionEvent ref)
   {
     for (CaptionEvent e : list)

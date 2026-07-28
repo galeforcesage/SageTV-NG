@@ -128,4 +128,39 @@ public class CaptionEventTest
     assertEquals(b.getBeginSeconds(), 0.1, EPS);
     assertEquals(b.getEndSeconds(), 0.2, EPS);
   }
+
+  /**
+   * A long cue's dwell floor scales with its text length via the reading-speed
+   * (characters-per-second) calculation, not just the flat 1.0s minimum -- a dense
+   * line of dialogue needs more time on screen than a 3-word one.
+   */
+  @Test
+  public void longCueGetsReadingSpeedFloorNotJustFlatMinimum()
+  {
+    // 64 characters / 16 cps = 4.0s -- well above the flat 1.0s floor.
+    String longText = "This is a fairly long line of dialogue that needs more time!!!!";
+    assertTrue(longText.length() > 60, "test setup sanity: text should be long enough to trigger the CPS floor");
+
+    List<CaptionEvent> input = new ArrayList<>();
+    input.add(cue(10.0, 10.5, longText));   // natural duration only 0.5s
+    input.add(cue(30.0, 31.0, "Later"));    // ample forward slack available
+
+    List<CaptionEvent> out = CaptionEvent.coalesce(input);
+    CaptionEvent first = out.get(0);
+    double expectedFloor = longText.length() / CaptionEvent.MIN_READING_CPS;
+    assertTrue(expectedFloor > CaptionEvent.MIN_CUE_DURATION_SECONDS,
+        "test setup sanity: reading-speed floor should exceed the flat floor for this text");
+    assertEquals(first.getBeginSeconds(), 10.0, EPS, "begin should be untouched when forward slack suffices");
+    assertEquals(first.getEndSeconds(), 10.0 + expectedFloor, EPS,
+        "end should extend to the reading-speed floor, not just the flat 1.0s minimum");
+  }
+
+  /** Short cues (the common case) are unaffected: the reading-speed floor never exceeds the flat one. */
+  @Test
+  public void shortCueReadingSpeedFloorMatchesFlatFloor()
+  {
+    assertEquals(CaptionEvent.readingSpeedFloorSeconds("Hi"), CaptionEvent.MIN_CUE_DURATION_SECONDS, EPS);
+    assertEquals(CaptionEvent.readingSpeedFloorSeconds(""), CaptionEvent.MIN_CUE_DURATION_SECONDS, EPS);
+    assertEquals(CaptionEvent.readingSpeedFloorSeconds(null), CaptionEvent.MIN_CUE_DURATION_SECONDS, EPS);
+  }
 }
