@@ -4002,6 +4002,15 @@ public class MediaFile extends DBObject implements SegmentedFile
       // Remove sidecar files (.skip, .fidx, .seg, .edl, .vprj, .csv)
       sage.io.SidecarFile.deleteSidecars(theFile);
       sage.commercial.EdlWriter.deleteEdl(theFile);
+      // Issue C fix (caption-session lifecycle): also remove any caption-
+      // extraction .srt sidecar. Without this, deleting a partial/ephemeral
+      // recording (e.g. a discarded live-buffer or cancelled manual
+      // recording) can leave an orphaned sidecar on disk that a later,
+      // unrelated recording could pick up as if it were its own -- the
+      // sidecar path is derived purely from the recording file path (see
+      // CaptionExtractionManager.sidecarFor), so it has no other lifecycle
+      // tied to it once the recording itself is gone.
+      sage.captions.CaptionExtractionManager.sidecarFor(theFile).delete();
       if (dotIdx != -1)
       {
         String basePath = fullPath.substring(0, dotIdx);

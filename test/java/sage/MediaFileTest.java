@@ -44,4 +44,33 @@ public class MediaFileTest
     assertTrue(file.exists() && file.isFile());
     file.deleteOnExit();
   }
+
+  /**
+   * Caption-session lifecycle fix (Issue C): deleting a MediaFile's backing
+   * recording must also remove its caption-extraction .srt sidecar, so a
+   * later, unrelated recording can never be re-attached to stale captions
+   * left over from a deleted partial/ephemeral recording (the sidecar path
+   * is derived purely from the recording's file path -- see
+   * sage.captions.CaptionExtractionManager#sidecarFor -- so nothing else
+   * ties it to the deleted recording's lifecycle unless we do it here).
+   */
+  @Test
+  public void testDeleteRemovesCaptionSidecar() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+
+    File recFile = File.createTempFile("CaptionSidecarDeleteTest", ".mpg");
+    recFile.deleteOnExit();
+    File sidecar = sage.captions.CaptionExtractionManager.sidecarFor(recFile);
+    assertTrue(sidecar.createNewFile(), "failed to create test sidecar " + sidecar);
+    sidecar.deleteOnExit();
+    assertTrue(sidecar.isFile(), "sidecar should exist before delete()");
+
+    MediaFile mf = new MediaFile(Integer.MAX_VALUE - 1);
+    mf.files.add(recFile);
+
+    assertTrue(mf.delete(false), "MediaFile.delete() should report success");
+    assertFalse(sidecar.exists(), "caption sidecar should be removed when the recording is deleted");
+    assertFalse(recFile.exists(), "backing recording file should be removed by delete()");
+  }
 }
