@@ -3319,6 +3319,20 @@ public class FFMPEGTranscoder implements TranscodeEngine
   }
 
   /**
+   * @param b true if the connecting client is a hardware media extender
+   *          (HD100/HD200-class); see {@link #mediaExtender}.
+   */
+  public void setMediaExtender(boolean b)
+  {
+    mediaExtender = b;
+  }
+
+  public boolean isMediaExtender()
+  {
+    return mediaExtender;
+  }
+
+  /**
    * Absolute video-bitrate ceiling (Kbps) for the legacy mpeg4 "dynamic" placeshifter
    * ladder and its continuous runtime up-ramp adjuster (the {@code videorateadapt}
    * loop in {@code MiniPlayer}). Historically a single hardcoded value (1000 in the
@@ -3329,12 +3343,18 @@ public class FFMPEGTranscoder implements TranscodeEngine
    * real headroom the bandwidth-feedback loop had already discovered.
    * <p>
    * Returns {@code ffmpeg/dynamic_max_video_kbps_lan} (default 5000) when
-   * {@link #localClient} is true (set via {@link #setLocalClient}), otherwise
-   * {@code ffmpeg/dynamic_max_video_kbps_wan} (default 1500, preserving the
-   * pre-existing WAN ceiling exactly). Either is still bounded below by whatever
-   * {@link #estimatedBandwidth}/the live bandwidth-hint feedback loop actually
-   * measures -- this is a ceiling, not a target -- so a slow LAN link still gets
-   * scaled down appropriately.
+   * {@link #localClient} is true (set via {@link #setLocalClient}) AND the
+   * client is NOT a hardware media extender, {@code ffmpeg/dynamic_max_video_kbps_lan_extender}
+   * (default 1500, a deliberately conservative value matching extenders'
+   * historical baseline) when it IS a LAN extender (see {@link #mediaExtender}/
+   * {@link #setMediaExtender}) -- extender hardware's real mpeg4 decode
+   * headroom hasn't changed just because the desktop-Placeshifter LAN
+   * fallback ceiling was raised, so it keeps its own, separately
+   * configurable ceiling -- otherwise {@code ffmpeg/dynamic_max_video_kbps_wan}
+   * (default 1500, preserving the pre-existing WAN ceiling exactly). Either
+   * is still bounded below by whatever {@link #estimatedBandwidth}/the live
+   * bandwidth-hint feedback loop actually measures -- this is a ceiling, not
+   * a target -- so a slow LAN link still gets scaled down appropriately.
    * <p>
    * Never-upscale-the-source correctness rule: the returned ceiling is also
    * hard-capped at the source's own bitrate ({@link #getSourceBitrateKbps()})
@@ -3346,9 +3366,13 @@ public class FFMPEGTranscoder implements TranscodeEngine
    */
   public int getDynamicMaxVideoKbps()
   {
-    int ceiling = localClient
-        ? Sage.getInt("ffmpeg/dynamic_max_video_kbps_lan", 5000)
-        : Sage.getInt("ffmpeg/dynamic_max_video_kbps_wan", 1500);
+    int ceiling;
+    if (!localClient)
+      ceiling = Sage.getInt("ffmpeg/dynamic_max_video_kbps_wan", 1500);
+    else if (mediaExtender)
+      ceiling = Sage.getInt("ffmpeg/dynamic_max_video_kbps_lan_extender", 1500);
+    else
+      ceiling = Sage.getInt("ffmpeg/dynamic_max_video_kbps_lan", 5000);
     int sourceKbps = getSourceBitrateKbps();
     if (sourceKbps > 0 && sourceKbps < ceiling)
       return sourceKbps;
@@ -3723,6 +3747,20 @@ public class FFMPEGTranscoder implements TranscodeEngine
    * false (WAN-conservative) so any caller that never sets it keeps today's behavior.
    */
   protected boolean localClient = false;
+  /**
+   * True when the connecting client is a hardware media extender (HD100/
+   * HD200-class device -- no MOUSE in {@code INPUT_DEVICES}, see
+   * {@code MiniClientSageRenderer.isMediaExtender()}, the SAME signal
+   * {@code MiniPlayer.legacyH264PushProfileApplies()} uses to EXCLUDE
+   * extenders from the H.264-push profile). Used by
+   * {@link #getDynamicMaxVideoKbps()} to apply a separate, more
+   * conservative LAN ceiling for extenders than for non-extender classic
+   * desktop Placeshifter clients -- so raising the desktop-Placeshifter LAN
+   * fallback ceiling never also raises old extender hardware's ceiling.
+   * Defaults to false (non-extender) so any caller that never sets it keeps
+   * today's non-extender behavior.
+   */
+  protected boolean mediaExtender = false;
   protected int liveLastBandwidthHintKbps;
   protected int liveSmoothedBandwidthHintKbps;
   protected int liveDeficitWindows;

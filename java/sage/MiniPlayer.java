@@ -2164,6 +2164,13 @@ public class MiniPlayer implements DVDMediaPlayer
           // every classic placeshifter client to the same WAN-conservative cap. See
           // FFMPEGTranscoder.getDynamicMaxVideoKbps()/getDynamicMaxFps().
           xcodeFtc.setLocalClient(mcsr != null && mcsr.isLocalConnection());
+          // Media extenders (HD100/HD200 -- the SAME mediaExtender signal
+          // legacyH264PushProfileApplies() uses to exclude them from the H.264
+          // push profile) get their own, separately configurable LAN ceiling
+          // (dynamic_max_video_kbps_lan_extender) so raising the desktop
+          // Placeshifter's LAN fallback ceiling never also raises old extender
+          // hardware's ceiling. See FFMPEGTranscoder.setMediaExtender()/getDynamicMaxVideoKbps().
+          xcodeFtc.setMediaExtender(mediaExtender);
           xcodeFtc.setThreadingEnabled(Sage.getBoolean("xcode/allow_multithreading_for_hdextender_placeshifting", false) || !hdMediaExtender || !lowBandwidth);
         }
       }
