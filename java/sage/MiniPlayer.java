@@ -1590,8 +1590,9 @@ public class MiniPlayer implements DVDMediaPlayer
             // we still want the bitrate adjuster to clamp the transcode
             // DOWN when the measured link can't carry the profile's target
             // bitrate. The UP branch in the adjuster gates on
-            // currentVideoBitrate < 1500 kbps, so a fixed profile above
-            // that floor cannot be ratcheted upward — we only ever clamp
+            // currentVideoBitrate < fftc.getDynamicMaxVideoKbps() (LAN-aware
+            // ceiling; see FFMPEGTranscoder), so a fixed profile at or above
+            // that ceiling cannot be ratcheted upward — we only ever clamp
             // downward toward the link's capacity.
             //
             // Toggle: transcoder/adapt_fixed_to_bw (default true).
@@ -2099,8 +2100,15 @@ public class MiniPlayer implements DVDMediaPlayer
           finalLength = mpegSrc.length();
         if (serverSideTranscoding && mpegSrc != null && mpegSrc.getTranscoder() != null && mpegSrc.getTranscoder() instanceof FFMPEGTranscoder)
         {
-          ((FFMPEGTranscoder)mpegSrc.getTranscoder()).setEstimatedBandwidth(uiBandwidthEstimate);
-          ((FFMPEGTranscoder)mpegSrc.getTranscoder()).setThreadingEnabled(Sage.getBoolean("xcode/allow_multithreading_for_hdextender_placeshifting", false) || !hdMediaExtender || !lowBandwidth);
+          FFMPEGTranscoder xcodeFtc = (FFMPEGTranscoder)mpegSrc.getTranscoder();
+          xcodeFtc.setEstimatedBandwidth(uiBandwidthEstimate);
+          // mcsr.isLocalConnection() is the same real subnet-mask IP comparison already used
+          // above to clamp DOWN a marginal WAN estimate -- reuse it here to let the dynamic
+          // mpeg4 ladder/ramp raise ITS bitrate/fps ceiling for a LAN client instead of holding
+          // every classic placeshifter client to the same WAN-conservative cap. See
+          // FFMPEGTranscoder.getDynamicMaxVideoKbps()/getDynamicMaxFps().
+          xcodeFtc.setLocalClient(mcsr != null && mcsr.isLocalConnection());
+          xcodeFtc.setThreadingEnabled(Sage.getBoolean("xcode/allow_multithreading_for_hdextender_placeshifting", false) || !hdMediaExtender || !lowBandwidth);
         }
       }
       //mpegSrc.setTimeshifted(timeshifted);
@@ -3211,16 +3219,21 @@ public class MiniPlayer implements DVDMediaPlayer
                   if (Sage.DBG || debugPush) System.out.println("Adjusted bitrate DOWN to : " + fftc.getCurrentStreamBitrateKbps());
                 }
               }
-              else if (fftc.getCurrentVideoBitrateKbps() < 1500 &&
+              else if (fftc.getCurrentVideoBitrateKbps() < fftc.getDynamicMaxVideoKbps() &&
                   (lastAverageEstimatedPushBitrate/1000 > fftc.getCurrentStreamBitrateKbps() + currBandwidthBufferKbps) && Sage.eventTime() - lastRateAdjustTime > 1000)
               {
                 // Trying to push the bitrate higher than the bandwidth we've detected doesn't seem wise at this point...
-                int currAdjust = Math.min(1500 - fftc.getCurrentVideoBitrateKbps(),
+                // Ceiling is fftc.getDynamicMaxVideoKbps() -- LAN-aware (raised for a client on the
+                // server's subnet, see FFMPEGTranscoder.setLocalClient()/getDynamicMaxVideoKbps()) instead
+                // of a single hardcoded 1500 applied to every classic placeshifter client regardless of
+                // actually-measured/available bandwidth (lastAverageEstimatedPushBitrate above still
+                // bounds it, so a slow LAN link isn't force-fed bitrate it can't sustain).
+                int currAdjust = Math.min(fftc.getDynamicMaxVideoKbps() - fftc.getCurrentVideoBitrateKbps(),
                     lastEstimatedPushBitrate/1000 - fftc.getCurrentStreamBitrateKbps() - currBandwidthBufferKbps);
                 //								if (lastEstimatedPushBitrate < lastAverageEstimatedPushBitrate &&
                 //									lastAverageEstimatedPushBitrate < fftc.getCurrentStreamBitrateKbps())//(Math.abs(currAdjust) < 20)
                 {
-                  int newAdjust = Math.min(1500 - fftc.getCurrentVideoBitrateKbps(),
+                  int newAdjust = Math.min(fftc.getDynamicMaxVideoKbps() - fftc.getCurrentVideoBitrateKbps(),
                       lastAverageEstimatedPushBitrate/1000 - fftc.getCurrentStreamBitrateKbps() - currBandwidthBufferKbps);
                   //									if (Math.abs(newAdjust) < Math.abs(currAdjust))
                   {
