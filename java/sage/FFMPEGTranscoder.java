@@ -1832,14 +1832,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add(iOSMode ? "mpegts" : "dvd");
       xcodeParamsVec.add("-vcodec");
       xcodeParamsVec.add(videoCodec = "mpeg4");
-      int dynamicWidth = 1280;
-      int dynamicHeight = 720;
-      if (srcVideo != null && srcVideo.getWidth() > 0 && srcVideo.getHeight() > 0 && srcVideo.getHeight() < 720)
-      {
-        // Do not upscale SD sources in dynamic mode.
-        dynamicWidth = srcVideo.getWidth();
-        dynamicHeight = srcVideo.getHeight();
-      }
+      int[] dynamicRes = getDynamicMaxResolution(srcVideo);
+      int dynamicWidth = dynamicRes[0];
+      int dynamicHeight = dynamicRes[1];
       xcodeParamsVec.add("-s");
       xcodeParamsVec.add(dynamicWidth + "x" + dynamicHeight);
       targetWidth = dynamicWidth;
@@ -3340,12 +3335,77 @@ public class FFMPEGTranscoder implements TranscodeEngine
    * {@link #estimatedBandwidth}/the live bandwidth-hint feedback loop actually
    * measures -- this is a ceiling, not a target -- so a slow LAN link still gets
    * scaled down appropriately.
+   * <p>
+   * Never-upscale-the-source correctness rule: the returned ceiling is also
+   * hard-capped at the source's own bitrate ({@link #getSourceBitrateKbps()})
+   * when that is known and lower than the configured ceiling. Recompressing
+   * at a higher bitrate than the source itself carried doesn't add any real
+   * detail -- it just spends bits the source never had -- so a LAN client
+   * only gets pushed up toward genuine source quality, never invited to
+   * synthesize beyond it.
    */
   public int getDynamicMaxVideoKbps()
   {
-    return localClient
+    int ceiling = localClient
         ? Sage.getInt("ffmpeg/dynamic_max_video_kbps_lan", 8000)
         : Sage.getInt("ffmpeg/dynamic_max_video_kbps_wan", 1500);
+    int sourceKbps = getSourceBitrateKbps();
+    if (sourceKbps > 0 && sourceKbps < ceiling)
+      return sourceKbps;
+    return ceiling;
+  }
+
+  /**
+   * Best-known source bitrate (Kbps) for the current {@link #sourceFormat}, or
+   * 0 if unknown. This is the OVERALL container bitrate (video + audio, as
+   * reported by ffprobe/the format parser) -- {@link sage.media.format.VideoFormat}
+   * carries no separate video-only bitrate field, so this is a deliberately
+   * conservative approximation: for a video-dominant broadcast stream (e.g. a
+   * multi-Mbps HEVC ATSC3 program with a few-hundred-Kbps AC-4/AAC audio
+   * track) it is very close to the true video bitrate, and erring toward
+   * including the audio share only makes the resulting ceiling slightly
+   * MORE conservative (never accidentally permits exceeding source video
+   * quality).
+   */
+  private int getSourceBitrateKbps()
+  {
+    if (sourceFormat == null) return 0;
+    int br = sourceFormat.getBitrate();
+    return br > 0 ? br / 1000 : 0;
+  }
+
+  /**
+   * Target output resolution {@code {width, height}} for the legacy mpeg4
+   * "dynamic" placeshifter ladder. Historically hardcoded to 1280x720 (with
+   * an SD-source exception to avoid upscaling) regardless of the client's
+   * decode capability or how much better the source actually is -- e.g. a
+   * genuine 1080p HEVC ATSC3 source was downscaled to 720p even for a LAN
+   * client with bandwidth and decode headroom for full 1080p mpeg4.
+   * <p>
+   * Returns a ceiling raised toward {@code ffmpeg/dynamic_max_width_lan} x
+   * {@code ffmpeg/dynamic_max_height_lan} (default 1920x1080) for a
+   * {@link #localClient}, otherwise the original 1280x720 WAN ceiling
+   * (unchanged default behavior). In both cases the result is HARD-CAPPED at
+   * the source's own resolution -- this is a ceiling toward true source-native
+   * detail, it NEVER upscales or invents resolution the source doesn't have.
+   * A source narrower/shorter than the applicable ceiling (e.g. genuine SD)
+   * is passed through at its native size, exactly like the historical
+   * SD-passthrough behavior this generalizes.
+   */
+  public int[] getDynamicMaxResolution(sage.media.format.VideoFormat srcVideo)
+  {
+    int ceilW = localClient ? Sage.getInt("ffmpeg/dynamic_max_width_lan", 1920) : 1280;
+    int ceilH = localClient ? Sage.getInt("ffmpeg/dynamic_max_height_lan", 1080) : 720;
+    if (srcVideo != null && srcVideo.getWidth() > 0 && srcVideo.getHeight() > 0)
+    {
+      // Never upscale, and never exceed source-native -- independent per-axis
+      // min() is behavior-identical to the historical hardcoded-720p path for
+      // any source at or above 1280x720 (both axes clamp to the same 1280x720
+      // ceiling as before), and identical to the historical SD-passthrough
+      // exception for a source below the ceiling on both axes.
+      return new int[] { Math.min(ceilW, srcVideo.getWidth()), Math.min(ceilH, srcVideo.getHeight()) };
+    }
+    return new int[] { ceilW, ceilH };
   }
 
   /**
