@@ -30,6 +30,54 @@ public class MiniPlayer implements DVDMediaPlayer
   private static final int MIN_DYNAMIC_VIDEO_BITRATE_KBPS = 50;
   private static final int BANDWIDTH_BUFFER_KBPS = 50; // increased from 30 because our new algorithm is more aggressive
 
+  /**
+   * Legacy-client H.264-push capability profile.
+   * <p>
+   * The classic (non-NG) MiniClient/Placeshifter wire protocol
+   * ({@code sage.miniclient.MiniClientConnection}) already advertises H.264
+   * video decode support via {@code MPLAYER_VIDEO_CODECS}, but its
+   * {@code PUSH_AV_CONTAINERS} handshake reply is hardcoded to MPEG2-PS only
+   * ({@code MPLAYER_PUSH_FORMATS}) -- it has no way to self-advertise
+   * MPEG2-TS push even though the underlying H.264 decode capability is
+   * real (verified via a live handshake capture: {@code VIDEO_CODECS}
+   * includes H.264, {@code PUSH_AV_CONTAINERS=MPEG2-PS}).
+   * <p>
+   * This profile grants the missing MPEG2-TS-push capability -- but ONLY to
+   * clients that are:
+   * <ul>
+   *   <li>genuinely legacy, i.e. NOT an NG session ({@code !ngSession}) --
+   *       NG clients (PWA/Android) already negotiate their own capabilities
+   *       correctly and must never be touched by this override; and</li>
+   *   <li>NOT a hardware media extender ({@code !mediaExtender}) -- HD100/
+   *       HD200 boxes report no MOUSE in {@code INPUT_DEVICES}, so
+   *       {@code mediaExtender} is true for them and they are excluded,
+   *       remaining on the legacy mpeg4 ladder (with its LAN-aware ceiling
+   *       from {@code ffmpeg/dynamic_max_video_kbps_lan}, default 5000) as
+   *       the correct fallback for genuinely mpeg4-only legacy devices.</li>
+   * </ul>
+   * The caller is still required to have separately confirmed the client
+   * already advertises H.264 video decode ({@code isSupportedVideoCodec(H264)})
+   * before consulting this profile -- it only ever substitutes for the
+   * missing MPEG2-TS push advertisement, never for H.264 decode support
+   * itself.
+   * <p>
+   * Kill-switch: {@code miniplayer/legacy_h264_push_override} (default
+   * {@code true}) allows disabling this profile live, without a rebuild, if
+   * a legacy client is ever found to mis-decode pushed H.264/MPEG2-TS.
+   *
+   * @param ngSession     true if this is an NG-capable session (from
+   *                      {@link MiniClientSageRenderer#isNgCapableSession()})
+   * @param mediaExtender true if this connection is from a hardware media
+   *                      extender (from {@link MiniClientSageRenderer#isMediaExtender()})
+   * @return true if the legacy-client H.264-push profile should treat
+   *         MPEG2-TS push as supported for this client
+   */
+  static boolean legacyH264PushProfileApplies(boolean ngSession, boolean mediaExtender)
+  {
+    return Sage.getBoolean("miniplayer/legacy_h264_push_override", true)
+        && !ngSession && !mediaExtender;
+  }
+
   private java.nio.channels.SocketChannel clientSocket;
   private FastPusherReply clientInStream;
   private java.nio.ByteBuffer sockBuf = java.nio.ByteBuffer.allocateDirect(65536);
@@ -824,7 +872,15 @@ public class MiniPlayer implements DVDMediaPlayer
         // miniplayer/enable_h264_push_transcode (default true).
         h264PushOK = Sage.getBoolean("miniplayer/enable_h264_push_transcode", true)
             && mcsr.isSupportedVideoCodec(sage.media.format.MediaFormat.H264)
-            && mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_TS);
+            && (mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_TS)
+                // Legacy-client H.264-push capability profile: the classic desktop
+                // Placeshifter already advertises H.264 decode but never advertises
+                // MPEG2-TS push (protocol limitation, not a real capability gap --
+                // see legacyH264PushProfileApplies() javadoc). Grant it here so this
+                // client routes onto the modern dynamich264 path instead of the
+                // legacy mpeg4 ladder. Scoped to non-NG, non-extender clients only;
+                // HD100/HD200 and NG clients are unaffected.
+                || legacyH264PushProfileApplies(ngSession, mediaExtender));
         detailedPushBufferStats = mcsr.isDetailedPushBufferStats();
         if (mcsr.isSupportedVideoCodec("MPEG2-VIDEO@HL"))
         {
