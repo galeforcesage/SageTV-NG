@@ -328,6 +328,66 @@ public class FFMPEGTranscoderTest
     }
   }
 
+  /**
+   * Hardware media extenders (HD100/HD200 -- {@code mediaExtender == true},
+   * the SAME signal {@code MiniPlayer.legacyH264PushProfileApplies()} uses
+   * to EXCLUDE them from the H.264-push profile) must get their OWN,
+   * separately configurable LAN ceiling (conservative default 1500,
+   * matching their historical baseline) rather than inheriting the
+   * desktop-Placeshifter LAN fallback ceiling (5000). This keeps raising
+   * the desktop-Placeshifter fallback ceiling from silently also raising
+   * old extender hardware's ceiling.
+   */
+  @Test
+  public void testGetDynamicMaxVideoKbpsExtenderCeilingIsSeparate() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    Sage.remove("ffmpeg/dynamic_max_video_kbps_lan");
+    Sage.remove("ffmpeg/dynamic_max_video_kbps_lan_extender");
+    Sage.remove("ffmpeg/dynamic_max_video_kbps_wan");
+    try
+    {
+      FFMPEGTranscoder transcoder = new FFMPEGTranscoder();
+      transcoder.setLocalClient(true);
+
+      // Non-extender LAN client (classic desktop Placeshifter fallback): unchanged 5000.
+      assertFalse(transcoder.isMediaExtender());
+      assertEquals(transcoder.getDynamicMaxVideoKbps(), 5000);
+
+      // Extender LAN client: separate, more conservative default ceiling (1500), NOT 5000.
+      transcoder.setMediaExtender(true);
+      assertTrue(transcoder.isMediaExtender());
+      assertEquals(transcoder.getDynamicMaxVideoKbps(), 1500);
+
+      // Independently operator-configurable from the non-extender LAN ceiling.
+      Sage.put("ffmpeg/dynamic_max_video_kbps_lan_extender", "2200");
+      assertEquals(transcoder.getDynamicMaxVideoKbps(), 2200);
+      Sage.put("ffmpeg/dynamic_max_video_kbps_lan", "9000");
+      // Extender still uses its own ceiling, unaffected by the non-extender LAN value.
+      assertEquals(transcoder.getDynamicMaxVideoKbps(), 2200);
+      transcoder.setMediaExtender(false);
+      assertEquals(transcoder.getDynamicMaxVideoKbps(), 9000);
+
+      // Still bandwidth-bound and source-capped regardless of extender status.
+      transcoder.setMediaExtender(true);
+      ContainerFormat cf = new ContainerFormat();
+      cf.setBitrate(1_000_000); // 1000 Kbps source, below the 2200 extender ceiling
+      transcoder.sourceFormat = cf;
+      assertEquals(transcoder.getDynamicMaxVideoKbps(), 1000);
+
+      // WAN path is untouched by extender status -- it's a purely LAN-side distinction.
+      transcoder.sourceFormat = null;
+      transcoder.setLocalClient(false);
+      assertEquals(transcoder.getDynamicMaxVideoKbps(), 1500);
+    }
+    finally
+    {
+      Sage.remove("ffmpeg/dynamic_max_video_kbps_lan");
+      Sage.remove("ffmpeg/dynamic_max_video_kbps_lan_extender");
+      Sage.remove("ffmpeg/dynamic_max_video_kbps_wan");
+    }
+  }
+
   @Test
   public void testGetDynamicMaxFpsIsLanAwareAndSourceCapped() throws Throwable
   {
