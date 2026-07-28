@@ -366,6 +366,115 @@ public class FFMPEGTranscoderTest
     }
   }
 
+  @Test
+  public void testGetDynamicMaxVideoKbpsNeverExceedsSourceBitrate() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    Sage.remove("ffmpeg/dynamic_max_video_kbps_lan");
+    Sage.remove("ffmpeg/dynamic_max_video_kbps_wan");
+    try
+    {
+      FFMPEGTranscoder transcoder = new FFMPEGTranscoder();
+      transcoder.setLocalClient(true);
+
+      // No source format known: falls back to the plain LAN ceiling (existing behavior).
+      assertEquals(transcoder.getDynamicMaxVideoKbps(), 8000);
+
+      // Source format known but a genuine multi-Mbps HEVC broadcast (e.g. ~12Mbps):
+      // well above the LAN ceiling, so the ceiling itself still governs -- recompressing
+      // toward a much lower mpeg4 bitrate than source is normal/expected, not an upscale.
+      ContainerFormat cf = new ContainerFormat();
+      cf.setBitrate(12_000_000);
+      transcoder.sourceFormat = cf;
+      assertEquals(transcoder.getDynamicMaxVideoKbps(), 8000);
+
+      // Source is a genuinely LOW-bitrate program (e.g. a lightly-encoded SD feed at
+      // 3Mbps): never target an OUTPUT bitrate above what the source itself carried --
+      // recompressing higher than source doesn't add real detail, it just spends bits
+      // the source never had.
+      cf.setBitrate(3_000_000);
+      assertEquals(transcoder.getDynamicMaxVideoKbps(), 3000);
+
+      // WAN client: the much-lower WAN ceiling (1500) already governs below a normal
+      // broadcast bitrate, so the source-bitrate cap is a no-op there (unchanged
+      // pre-existing behavior).
+      transcoder.setLocalClient(false);
+      assertEquals(transcoder.getDynamicMaxVideoKbps(), 1500);
+    }
+    finally
+    {
+      Sage.remove("ffmpeg/dynamic_max_video_kbps_lan");
+      Sage.remove("ffmpeg/dynamic_max_video_kbps_wan");
+    }
+  }
+
+  @Test
+  public void testGetDynamicMaxResolutionNeverUpscalesBeyondSource() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    Sage.remove("ffmpeg/dynamic_max_width_lan");
+    Sage.remove("ffmpeg/dynamic_max_height_lan");
+    try
+    {
+      FFMPEGTranscoder transcoder = new FFMPEGTranscoder();
+      VideoFormat srcVideo = new VideoFormat();
+
+      // WAN client with a genuine 1080p source: unchanged historical 1280x720 ceiling
+      // (this is the pre-existing hardcoded WAN behavior, preserved exactly).
+      srcVideo.setWidth(1920);
+      srcVideo.setHeight(1080);
+      int[] wanRes = transcoder.getDynamicMaxResolution(srcVideo);
+      assertEquals(wanRes[0], 1280);
+      assertEquals(wanRes[1], 720);
+
+      // LAN client with the SAME 1080p source: raised toward true source-native detail --
+      // this is the actual fix (previously downscaled to 720p even on LAN with headroom).
+      transcoder.setLocalClient(true);
+      int[] lanRes = transcoder.getDynamicMaxResolution(srcVideo);
+      assertEquals(lanRes[0], 1920);
+      assertEquals(lanRes[1], 1080);
+
+      // LAN client but source is only 720p: hard-capped at source-native -- never upscale
+      // beyond what the source actually provides, even though the LAN ceiling is higher.
+      srcVideo.setWidth(1280);
+      srcVideo.setHeight(720);
+      int[] lanCappedRes = transcoder.getDynamicMaxResolution(srcVideo);
+      assertEquals(lanCappedRes[0], 1280);
+      assertEquals(lanCappedRes[1], 720);
+
+      // Genuine SD source: passthrough at native size on both WAN and LAN (never upscale
+      // SD), matching the historical SD-passthrough exception.
+      srcVideo.setWidth(720);
+      srcVideo.setHeight(480);
+      int[] sdLan = transcoder.getDynamicMaxResolution(srcVideo);
+      assertEquals(sdLan[0], 720);
+      assertEquals(sdLan[1], 480);
+      transcoder.setLocalClient(false);
+      int[] sdWan = transcoder.getDynamicMaxResolution(srcVideo);
+      assertEquals(sdWan[0], 720);
+      assertEquals(sdWan[1], 480);
+
+      // No source format available: falls back to the plain ceiling.
+      assertEquals(transcoder.getDynamicMaxResolution(null)[0], 1280);
+      assertEquals(transcoder.getDynamicMaxResolution(null)[1], 720);
+
+      // Ceilings are operator-configurable.
+      transcoder.setLocalClient(true);
+      Sage.put("ffmpeg/dynamic_max_width_lan", "1280");
+      Sage.put("ffmpeg/dynamic_max_height_lan", "720");
+      srcVideo.setWidth(1920);
+      srcVideo.setHeight(1080);
+      int[] configuredRes = transcoder.getDynamicMaxResolution(srcVideo);
+      assertEquals(configuredRes[0], 1280);
+      assertEquals(configuredRes[1], 720);
+    }
+    finally
+    {
+      Sage.remove("ffmpeg/dynamic_max_width_lan");
+      Sage.remove("ffmpeg/dynamic_max_height_lan");
+    }
+  }
+
     private FFMPEGTranscoder hevcTsTranscoder()
     {
       FFMPEGTranscoder t = new FFMPEGTranscoder();
