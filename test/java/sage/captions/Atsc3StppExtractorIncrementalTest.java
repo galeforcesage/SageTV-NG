@@ -335,6 +335,103 @@ public class Atsc3StppExtractorIncrementalTest
         "strongly negative media time must be rejected");
   }
 
+  // ── Issue B: overlap seek must never re-enter an already-finalized cue ──
+
+  /**
+   * Reproduces the real-world "long already-finalized cue re-derived as a
+   * truncated duplicate" bug: a long char-by-char roll-up cue (e.g. a music
+   * note marker held up for several seconds) finalizes once the next
+   * sentence's tail appears. Its own duration exceeds the fixed overlap
+   * look-back margin, so naively seeking to {@code resumeSeconds - overlap}
+   * (the pre-fix formula) lands back inside that cue's raw time span. If a
+   * later incremental window is built from that seek point, it misses the
+   * long cue's *first* raw fragment (which lies before the seek point) and
+   * only sees its later fragment(s) — coalesce() then derives a truncated,
+   * differently-timed duplicate of an already-emitted cue.
+   *
+   * <p>This test drives {@code processWindowRaw}/{@code reconcile} directly
+   * (the seek computation itself lives in {@code extractIncremental}, which
+   * needs ffmpeg) and asserts two things: (1) after the long cue finalizes,
+   * {@code state.resumeFloorSeconds} is advanced to (at least) that cue's
+   * end, so the same seek formula {@code extractIncremental} uses —
+   * {@code max(resumeFloorSeconds, resumeSeconds - overlap)} — can never
+   * land before it; and (2) driving a subsequent window built from that
+   * fixed seek point (rather than the old, unclamped one) never produces a
+   * duplicate/truncated re-finalization of the long cue.
+   */
+  @Test
+  public void overlapSeekNeverReenterAlreadyFinalizedCue()
+  {
+    double overlap = 4.0; // matches Atsc3StppExtractor's default stpp_window_overlap_seconds
+
+    // A long roll-up cue: two raw fragments 8s apart (a real "note" marker
+    // held up across several packets), well past the fixed overlap margin.
+    // Values are absolute/raw TTML times (the epoch anchor, frozen from this
+    // window's minimum begin, is subtracted back out below to interpret
+    // state.resumeSeconds/resumeFloorSeconds, which live in normalized
+    // media-relative seconds -- the same domain ffmpeg's -ss expects).
+    CaptionEvent longRaw1 = raw(100.0, 100.5, "note");
+    CaptionEvent longRaw2 = raw(108.0, 110.0, "note note"); // extends "note" -> single coalesced cue
+    // Next sentence's first fragment -- makes longRaw2 finalize as the closed cue.
+    CaptionEvent nextRaw = raw(111.0, 111.5, "Hello");
+
+    Atsc3StppExtractor.StppIncrementalState state = new Atsc3StppExtractor.StppIncrementalState();
+    Atsc3StppExtractor.IncrementalResult r1 = Atsc3StppExtractor.processWindowRaw(
+        new ArrayList<>(List.of(longRaw1, longRaw2, nextRaw)), state);
+
+    assertEquals(r1.newlyFinalized.size(), 1, "the long roll-up cue should finalize once the next sentence starts");
+    CaptionEvent longFinalized = r1.newlyFinalized.get(0);
+    assertEquals(longFinalized.getText(), "note note");
+    double epoch = state.epochOffsetSeconds; // frozen anchor == longRaw1.begin == 100.0
+    assertEquals(longFinalized.getBeginSeconds(), 100.0 - epoch, EPS,
+        "finalized cue must keep its TRUE (normalized) begin -- the first fragment");
+    assertEquals(longFinalized.getEndSeconds(), 110.0 - epoch, EPS);
+
+    // The floor must have advanced to (at least) the long cue's normalized end.
+    double longCueNormalizedEnd = 110.0 - epoch;
+    assertTrue(state.resumeFloorSeconds >= longCueNormalizedEnd - EPS,
+        "resumeFloorSeconds must advance to the finalized cue's end: was " + state.resumeFloorSeconds);
+
+    // Reproduce the seek formula extractIncremental() uses (normalized seconds).
+    double seekSeconds = Math.max(state.resumeFloorSeconds, state.resumeSeconds - overlap);
+    seekSeconds = Math.max(0.0, seekSeconds);
+
+    // Sanity: WITHOUT the floor, the naive formula would land inside the gap
+    // between the long cue's two raw fragments -- proving this scenario
+    // really does reproduce the bug: a window seeked from there would miss
+    // the long cue's *first* fragment (normalized begin 0.0) while still
+    // capturing its second fragment (normalized begin 8.0).
+    double naiveSeek = Math.max(0.0, state.resumeSeconds - overlap);
+    assertTrue(naiveSeek > 0.0 && naiveSeek < (108.0 - epoch),
+        "test setup sanity: naive seek should land after the long cue's first fragment " +
+            "but before its second, was " + naiveSeek);
+
+    // The floor-respecting seek must NOT land inside the long cue's span.
+    assertTrue(seekSeconds >= longCueNormalizedEnd - EPS,
+        "clamped seek must not re-enter the already-finalized long cue: was " + seekSeconds);
+
+    // Drive a follow-up window built from the fixed seek point. Raw TTML docs
+    // are keyed by absolute time, so convert the normalized seek back to the
+    // raw domain (adding the frozen epoch back) before filtering -- exactly
+    // mirroring how a real ffmpeg -ss (media-relative) determines which raw
+    // TTML packets fall inside the re-extracted window.
+    double rawSeek = seekSeconds + epoch;
+    List<CaptionEvent> window2 = new ArrayList<>();
+    for (CaptionEvent e : List.of(longRaw1, longRaw2, nextRaw))
+      if (e.getBeginSeconds() >= rawSeek) window2.add(e);
+    // Confirms the fixed seek correctly omits BOTH of the long cue's raw
+    // fragments (already fully finalized), leaving only the next sentence.
+    assertEquals(window2.size(), 1);
+    assertEquals(window2.get(0).getText(), "Hello");
+
+    Atsc3StppExtractor.IncrementalResult r2 = Atsc3StppExtractor.processWindowRaw(window2, state);
+
+    assertTrue(r2.newlyFinalized.isEmpty(), "no cue should re-finalize from the follow-up window: " + r2.newlyFinalized);
+    assertEquals(state.finalizedCues.size(), 1, "the long cue must not be duplicated");
+    assertEquals(state.finalizedCues.get(0).getBeginSeconds(), 100.0 - epoch, EPS,
+        "the single finalized cue must retain its TRUE begin, not a truncated one");
+  }
+
   private static CaptionEvent find(List<CaptionEvent> list, CaptionEvent ref)
   {
     for (CaptionEvent e : list)
