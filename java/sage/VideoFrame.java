@@ -2600,7 +2600,32 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
             if (!alreadyDidSubCheck && downer == null)
               currFile.checkForSubtitles();
             sage.media.format.ContainerFormat cf = currFile.getFileFormat();
-            if (cf != null && cf.hasExternalSubtitles())
+            // Issue C fix (caption-session lifecycle): an in-progress
+            // (live/timeshift) recording's external-subtitle sidecar is
+            // keyed purely to the recording's file path (see
+            // CaptionExtractionManager.sidecarFor), not to this viewing
+            // session -- so if the SAME still-recording file was already
+            // viewed earlier (tuned away and back), checkForSubtitles()
+            // above can find a sidecar written during that EARLIER session
+            // and this block would wire it up here as if it were
+            // authoritative for "right now". Once wired as a real
+            // (non-push) handler that's permanent for this VideoFrame:
+            // postCaptionEvents() refuses to ever fight an existing real
+            // handler, and the live extractor's own reload fallback also
+            // no-ops once it marks itself active -- so a stale sidecar
+            // found here would freeze captions at old content for the
+            // entire session, with the live extractor's real cues silently
+            // dropped. The only correct source of truth for a live
+            // recording's captions is the live extraction pipeline, so skip
+            // trusting an on-disk sidecar here entirely for that case and
+            // let the persisted-CC reapply below route through
+            // maybeTriggerOnDemandCCExtraction(), which always (re)attaches
+            // the live extractor and lets its callback (in-memory push, or
+            // a reload once real cues exist) be the sole owner. Completed
+            // recordings are unaffected -- their sidecar is final and
+            // authoritative, so the original wiring still applies as-is.
+            boolean liveRecording = currFile.isRecording();
+            if (cf != null && cf.hasExternalSubtitles() && !liveRecording)
             {
               // Check if these are bitmap based and if so only do it with a client that supports it
               if (cf.areExternalSubsBitmaps())
@@ -2633,7 +2658,25 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
           {
             int persistedCC = uiMgr.getInt(prefs + LAST_CC_STATE, MediaPlayer.CC_DISABLED);
             if (persistedCC != MediaPlayer.CC_DISABLED)
-              applyCCStateToExternalSubs(persistedCC);
+            {
+              if (currFile != null && currFile.isRecording() && ccHandler == null)
+              {
+                // Live/in-progress recording (see the liveRecording skip
+                // above): always route through the same on-demand trigger
+                // the CC-toggle path uses, which correctly (re)attaches the
+                // live extractor regardless of whatever -- if anything --
+                // is already on disk from a previous viewing of this same
+                // still-recording file. Skipped when an embedded 608/708
+                // ccHandler is already present, matching setCCState's own
+                // gate -- native in-stream CC decode needs no sidecar
+                // extraction at all.
+                maybeTriggerOnDemandCCExtraction(persistedCC);
+              }
+              else
+              {
+                applyCCStateToExternalSubs(persistedCC);
+              }
+            }
           }
 
           // Don't select TrueHD audio in Matroska files by default for media extenders unless HD audio output is enabled
