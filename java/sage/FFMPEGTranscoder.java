@@ -1746,6 +1746,17 @@ public class FFMPEGTranscoder implements TranscodeEngine
             + " (reportedBW=" + (estimatedBandwidth / 1000) + " kbps)");
       xcodeParamsVec.add("-vcodec");
       xcodeParamsVec.add(videoCodec);
+      // Force 8-bit 4:2:0 output frames regardless of source bit depth. ATSC3
+      // HEVC Main10 sources decode to yuv420p10le via the software HEVC decoder
+      // on this path (nativeHevcHwDecodeArgs() intentionally excludes pushH264 --
+      // see its javadoc), and both h264_nvenc's 8-bit "high" profile and libx264
+      // without high-bit-depth support reject/mishandle 10-bit input directly
+      // (observed as h264_nvenc "CreateInputBuffer failed: invalid param"). This
+      // mirrors the existing audioonly h264_nvenc precedent (see audioonly video
+      // codec handling above) and is a cheap no-op when the source is already
+      // 8-bit yuv420p.
+      xcodeParamsVec.add("-vf");
+      xcodeParamsVec.add("format=yuv420p");
 
       // Bandwidth-aware target. estimatedBandwidth is the client's reported link
       // (bits/sec) from MiniPlayer.setEstimatedBandwidth; 0 => unknown, assume a
