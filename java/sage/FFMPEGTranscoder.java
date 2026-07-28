@@ -1898,12 +1898,13 @@ public class FFMPEGTranscoder implements TranscodeEngine
       else
       {
         if (currVideoBitrateKbps == -1)
-          currVideoBitrateKbps = Math.min(1000, (int)estimatedBandwidth/2000);//192;//384;
+          currVideoBitrateKbps = Math.min(getDynamicMaxVideoKbps(), (int)estimatedBandwidth/2000);//192;//384;
         if (currAudioBitrateKbps == -1)
           currAudioBitrateKbps = 128; // There's issues with using 96Kbps audio encoding I discovered
         fdkAacProfile = "aac_low"; // LC-AAC is best at >=128kbps
-        // 30fps at 352x240 and 48kHz audio at 96Kbps
-        currFps = MMC.getInstance().isNTSCVideoFormat() ? 30 : 25;
+        // 30fps at 352x240 and 48kHz audio at 96Kbps (or up to getDynamicMaxFps()
+        // for a LAN client with headroom -- see that method's javadoc)
+        currFps = getDynamicMaxFps(srcVideo);
         currAudioSampling = 48000;
         currPacketSize = 2048;
       }
@@ -2119,7 +2120,16 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add("-minrate");
       xcodeParamsVec.add("0"); // For CBR this should be the same as max rate, but it's OK to go lower and if we don't make this 0, then qmin causes an A/V gap in the muxing
       xcodeParamsVec.add("-bufsize");
-      xcodeParamsVec.add(Integer.toString(currVideoBitrateKbps * 1000)); // the rate control buffer averages over a 1 second period, it's in bits (used to be Kbytes)
+      // Headroom above -maxrate/the target bitrate, not an exact match: bufsize==maxrate==
+      // bitrate gives the mpeg4 rate controller a 1-second window with ZERO slack to absorb a
+      // short complexity spike, which is what produced the observed "[mpeg4] impossible bitrate
+      // constraints, this will fail" warning and forced hard quality/frame drops instead of a
+      // brief smoothed dip. ffmpeg/dynamic_vbv_bufsize_ratio (default 1.5x) restores real VBV
+      // headroom; applies to every dynamicRateAdjust session (LAN or WAN), not just the raised
+      // LAN ceiling above -- this bug existed at every bitrate tier.
+      float bufsizeRatio = Sage.getFloat("ffmpeg/dynamic_vbv_bufsize_ratio", 1.5f);
+      long bufsizeBits = Math.round(currVideoBitrateKbps * 1000f * bufsizeRatio);
+      xcodeParamsVec.add(Long.toString(bufsizeBits));
       xcodeParamsVec.add("-mbd");
       xcodeParamsVec.add("2"); // rate distortion macroblock decisions
       if (dynamicRateAdjust)
@@ -3303,6 +3313,65 @@ public class FFMPEGTranscoder implements TranscodeEngine
     estimatedBandwidth = bps;
   }
 
+  public void setLocalClient(boolean b)
+  {
+    localClient = b;
+  }
+
+  public boolean isLocalClient()
+  {
+    return localClient;
+  }
+
+  /**
+   * Absolute video-bitrate ceiling (Kbps) for the legacy mpeg4 "dynamic" placeshifter
+   * ladder and its continuous runtime up-ramp adjuster (the {@code videorateadapt}
+   * loop in {@code MiniPlayer}). Historically a single hardcoded value (1000 in the
+   * startup tier ladder, 1500 in the runtime adjuster) applied to every classic
+   * placeshifter client regardless of how much bandwidth is actually available --
+   * so a LAN client whose measured/probed throughput is 50+ Mbps was held to the
+   * same ~1 Mbps cap as a genuinely bandwidth-constrained WAN client, discarding
+   * real headroom the bandwidth-feedback loop had already discovered.
+   * <p>
+   * Returns {@code ffmpeg/dynamic_max_video_kbps_lan} (default 8000) when
+   * {@link #localClient} is true (set via {@link #setLocalClient}), otherwise
+   * {@code ffmpeg/dynamic_max_video_kbps_wan} (default 1500, preserving the
+   * pre-existing WAN ceiling exactly). Either is still bounded below by whatever
+   * {@link #estimatedBandwidth}/the live bandwidth-hint feedback loop actually
+   * measures -- this is a ceiling, not a target -- so a slow LAN link still gets
+   * scaled down appropriately.
+   */
+  public int getDynamicMaxVideoKbps()
+  {
+    return localClient
+        ? Sage.getInt("ffmpeg/dynamic_max_video_kbps_lan", 8000)
+        : Sage.getInt("ffmpeg/dynamic_max_video_kbps_wan", 1500);
+  }
+
+  /**
+   * Top-tier frame rate for the legacy mpeg4 "dynamic" placeshifter ladder. The
+   * ladder's top tier historically hardcoded 30fps (NTSC) / 25fps (PAL) regardless
+   * of source cadence or available bandwidth, forcing a 59.94->30fps cadence
+   * conversion even for a LAN client with ample bandwidth AND decode headroom.
+   * Returns {@code ffmpeg/dynamic_max_fps_lan} (default 60) for a local client
+   * capped at the source's own fps (never invents motion the source doesn't have),
+   * otherwise the original NTSC/PAL default -- unchanged WAN behavior.
+   */
+  public int getDynamicMaxFps(sage.media.format.VideoFormat srcVideo)
+  {
+    int ntscPalDefault = MMC.getInstance().isNTSCVideoFormat() ? 30 : 25;
+    if (!localClient)
+      return ntscPalDefault;
+    int lanCeiling = Sage.getInt("ffmpeg/dynamic_max_fps_lan", 60);
+    float srcFps = (srcVideo != null) ? srcVideo.getFps() : 0;
+    // Cap to the source's own cadence when it's lower than the configured LAN ceiling --
+    // e.g. a 24fps film source stays at 24fps even for a LAN client; we only raise the
+    // ceiling itself, never invent motion/interpolate frames the source doesn't have.
+    if (srcFps > 0 && srcFps < lanCeiling)
+      return (int) Math.ceil(srcFps);
+    return lanCeiling;
+  }
+
   /**
    * Feed periodic link-capacity hints (Kbps) from the player loop.
    *
@@ -3567,6 +3636,16 @@ public class FFMPEGTranscoder implements TranscodeEngine
    *  so legacy 9.2.16 extenders/placeshifters keep the mpeg4 path unchanged. */
   protected boolean pushH264 = false;
   protected long estimatedBandwidth;
+  /**
+   * True when the connecting client is on the same subnet as the server
+   * (see {@code MiniClientSageRenderer.isLocalConnection()}, a real IP/subnet-mask
+   * comparison -- set here by {@code MiniPlayer} alongside {@link #setEstimatedBandwidth}).
+   * Used by the legacy mpeg4 "dynamic" placeshifter ladder ({@link #getDynamicMaxVideoKbps()})
+   * to lift its bitrate/fps ceiling for LAN clients instead of clamping everyone to the
+   * same conservative WAN-safe cap regardless of actually-available bandwidth. Defaults to
+   * false (WAN-conservative) so any caller that never sets it keeps today's behavior.
+   */
+  protected boolean localClient = false;
   protected int liveLastBandwidthHintKbps;
   protected int liveSmoothedBandwidthHintKbps;
   protected int liveDeficitWindows;

@@ -294,6 +294,78 @@ public class FFMPEGTranscoderTest
     }
   }
 
+  @Test
+  public void testGetDynamicMaxVideoKbpsIsLanAware() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    Sage.remove("ffmpeg/dynamic_max_video_kbps_lan");
+    Sage.remove("ffmpeg/dynamic_max_video_kbps_wan");
+    try
+    {
+      FFMPEGTranscoder transcoder = new FFMPEGTranscoder();
+
+      // Default: WAN-conservative, matching the pre-fix hardcoded ceiling exactly so a
+      // client we've never classified as local doesn't silently get a behavior change.
+      assertFalse(transcoder.isLocalClient());
+      assertEquals(transcoder.getDynamicMaxVideoKbps(), 1500);
+
+      // A LAN client (mcsr.isLocalConnection()==true, wired via MiniPlayer.setLocalClient())
+      // gets a substantially higher ceiling by default.
+      transcoder.setLocalClient(true);
+      assertEquals(transcoder.getDynamicMaxVideoKbps(), 8000);
+
+      // Both ceilings are independently operator-configurable without a code change.
+      Sage.put("ffmpeg/dynamic_max_video_kbps_lan", "12000");
+      assertEquals(transcoder.getDynamicMaxVideoKbps(), 12000);
+      transcoder.setLocalClient(false);
+      Sage.put("ffmpeg/dynamic_max_video_kbps_wan", "800");
+      assertEquals(transcoder.getDynamicMaxVideoKbps(), 800);
+    }
+    finally
+    {
+      Sage.remove("ffmpeg/dynamic_max_video_kbps_lan");
+      Sage.remove("ffmpeg/dynamic_max_video_kbps_wan");
+    }
+  }
+
+  @Test
+  public void testGetDynamicMaxFpsIsLanAwareAndSourceCapped() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    Sage.remove("ffmpeg/dynamic_max_fps_lan");
+    try
+    {
+      FFMPEGTranscoder transcoder = new FFMPEGTranscoder();
+      VideoFormat srcVideo = new VideoFormat();
+
+      // WAN client: unchanged NTSC/PAL behavior regardless of source fps.
+      srcVideo.setFps(59.94f);
+      assertEquals(transcoder.getDynamicMaxFps(srcVideo), MMC.getInstance().isNTSCVideoFormat() ? 30 : 25);
+
+      // LAN client with a high-fps source: raised to the configurable LAN ceiling (default 60),
+      // never above the ceiling even if the source is higher.
+      transcoder.setLocalClient(true);
+      assertEquals(transcoder.getDynamicMaxFps(srcVideo), 60);
+
+      // LAN client whose SOURCE fps is lower than the LAN ceiling: capped to the source's own
+      // cadence -- we should never invent motion/interpolate frames the source doesn't have.
+      srcVideo.setFps(24f);
+      assertEquals(transcoder.getDynamicMaxFps(srcVideo), 24);
+
+      // No source format available: falls back to the LAN ceiling itself.
+      assertEquals(transcoder.getDynamicMaxFps(null), 60);
+
+      // Ceiling is operator-configurable.
+      Sage.put("ffmpeg/dynamic_max_fps_lan", "50");
+      srcVideo.setFps(59.94f);
+      assertEquals(transcoder.getDynamicMaxFps(srcVideo), 50);
+    }
+    finally
+    {
+      Sage.remove("ffmpeg/dynamic_max_fps_lan");
+    }
+  }
+
     private FFMPEGTranscoder hevcTsTranscoder()
     {
       FFMPEGTranscoder t = new FFMPEGTranscoder();
