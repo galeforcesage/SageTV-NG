@@ -1561,10 +1561,17 @@ public class MiniPlayer implements DVDMediaPlayer
                       effDelivery += ";afeq=" + java.net.URLEncoder.encode(eqPlan.getFilterGraph(), "UTF-8");
                       if (eqTargetCodec != null && eqTargetCodec.length() > 0)
                         effDelivery += ";afeqcodec=" + java.net.URLEncoder.encode(eqTargetCodec, "UTF-8");
-                      if (Sage.DBG) System.out.println("MiniPlayer OPENURL server audio-EQ plan resolved: " + eqPlan);
                     }
-                    else if (Sage.DBG)
-                      System.out.println("MiniPlayer OPENURL server audio-EQ NOT applied: " + eqPlan.getReason());
+                    // Phase 7 structured diagnostics: one line per resolved
+                    // plan (SERVER or NONE), covering the full canonical
+                    // field set (client kind, settings/filtergraph hashes,
+                    // double-processing prevention, night-mode engine, etc).
+                    if (Sage.DBG)
+                    {
+                      java.util.Map<String, Object> diagEvent = sage.audioproc.AudioProcessingDiagnostics.buildEvent(
+                          apState, ffmpegCaps, eqPlan);
+                      System.out.println("MiniPlayer OPENURL " + sage.audioproc.AudioProcessingDiagnostics.formatForLog(diagEvent));
+                    }
                     // Ack the client so it knows whether the server took over
                     // (clientMustDisableDsp) or it should keep its own local DSP.
                     mcsr.sendAudioProcessingPlan(eqPlan);
