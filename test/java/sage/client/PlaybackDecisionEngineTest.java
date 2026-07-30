@@ -172,6 +172,92 @@ public class PlaybackDecisionEngineTest
   }
 
   // -----------------------------------------------------------------------
+  // Test Case (e): a REMUX/browserhd_remux candidate (codecs already match,
+  // audio would otherwise copy) gets rerouted to AUDIO_TRANSCODE/
+  // browserhd_copyv when EQ requested and no better AUDIO_TRANSCODE
+  // candidate exists -- forcing the audio stage from copy to a real encode
+  // of the SAME codec so -af has something to attach to.
+  // -----------------------------------------------------------------------
+  @Test
+  public void testPromotesRemuxCandidate_ForcingAudioFlip_WhenNoAudioTranscodeCandidateExists()
+  {
+    PlaybackDecisionEngine.SurfaceDecision directPlayWinner =
+        decisionOf("pwa_native", 10, PlaybackDecisionEngine.Decision.DIRECT_PLAY, null);
+    PlaybackDecisionEngine.SurfaceDecision remuxCandidate =
+        decisionOf("browserhd", 5, PlaybackDecisionEngine.Decision.REMUX, "browserhd_remux");
+
+    List<PlaybackDecisionEngine.SurfaceDecision> ranked = new ArrayList<>();
+    ranked.add(directPlayWinner);
+    ranked.add(remuxCandidate);
+
+    PlaybackDecisionEngine.SurfaceDecision result = PlaybackDecisionEngine.promoteForServerEqIfRequested(
+        ranked, directPlayWinner, true);
+
+    assertNotSame(result, directPlayWinner, "Should not stay on the cheaper DIRECT_PLAY winner");
+    assertNotSame(result, remuxCandidate, "Should be a NEW relabeled decision, not the raw REMUX candidate itself");
+    assertEquals(result.decision.decision, PlaybackDecisionEngine.Decision.AUDIO_TRANSCODE,
+        "REMUX should be relabeled AUDIO_TRANSCODE so the audio stage becomes a real encode");
+    assertEquals(result.chosenXcodeMode, "browserhd_copyv",
+        "Should reuse the existing browserhd_copyv xcodeMode/ffmpeg template -- no new mode invented");
+    assertSame(result.surface, remuxCandidate.surface, "Surface identity must be preserved");
+    assertEquals(result.decision.targetVideoCodec, remuxCandidate.decision.targetVideoCodec,
+        "Video target codec must be carried over unchanged (still a copy)");
+    assertEquals(result.decision.targetAudioCodec, remuxCandidate.decision.targetAudioCodec,
+        "Audio target codec must be carried over unchanged -- never invented by this method");
+  }
+
+  // -----------------------------------------------------------------------
+  // An AUDIO_TRANSCODE/browserhd_copyv candidate is preferred over a REMUX
+  // candidate when both exist -- audio is already re-encoding there, so no
+  // relabeling/flip is needed.
+  // -----------------------------------------------------------------------
+  @Test
+  public void testPrefersAudioTranscodeCandidate_OverRemuxCandidate_WhenBothExist()
+  {
+    PlaybackDecisionEngine.SurfaceDecision directPlayWinner =
+        decisionOf("pwa_native", 10, PlaybackDecisionEngine.Decision.DIRECT_PLAY, null);
+    PlaybackDecisionEngine.SurfaceDecision audioTranscodeCandidate =
+        decisionOf("browserhd_a", 5, PlaybackDecisionEngine.Decision.AUDIO_TRANSCODE, "browserhd_copyv");
+    PlaybackDecisionEngine.SurfaceDecision remuxCandidate =
+        decisionOf("browserhd_b", 6, PlaybackDecisionEngine.Decision.REMUX, "browserhd_remux");
+
+    List<PlaybackDecisionEngine.SurfaceDecision> ranked = new ArrayList<>();
+    ranked.add(directPlayWinner);
+    ranked.add(audioTranscodeCandidate);
+    ranked.add(remuxCandidate);
+
+    PlaybackDecisionEngine.SurfaceDecision result = PlaybackDecisionEngine.promoteForServerEqIfRequested(
+        ranked, directPlayWinner, true);
+
+    assertSame(result, audioTranscodeCandidate,
+        "An already-audio-transcoding candidate should win over a REMUX-flip candidate");
+  }
+
+  // -----------------------------------------------------------------------
+  // REMUX candidates on the TV/AVPlay-family mpeg2tsremux xcodeMode are
+  // intentionally OUT of v1 scope (matches browserhd/browserhd_copyv-only
+  // scope already established) -- must NOT be promoted/rerouted.
+  // -----------------------------------------------------------------------
+  @Test
+  public void testNoPromotion_ForMpeg2TsRemuxCandidate_OutOfScope()
+  {
+    PlaybackDecisionEngine.SurfaceDecision directPlayWinner =
+        decisionOf("pwa_native", 10, PlaybackDecisionEngine.Decision.DIRECT_PLAY, null);
+    PlaybackDecisionEngine.SurfaceDecision tvRemuxCandidate =
+        decisionOf("tv_avplay", 5, PlaybackDecisionEngine.Decision.REMUX, "mpeg2tsremux");
+
+    List<PlaybackDecisionEngine.SurfaceDecision> ranked = new ArrayList<>();
+    ranked.add(directPlayWinner);
+    ranked.add(tvRemuxCandidate);
+
+    PlaybackDecisionEngine.SurfaceDecision result = PlaybackDecisionEngine.promoteForServerEqIfRequested(
+        ranked, directPlayWinner, true);
+
+    assertSame(result, directPlayWinner,
+        "mpeg2tsremux (TV/AVPlay family) is out of v1 EQ scope and must not be rerouted");
+  }
+
+  // -----------------------------------------------------------------------
   // ranked is pre-sorted: the FIRST matching AUDIO_TRANSCODE/browserhd_copyv
   // candidate should win when multiple exist.
   // -----------------------------------------------------------------------

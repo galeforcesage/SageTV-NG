@@ -1410,35 +1410,60 @@ public class PlaybackDecisionEngine
    * cheapest-ranked {@code winner} may be a {@code DIRECT_PLAY} / {@code
    * REMUX} / non-fMP4 {@code TRANSCODE} decision with no active audio-encode
    * stage for the server to inject an {@code -af} EQ filtergraph into (e.g.
-   * pwa_native's raw file push). When the client has explicitly requested
-   * server EQ, this promotes the best ALREADY-RANKED {@code AUDIO_TRANSCODE}
-   * candidate targeting the {@code browserhd_copyv} fMP4 push path (copy
-   * video, transcode only audio) over the cheaper winner, so the audio stage
-   * has somewhere to apply the filtergraph. Every other session's ranking
-   * (and this session's ranking when EQ was NOT requested) is completely
-   * unaffected -- callers must gate {@code serverEqRequested} on the client's
-   * explicit positive signal (see {@code AudioProcessingResolver}), never on
-   * an assumption.
+   * pwa_native's raw file push, or a browser REMUX where codecs already
+   * match and only the container would change). When the client has
+   * explicitly requested server EQ, this promotes the best video-copy-safe
+   * candidate that CAN carry an audio encode over the cheaper winner, so the
+   * audio stage has somewhere to apply the filtergraph. Every other
+   * session's ranking (and this session's ranking when EQ was NOT requested)
+   * is completely unaffected -- callers must gate {@code serverEqRequested}
+   * on the client's explicit positive signal (see {@code
+   * AudioProcessingResolver}), never on an assumption of whether the client
+   * "should" have asked -- an explicit request is trusted at face value.
+   *
+   * <p>Two promotion paths, tried in this order:
+   * <ol>
+   *   <li>An already-ranked {@code AUDIO_TRANSCODE}+{@code browserhd_copyv}
+   *   candidate (audio is ALREADY being re-encoded for a genuine codec
+   *   mismatch, e.g. AC-3/E-AC-3 cable audio a browser can't decode) --
+   *   returned as-is; EQ simply appends onto that existing encode.</li>
+   *   <li>Otherwise, a {@code REMUX}+{@code browserhd_remux} candidate
+   *   (codecs are ALREADY natively decodable -- audio would otherwise be a
+   *   plain stream copy, only the container needs changing) -- rerouted via
+   *   {@link #rerouteRemuxForServerEq} into the {@code browserhd_copyv}
+   *   shape, which reuses the EXACT SAME copy-video/transcode-audio ffmpeg
+   *   template MediaServer already defines for {@code AUDIO_TRANSCODE}. This
+   *   forces the audio stage from a copy to a real encode (of the SAME
+   *   codec the REMUX decision already chose -- never a new codec pick) so
+   *   {@code -af} has something to attach to. No new ffmpeg template, no new
+   *   xcodeMode string -- {@code browserhd_copyv} plumbing (including the
+   *   existing {@code -acodec}/{@code -af} injection in {@code MiniPlayer})
+   *   is reused unchanged.</li>
+   * </ol>
    *
    * <p>This method NEVER changes the video decision or picks an audio codec:
-   * {@code AUDIO_TRANSCODE} decisions always carry {@code targetVideoCodec ==}
-   * the source video codec (a copy, never a re-encode -- see {@link
-   * #evaluateForSurfaceWithAudioChoice}/{@link #evaluateForSurface}), and the
-   * target audio codec is whatever {@link #selectBestAudioCodecForSurface}
-   * already picked for that candidate surface. It only ever SELECTS among
-   * decisions the per-surface evaluator already independently computed.
+   * both {@code AUDIO_TRANSCODE} and {@code REMUX} decisions always carry
+   * {@code targetVideoCodec ==} the source video codec (a copy, never a
+   * re-encode -- see {@link #evaluateForSurfaceWithAudioChoice}/{@link
+   * #evaluateForSurface}), and the target audio codec is always whatever the
+   * per-surface evaluator already picked for that candidate (echoed through
+   * unchanged by {@link #rerouteRemuxForServerEq} for the REMUX case). It
+   * only ever SELECTS among / relabels decisions the per-surface evaluator
+   * already independently computed.
    *
    * <p>Returns {@code winner} unchanged when: EQ was not requested; the
    * winner already offers an audio-encode stage ({@code AUDIO_TRANSCODE}, or
-   * an xcodeMode of {@code browserhd_copyv}/{@code browserhd}); or no
-   * video-copy-compatible {@code browserhd_copyv} candidate exists in {@code
-   * ranked} at all (the known boundary case -- e.g. MPEG2 video, which no
-   * browser/MSE surface can copy into fragmented MP4, so EQ genuinely cannot
-   * apply there and the existing DIRECT_PLAY behavior is preserved exactly).
+   * an xcodeMode of {@code browserhd_copyv}/{@code browserhd}); or NEITHER a
+   * video-copy-compatible {@code browserhd_copyv} NOR {@code browserhd_remux}
+   * candidate exists in {@code ranked} at all (the known boundary case --
+   * e.g. MPEG2 video, which no browser/MSE surface can copy into fragmented
+   * MP4, so EQ genuinely cannot apply there and the existing DIRECT_PLAY
+   * behavior is preserved exactly -- this is the true, out-of-scope PWA
+   * codec wall, not something this method should paper over).
    *
    * @param ranked the full ranked list from {@link #evaluateSurfaces}
-   *     (pre-sorted; the first {@code AUDIO_TRANSCODE}+{@code browserhd_copyv}
-   *     match is therefore the best candidate within that tier).
+   *     (pre-sorted; the first match within a tier is therefore the best
+   *     candidate within that tier).
    * @param winner the currently-selected top-ranked decision ({@code
    *     ranked.get(0)}), passed separately so callers can log a promotion.
    * @param serverEqRequested whether THIS session's client has explicitly
@@ -1460,8 +1485,40 @@ public class PlaybackDecisionEngine
         if (sd.decision.decision == Decision.AUDIO_TRANSCODE && "browserhd_copyv".equals(sd.chosenXcodeMode))
           return sd; // ranked is pre-sorted; first match is the best within-tier candidate
       }
+      for (SurfaceDecision sd : ranked)
+      {
+        if (sd.decision.decision == Decision.REMUX && "browserhd_remux".equals(sd.chosenXcodeMode))
+          return rerouteRemuxForServerEq(sd); // otherwise-copy audio -> forced re-encode for EQ
+      }
     }
     return winner; // no video-copy-compatible candidate (e.g. MPEG2 video) -- unchanged
+  }
+
+  /**
+   * Relabels an already-computed {@code REMUX}+{@code browserhd_remux}
+   * candidate (video AND audio would both be a plain stream copy into
+   * fragmented MP4) as an {@code AUDIO_TRANSCODE}+{@code browserhd_copyv}
+   * candidate, so the audio stage becomes a real encode instead of a copy --
+   * required for {@code -af} to apply at all (ffmpeg refuses {@code -af}
+   * over stream-copy). The video codec/container target and the audio
+   * codec/channel choice are carried over UNCHANGED from the original REMUX
+   * decision -- this method never invents or upgrades either; it only forces
+   * the audio stage from copy to encode using the codec the evaluator
+   * already picked. Only called for {@code browserhd_remux} (fMP4/browser-
+   * MSE family) candidates, matching the existing v1 EQ scope of {@code
+   * browserhd}/{@code browserhd_copyv} only -- the TV/AVPlay-family {@code
+   * mpeg2tsremux} REMUX candidates are intentionally NOT eligible here.
+   */
+  private static SurfaceDecision rerouteRemuxForServerEq(SurfaceDecision remuxCandidate)
+  {
+    PlaybackDecision original = remuxCandidate.decision;
+    PlaybackDecision forced = new PlaybackDecision(Decision.AUDIO_TRANSCODE,
+        "server EQ requested: forcing audio re-encode over otherwise-copy audio ("
+            + original.reason + ")",
+        original.targetContainer, original.targetVideoCodec, original.targetAudioCodec,
+        original.targetBitrateKbps, original.preferredPlayer);
+    return new SurfaceDecision(remuxCandidate.surface, forced, remuxCandidate.chosenDeliveryMode,
+        remuxCandidate.audioStreamChoice, "browserhd_copyv");
   }
 
   /**
