@@ -1395,14 +1395,20 @@ public class MiniPlayer implements DVDMediaPlayer
             // decision with no active audio-encode stage to apply an -af EQ
             // graph to (this was the gap: EQ only ever rode content ALREADY
             // going through the transcoder). When the client has explicitly
-            // requested server EQ, promote the best already-ranked
-            // AUDIO_TRANSCODE/browserhd_copyv candidate (video stays copy,
-            // audio target codec is whatever the existing per-surface codec
-            // selection already picked) over the cheaper winner. No-op (and
+            // requested server EQ, promote (a) an already-ranked
+            // AUDIO_TRANSCODE/browserhd_copyv candidate (audio is already
+            // re-encoding for a genuine codec mismatch -- EQ just appends),
+            // or (b) a REMUX/browserhd_remux candidate (codecs already match,
+            // audio would otherwise copy) rerouted into the SAME
+            // browserhd_copyv shape to force the audio stage from copy to a
+            // real encode of the SAME codec. Video always stays copy; audio
+            // target codec is always whatever the existing per-surface codec
+            // selection already picked -- never invented here. No-op (and
             // net-neutral) for every session that didn't request server EQ,
-            // and for content with no video-copy-compatible candidate (e.g.
-            // MPEG2 video -- no browser/MSE surface can copy that into
-            // fragmented MP4, so EQ correctly stays unavailable there).
+            // and for content with no video-copy-compatible candidate at all
+            // (e.g. MPEG2 video -- no browser/MSE surface can copy that into
+            // fragmented MP4, so EQ correctly stays unavailable there; that's
+            // the out-of-scope PWA codec issue, not something to paper over).
             sage.client.PlaybackDecisionEngine.SurfaceDecision preEqWinner = winner;
             boolean serverEqRequested = isServerAudioEqRequested();
             winner = sage.client.PlaybackDecisionEngine.promoteForServerEqIfRequested(
@@ -1420,8 +1426,9 @@ public class MiniPlayer implements DVDMediaPlayer
                 && !"browserhd".equals(winner.chosenXcodeMode))
             {
               System.out.println("MiniPlayer surface decision (v2.1): server EQ requested but no "
-                  + "video-copy-compatible browserhd_copyv candidate available for this content "
-                  + "(winner=" + winner + ") -- EQ cannot apply, falling back to " + winner.decision.decision);
+                  + "video-copy-compatible browserhd_copyv/browserhd_remux candidate available for "
+                  + "this content (winner=" + winner + ") -- EQ cannot apply, falling back to "
+                  + winner.decision.decision);
             }
             profileDecision = winner.decision;
             chosenSurfaceId = winner.surface.getId();
