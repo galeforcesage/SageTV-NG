@@ -1406,6 +1406,65 @@ public class PlaybackDecisionEngine
   }
 
   /**
+   * Server-side Audio Equalizer / AudioProcessing (v1) extension: the
+   * cheapest-ranked {@code winner} may be a {@code DIRECT_PLAY} / {@code
+   * REMUX} / non-fMP4 {@code TRANSCODE} decision with no active audio-encode
+   * stage for the server to inject an {@code -af} EQ filtergraph into (e.g.
+   * pwa_native's raw file push). When the client has explicitly requested
+   * server EQ, this promotes the best ALREADY-RANKED {@code AUDIO_TRANSCODE}
+   * candidate targeting the {@code browserhd_copyv} fMP4 push path (copy
+   * video, transcode only audio) over the cheaper winner, so the audio stage
+   * has somewhere to apply the filtergraph. Every other session's ranking
+   * (and this session's ranking when EQ was NOT requested) is completely
+   * unaffected -- callers must gate {@code serverEqRequested} on the client's
+   * explicit positive signal (see {@code AudioProcessingResolver}), never on
+   * an assumption.
+   *
+   * <p>This method NEVER changes the video decision or picks an audio codec:
+   * {@code AUDIO_TRANSCODE} decisions always carry {@code targetVideoCodec ==}
+   * the source video codec (a copy, never a re-encode -- see {@link
+   * #evaluateForSurfaceWithAudioChoice}/{@link #evaluateForSurface}), and the
+   * target audio codec is whatever {@link #selectBestAudioCodecForSurface}
+   * already picked for that candidate surface. It only ever SELECTS among
+   * decisions the per-surface evaluator already independently computed.
+   *
+   * <p>Returns {@code winner} unchanged when: EQ was not requested; the
+   * winner already offers an audio-encode stage ({@code AUDIO_TRANSCODE}, or
+   * an xcodeMode of {@code browserhd_copyv}/{@code browserhd}); or no
+   * video-copy-compatible {@code browserhd_copyv} candidate exists in {@code
+   * ranked} at all (the known boundary case -- e.g. MPEG2 video, which no
+   * browser/MSE surface can copy into fragmented MP4, so EQ genuinely cannot
+   * apply there and the existing DIRECT_PLAY behavior is preserved exactly).
+   *
+   * @param ranked the full ranked list from {@link #evaluateSurfaces}
+   *     (pre-sorted; the first {@code AUDIO_TRANSCODE}+{@code browserhd_copyv}
+   *     match is therefore the best candidate within that tier).
+   * @param winner the currently-selected top-ranked decision ({@code
+   *     ranked.get(0)}), passed separately so callers can log a promotion.
+   * @param serverEqRequested whether THIS session's client has explicitly
+   *     signaled {@code location=SERVER} + EQ enabled.
+   */
+  public static SurfaceDecision promoteForServerEqIfRequested(
+      java.util.List<SurfaceDecision> ranked, SurfaceDecision winner, boolean serverEqRequested)
+  {
+    if (!serverEqRequested || winner == null)
+      return winner;
+    if (winner.decision.decision == Decision.AUDIO_TRANSCODE
+        || "browserhd_copyv".equals(winner.chosenXcodeMode)
+        || "browserhd".equals(winner.chosenXcodeMode))
+      return winner; // already offers (or already has) an active audio-encode stage
+    if (ranked != null)
+    {
+      for (SurfaceDecision sd : ranked)
+      {
+        if (sd.decision.decision == Decision.AUDIO_TRANSCODE && "browserhd_copyv".equals(sd.chosenXcodeMode))
+          return sd; // ranked is pre-sorted; first match is the best within-tier candidate
+      }
+    }
+    return winner; // no video-copy-compatible candidate (e.g. MPEG2 video) -- unchanged
+  }
+
+  /**
    * Internal evaluator that uses a pre-chosen audio stream from
    * {@link #selectBestAudioStream}. Callers already know whether the
    * audio is natively decodable, so the check is pre-resolved.

@@ -1390,6 +1390,39 @@ public class MiniPlayer implements DVDMediaPlayer
           if (!ranked.isEmpty())
           {
             sage.client.PlaybackDecisionEngine.SurfaceDecision winner = ranked.get(0);
+            // --- Server-side Audio Equalizer / AudioProcessing (v1) extension ---
+            // The naturally-cheapest winner may be a DIRECT_PLAY/REMUX raw-push
+            // decision with no active audio-encode stage to apply an -af EQ
+            // graph to (this was the gap: EQ only ever rode content ALREADY
+            // going through the transcoder). When the client has explicitly
+            // requested server EQ, promote the best already-ranked
+            // AUDIO_TRANSCODE/browserhd_copyv candidate (video stays copy,
+            // audio target codec is whatever the existing per-surface codec
+            // selection already picked) over the cheaper winner. No-op (and
+            // net-neutral) for every session that didn't request server EQ,
+            // and for content with no video-copy-compatible candidate (e.g.
+            // MPEG2 video -- no browser/MSE surface can copy that into
+            // fragmented MP4, so EQ correctly stays unavailable there).
+            sage.client.PlaybackDecisionEngine.SurfaceDecision preEqWinner = winner;
+            boolean serverEqRequested = isServerAudioEqRequested();
+            winner = sage.client.PlaybackDecisionEngine.promoteForServerEqIfRequested(
+                ranked, winner, serverEqRequested);
+            if (Sage.DBG && winner != preEqWinner)
+            {
+              System.out.println("MiniPlayer surface decision (v2.1): server EQ requested -- "
+                  + "promoting audio-transcode surface " + winner + " over cheaper winner "
+                  + preEqWinner + " so the audio stage has an active encode to apply -af to "
+                  + "(video stays copy)");
+            }
+            else if (Sage.DBG && serverEqRequested
+                && winner.decision.decision != sage.client.PlaybackDecisionEngine.Decision.AUDIO_TRANSCODE
+                && !"browserhd_copyv".equals(winner.chosenXcodeMode)
+                && !"browserhd".equals(winner.chosenXcodeMode))
+            {
+              System.out.println("MiniPlayer surface decision (v2.1): server EQ requested but no "
+                  + "video-copy-compatible browserhd_copyv candidate available for this content "
+                  + "(winner=" + winner + ") -- EQ cannot apply, falling back to " + winner.decision.decision);
+            }
             profileDecision = winner.decision;
             chosenSurfaceId = winner.surface.getId();
             chosenSurfaceDelivery = winner.chosenDeliveryMode;
@@ -3787,6 +3820,37 @@ public class MiniPlayer implements DVDMediaPlayer
     synchronized (yieldDecoderLockCountLock)
     {
       yieldDecoderLockCount--;
+    }
+  }
+
+  /**
+   * True only when THIS session's client has explicitly signaled server-side
+   * Audio EQ (location=SERVER + EQ enabled) via {@link
+   * sage.audioproc.AudioProcessingClientState}. Absent/ambiguous/legacy
+   * clients always return false here (net-neutral) -- see {@code
+   * AudioProcessingResolver}/{@code AudioProcessingJson.resolveLocation} for
+   * the same positive-signal-only rule applied at settings-parse time. Used
+   * by the surface-decision winner-promotion logic in {@link
+   * sage.client.PlaybackDecisionEngine#promoteForServerEqIfRequested} so a
+   * DIRECT_PLAY raw-push winner with no audio-encode stage can be swapped for
+   * an already-ranked audio-transcode candidate when (and only when) the
+   * client actually asked for server EQ.
+   */
+  private boolean isServerAudioEqRequested()
+  {
+    if (mcsr == null) return false;
+    try
+    {
+      sage.audioproc.AudioProcessingClientState apState = mcsr.getAudioProcessingClientState();
+      return apState != null
+          && apState.getSettings().getLocation() == sage.audioproc.AudioProcessingLocation.SERVER
+          && apState.getSettings().isEqEnabled();
+    }
+    catch (Throwable t)
+    {
+      // Never let audio-EQ signal detection affect the surface decision itself.
+      if (Sage.DBG) System.out.println("MiniPlayer isServerAudioEqRequested check failed (ignored): " + t);
+      return false;
     }
   }
 
