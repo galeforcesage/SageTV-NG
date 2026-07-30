@@ -53,10 +53,10 @@ This resets the guard on each focus cycle, allowing one Refresh() per cycle whil
 **Step 1: Create Server Snapshot (Rollback Point)**
 ```bash
 # SSH to server
-ssh sagetv@192.168.0.75
+ssh sagetv@<host>
 
 # Inside container, snapshot current STV
-docker exec sagetv-mine bash -c \
+docker exec <container> bash -c \
   'cp /opt/sagetv/server/STVs/SageTV7/SageTV7.xml \
       /opt/sagetv/server/STVs/SageTV7_backups/SageTV7.xml.pre-phase3-'$(date +%s)''
 ```
@@ -64,19 +64,19 @@ docker exec sagetv-mine bash -c \
 **Step 2: Deploy Phase 3 STV**
 ```bash
 # From local workstation
-cd C:\Users\ted\SageTV-mine
+cd %USERPROFILE%\SageTV-NG
 
 # Copy to server (via scp to /tmp, then docker cp)
-scp stvs/SageTV7/SageTV7_cached_ac25_phase3.xml sagetv@192.168.0.75:/tmp/
+scp stvs/SageTV7/SageTV7_cached_ac25_phase3.xml sagetv@<host>:/tmp/
 
 # SSH and deploy into container
-ssh sagetv@192.168.0.75 'docker cp /tmp/SageTV7_cached_ac25_phase3.xml \
-  sagetv-mine:/opt/sagetv/server/STVs/SageTV7/SageTV7.xml'
+ssh sagetv@<host> 'docker cp /tmp/SageTV7_cached_ac25_phase3.xml \
+  <container>:/opt/sagetv/server/STVs/SageTV7/SageTV7.xml'
 
 # Stop Sage and reload
-ssh sagetv@192.168.0.75 'docker exec sagetv-mine /opt/sagetv/server/stopsage'
+ssh sagetv@<host> 'docker exec <container> /opt/sagetv/server/stopsage'
 # Wait ~10s for clean shutdown
-ssh sagetv@192.168.0.75 'docker exec sagetv-mine /opt/sagetv/server/startsage'
+ssh sagetv@<host> 'docker exec <container> /opt/sagetv/server/startsage'
 ```
 
 **Step 3: Validation Testing**
@@ -94,7 +94,7 @@ ssh sagetv@192.168.0.75 'docker exec sagetv-mine /opt/sagetv/server/startsage'
 
 **Server Log Check:**
 ```bash
-ssh sagetv@192.168.0.75 'docker exec sagetv-mine tail -100 /opt/sagetv/server/sagetv_0.txt'
+ssh sagetv@<host> 'docker exec <container> tail -100 /opt/sagetv/server/sagetv_0.txt'
 ```
 Look for:
 - Any ERROR or exception related to SetLocal or GetLocal
@@ -104,7 +104,7 @@ Look for:
 **Optional: Enable Diagnostic Logging**
 (If you want to measure actual Refresh() reduction)
 ```bash
-ssh sagetv@192.168.0.75 'docker exec sagetv-mine bash -c \
+ssh sagetv@<host> 'docker exec <container> bash -c \
   "sed -i \"s/^/ui\\/debug_refresh_churn=true/\" /opt/sagetv/server/Sage.properties"'
 ```
 Then restart and watch logs for "Main Menu ref 75 Refresh() called" lines.
@@ -114,18 +114,18 @@ Then restart and watch logs for "Main Menu ref 75 Refresh() called" lines.
 **Immediate Rollback:**
 ```bash
 # SSH to server
-ssh sagetv@192.168.0.75
+ssh sagetv@<host>
 
 # Stop Sage
-docker exec sagetv-mine /opt/sagetv/server/stopsage
+docker exec <container> /opt/sagetv/server/stopsage
 
 # Restore from backup
-docker exec sagetv-mine bash -c \
+docker exec <container> bash -c \
   'cp /opt/sagetv/server/STVs/SageTV7_backups/SageTV7.xml.pre-phase3-* \
       /opt/sagetv/server/STVs/SageTV7/SageTV7.xml'
 
 # Restart
-docker exec sagetv-mine /opt/sagetv/server/startsage
+docker exec <container> /opt/sagetv/server/startsage
 ```
 
 ### Regression Testing Checklist
@@ -171,6 +171,6 @@ Once deployed and validated:
 **File Versions:**
 - Phase 3 optimizer: `docs/STV_Cleanup/stv_phase3_main_menu_optimizer.py`
 - Phase 3 STV: `stvs/SageTV7/SageTV7_cached_ac25_phase3.xml` (MD5: 57526de33366be68d4657186269962c1)
-- Deployed to: `/opt/sagetv/server/STVs/SageTV7/SageTV7.xml` on sagetv-mine container
+- Deployed to: `/opt/sagetv/server/STVs/SageTV7/SageTV7.xml` on the `<container>` container
 
 **Commit:** 7259138c

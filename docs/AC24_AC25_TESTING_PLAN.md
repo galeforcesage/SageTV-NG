@@ -190,8 +190,8 @@ Concern: Cache not leaking or growing unbounded
 **Root Cause**: FocusGained hook not firing OR SetLocal call failed
 **Debug**:
 ```bash
-docker exec sagetv-mine grep -i "FocusGained" /opt/sagetv/server/STVs/SageTV7/SageTV7.xml | head -5
-docker exec sagetv-mine tail -100 /opt/sagetv/server/sagetv_0.txt | grep -i "SetLocal"
+docker exec <container> grep -i "FocusGained" /opt/sagetv/server/STVs/SageTV7/SageTV7.xml | head -5
+docker exec <container> tail -100 /opt/sagetv/server/sagetv_0.txt | grep -i "SetLocal"
 ```
 **Fix**: May need to re-embed hooks or adjust event trigger
 
@@ -206,7 +206,7 @@ docker exec sagetv-mine tail -100 /opt/sagetv/server/sagetv_0.txt | grep -i "Set
 **Root Cause**: SetLocal variables not cleared, or cache accumulating
 **Debug**:
 ```bash
-docker exec sagetv-mine ps -o rss= -p $(pgrep -x java)
+docker exec <container> ps -o rss= -p $(pgrep -x java)
 # Monitor over 1 hour
 ```
 **Fix**: May need explicit cache eviction policy or size limits

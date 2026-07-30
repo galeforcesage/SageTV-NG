@@ -2,7 +2,7 @@
 # host-build-hdhr.sh — runs on a Docker host and stages/builds HDHR sources.
 # Stages source into the container, builds, deploys.
 set -euo pipefail
-CONT=${SAGETV_CONTAINER:-sagetv-mine}
+CONT=${SAGETV_CONTAINER:-sagetv}
 CONTAINER_USER=${SAGETV_CONTAINER_USER:-sagetv}
 
 echo "=== check tarball ==="

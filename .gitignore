@@ -29,6 +29,8 @@ config*.log
 /verify-*.sh
 /entrypoint-state.sh
 /Dockerfile.entrypoint-overlay
+# Private local AI-assistant scratch notes (host IPs, container names, creds) — never commit.
+/AI_LOCAL_CONTEXT.md
 # Throwaway debug shell scripts and probe artifacts (lineup.json, etc.)
 /scripts/
 /tmp-*.sh

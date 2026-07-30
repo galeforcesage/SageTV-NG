@@ -18,6 +18,7 @@
 
 $script:HostAddr = if ($env:SAGE_DEPLOY_HOST) { $env:SAGE_DEPLOY_HOST } else { 'sagetv@<HOST>' }
 $script:RepoRoot = if ($env:SAGE_REPO_ROOT)   { $env:SAGE_REPO_ROOT }   else { (Split-Path -Parent $PSScriptRoot) }
+$script:Container = if ($env:SAGE_DEPLOY_CONTAINER) { $env:SAGE_DEPLOY_CONTAINER } else { 'sagetv' }
 
 function Get-RepoBuildVersion {
     # BUILD_VERSION is derived from git commit count at build time; the source
@@ -66,14 +67,14 @@ function Get-DeployedBuildVersion {
     # which under `powershell -File` is non-interactive but not closed -- ssh then hangs
     # waiting on it. Dot-sourced in an interactive shell stdin is the console (a tty)
     # which ssh handles correctly, so the bug only appears under `-File`.
-    $out = ssh -n -o ConnectTimeout=15 -o BatchMode=yes $script:HostAddr 'docker exec sagetv-mine javap -p -c -constants -cp /opt/sagetv/server/Sage.jar sage.SageConstants 2>/dev/null'
+    $out = ssh -n -o ConnectTimeout=15 -o BatchMode=yes $script:HostAddr ('docker exec {0} javap -p -c -constants -cp /opt/sagetv/server/Sage.jar sage.SageConstants 2>/dev/null' -f $script:Container)
     $line = $out | Select-String 'BUILD_VERSION\s*=\s*(\d+)' | Select-Object -First 1
     if (-not $line) { throw "could not read deployed BUILD_VERSION (ssh/docker output empty)" }
     return [int]$line.Matches[0].Groups[1].Value
 }
 
 function Get-DeployedJarMd5 {
-    $out = ssh -n -o ConnectTimeout=15 -o BatchMode=yes $script:HostAddr 'docker exec sagetv-mine md5sum /opt/sagetv/server/Sage.jar'
+    $out = ssh -n -o ConnectTimeout=15 -o BatchMode=yes $script:HostAddr ('docker exec {0} md5sum /opt/sagetv/server/Sage.jar' -f $script:Container)
     if ($out -match '^([a-f0-9]{32})\s') { return $Matches[1] }
     throw "could not read deployed jar md5 (got: $out)"
 }

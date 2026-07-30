@@ -1,5 +1,5 @@
 #-------------------------------------------------------------------------------
-# sagetv-mine — NVIDIA GPU override (OPT-IN)
+# sagetv-ng — NVIDIA GPU override (OPT-IN)
 #
 # Layer this on top of the CPU-only base to enable the NVIDIA GPU for:
 #   • hardware transcode (NVENC h264_nvenc / hevc_nvenc via HwEncoder), and
@@ -24,7 +24,7 @@
 #     via Sage.properties: transcoder/ai_upscale_binary=/opt/realesrgan/realesrgan-ncnn-vulkan
 #-------------------------------------------------------------------------------
 services:
-  sagetv-mine:
+  sagetv-ng:
     environment:
       # Expose all GPUs and the driver capabilities the workloads need.
       # "graphics" is what makes Vulkan (Real-ESRGAN) work — do not drop it.

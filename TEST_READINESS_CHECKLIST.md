@@ -122,7 +122,7 @@
 - [ ] **Result**: PASS / FAIL
 
 **Test 3: Log Monitoring**
-- [ ] Check for new ERROR logs: `docker exec sagetv-mine tail -100 /opt/sagetv/server/sagetv_0.txt | grep ERROR`
+- [ ] Check for new ERROR logs: `docker exec <container> tail -100 /opt/sagetv/server/sagetv_0.txt | grep ERROR`
 - [ ] Verify no errors related to SetLocal/GetLocal
 - [ ] Verify no errors related to FocusGained hooks
 - [ ] **Result**: PASS / FAIL
@@ -185,10 +185,10 @@ Any Must-Have Criteria FAIL
 ### Issue: AC-2.4 Latency Not Improved
 ```bash
 # Check if SetLocal calls are present
-docker exec sagetv-mine grep -c "SetLocal(" /opt/sagetv/server/STVs/SageTV7/SageTV7.xml
+docker exec <container> grep -c "SetLocal(" /opt/sagetv/server/STVs/SageTV7/SageTV7.xml
 
 # Check if GetLocal is being used
-docker exec sagetv-mine grep -c "GetLocal(" /opt/sagetv/server/STVs/SageTV7/SageTV7.xml
+docker exec <container> grep -c "GetLocal(" /opt/sagetv/server/STVs/SageTV7/SageTV7.xml
 
 # Expected: Both counts should be > 0
 ```
@@ -196,10 +196,10 @@ docker exec sagetv-mine grep -c "GetLocal(" /opt/sagetv/server/STVs/SageTV7/Sage
 ### Issue: AC-2.5 State Not Updating
 ```bash
 # Check if FocusGained hooks are present
-docker exec sagetv-mine grep -c "FocusGained" /opt/sagetv/server/STVs/SageTV7/SageTV7.xml
+docker exec <container> grep -c "FocusGained" /opt/sagetv/server/STVs/SageTV7/SageTV7.xml
 
 # Check for errors in logs
-docker exec sagetv-mine tail -50 /opt/sagetv/server/sagetv_0.txt | grep -i "SetLocal\|FocusGained"
+docker exec <container> tail -50 /opt/sagetv/server/sagetv_0.txt | grep -i "SetLocal\|FocusGained"
 
 # Expected: FocusGained count should be > 0, no errors
 ```
@@ -207,7 +207,7 @@ docker exec sagetv-mine tail -50 /opt/sagetv/server/sagetv_0.txt | grep -i "SetL
 ### Issue: Memory Growing Unbounded
 ```bash
 # Monitor memory usage over time
-watch -n 5 'docker exec sagetv-mine ps -o rss= -p $(pgrep -x java) | awk "{print \$1/1024 \" MB\"}"'
+watch -n 5 'docker exec <container> ps -o rss= -p $(pgrep -x java) | awk "{print \$1/1024 \" MB\"}"'
 
 # If growing: may need to investigate cache eviction
 # Fallback: revert to backup and investigate

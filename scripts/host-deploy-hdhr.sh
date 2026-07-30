@@ -1,7 +1,7 @@
 #!/bin/bash
 # host-deploy-hdhr.sh - run on docker host. Deploys the patched .so.
 set -euo pipefail
-CONT=sagetv-mine
+CONT=${SAGETV_CONTAINER:-sagetv}
 
 echo "=== copy .so out of build dir, deploy to /opt/sagetv/server ==="
 docker exec --user root "$CONT" bash -c '
@@ -52,5 +52,5 @@ tail -30 /opt/sagetv/server/sagetv_0.txt
 echo ""
 echo "=== DONE — now trigger a channel scan on Tuner 3 from the SageTV UI ==="
 echo "Then check for diagnostic packet sizes:"
-echo "  docker exec sagetv-mine grep HDHR_VIDEO /opt/sagetv/server/sagetv_0.txt | head -50"
-echo "  docker exec sagetv-mine grep HDHR_VIDEO /var/log/syslog 2>/dev/null | head -50"
+echo "  docker exec ${CONT} grep HDHR_VIDEO /opt/sagetv/server/sagetv_0.txt | head -50"
+echo "  docker exec ${CONT} grep HDHR_VIDEO /var/log/syslog 2>/dev/null | head -50"
