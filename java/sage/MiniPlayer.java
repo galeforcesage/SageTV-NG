@@ -98,6 +98,91 @@ public class MiniPlayer implements DVDMediaPlayer
         && !ngSession && !mediaExtender;
   }
 
+  /**
+   * Collaborator seam for {@link #acquirePlayerSocketChannel(PlayerSocketProvider)}.
+   * Decouples the bounded self-heal retry policy from the real
+   * {@code MiniClientSageRenderer}/{@code SocketChannel} plumbing so the
+   * policy can be unit tested without a live client connection.
+   */
+  interface PlayerSocketProvider
+  {
+    /** @return the current player-socket-channel, or null/dead if unavailable. */
+    java.nio.channels.SocketChannel getChannel();
+    /** Ask the client to (re)establish its player-socket-channel, if supported. */
+    void requestReconnect();
+  }
+
+  private static boolean isUsablePlayerSocketChannel(java.nio.channels.SocketChannel sc)
+  {
+    return sc != null && sc.isOpen() && sc.isConnected();
+  }
+
+  /**
+   * Bounded self-heal for acquiring the shared player-socket-channel consulted by
+   * {@link #initDriver0(int)} and {@link #openURL0(String)}.
+   * <p>
+   * Root-caused live incident: a client-side decode failure on one file (e.g. an
+   * unplayable {@code DIRECT_PLAY} of a codec/container the client can't actually
+   * decode) can tear down this shared channel out from under an in-flight
+   * request. Previously, once that happened, {@code initDriver0()} would see
+   * {@code getPlayerSocketChannel() == null} and give up immediately -- wedging
+   * EVERY subsequent playback attempt in the same session, even for a
+   * completely unrelated and perfectly playable file (confirmed: an HEVC file
+   * failed identically right after an MPEG file's DIRECT_PLAY decision blew up
+   * the shared channel, with no codec-specific error of its own).
+   * <p>
+   * This retries acquisition a bounded number of times, explicitly asking the
+   * client to reconnect (via {@code provider.requestReconnect()}) between
+   * attempts, and treats a channel that is present but closed/disconnected the
+   * same as a missing one (the underlying connection pool can hand back a
+   * stale entry). It never loops unboundedly and never busy-spins -- each
+   * retry is separated by a short, configurable backoff.
+   * <p>
+   * Tunable/kill-switch live, without a rebuild:
+   * <ul>
+   *   <li>{@code miniplayer/player_socket_reconnect_attempts} (default 2) --
+   *       total acquisition attempts; set to 1 to fully restore the old
+   *       give-up-immediately behavior.</li>
+   *   <li>{@code miniplayer/player_socket_reconnect_backoff_ms} (default 250)
+   *       -- delay between attempts.</li>
+   * </ul>
+   *
+   * @param provider supplies/reconnects the real channel; null returns null
+   * @return a usable (open + connected) channel, or null if every attempt
+   *         was exhausted
+   */
+  static java.nio.channels.SocketChannel acquirePlayerSocketChannel(PlayerSocketProvider provider)
+  {
+    if (provider == null)
+      return null;
+    int maxAttempts = Math.max(1, Sage.getInt("miniplayer/player_socket_reconnect_attempts", 2));
+    long backoffMs = Math.max(0, Sage.getLong("miniplayer/player_socket_reconnect_backoff_ms", 250));
+    for (int attempt = 0; attempt < maxAttempts; attempt++)
+    {
+      java.nio.channels.SocketChannel sc = provider.getChannel();
+      if (isUsablePlayerSocketChannel(sc))
+        return sc;
+      if (sc != null)
+      {
+        // Stale/dead entry handed back from the pool; don't let it linger.
+        try { sc.close(); } catch (Exception e) {}
+      }
+      boolean attemptsRemain = attempt < maxAttempts - 1;
+      if (!attemptsRemain)
+        break;
+      if (Sage.DBG)
+        System.out.println("MiniPlayer: player-socket-channel unavailable (attempt " +
+            (attempt + 1) + "/" + maxAttempts + "); requesting client reconnect and retrying");
+      provider.requestReconnect();
+      if (backoffMs > 0)
+      {
+        try { Thread.sleep(backoffMs); }
+        catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+      }
+    }
+    return null;
+  }
+
   private java.nio.channels.SocketChannel clientSocket;
   private FastPusherReply clientInStream;
   private java.nio.ByteBuffer sockBuf = java.nio.ByteBuffer.allocateDirect(65536);
@@ -4428,11 +4513,33 @@ public class MiniPlayer implements DVDMediaPlayer
   protected long initDriver0(int videoFormat)
   {
     if (Sage.DBG) System.out.println("initDriver0()");
-    clientSocket = (mcsr == null) ? MiniClientSageRenderer.getPlayerSocketChannel(null, null) :
-      mcsr.getPlayerSocketChannel();
+    clientSocket = acquirePlayerSocketChannel(new PlayerSocketProvider()
+    {
+      public java.nio.channels.SocketChannel getChannel()
+      {
+        return (mcsr == null) ? MiniClientSageRenderer.getPlayerSocketChannel(null, null) : mcsr.getPlayerSocketChannel();
+      }
+      public void requestReconnect()
+      {
+        if (mcsr != null)
+          mcsr.forceMediaReconnect();
+      }
+    });
 
     String clientName = (uiMgr == null ? "EXTERNAL" : uiMgr.getLocalUIClientName());
-    if (clientSocket == null) return 0;
+    if (clientSocket == null)
+    {
+      // Self-heal exhausted; don't leave a stale stream wrapping a dead/closed
+      // channel around for a later openURL0()/pushBuffer0() call to silently
+      // reuse (its own "if (clientInStream == null)" guard would otherwise
+      // treat this leftover reference as still good).
+      if (clientInStream != null)
+      {
+        try { clientInStream.close(); } catch (Exception e) {}
+        clientInStream = null;
+      }
+      return 0;
+    }
     boolean retry = true;
     while (true)
     {
