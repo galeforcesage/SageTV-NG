@@ -59,6 +59,126 @@ public class FFMPEGTranscoder implements TranscodeEngine
   public void setSurfaceTargetAudioCodec(String codec) { this.surfaceTargetAudioCodec = codec; }
   public void setSurfaceTargetAudioChannels(int ch) { this.surfaceTargetAudioChannels = ch; }
 
+  /**
+   * Server-side audio EQ/processing plan for this transcode session (Audio
+   * Equalizer v1, feature-flagged off by default). This is a PURE AUDIO-STAGE
+   * OVERLAY -- it never touches video params and never chooses the audio
+   * codec/bitrate itself. When {@link sage.audioproc.AudioProcessingPlan#getResolvedLocation()}
+   * is {@code SERVER} and a filtergraph was built, this instance does exactly
+   * two things to whatever audio stage the EXISTING selection logic already
+   * assembled: (a) disqualifies a plain {@code -acodec copy} by rewriting it
+   * to {@link sage.audioproc.AudioProcessingPlan#getTargetAudioCodec()} --
+   * itself just an echo of whatever the existing audio-selection logic already
+   * chose, never invented here -- because ffmpeg refuses to combine {@code -af}
+   * with stream-copy, and (b) appends the plan's {@code -af} filtergraph to
+   * whatever audio filter chain (if any) the existing logic already built.
+   * Set by the caller (client-state/session wiring) before {@link #startTranscode}
+   * runs; null/no-op when the caller never sets it, which keeps every existing
+   * playback path byte-for-byte unchanged when this feature isn't in play.
+   */
+  private sage.audioproc.AudioProcessingPlan serverAudioEqPlan;
+  public void setServerAudioProcessingPlan(sage.audioproc.AudioProcessingPlan plan) { this.serverAudioEqPlan = plan; }
+
+  /**
+   * True only when a real, flag-enabled, buildable server-EQ plan is present.
+   * Defense-in-depth: even if a caller sets a plan without itself checking the
+   * master flag, this transcoder still won't act unless {@code audioproc/enable_server_eq}
+   * is on -- guaranteeing net-neutral behavior with the flag off regardless of
+   * caller correctness.
+   */
+  boolean isServerAudioEqActive()
+  {
+    if (serverAudioEqPlan == null) return false;
+    if (serverAudioEqPlan.getResolvedLocation() != sage.audioproc.AudioProcessingLocation.SERVER) return false;
+    String graph = serverAudioEqPlan.getFilterGraph();
+    if (graph == null || graph.length() == 0) return false;
+    return Sage.getBoolean("audioproc/enable_server_eq", false);
+  }
+
+  /**
+   * Disqualifies a plain {@code -acodec}/{@code -c:a}/{@code -codec:a copy}
+   * from {@code xcodeParamsVec} when a server-EQ plan is active, since a
+   * filtergraph cannot be applied over stream-copy. Rewrites the value to
+   * {@link sage.audioproc.AudioProcessingPlan#getTargetAudioCodec()} -- the
+   * plan's echo of whatever the existing audio-selection logic already
+   * picked -- so the audio codec choice itself is never made here. Must be
+   * called BEFORE {@link #isAudioCopySelected} is evaluated for this build so
+   * the downstream {@code -af} construction naturally takes its normal
+   * (non-copy) branch. No-op if the plan lacks a usable target codec (avoids
+   * corrupting the command line with a blank codec value).
+   */
+  @SuppressWarnings({"rawtypes","unchecked"})
+  void maybeDisqualifyAudioCopyForServerEq(java.util.ArrayList xcodeParamsVec)
+  {
+    if (!isServerAudioEqActive()) return;
+    String targetCodec = serverAudioEqPlan.getTargetAudioCodec();
+    if (targetCodec == null || targetCodec.length() == 0)
+    {
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: server audio EQ active but plan has no "
+          + "targetAudioCodec -- skipping copy disqualification (leaving audio path unchanged)");
+      return;
+    }
+    for (int i = 0; i < xcodeParamsVec.size() - 1; i++)
+    {
+      Object o = xcodeParamsVec.get(i);
+      if (!(o instanceof String)) continue;
+      String tok = (String) o;
+      if (tok.equals("-acodec") || tok.equals("-c:a") || tok.equals("-codec:a"))
+      {
+        Object v = xcodeParamsVec.get(i + 1);
+        if (v instanceof String && "copy".equalsIgnoreCase((String) v))
+        {
+          xcodeParamsVec.set(i + 1, targetCodec);
+          if (Sage.DBG) System.out.println("FFMPEGTranscoder: server audio EQ disqualifying -acodec copy -> "
+              + targetCodec + " (filtergraph requires an active audio encode)");
+        }
+      }
+    }
+  }
+
+  /**
+   * Appends the server-EQ plan's {@code -af} filtergraph to whatever audio
+   * filter chain (if any) the existing logic already built for this session,
+   * or adds a fresh {@code -af} pair if none exists. Never replaces an
+   * existing filter value -- always comma-joins onto the end, so an in-flight
+   * transcode (e.g. AC-4 -> E-AC-3, or the aresample/async drift-correction
+   * filter) keeps working exactly as before with the EQ graph layered on top.
+   * Call this AFTER the existing {@code -af} construction for this build path
+   * has already run.
+   */
+  @SuppressWarnings({"rawtypes","unchecked"})
+  void maybeAppendServerAudioEqFilter(java.util.ArrayList xcodeParamsVec)
+  {
+    if (!isServerAudioEqActive()) return;
+    String graph = serverAudioEqPlan.getFilterGraph();
+    int afIdx = -1;
+    for (int i = 0; i < xcodeParamsVec.size() - 1; i++)
+    {
+      Object o = xcodeParamsVec.get(i);
+      if (o instanceof String && "-af".equals(o))
+      {
+        afIdx = i + 1;
+        break;
+      }
+    }
+    if (afIdx >= 0)
+    {
+      Object existing = xcodeParamsVec.get(afIdx);
+      String existingVal = (existing == null) ? "" : existing.toString();
+      String combined = existingVal.length() == 0 ? graph : existingVal + "," + graph;
+      xcodeParamsVec.set(afIdx, combined);
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: appended server audio EQ filtergraph "
+          + "(hash=" + serverAudioEqPlan.getFilterGraphHash() + ") onto existing -af -> " + combined);
+    }
+    else
+    {
+      xcodeParamsVec.add("-af");
+      xcodeParamsVec.add(graph);
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: added server audio EQ -af "
+          + "(hash=" + serverAudioEqPlan.getFilterGraphHash() + ") -> " + graph);
+    }
+  }
+
   public long getAvailableTranscodeBytes()
   {
     if (bufferOutput)
@@ -2301,6 +2421,12 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // copy check restores the old effective behavior. If a source genuinely
     // needs aresample drift correction, force it onto the audio re-encode
     // branch above rather than trying to filter through a copy.
+    // Audio EQ v1 (feature-flagged, default off): if a server-side EQ plan is
+    // active for this session, disqualify a plain -acodec copy BEFORE the copy
+    // check below so the -af construction that follows naturally takes its
+    // normal (non-copy) branch. No-op unless audioproc/enable_server_eq is on
+    // and a buildable plan was set on this instance -- see isServerAudioEqActive().
+    maybeDisqualifyAudioCopyForServerEq(xcodeParamsVec);
     boolean audioIsCopy = isAudioCopySelected(xcodeParamsVec);
     // MP4-family + AAC stream-copy: AAC from an ADTS-framed source (MPEG-TS)
     // must be converted to ASC via the aac_adtstoasc bitstream filter or the
@@ -2387,6 +2513,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
         System.out.println("FFMPEGTranscoder: skipping -af aresample=async (audio is -acodec copy)");
       }
     }
+
+    // Audio EQ v1: append (never replace) the server-EQ filtergraph onto
+    // whatever -af the branches above already built (or add a fresh -af if
+    // none exists). No-op unless the feature is active for this session.
+    maybeAppendServerAudioEqFilter(xcodeParamsVec);
 
     if (Sage.DBG && "TRUE".equals(Sage.get("xcode_video_bitrate_stats", null)))
       xcodeParamsVec.add("-vstats");
