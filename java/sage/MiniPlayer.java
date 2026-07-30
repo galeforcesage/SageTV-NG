@@ -61,9 +61,29 @@ public class MiniPlayer implements DVDMediaPlayer
    * missing MPEG2-TS push advertisement, never for H.264 decode support
    * itself.
    * <p>
+   * <b>Defaults OFF as of the stall investigation below.</b> The classic
+   * Placeshifter's PUSH receiver turned out to be a bespoke, PS-only native
+   * path (distinct from its PULL path, which rides an embedded MPlayer with
+   * a real general demuxer) -- it was never built or tested against
+   * MPEG2-TS framing. Granting it MPEG2-TS push via this override caused a
+   * confirmed live stall (server-side pusher stopped draining, client never
+   * rendered audio/video) because the client's push receiver cannot demux
+   * the TS container this profile advertises support for. Root-caused via
+   * live log forensics + a standalone ffmpeg isolation test that ruled out
+   * decode/encode/consumer-buffer causes, leaving client-side TS-push demux
+   * as the only remaining explanation. A pull-based H.264 delivery route is
+   * a promising fix (the client's PULL path already handles MPEG2-TS) but
+   * requires new engineering (transcode-to-growing-file instead of a live
+   * socket push, plus a LAN-only port) and is tracked as separate future
+   * work -- not a quick flip. Until that lands, this override stays
+   * available for opt-in (e.g. a future client build verified to handle
+   * TS push, or that new pull-xcode delivery path) but defaults to leaving
+   * classic Placeshifters on the working legacy mpeg4 ladder.
+   * <p>
    * Kill-switch: {@code miniplayer/legacy_h264_push_override} (default
-   * {@code true}) allows disabling this profile live, without a rebuild, if
-   * a legacy client is ever found to mis-decode pushed H.264/MPEG2-TS.
+   * {@code false}) allows enabling this profile live, without a rebuild, if
+   * a legacy client is ever verified to correctly decode pushed
+   * H.264/MPEG2-TS.
    *
    * @param ngSession     true if this is an NG-capable session (from
    *                      {@link MiniClientSageRenderer#isNgCapableSession()})
@@ -74,7 +94,7 @@ public class MiniPlayer implements DVDMediaPlayer
    */
   static boolean legacyH264PushProfileApplies(boolean ngSession, boolean mediaExtender)
   {
-    return Sage.getBoolean("miniplayer/legacy_h264_push_override", true)
+    return Sage.getBoolean("miniplayer/legacy_h264_push_override", false)
         && !ngSession && !mediaExtender;
   }
 
