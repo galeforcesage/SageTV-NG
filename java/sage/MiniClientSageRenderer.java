@@ -8574,11 +8574,153 @@ public class MiniClientSageRenderer extends SageRenderer
       propValue = new String(payload, 4 + propNameLen, propValLen);
     }
 
-    if (!"DOWNLOAD_REFRESH_REQUEST".equalsIgnoreCase(propName))
-      return false;
+    if ("DOWNLOAD_REFRESH_REQUEST".equalsIgnoreCase(propName))
+    {
+      processDownloadRefreshRequest(propValue);
+      return true;
+    }
 
-    processDownloadRefreshRequest(propValue);
-    return true;
+    if ("AUDIO_PROCESSING_CAPABILITIES".equalsIgnoreCase(propName))
+    {
+      handleInboundAudioProcessingCapabilities(propValue);
+      return true;
+    }
+
+    // Canonical AUDIO_PROCESSING_SETTINGS_STATE and the currently-shipped
+    // live PWA client's AUDIO_PROCESSING_SETTINGS are the same message.
+    if ("AUDIO_PROCESSING_SETTINGS_STATE".equalsIgnoreCase(propName) ||
+        "AUDIO_PROCESSING_SETTINGS".equalsIgnoreCase(propName))
+    {
+      handleInboundAudioProcessingSettings(propValue);
+      return true;
+    }
+
+    if ("AUDIO_PROCESSING_DSP_ACTIVE".equalsIgnoreCase(propName))
+    {
+      handleInboundAudioProcessingDspActive(propValue);
+      return true;
+    }
+
+    if ("AUDIO_PROCESSING_DIAGNOSTIC_EVENT".equalsIgnoreCase(propName))
+    {
+      // Phase 7 concern: client-side diagnostic telemetry. Acknowledge
+      // receipt (return true so it isn't logged as unrecognized) but do
+      // not act on it -- this is informational only, never persisted.
+      if (Sage.DBG) System.out.println("AudioProcessing: client diagnostic event: " + propValue);
+      return true;
+    }
+
+    return false;
+  }
+
+  /** Parses and stores an inbound {@code AUDIO_PROCESSING_CAPABILITIES} payload. */
+  private void handleInboundAudioProcessingCapabilities(String json)
+  {
+    sage.audioproc.AudioProcessingCapabilities parsed = sage.audioproc.AudioProcessingJson.parseCapabilities(json);
+    // Defense-in-depth: a session this server does not consider NG-capable
+    // (i.e. a legacy SageTV/STV client, or a stray/spoofed message before
+    // NG negotiation completes) can never be treated as anything but
+    // LEGACY, regardless of what the payload itself claims.
+    if (!isNgCapableSession() && parsed.getClientKind() != sage.audioproc.ClientKind.LEGACY)
+    {
+      parsed = sage.audioproc.AudioProcessingCapabilities.builder()
+          .clientKind(sage.audioproc.ClientKind.LEGACY)
+          .build();
+    }
+    audioProcessingCapabilities = parsed;
+    audioProcessingLastUpdatedMillis = Sage.time();
+  }
+
+  /** Parses and stores an inbound {@code AUDIO_PROCESSING_SETTINGS_STATE}/{@code AUDIO_PROCESSING_SETTINGS} payload. */
+  private void handleInboundAudioProcessingSettings(String json)
+  {
+    audioProcessingSettings = sage.audioproc.AudioProcessingJson.parseSettings(json);
+    audioProcessingLastUpdatedMillis = Sage.time();
+  }
+
+  /** Parses and stores an inbound {@code AUDIO_PROCESSING_DSP_ACTIVE} payload (object or bare boolean scalar). */
+  private void handleInboundAudioProcessingDspActive(String payload)
+  {
+    sage.audioproc.AudioProcessingState state = sage.audioproc.AudioProcessingJson.parseState(payload);
+    audioProcessingClientDspActive = state.isDspActive();
+    audioProcessingLastUpdatedMillis = Sage.time();
+  }
+
+  /** The client's latest reported audio-DSP capabilities; never {@code null} (defaults to fully incapable). */
+  public sage.audioproc.AudioProcessingCapabilities getAudioProcessingCapabilities()
+  {
+    return audioProcessingCapabilities;
+  }
+
+  /** The client's latest reported audio-DSP settings request; never {@code null} (defaults to disabled/NONE). */
+  public sage.audioproc.AudioProcessingSettings getAudioProcessingSettings()
+  {
+    return audioProcessingSettings;
+  }
+
+  /** {@code true} if the client's own local DSP is currently reported active. */
+  public boolean isAudioProcessingClientDspActive()
+  {
+    return audioProcessingClientDspActive;
+  }
+
+  /**
+   * A convenience aggregate of this connection's current audio-DSP state,
+   * suitable to pass directly to {@link sage.audioproc.AudioProcessingResolver#resolve}.
+   */
+  public sage.audioproc.AudioProcessingClientState getAudioProcessingClientState()
+  {
+    return new sage.audioproc.AudioProcessingClientState(getNgClientId(), audioProcessingCapabilities,
+        audioProcessingSettings, audioProcessingClientDspActive, audioProcessingLastUpdatedMillis);
+  }
+
+  /**
+   * Sends a resolved {@link sage.audioproc.AudioProcessingPlan} to the
+   * client as {@code AUDIO_PROCESSING_PLAN}. No-op (logged) on I/O failure
+   * -- a failed ack must never affect playback itself.
+   */
+  public void sendAudioProcessingPlan(sage.audioproc.AudioProcessingPlan plan)
+  {
+    if (plan == null)
+      return;
+    try
+    {
+      sendSetProperty("AUDIO_PROCESSING_PLAN", sage.audioproc.AudioProcessingJson.toJson(plan));
+    }
+    catch (java.io.IOException e)
+    {
+      if (Sage.DBG) System.out.println("AudioProcessing: failed to send AUDIO_PROCESSING_PLAN: " + e);
+    }
+  }
+
+  /** Sends {@code AUDIO_PROCESSING_SETTINGS_VERSION_ACK} acknowledging the settings version the server resolved against. */
+  public void sendAudioProcessingSettingsVersionAck(long settingsVersion, String settingsHash)
+  {
+    try
+    {
+      sendSetProperty("AUDIO_PROCESSING_SETTINGS_VERSION_ACK",
+          "{\"settingsVersion\":" + settingsVersion + ",\"settingsHash\":" +
+              (settingsHash == null ? "null" : "\"" + settingsHash.replace("\"", "\\\"") + "\"") + "}");
+    }
+    catch (java.io.IOException e)
+    {
+      if (Sage.DBG) System.out.println("AudioProcessing: failed to send AUDIO_PROCESSING_SETTINGS_VERSION_ACK: " + e);
+    }
+  }
+
+  /** Sends {@code AUDIO_PROCESSING_ERROR} with a short error code and human-readable message. */
+  public void sendAudioProcessingError(String errorCode, String message)
+  {
+    try
+    {
+      String safeCode = errorCode == null ? "UNKNOWN" : errorCode.replace("\"", "\\\"");
+      String safeMsg = message == null ? "" : message.replace("\"", "\\\"");
+      sendSetProperty("AUDIO_PROCESSING_ERROR", "{\"errorCode\":\"" + safeCode + "\",\"message\":\"" + safeMsg + "\"}");
+    }
+    catch (java.io.IOException e)
+    {
+      if (Sage.DBG) System.out.println("AudioProcessing: failed to send AUDIO_PROCESSING_ERROR: " + e);
+    }
   }
 
   private void processDownloadRefreshRequest(String payload)
@@ -9754,6 +9896,20 @@ public class MiniClientSageRenderer extends SageRenderer
   // by HTTPLSServer.setupTranscoder â†’ FFMPEGTranscoder.setHttplsSurfaceAudioStreamIndex
   // to emit the correct -map for the chosen audio track.
   private volatile int currentSurfaceAudioStreamIndex = -1;
+  // --- Server-side Audio Equalizer / AudioProcessing (v1, additive) ---
+  // Client-pushed state for AUDIO_PROCESSING_* messages (see
+  // sage.audioproc.AudioProcessingResolver / AudioProcessingClientState).
+  // Populated ONLY from explicit client messages -- never inferred from
+  // clientPlatform/resolution/etc, matching the "no server-side client
+  // assumptions" rule. Defaults are the fully-inert/incapable state so a
+  // client (or a legacy client that never sends these messages at all)
+  // always resolves to AudioProcessingLocation.NONE.
+  private volatile sage.audioproc.AudioProcessingCapabilities audioProcessingCapabilities =
+      sage.audioproc.AudioProcessingCapabilities.NONE;
+  private volatile sage.audioproc.AudioProcessingSettings audioProcessingSettings =
+      sage.audioproc.AudioProcessingSettings.DISABLED;
+  private volatile boolean audioProcessingClientDspActive = false;
+  private volatile long audioProcessingLastUpdatedMillis = 0L;
   // --- PWA-only GFX perf instrumentation (SERVER2) ---
   // Active only when pwa/perf_logging=true AND isPwaBrowserClient(). Purely
   // observational: no command payload, send order, buffering, or timing is

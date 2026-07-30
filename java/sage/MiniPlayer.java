@@ -1498,27 +1498,83 @@ public class MiniPlayer implements DVDMediaPlayer
             // audio codec + source channel count as ";acodec=<v>;ac=<n>" so the
             // server honors "best codec the client supports at/below source"
             // instead of the static AAC-stereo floor. Copy/remux modes omit it.
-            if (("browserhd".equals(chosenSurfaceXcodeMode) || "browserhd_copyv".equals(chosenSurfaceXcodeMode))
-                && profileDecision != null && profileDecision.targetAudioCodec != null
-                && profileDecision.targetAudioCodec.length() > 0)
+            if ("browserhd".equals(chosenSurfaceXcodeMode) || "browserhd_copyv".equals(chosenSurfaceXcodeMode))
             {
-              String tac = profileDecision.targetAudioCodec.trim().toUpperCase(java.util.Locale.ROOT);
               String ffAcodec = null;
-              if (tac.equals("EAC3") || tac.equals("E-AC-3") || tac.equals("EC-3")) ffAcodec = "eac3";
-              else if (tac.equals("AC3") || tac.equals("AC-3")) ffAcodec = "ac3";
-              else if (tac.equals("AAC") || tac.equals("HE-AAC")) ffAcodec = "aac";
-              else if (tac.equals("MP2")) ffAcodec = "mp2";
-              else if (tac.equals("OPUS")) ffAcodec = "libopus";
-              else if (tac.equals("FLAC")) ffAcodec = "flac";
-              // else (DTS/TRUEHD/unknown): no override -> the mode's default stands.
-              if (ffAcodec != null)
+              if (profileDecision != null && profileDecision.targetAudioCodec != null
+                  && profileDecision.targetAudioCodec.length() > 0)
               {
-                effDelivery += ";acodec=" + ffAcodec;
-                int ch = chosenSurfaceAudioChannels;
-                if (ch <= 0 && currMF != null && currMF.getFileFormat() != null
-                    && currMF.getFileFormat().getAudioFormat() != null)
-                  ch = currMF.getFileFormat().getAudioFormat().getChannels();
-                if (ch > 0) effDelivery += ";ac=" + ch;
+                String tac = profileDecision.targetAudioCodec.trim().toUpperCase(java.util.Locale.ROOT);
+                if (tac.equals("EAC3") || tac.equals("E-AC-3") || tac.equals("EC-3")) ffAcodec = "eac3";
+                else if (tac.equals("AC3") || tac.equals("AC-3")) ffAcodec = "ac3";
+                else if (tac.equals("AAC") || tac.equals("HE-AAC")) ffAcodec = "aac";
+                else if (tac.equals("MP2")) ffAcodec = "mp2";
+                else if (tac.equals("OPUS")) ffAcodec = "libopus";
+                else if (tac.equals("FLAC")) ffAcodec = "flac";
+                // else (DTS/TRUEHD/unknown): no override -> the mode's default stands.
+                if (ffAcodec != null)
+                {
+                  effDelivery += ";acodec=" + ffAcodec;
+                  int ch = chosenSurfaceAudioChannels;
+                  if (ch <= 0 && currMF != null && currMF.getFileFormat() != null
+                      && currMF.getFileFormat().getAudioFormat() != null)
+                    ch = currMF.getFileFormat().getAudioFormat().getChannels();
+                  if (ch > 0) effDelivery += ";ac=" + ch;
+                }
+              }
+              // --- Server-side Audio Equalizer / AudioProcessing (v1) ---
+              // PURE AUDIO-STAGE OVERLAY, feature-flagged off by default
+              // (audioproc/enable_server_eq). Never touches video, never
+              // picks the audio codec/bitrate itself -- eqTargetCodec below
+              // is just an echo of whichever codec the existing selection
+              // logic above (ffAcodec, or -- if the existing logic left the
+              // mode's own default/copy in place -- the source's own codec,
+              // so a "flip copy to re-encode" case re-encodes with the SAME
+              // codec rather than this code choosing a different one).
+              // MediaServer has no route back to this MiniClientSageRenderer,
+              // so -- exactly like ";acodec=;ac=" above -- the
+              // ALREADY-RESOLVED plan's filtergraph is carried via the mode
+              // string as ";afeq=<url-encoded -af graph>" (+ ";afeqcodec="
+              // so MediaServer can disqualify -acodec copy for the audio
+              // stage without picking a codec itself).
+              // v1 scope: browserhd/browserhd_copyv fMP4 push only.
+              if (mcsr != null && Sage.getBoolean("audioproc/enable_server_eq", false))
+              {
+                try
+                {
+                  sage.audioproc.AudioProcessingClientState apState = mcsr.getAudioProcessingClientState();
+                  if (apState != null
+                      && apState.getSettings().getLocation() == sage.audioproc.AudioProcessingLocation.SERVER
+                      && apState.getSettings().isEqEnabled())
+                  {
+                    String srcAudioCodec = (currMF != null && currMF.getFileFormat() != null
+                        && currMF.getFileFormat().getAudioFormat() != null)
+                        ? currMF.getFileFormat().getAudioFormat().getFormatName() : null;
+                    String eqTargetCodec = (ffAcodec != null) ? ffAcodec : srcAudioCodec;
+                    sage.audioproc.AudioFilterCapabilities ffmpegCaps =
+                        sage.audioproc.FfmpegAudioFilterProbeService.probe(FFMPEGTranscoder.getTranscoderPath());
+                    sage.audioproc.AudioProcessingPlan eqPlan = sage.audioproc.AudioProcessingResolver.resolve(
+                        apState, true, ffmpegCaps, srcAudioCodec, eqTargetCodec, 0, null);
+                    if (eqPlan.getResolvedLocation() == sage.audioproc.AudioProcessingLocation.SERVER
+                        && eqPlan.getFilterGraph() != null && eqPlan.getFilterGraph().length() > 0)
+                    {
+                      effDelivery += ";afeq=" + java.net.URLEncoder.encode(eqPlan.getFilterGraph(), "UTF-8");
+                      if (eqTargetCodec != null && eqTargetCodec.length() > 0)
+                        effDelivery += ";afeqcodec=" + java.net.URLEncoder.encode(eqTargetCodec, "UTF-8");
+                      if (Sage.DBG) System.out.println("MiniPlayer OPENURL server audio-EQ plan resolved: " + eqPlan);
+                    }
+                    else if (Sage.DBG)
+                      System.out.println("MiniPlayer OPENURL server audio-EQ NOT applied: " + eqPlan.getReason());
+                    // Ack the client so it knows whether the server took over
+                    // (clientMustDisableDsp) or it should keep its own local DSP.
+                    mcsr.sendAudioProcessingPlan(eqPlan);
+                  }
+                }
+                catch (Throwable t)
+                {
+                  // Never let audio-EQ resolution affect playback itself.
+                  if (Sage.DBG) System.out.println("MiniPlayer OPENURL server audio-EQ resolution failed (ignored): " + t);
+                }
               }
             }
             if (Sage.DBG) System.out.println("MiniPlayer OPENURL emit CAP_EFFECTIVE_DELIVERY=" + effDelivery);
