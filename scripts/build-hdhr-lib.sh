@@ -1,6 +1,6 @@
 #!/bin/bash
 # build-hdhr-lib.sh
-# Run INSIDE the sagetv-mine container as user sagetv.
+# Run INSIDE the SageTV container (see host-build-hdhr.sh's SAGETV_CONTAINER) as user sagetv.
 # Builds libHDHomeRunCapture.so from /tmp/hdhrbuild (a tarball of the SageTV
 # source tree's third_party/SiliconDust/libhdhomerun + native/ directories).
 # Output: /tmp/hdhrbuild/native/so/HDHomeRun2.0/libHDHomeRunCapture.so

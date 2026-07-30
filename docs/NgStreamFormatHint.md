@@ -41,11 +41,11 @@ containerMime,videoMime,audioMime
 ### Pull Mode
 
 ```
-stv://192.168.0.75/path/file.ts?ng_fmt=video/mp2t,video/hevc,audio/ac4
-stv://192.168.0.75/path/file.mkv?ng_fmt=video/x-matroska,video/hevc,audio/eac3
+stv://<host>/path/file.ts?ng_fmt=video/mp2t,video/hevc,audio/ac4
+stv://<host>/path/file.mkv?ng_fmt=video/x-matroska,video/hevc,audio/eac3
 /path/file.ts?ng_fmt=video/mp2t,video/hevc,audio/ac4
-stv://192.168.0.75/path/file.mp4?ng_fmt=video/mp4,video/avc,audio/mp4a-latm
-stv://192.168.0.75/path/file.ts?ng_fmt=video/mp2t,video/hevc,
+stv://<host>/path/file.mp4?ng_fmt=video/mp4,video/avc,audio/mp4a-latm
+stv://<host>/path/file.ts?ng_fmt=video/mp2t,video/hevc,
 ```
 
 The last example shows an empty audio field (server couldn't determine audio format).

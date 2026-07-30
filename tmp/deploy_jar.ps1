@@ -1,5 +1,5 @@
 # deploy_jar.ps1 - in-place Sage.jar deploy: stopsage -> copy -> startsage.
-# HARD RULE: never docker stop/start/restart sagetv-mine.
+# HARD RULE: never docker stop/start/restart the Sage container ($env:SAGE_DEPLOY_CONTAINER, default "sagetv").
 #
 # Gate: refuses to deploy unless local jar BUILD_VERSION > deployed BUILD_VERSION.
 # That means every java-touching commit MUST bump BUILD_VERSION (see SageConstants.java).
@@ -7,7 +7,7 @@
 #   -SkipBuild  : reuse existing build/libs/Sage.jar instead of running gradlew sageJar
 #   -Force      : skip the BUILD_VERSION gate (use only when intentionally redeploying same version)
 #
-# Always run from C:\Users\ted\SageTV-NG.
+# Always run from the repo root ($env:SAGE_REPO_ROOT, or the parent of this script's tmp\ dir).
 
 param(
     [switch]$SkipBuild,
@@ -37,7 +37,7 @@ if ((Test-DirtyTree) -and -not $Force) {
 # ---- [0/7] Build (unless -SkipBuild) -----------------------------------------
 if (-not $SkipBuild) {
     Write-Host '=== [0/7] gradle sageJar ===' -ForegroundColor Cyan
-    Push-Location 'C:\Users\ted\SageTV-NG'
+    Push-Location $script:RepoRoot
     try {
         $env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.10.7-hotspot'
         # PS 5.1 with $ErrorActionPreference='Stop' treats any javac/gradle stderr
@@ -99,7 +99,7 @@ Write-Host ''
 
 # ---- [3/7] stopsage ----------------------------------------------------------
 Write-Host '=== [3/7] stopsage (graceful, in-container) ===' -ForegroundColor Cyan
-ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker exec sagetv-mine /opt/sagetv/server/stopsage; sleep 4; (docker exec sagetv-mine pgrep -x java >/dev/null && echo "[warn] java still running") || echo "[ok] java is down"'
+ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr ('docker exec {0} /opt/sagetv/server/stopsage; sleep 4; (docker exec {0} pgrep -x java >/dev/null && echo "[warn] java still running") || echo "[ok] java is down"' -f $script:Container)
 Write-Host ''
 
 # ---- [4/7] docker cp + chown ------------------------------------------------
@@ -108,12 +108,12 @@ Write-Host '=== [4/7] docker cp + chown ===' -ForegroundColor Cyan
 # authoritative (-cp Sage.jar:JARs/* loads it first), but we keep the
 # secondary JARs/Sage.jar byte-identical so md5/date checks (and casual
 # `javap` inspections) never mislead into thinking a stale jar is live.
-ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker cp /tmp/Sage.jar sagetv-mine:/opt/sagetv/server/Sage.jar; docker cp /tmp/Sage.jar sagetv-mine:/opt/sagetv/server/JARs/Sage.jar; docker exec sagetv-mine chown sagetv:sagetv /opt/sagetv/server/Sage.jar /opt/sagetv/server/JARs/Sage.jar 2>/dev/null; docker exec sagetv-mine ls -l /opt/sagetv/server/Sage.jar /opt/sagetv/server/JARs/Sage.jar'
+ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr ('docker cp /tmp/Sage.jar {0}:/opt/sagetv/server/Sage.jar; docker cp /tmp/Sage.jar {0}:/opt/sagetv/server/JARs/Sage.jar; docker exec {0} chown sagetv:sagetv /opt/sagetv/server/Sage.jar /opt/sagetv/server/JARs/Sage.jar 2>/dev/null; docker exec {0} ls -l /opt/sagetv/server/Sage.jar /opt/sagetv/server/JARs/Sage.jar' -f $script:Container)
 Write-Host ''
 
 # ---- [5/7] verify md5 + BUILD_VERSION post-copy -----------------------------
 Write-Host '=== [5/7] verify post-copy ===' -ForegroundColor Cyan
-ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker exec sagetv-mine md5sum /opt/sagetv/server/Sage.jar'
+ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr ('docker exec {0} md5sum /opt/sagetv/server/Sage.jar' -f $script:Container)
 $postVer = Get-DeployedBuildVersion
 Write-Host ("deployed BUILD_VERSION (post-copy) = {0}" -f $postVer)
 if ($postVer -ne $jarVer) {
@@ -125,9 +125,9 @@ Write-Host ''
 
 # ---- [6/7] startsage ---------------------------------------------------------
 Write-Host '=== [6/7] startsage ===' -ForegroundColor Cyan
-ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker exec sagetv-mine /opt/sagetv/server/startsage'
+ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr ('docker exec {0} /opt/sagetv/server/startsage' -f $script:Container)
 Start-Sleep -Seconds 4
-$javaPid = ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker exec sagetv-mine pgrep -x java'
+$javaPid = ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr ('docker exec {0} pgrep -x java' -f $script:Container)
 if ($javaPid) {
     Write-Host "[ok] java is up (pid=$javaPid)" -ForegroundColor Green
 } else {
@@ -137,10 +137,10 @@ Write-Host ''
 
 # ---- [7/7] post-start sanity + stamp DEPLOYED_COMMIT -------------------------
 Write-Host '=== [7/7] post-start sanity ===' -ForegroundColor Cyan
-ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker exec sagetv-mine ls -l /opt/sagetv/server/sagetv_0.txt'
-ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker exec sagetv-mine tail -3 /opt/sagetv/server/sagetv_0.txt'
-$sha = (git -C 'C:\Users\ted\SageTV-NG' rev-parse HEAD).Trim()
-ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr "docker exec sagetv-mine bash -c 'echo $sha > /opt/sagetv/server/DEPLOYED_COMMIT'"
+ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr ('docker exec {0} ls -l /opt/sagetv/server/sagetv_0.txt' -f $script:Container)
+ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr ('docker exec {0} tail -3 /opt/sagetv/server/sagetv_0.txt' -f $script:Container)
+$sha = (git -C $script:RepoRoot rev-parse HEAD).Trim()
+ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr ('docker exec {0} bash -c ''echo {1} > /opt/sagetv/server/DEPLOYED_COMMIT''' -f $script:Container, $sha)
 Write-Host "[ok] stamped DEPLOYED_COMMIT = $sha" -ForegroundColor Green
 Write-Host ''
 

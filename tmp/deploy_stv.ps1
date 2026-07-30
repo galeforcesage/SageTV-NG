@@ -39,20 +39,20 @@ if ($LASTEXITCODE -ne 0) { Write-Host 'scp failed' -ForegroundColor Red; exit 1 
 
 Write-Host ''
 Write-Host '=== [2/5] stopsage (graceful, in-container) ===' -ForegroundColor Cyan
-ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker exec sagetv-mine /opt/sagetv/server/stopsage; sleep 4; (docker exec sagetv-mine pgrep -x java >/dev/null && echo "[warn] java still running") || echo "[ok] java is down"'
+ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr ('docker exec {0} /opt/sagetv/server/stopsage; sleep 4; (docker exec {0} pgrep -x java >/dev/null && echo "[warn] java still running") || echo "[ok] java is down"' -f $script:Container)
 
 Write-Host ''
 Write-Host '=== [3/5] docker cp + chown ===' -ForegroundColor Cyan
-ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker cp /tmp/SageTV7.xml sagetv-mine:/opt/sagetv/server/STVs/SageTV7/SageTV7.xml; docker exec sagetv-mine chown sagetv:sagetv /opt/sagetv/server/STVs/SageTV7/SageTV7.xml 2>/dev/null; docker exec sagetv-mine ls -l /opt/sagetv/server/STVs/SageTV7/SageTV7.xml'
+ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr ('docker cp /tmp/SageTV7.xml {0}:/opt/sagetv/server/STVs/SageTV7/SageTV7.xml; docker exec {0} chown sagetv:sagetv /opt/sagetv/server/STVs/SageTV7/SageTV7.xml 2>/dev/null; docker exec {0} ls -l /opt/sagetv/server/STVs/SageTV7/SageTV7.xml' -f $script:Container)
 
 Write-Host ''
 Write-Host '=== [4/5] verify contents (NGDLQ + CAP sym counts) ===' -ForegroundColor Cyan
-ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker exec sagetv-mine grep -c NGDLQ- /opt/sagetv/server/STVs/SageTV7/SageTV7.xml'
-ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker exec sagetv-mine grep -c CAP- /opt/sagetv/server/STVs/SageTV7/SageTV7.xml'
+ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr ('docker exec {0} grep -c NGDLQ- /opt/sagetv/server/STVs/SageTV7/SageTV7.xml' -f $script:Container)
+ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr ('docker exec {0} grep -c CAP- /opt/sagetv/server/STVs/SageTV7/SageTV7.xml' -f $script:Container)
 
 Write-Host ''
 Write-Host '=== [5/5] startsage ===' -ForegroundColor Cyan
-ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr 'docker exec sagetv-mine /opt/sagetv/server/startsage; sleep 4; (docker exec sagetv-mine pgrep -x java >/dev/null && echo "[ok] java is up") || echo "[warn] java did not come up"'
+ssh -n -o ConnectTimeout=15 -o BatchMode=yes $host_addr ('docker exec {0} /opt/sagetv/server/startsage; sleep 4; (docker exec {0} pgrep -x java >/dev/null && echo "[ok] java is up") || echo "[warn] java did not come up"' -f $script:Container)
 
 Write-Host ''
 Write-Host '=== Deploy complete ===' -ForegroundColor Green

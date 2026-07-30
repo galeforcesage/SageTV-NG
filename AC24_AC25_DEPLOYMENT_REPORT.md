@@ -74,10 +74,10 @@
 
 ## Rollback Procedure (If Needed)
 ```bash
-docker exec sagetv-mine stopsage
+docker exec <container> stopsage
 docker cp /opt/sagetv/server/STVs/SageTV7_backups/SageTV7.xml.bak-20260626_150507 \
-  sagetv-mine:/opt/sagetv/server/STVs/SageTV7/SageTV7.xml
-docker exec sagetv-mine startsage
+  <container>:/opt/sagetv/server/STVs/SageTV7/SageTV7.xml
+docker exec <container> startsage
 ```
 
 **Estimated Rollback Time**: ~3 minutes (same as deploy)

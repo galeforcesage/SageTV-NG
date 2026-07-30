@@ -13,7 +13,7 @@
 # Prune snapshots older than N days (default keep all):
 #   .\tmp\snapshot_safety.ps1 -PruneOlderThanDays 30
 #
-# Always run from C:\Users\ted\SageTV-mine.
+# Always run from the repo root (%USERPROFILE%\SageTV-NG by convention; $PSScriptRoot is used internally so cwd doesn't actually matter).
 param(
     [string]$Message = "",
     [int]$PruneOlderThanDays = 0,

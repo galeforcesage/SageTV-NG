@@ -240,17 +240,17 @@
 
 ```bash
 # 1. Stop SageTV
-docker exec sagetv-mine stopsage
+docker exec <container> stopsage
 
 # 2. Restore backup
 docker cp /opt/sagetv/server/STVs/SageTV7_backups/SageTV7.xml.bak-20260626_150507 \
-  sagetv-mine:/opt/sagetv/server/STVs/SageTV7/SageTV7.xml
+  <container>:/opt/sagetv/server/STVs/SageTV7/SageTV7.xml
 
 # 3. Start SageTV
-docker exec sagetv-mine startsage
+docker exec <container> startsage
 
 # 4. Verify
-docker exec sagetv-mine ps aux | grep java | grep -v grep
+docker exec <container> ps aux | grep java | grep -v grep
 ```
 
 **Estimated Rollback Time**: ~3 minutes  
