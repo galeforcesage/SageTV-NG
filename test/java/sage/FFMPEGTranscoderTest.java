@@ -660,8 +660,9 @@ public class FFMPEGTranscoderTest
   // xcodeParamsVec already assembled by the existing (untouched) selection
   // logic: (a) disqualify a plain -acodec copy when a server-EQ plan is
   // active, and (b) append (never replace) the plan's -af filtergraph. Every
-  // "off"/"inactive" case must leave the vector byte-for-byte unchanged.
-  private static final String EQ_FLAG = "audioproc/enable_server_eq";
+  // "inactive" case (no plan / wrong location / no filtergraph) must leave
+  // the vector byte-for-byte unchanged. There is no separate master flag --
+  // activity is gated solely by whether an explicit-request plan was set.
 
   private static sage.audioproc.AudioProcessingPlan activeServerPlan(String targetCodec)
   {
@@ -681,219 +682,128 @@ public class FFMPEGTranscoderTest
   public void testMaybeDisqualifyAudioCopyForServerEq_ReplacesCopyWhenActive() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();
-    try
-    {
-      Sage.put(EQ_FLAG, "true");
-      FFMPEGTranscoder t = new FFMPEGTranscoder();
-      t.setServerAudioProcessingPlan(activeServerPlan("ac3"));
-      java.util.ArrayList<String> vec = new java.util.ArrayList<>(
-          java.util.Arrays.asList("-vcodec", "copy", "-acodec", "copy", "-f", "mpegts"));
-      assertTrue(t.isServerAudioEqActive());
-      t.maybeDisqualifyAudioCopyForServerEq(vec);
-      // Video copy is untouched -- this feature never touches -vcodec.
-      assertEquals(vec.get(0), "-vcodec");
-      assertEquals(vec.get(1), "copy");
-      // Audio copy is disqualified to the plan's (pass-through) target codec.
-      assertEquals(vec.get(2), "-acodec");
-      assertEquals(vec.get(3), "ac3");
-    }
-    finally
-    {
-      Sage.remove(EQ_FLAG);
-    }
-  }
-
-  @Test
-  public void testMaybeDisqualifyAudioCopyForServerEq_NoopWhenFlagOff() throws Throwable
-  {
-    TestUtils.initializeSageTVForTesting();
-    try
-    {
-      Sage.put(EQ_FLAG, "false");
-      FFMPEGTranscoder t = new FFMPEGTranscoder();
-      t.setServerAudioProcessingPlan(activeServerPlan("ac3"));
-      java.util.ArrayList<String> vec = new java.util.ArrayList<>(
-          java.util.Arrays.asList("-acodec", "copy"));
-      assertFalse(t.isServerAudioEqActive());
-      t.maybeDisqualifyAudioCopyForServerEq(vec);
-      assertEquals(vec.get(1), "copy"); // untouched -- net-neutral with flag off
-    }
-    finally
-    {
-      Sage.remove(EQ_FLAG);
-    }
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.setServerAudioProcessingPlan(activeServerPlan("ac3"));
+    java.util.ArrayList<String> vec = new java.util.ArrayList<>(
+        java.util.Arrays.asList("-vcodec", "copy", "-acodec", "copy", "-f", "mpegts"));
+    assertTrue(t.isServerAudioEqActive());
+    t.maybeDisqualifyAudioCopyForServerEq(vec);
+    // Video copy is untouched -- this feature never touches -vcodec.
+    assertEquals(vec.get(0), "-vcodec");
+    assertEquals(vec.get(1), "copy");
+    // Audio copy is disqualified to the plan's (pass-through) target codec.
+    assertEquals(vec.get(2), "-acodec");
+    assertEquals(vec.get(3), "ac3");
   }
 
   @Test
   public void testMaybeDisqualifyAudioCopyForServerEq_NoopWhenNoPlanSet() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();
-    try
-    {
-      Sage.put(EQ_FLAG, "true");
-      FFMPEGTranscoder t = new FFMPEGTranscoder(); // no plan ever set
-      java.util.ArrayList<String> vec = new java.util.ArrayList<>(
-          java.util.Arrays.asList("-acodec", "copy"));
-      assertFalse(t.isServerAudioEqActive());
-      t.maybeDisqualifyAudioCopyForServerEq(vec);
-      assertEquals(vec.get(1), "copy"); // untouched -- caller never engaged the feature
-    }
-    finally
-    {
-      Sage.remove(EQ_FLAG);
-    }
+    FFMPEGTranscoder t = new FFMPEGTranscoder(); // no plan ever set
+    java.util.ArrayList<String> vec = new java.util.ArrayList<>(
+        java.util.Arrays.asList("-acodec", "copy"));
+    assertFalse(t.isServerAudioEqActive());
+    t.maybeDisqualifyAudioCopyForServerEq(vec);
+    assertEquals(vec.get(1), "copy"); // untouched -- caller never engaged the feature
   }
 
   @Test
   public void testMaybeDisqualifyAudioCopyForServerEq_NoopWhenLocationNotServer() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();
-    try
-    {
-      Sage.put(EQ_FLAG, "true");
-      FFMPEGTranscoder t = new FFMPEGTranscoder();
-      t.setServerAudioProcessingPlan(sage.audioproc.AudioProcessingPlan.none("client dsp active", "hash"));
-      java.util.ArrayList<String> vec = new java.util.ArrayList<>(
-          java.util.Arrays.asList("-acodec", "copy"));
-      assertFalse(t.isServerAudioEqActive());
-      t.maybeDisqualifyAudioCopyForServerEq(vec);
-      assertEquals(vec.get(1), "copy");
-    }
-    finally
-    {
-      Sage.remove(EQ_FLAG);
-    }
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.setServerAudioProcessingPlan(sage.audioproc.AudioProcessingPlan.none("client dsp active", "hash"));
+    java.util.ArrayList<String> vec = new java.util.ArrayList<>(
+        java.util.Arrays.asList("-acodec", "copy"));
+    assertFalse(t.isServerAudioEqActive());
+    t.maybeDisqualifyAudioCopyForServerEq(vec);
+    assertEquals(vec.get(1), "copy");
   }
 
   @Test
   public void testMaybeDisqualifyAudioCopyForServerEq_NoopWhenTargetCodecMissing() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();
-    try
-    {
-      Sage.put(EQ_FLAG, "true");
-      FFMPEGTranscoder t = new FFMPEGTranscoder();
-      t.setServerAudioProcessingPlan(activeServerPlan(null)); // buildable plan, but no target codec known
-      java.util.ArrayList<String> vec = new java.util.ArrayList<>(
-          java.util.Arrays.asList("-acodec", "copy"));
-      // Active (flag on, SERVER, filtergraph present) but must not corrupt the
-      // command line with a blank codec -- leaves copy in place defensively.
-      assertTrue(t.isServerAudioEqActive());
-      t.maybeDisqualifyAudioCopyForServerEq(vec);
-      assertEquals(vec.get(1), "copy");
-    }
-    finally
-    {
-      Sage.remove(EQ_FLAG);
-    }
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.setServerAudioProcessingPlan(activeServerPlan(null)); // buildable plan, but no target codec known
+    java.util.ArrayList<String> vec = new java.util.ArrayList<>(
+        java.util.Arrays.asList("-acodec", "copy"));
+    // Active (SERVER, filtergraph present) but must not corrupt the command
+    // line with a blank codec -- leaves copy in place defensively.
+    assertTrue(t.isServerAudioEqActive());
+    t.maybeDisqualifyAudioCopyForServerEq(vec);
+    assertEquals(vec.get(1), "copy");
   }
 
   @Test
   public void testMaybeAppendServerAudioEqFilter_AppendsToExistingAf() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();
-    try
-    {
-      Sage.put(EQ_FLAG, "true");
-      FFMPEGTranscoder t = new FFMPEGTranscoder();
-      sage.audioproc.AudioProcessingPlan plan = activeServerPlan("eac3");
-      t.setServerAudioProcessingPlan(plan);
-      java.util.ArrayList<String> vec = new java.util.ArrayList<>(
-          java.util.Arrays.asList("-fps_mode", "cfr", "-af", "aresample=async=1000", "-b:a", "640k"));
-      t.maybeAppendServerAudioEqFilter(vec);
-      int afIdx = vec.indexOf("-af");
-      assertEquals(afIdx, 2);
-      // Comma-joined onto the END -- the existing aresample=async filter (an
-      // in-flight drift-correction/AC-4 transcode) keeps working, EQ layers on top.
-      assertEquals(vec.get(afIdx + 1), "aresample=async=1000," + plan.getFilterGraph());
-      // Everything else in the vector is untouched.
-      assertEquals(vec.get(0), "-fps_mode");
-      assertEquals(vec.get(1), "cfr");
-      assertEquals(vec.get(4), "-b:a");
-      assertEquals(vec.get(5), "640k");
-    }
-    finally
-    {
-      Sage.remove(EQ_FLAG);
-    }
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    sage.audioproc.AudioProcessingPlan plan = activeServerPlan("eac3");
+    t.setServerAudioProcessingPlan(plan);
+    java.util.ArrayList<String> vec = new java.util.ArrayList<>(
+        java.util.Arrays.asList("-fps_mode", "cfr", "-af", "aresample=async=1000", "-b:a", "640k"));
+    t.maybeAppendServerAudioEqFilter(vec);
+    int afIdx = vec.indexOf("-af");
+    assertEquals(afIdx, 2);
+    // Comma-joined onto the END -- the existing aresample=async filter (an
+    // in-flight drift-correction/AC-4 transcode) keeps working, EQ layers on top.
+    assertEquals(vec.get(afIdx + 1), "aresample=async=1000," + plan.getFilterGraph());
+    // Everything else in the vector is untouched.
+    assertEquals(vec.get(0), "-fps_mode");
+    assertEquals(vec.get(1), "cfr");
+    assertEquals(vec.get(4), "-b:a");
+    assertEquals(vec.get(5), "640k");
   }
 
   @Test
   public void testMaybeAppendServerAudioEqFilter_AddsNewAfWhenNoneExists() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();
-    try
-    {
-      Sage.put(EQ_FLAG, "true");
-      FFMPEGTranscoder t = new FFMPEGTranscoder();
-      sage.audioproc.AudioProcessingPlan plan = activeServerPlan("aac");
-      t.setServerAudioProcessingPlan(plan);
-      java.util.ArrayList<String> vec = new java.util.ArrayList<>(
-          java.util.Arrays.asList("-acodec", "aac", "-b:a", "128k"));
-      t.maybeAppendServerAudioEqFilter(vec);
-      assertEquals(vec.size(), 6);
-      assertEquals(vec.get(4), "-af");
-      assertEquals(vec.get(5), plan.getFilterGraph());
-    }
-    finally
-    {
-      Sage.remove(EQ_FLAG);
-    }
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    sage.audioproc.AudioProcessingPlan plan = activeServerPlan("aac");
+    t.setServerAudioProcessingPlan(plan);
+    java.util.ArrayList<String> vec = new java.util.ArrayList<>(
+        java.util.Arrays.asList("-acodec", "aac", "-b:a", "128k"));
+    t.maybeAppendServerAudioEqFilter(vec);
+    assertEquals(vec.size(), 6);
+    assertEquals(vec.get(4), "-af");
+    assertEquals(vec.get(5), plan.getFilterGraph());
   }
 
   @Test
-  public void testMaybeAppendServerAudioEqFilter_NoopWhenFlagOff() throws Throwable
+  public void testMaybeAppendServerAudioEqFilter_NoopWhenNoPlanSet() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();
-    try
-    {
-      Sage.put(EQ_FLAG, "false");
-      FFMPEGTranscoder t = new FFMPEGTranscoder();
-      t.setServerAudioProcessingPlan(activeServerPlan("aac"));
-      java.util.ArrayList<String> vec = new java.util.ArrayList<>(
-          java.util.Arrays.asList("-acodec", "aac", "-b:a", "128k"));
-      t.maybeAppendServerAudioEqFilter(vec);
-      // Byte-for-byte unchanged: no -af added, existing flags untouched.
-      assertEquals(vec, java.util.Arrays.asList("-acodec", "aac", "-b:a", "128k"));
-    }
-    finally
-    {
-      Sage.remove(EQ_FLAG);
-    }
+    FFMPEGTranscoder t = new FFMPEGTranscoder(); // no plan ever set
+    java.util.ArrayList<String> vec = new java.util.ArrayList<>(
+        java.util.Arrays.asList("-acodec", "aac", "-b:a", "128k"));
+    t.maybeAppendServerAudioEqFilter(vec);
+    // Byte-for-byte unchanged: no -af added, existing flags untouched.
+    assertEquals(vec, java.util.Arrays.asList("-acodec", "aac", "-b:a", "128k"));
   }
 
   @Test
-  public void testIsServerAudioEqActive_RequiresFlagPlanLocationAndFilterGraph() throws Throwable
+  public void testIsServerAudioEqActive_RequiresPlanLocationAndFilterGraph() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();
-    try
-    {
-      FFMPEGTranscoder t = new FFMPEGTranscoder();
-      // No plan at all, flag off (property never set) -> inactive.
-      assertFalse(t.isServerAudioEqActive());
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    // No plan at all -> inactive.
+    assertFalse(t.isServerAudioEqActive());
 
-      Sage.put(EQ_FLAG, "true");
-      assertFalse(t.isServerAudioEqActive()); // still no plan set
+    t.setServerAudioProcessingPlan(sage.audioproc.AudioProcessingPlan.none("no eq requested", "hash"));
+    assertFalse(t.isServerAudioEqActive()); // NONE location
 
-      t.setServerAudioProcessingPlan(sage.audioproc.AudioProcessingPlan.none("no eq requested", "hash"));
-      assertFalse(t.isServerAudioEqActive()); // NONE location
+    sage.audioproc.AudioProcessingPlan noGraph = sage.audioproc.AudioProcessingPlan.builder()
+        .resolvedLocation(sage.audioproc.AudioProcessingLocation.SERVER)
+        .targetAudioCodec("ac3")
+        .build(); // SERVER but somehow no filterGraph -- defensive case
+    t.setServerAudioProcessingPlan(noGraph);
+    assertFalse(t.isServerAudioEqActive());
 
-      sage.audioproc.AudioProcessingPlan noGraph = sage.audioproc.AudioProcessingPlan.builder()
-          .resolvedLocation(sage.audioproc.AudioProcessingLocation.SERVER)
-          .targetAudioCodec("ac3")
-          .build(); // SERVER but somehow no filterGraph -- defensive case
-      t.setServerAudioProcessingPlan(noGraph);
-      assertFalse(t.isServerAudioEqActive());
-
-      t.setServerAudioProcessingPlan(activeServerPlan("ac3"));
-      assertTrue(t.isServerAudioEqActive());
-
-      Sage.put(EQ_FLAG, "false");
-      assertFalse(t.isServerAudioEqActive()); // flag is the final kill-switch
-    }
-    finally
-    {
-      Sage.remove(EQ_FLAG);
-    }
+    t.setServerAudioProcessingPlan(activeServerPlan("ac3"));
+    assertTrue(t.isServerAudioEqActive());
   }
 }

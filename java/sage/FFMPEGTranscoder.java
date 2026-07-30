@@ -61,7 +61,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
   /**
    * Server-side audio EQ/processing plan for this transcode session (Audio
-   * Equalizer v1, feature-flagged off by default). This is a PURE AUDIO-STAGE
+   * Equalizer v1, gated solely by an explicit client request -- see
+   * {@code sage.audioproc.AudioProcessingResolver}). This is a PURE AUDIO-STAGE
    * OVERLAY -- it never touches video params and never chooses the audio
    * codec/bitrate itself. When {@link sage.audioproc.AudioProcessingPlan#getResolvedLocation()}
    * is {@code SERVER} and a filtergraph was built, this instance does exactly
@@ -80,19 +81,20 @@ public class FFMPEGTranscoder implements TranscodeEngine
   public void setServerAudioProcessingPlan(sage.audioproc.AudioProcessingPlan plan) { this.serverAudioEqPlan = plan; }
 
   /**
-   * True only when a real, flag-enabled, buildable server-EQ plan is present.
-   * Defense-in-depth: even if a caller sets a plan without itself checking the
-   * master flag, this transcoder still won't act unless {@code audioproc/enable_server_eq}
-   * is on -- guaranteeing net-neutral behavior with the flag off regardless of
-   * caller correctness.
+   * True only when a real, buildable server-EQ plan targeting
+   * {@link sage.audioproc.AudioProcessingLocation#SERVER} with a non-empty
+   * filtergraph is present. Gated solely by the plan the caller sets via
+   * {@link #setServerAudioProcessingPlan}, which itself is only ever
+   * populated on an explicit client request (see
+   * {@code sage.audioproc.AudioProcessingResolver}) -- guaranteeing every
+   * other session stays byte-for-byte unchanged.
    */
   boolean isServerAudioEqActive()
   {
     if (serverAudioEqPlan == null) return false;
     if (serverAudioEqPlan.getResolvedLocation() != sage.audioproc.AudioProcessingLocation.SERVER) return false;
     String graph = serverAudioEqPlan.getFilterGraph();
-    if (graph == null || graph.length() == 0) return false;
-    return Sage.getBoolean("audioproc/enable_server_eq", false);
+    return graph != null && graph.length() > 0;
   }
 
   /**
@@ -2421,11 +2423,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // copy check restores the old effective behavior. If a source genuinely
     // needs aresample drift correction, force it onto the audio re-encode
     // branch above rather than trying to filter through a copy.
-    // Audio EQ v1 (feature-flagged, default off): if a server-side EQ plan is
-    // active for this session, disqualify a plain -acodec copy BEFORE the copy
-    // check below so the -af construction that follows naturally takes its
-    // normal (non-copy) branch. No-op unless audioproc/enable_server_eq is on
-    // and a buildable plan was set on this instance -- see isServerAudioEqActive().
+    // Audio EQ v1 (gated solely by an explicit client request): if a server-side
+    // EQ plan is active for this session, disqualify a plain -acodec copy BEFORE
+    // the copy check below so the -af construction that follows naturally takes
+    // its normal (non-copy) branch. No-op unless a buildable plan was set on
+    // this instance -- see isServerAudioEqActive().
     maybeDisqualifyAudioCopyForServerEq(xcodeParamsVec);
     boolean audioIsCopy = isAudioCopySelected(xcodeParamsVec);
     // MP4-family + AAC stream-copy: AAC from an ADTS-framed source (MPEG-TS)
