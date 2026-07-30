@@ -1345,6 +1345,8 @@ public class MediaServer implements Runnable
             String surfAcodec = null;
             int surfAc = 0;
             long surfSs = 0; // pull-xcode seek start position (ms); 0 = from start
+            String surfEqGraph = null; // server audio-EQ v1 (";afeq="): url-encoded -af filtergraph
+            String surfEqCodec = null; // server audio-EQ v1 (";afeqcodec="): echo of the audio-selection logic's target codec
             int semi = xcodeArg.indexOf(';');
             if (semi >= 0)
             {
@@ -1360,11 +1362,20 @@ public class MediaServer implements Runnable
                 if (k.equals("acodec")) surfAcodec = v;
                 else if (k.equals("ac")) { try { surfAc = Integer.parseInt(v); } catch (NumberFormatException nfe) {} }
                 else if (k.equals("ss")) { try { surfSs = Long.parseLong(v); } catch (NumberFormatException nfe) {} }
+                else if (k.equals("afeq"))
+                {
+                  try { surfEqGraph = java.net.URLDecoder.decode(v, "UTF-8"); } catch (Exception e) { surfEqGraph = null; }
+                }
+                else if (k.equals("afeqcodec"))
+                {
+                  try { surfEqCodec = java.net.URLDecoder.decode(v, "UTF-8"); } catch (Exception e) { surfEqCodec = null; }
+                }
               }
             }
             if (Sage.DBG) System.out.println("MediaServer is serving up in transcode mode: " + xcodeMode
                 + (surfAcodec != null ? " (surface acodec=" + surfAcodec + " ac=" + surfAc + ")" : "")
-                + (surfSs > 0 ? " (seek ss=" + surfSs + "ms)" : ""));
+                + (surfSs > 0 ? " (seek ss=" + surfSs + "ms)" : "")
+                + (surfEqGraph != null ? " (server audio-EQ af=" + surfEqGraph + " codec=" + surfEqCodec + ")" : ""));
             // Stop previous transcoder if still running (prevents ffmpeg zombie leak)
             if (xcoder != null)
             {
@@ -1397,6 +1408,25 @@ public class MediaServer implements Runnable
               fftc.setHwaccelDecode(hwDec);
             if (surfAcodec != null && surfAcodec.length() > 0) fftc.setSurfaceTargetAudioCodec(surfAcodec);
             if (surfAc > 0) fftc.setSurfaceTargetAudioChannels(surfAc);
+            // Server-side Audio Equalizer / AudioProcessing (v1): the plan was
+            // ALREADY resolved by MiniPlayer (which has the client's audio-EQ
+            // state; MediaServer has no route back to it) and its filtergraph
+            // carried here via ";afeq=;afeqcodec=". Reconstruct a minimal
+            // SERVER-location plan purely to hand the graph + target codec to
+            // this transcode session -- FFMPEGTranscoder.isServerAudioEqActive()
+            // independently re-checks the audioproc/enable_server_eq flag before
+            // acting, so this is a pure pass-through, never a second decision.
+            if (surfEqGraph != null && surfEqGraph.length() > 0)
+            {
+              sage.audioproc.AudioProcessingPlan eqPlan = sage.audioproc.AudioProcessingPlan.builder()
+                  .resolvedLocation(sage.audioproc.AudioProcessingLocation.SERVER)
+                  .reason("resolved by MiniPlayer for this playback session; carried via XCODE_SETUP afeq param")
+                  .filterGraph(surfEqGraph)
+                  .targetAudioCodec(surfEqCodec)
+                  .clientMustDisableDsp(true)
+                  .build();
+              fftc.setServerAudioProcessingPlan(eqPlan);
+            }
             // Honor the pull client's requested seek position (PWA seek/FF/REW/skip
             // re-opens /msproxy with ss=<ms>) so the transcode starts there via -ss
             // instead of restarting from 0.
