@@ -15,6 +15,10 @@
  */
 package sage.audioproc;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 /**
  * The resolver's decision for a single playback session, and the payload
  * sent to the client as an {@code AUDIO_PROCESSING_PLAN} message.
@@ -29,7 +33,12 @@ package sage.audioproc;
  */
 public final class AudioProcessingPlan
 {
+  public static final int SCHEMA_VERSION = 1;
+
+  private final String planId;
+  private final String playbackSessionId;
   private final AudioProcessingLocation resolvedLocation;
+  private final Long settingsVersionAccepted;
   private final String reason;
   private final String filterGraph;
   private final String filterGraphHash;
@@ -39,10 +48,14 @@ public final class AudioProcessingPlan
   private final String targetAudioCodec;
   private final int sampleRate;
   private final String channelLayout;
+  private final Map<String, Object> diagnostics;
 
   private AudioProcessingPlan(Builder b)
   {
+    this.planId = b.planId;
+    this.playbackSessionId = b.playbackSessionId;
     this.resolvedLocation = b.resolvedLocation;
+    this.settingsVersionAccepted = b.settingsVersionAccepted;
     this.reason = b.reason;
     this.filterGraph = b.filterGraph;
     this.filterGraphHash = b.filterGraph == null ? null : AudioProcessingHashing.sha256Hex16(b.filterGraph);
@@ -52,6 +65,7 @@ public final class AudioProcessingPlan
     this.targetAudioCodec = b.targetAudioCodec;
     this.sampleRate = b.sampleRate;
     this.channelLayout = b.channelLayout;
+    this.diagnostics = Collections.unmodifiableMap(new LinkedHashMap<String, Object>(b.diagnostics));
   }
 
   /** Convenience factory for the common "nothing to do" outcome. */
@@ -64,9 +78,32 @@ public final class AudioProcessingPlan
         .build();
   }
 
+  public int getSchemaVersion()
+  {
+    return SCHEMA_VERSION;
+  }
+
+  /** Server-generated unique identifier for this plan; may be {@code null} if not assigned by the caller. */
+  public String getPlanId()
+  {
+    return planId;
+  }
+
+  /** The playback session this plan was resolved for; may be {@code null} if not assigned by the caller. */
+  public String getPlaybackSessionId()
+  {
+    return playbackSessionId;
+  }
+
   public AudioProcessingLocation getResolvedLocation()
   {
     return resolvedLocation;
+  }
+
+  /** The client {@code settingsVersion} this plan was resolved against, if known. */
+  public Long getSettingsVersionAccepted()
+  {
+    return settingsVersionAccepted;
   }
 
   /** Human-readable diagnostic explaining why this location/plan was chosen. */
@@ -91,6 +128,12 @@ public final class AudioProcessingPlan
     return settingsHash;
   }
 
+  /** Canonical-named alias for {@link #getSettingsHash()} (wire field {@code settingsHashAccepted}). */
+  public String getSettingsHashAccepted()
+  {
+    return settingsHash;
+  }
+
   /**
    * {@code true} when the client must stop running its own local DSP
    * because the server has taken over (only ever {@code true} when {@link
@@ -100,6 +143,16 @@ public final class AudioProcessingPlan
   public boolean isClientMustDisableDsp()
   {
     return clientMustDisableDsp;
+  }
+
+  /**
+   * {@code true} when the server itself will apply DSP for this session --
+   * derived directly from {@link #getResolvedLocation()} (never stored
+   * separately, so it can never drift out of sync with it).
+   */
+  public boolean isServerWillApplyDsp()
+  {
+    return resolvedLocation == AudioProcessingLocation.SERVER;
   }
 
   public String getSourceAudioCodec()
@@ -123,10 +176,17 @@ public final class AudioProcessingPlan
     return channelLayout;
   }
 
+  /** Structured diagnostics (Phase 7 field set); never {@code null}, may be empty. */
+  public Map<String, Object> getDiagnostics()
+  {
+    return diagnostics;
+  }
+
   @Override
   public String toString()
   {
-    return "AudioProcessingPlan[location=" + resolvedLocation + ", reason=" + reason
+    return "AudioProcessingPlan[planId=" + planId + ", playbackSessionId=" + playbackSessionId
+        + ", location=" + resolvedLocation + ", reason=" + reason
         + ", filterGraphHash=" + filterGraphHash + ", settingsHash=" + settingsHash
         + ", clientMustDisableDsp=" + clientMustDisableDsp
         + ", sourceAudioCodec=" + sourceAudioCodec + ", targetAudioCodec=" + targetAudioCodec
@@ -140,7 +200,10 @@ public final class AudioProcessingPlan
 
   public static final class Builder
   {
+    private String planId;
+    private String playbackSessionId;
     private AudioProcessingLocation resolvedLocation = AudioProcessingLocation.NONE;
+    private Long settingsVersionAccepted;
     private String reason = "";
     private String filterGraph = null;
     private String settingsHash = null;
@@ -149,10 +212,29 @@ public final class AudioProcessingPlan
     private String targetAudioCodec = null;
     private int sampleRate = 0;
     private String channelLayout = null;
+    private final Map<String, Object> diagnostics = new LinkedHashMap<String, Object>();
+
+    public Builder planId(String v)
+    {
+      this.planId = v;
+      return this;
+    }
+
+    public Builder playbackSessionId(String v)
+    {
+      this.playbackSessionId = v;
+      return this;
+    }
 
     public Builder resolvedLocation(AudioProcessingLocation v)
     {
       this.resolvedLocation = v == null ? AudioProcessingLocation.NONE : v;
+      return this;
+    }
+
+    public Builder settingsVersionAccepted(Long v)
+    {
+      this.settingsVersionAccepted = v;
       return this;
     }
 
@@ -201,6 +283,21 @@ public final class AudioProcessingPlan
     public Builder channelLayout(String v)
     {
       this.channelLayout = v;
+      return this;
+    }
+
+    public Builder putDiagnostic(String key, Object value)
+    {
+      if (key != null)
+        this.diagnostics.put(key, value);
+      return this;
+    }
+
+    public Builder diagnostics(Map<String, Object> v)
+    {
+      this.diagnostics.clear();
+      if (v != null)
+        this.diagnostics.putAll(v);
       return this;
     }
 

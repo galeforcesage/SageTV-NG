@@ -45,12 +45,17 @@ public final class AudioProcessingSettings
   public static final AudioProcessingSettings DISABLED =
       new Builder().location(AudioProcessingLocation.NONE).eqEnabled(false).build();
 
+  /** Fixed canonical wire schema version for this model; always 1 in this protocol generation. */
+  public static final int SCHEMA_VERSION = 1;
+
   private final AudioProcessingLocation location;
   private final boolean eqEnabled;
   private final List<EqualizerBand> bands;
   private final double preampDb;
   private final NightModeSettings nightMode;
   private final long clientSettingsVersion;
+  private final String presetId;
+  private final long updatedAtEpochMs;
 
   private AudioProcessingSettings(Builder b)
   {
@@ -62,6 +67,26 @@ public final class AudioProcessingSettings
     this.preampDb = clampPreampDb(b.preampDb);
     this.nightMode = b.nightMode == null ? NightModeSettings.OFF : b.nightMode;
     this.clientSettingsVersion = b.clientSettingsVersion;
+    this.presetId = b.presetId;
+    this.updatedAtEpochMs = b.updatedAtEpochMs;
+  }
+
+  /** Always {@link #SCHEMA_VERSION} (1) for this protocol generation. */
+  public int getSchemaVersion()
+  {
+    return SCHEMA_VERSION;
+  }
+
+  /** Client-chosen preset identifier, if any; the legacy PWA field {@code presetName} is accepted as an alias on intake. */
+  public String getPresetId()
+  {
+    return presetId;
+  }
+
+  /** Client-reported wallclock epoch millis of the last local edit; 0 if not supplied. Server never derives/recomputes this. */
+  public long getUpdatedAtEpochMs()
+  {
+    return updatedAtEpochMs;
   }
 
   public static double clampPreampDb(double preampDb)
@@ -102,6 +127,12 @@ public final class AudioProcessingSettings
     return clientSettingsVersion;
   }
 
+  /** Canonical alias for {@link #getClientSettingsVersion()} (wire field {@code settingsVersion}). */
+  public long getSettingsVersion()
+  {
+    return clientSettingsVersion;
+  }
+
   /**
    * {@code true} when there is nothing for any DSP stage (server or client)
    * to actually do: EQ disabled with no bands, no preamp, and night mode off.
@@ -137,7 +168,8 @@ public final class AudioProcessingSettings
   {
     return "AudioProcessingSettings[location=" + location + ", eqEnabled=" + eqEnabled
         + ", bands=" + bands.size() + ", preampDb=" + preampDb + ", nightMode=" + nightMode
-        + ", clientSettingsVersion=" + clientSettingsVersion + "]";
+        + ", clientSettingsVersion=" + clientSettingsVersion + ", presetId=" + presetId
+        + ", updatedAtEpochMs=" + updatedAtEpochMs + "]";
   }
 
   public static Builder builder()
@@ -153,6 +185,8 @@ public final class AudioProcessingSettings
     private double preampDb = 0.0;
     private NightModeSettings nightMode = NightModeSettings.OFF;
     private long clientSettingsVersion = 0L;
+    private String presetId;
+    private long updatedAtEpochMs = 0L;
 
     public Builder location(AudioProcessingLocation location)
     {
@@ -196,6 +230,30 @@ public final class AudioProcessingSettings
     public Builder clientSettingsVersion(long clientSettingsVersion)
     {
       this.clientSettingsVersion = clientSettingsVersion;
+      return this;
+    }
+
+    /** Canonical alias for {@link #clientSettingsVersion(long)} (wire field {@code settingsVersion}). */
+    public Builder settingsVersion(long settingsVersion)
+    {
+      return clientSettingsVersion(settingsVersion);
+    }
+
+    public Builder presetId(String presetId)
+    {
+      this.presetId = presetId;
+      return this;
+    }
+
+    /** Alias for {@link #presetId(String)} matching the live PWA client's current field name. */
+    public Builder presetName(String presetName)
+    {
+      return presetId(presetName);
+    }
+
+    public Builder updatedAtEpochMs(long updatedAtEpochMs)
+    {
+      this.updatedAtEpochMs = updatedAtEpochMs;
       return this;
     }
 

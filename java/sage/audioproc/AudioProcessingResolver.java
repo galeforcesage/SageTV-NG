@@ -57,7 +57,7 @@ public final class AudioProcessingResolver
    * @param sampleRate the target sample rate the existing pipeline already chose (diagnostics/echo only)
    * @param channelLayout the target channel layout the existing pipeline already chose (diagnostics/echo only)
    */
-  public static AudioProcessingPlan resolve(AudioProcessingState clientState, boolean featureEnabled,
+  public static AudioProcessingPlan resolve(AudioProcessingClientState clientState, boolean featureEnabled,
       AudioFilterCapabilities ffmpegCaps, String sourceAudioCodec, String targetAudioCodec,
       int sampleRate, String channelLayout)
   {
@@ -68,6 +68,12 @@ public final class AudioProcessingResolver
 
     if (clientState == null)
       return AudioProcessingPlan.none("no client audio-processing state known for this session", null);
+
+    // Hard rule: a legacy SageTV/STV client is never offered SERVER audio processing, regardless
+    // of any other field it reports. (AudioProcessingCapabilities already forces serverEqPlanSupported
+    // and supportedLocations={NONE} for LEGACY, so this is defense-in-depth with a clearer reason.)
+    if (clientState.getCapabilities().getClientKind() == ClientKind.LEGACY)
+      return AudioProcessingPlan.none("client is a legacy SageTV/STV client; always NONE", settingsHash);
 
     AudioProcessingSettings settings = clientState.getSettings();
 

@@ -16,84 +16,99 @@
 package sage.audioproc;
 
 /**
- * The latest known audio-DSP state for a single client connection: its
- * reported {@link AudioProcessingCapabilities}, its most recent {@link
- * AudioProcessingSettings} request, and whether it currently has its own
- * local DSP actively running ({@code AUDIO_PROCESSING_DSP_ACTIVE}).
+ * The canonical wire payload of an {@code AUDIO_PROCESSING_DSP_ACTIVE}
+ * message (client&rarr;server): {@code { schemaVersion:1, playbackSessionId,
+ * dspActive, activeLocation, appliedSettingsVersion?, appliedSettingsHash?,
+ * engineName?, planId?, errorCode? }}.
  *
- * <p>This is an in-memory-only snapshot held by the per-client state
- * registry (never persisted -- see {@link AudioProcessingSettings}'s class
- * javadoc). The {@code clientDspActive} flag is what the resolver uses for
- * double-processing prevention: it must never choose {@link
- * AudioProcessingLocation#SERVER} while the client also reports its own DSP
- * active, and vice versa.
+ * <p>This is distinct from {@link AudioProcessingClientState} (this
+ * server's own per-connection aggregate of capabilities+settings+dsp-active,
+ * which is not itself a wire message). This class is the literal payload
+ * shape reported by the client for a single playback session and is not
+ * persisted -- callers fold {@link #isDspActive()} into an {@link
+ * AudioProcessingClientState} via {@link
+ * AudioProcessingClientState#withClientDspActive(boolean, long)} if needed.
  */
 public final class AudioProcessingState
 {
-  private final String clientId;
-  private final AudioProcessingCapabilities capabilities;
-  private final AudioProcessingSettings settings;
-  private final boolean clientDspActive;
-  private final long lastUpdatedMillis;
+  public static final int SCHEMA_VERSION = 1;
 
-  public AudioProcessingState(String clientId, AudioProcessingCapabilities capabilities,
-      AudioProcessingSettings settings, boolean clientDspActive, long lastUpdatedMillis)
+  private final String playbackSessionId;
+  private final boolean dspActive;
+  private final AudioProcessingLocation activeLocation;
+  private final Long appliedSettingsVersion;
+  private final String appliedSettingsHash;
+  private final AudioProcessingEngineName engineName;
+  private final String planId;
+  private final String errorCode;
+
+  public AudioProcessingState(String playbackSessionId, boolean dspActive, AudioProcessingLocation activeLocation,
+      Long appliedSettingsVersion, String appliedSettingsHash, AudioProcessingEngineName engineName,
+      String planId, String errorCode)
   {
-    this.clientId = clientId;
-    this.capabilities = capabilities == null ? AudioProcessingCapabilities.NONE : capabilities;
-    this.settings = settings == null ? AudioProcessingSettings.DISABLED : settings;
-    this.clientDspActive = clientDspActive;
-    this.lastUpdatedMillis = lastUpdatedMillis;
+    this.playbackSessionId = playbackSessionId;
+    this.dspActive = dspActive;
+    this.activeLocation = activeLocation == null ? AudioProcessingLocation.NONE : activeLocation;
+    this.appliedSettingsVersion = appliedSettingsVersion;
+    this.appliedSettingsHash = appliedSettingsHash;
+    this.engineName = engineName == null ? AudioProcessingEngineName.None : engineName;
+    this.planId = planId;
+    this.errorCode = errorCode;
   }
 
-  public String getClientId()
+  public int getSchemaVersion()
   {
-    return clientId;
+    return SCHEMA_VERSION;
   }
 
-  public AudioProcessingCapabilities getCapabilities()
+  public String getPlaybackSessionId()
   {
-    return capabilities;
+    return playbackSessionId;
   }
 
-  public AudioProcessingSettings getSettings()
+  public boolean isDspActive()
   {
-    return settings;
+    return dspActive;
   }
 
-  public boolean isClientDspActive()
+  public AudioProcessingLocation getActiveLocation()
   {
-    return clientDspActive;
+    return activeLocation;
   }
 
-  public long getLastUpdatedMillis()
+  /** The client-local settings version applied by its active DSP engine, if reported. */
+  public Long getAppliedSettingsVersion()
   {
-    return lastUpdatedMillis;
+    return appliedSettingsVersion;
   }
 
-  /** Returns a copy of this state with only the capabilities replaced. */
-  public AudioProcessingState withCapabilities(AudioProcessingCapabilities newCapabilities, long updatedMillis)
+  /** The client-local settings hash applied by its active DSP engine, if reported. */
+  public String getAppliedSettingsHash()
   {
-    return new AudioProcessingState(clientId, newCapabilities, settings, clientDspActive, updatedMillis);
+    return appliedSettingsHash;
   }
 
-  /** Returns a copy of this state with only the settings replaced. */
-  public AudioProcessingState withSettings(AudioProcessingSettings newSettings, long updatedMillis)
+  public AudioProcessingEngineName getEngineName()
   {
-    return new AudioProcessingState(clientId, capabilities, newSettings, clientDspActive, updatedMillis);
+    return engineName;
   }
 
-  /** Returns a copy of this state with only the client-DSP-active flag replaced. */
-  public AudioProcessingState withClientDspActive(boolean newClientDspActive, long updatedMillis)
+  /** The server plan id this state corresponds to, if the client is echoing back a prior {@code AUDIO_PROCESSING_PLAN}. */
+  public String getPlanId()
   {
-    return new AudioProcessingState(clientId, capabilities, settings, newClientDspActive, updatedMillis);
+    return planId;
+  }
+
+  public String getErrorCode()
+  {
+    return errorCode;
   }
 
   @Override
   public String toString()
   {
-    return "AudioProcessingState[clientId=" + clientId + ", capabilities=" + capabilities
-        + ", settings=" + settings + ", clientDspActive=" + clientDspActive
-        + ", lastUpdatedMillis=" + lastUpdatedMillis + "]";
+    return "AudioProcessingState[playbackSessionId=" + playbackSessionId + ", dspActive=" + dspActive
+        + ", activeLocation=" + activeLocation + ", engineName=" + engineName
+        + ", planId=" + planId + ", errorCode=" + errorCode + "]";
   }
 }
