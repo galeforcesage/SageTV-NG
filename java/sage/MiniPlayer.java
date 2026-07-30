@@ -1428,6 +1428,52 @@ public class MiniPlayer implements DVDMediaPlayer
               + " clientReports[container=" + crContainer + " video=" + crVideo + " audio=" + crAudio + "]");
         }
 
+        // TEMP PWA_CODEC_DIAG - remove once the PWA client's per-surface
+        // capability reporting + client-side re-request-on-failure fix ships
+        // (see Dick Van Dyke MPEG2/AC3 direct-play root-cause investigation;
+        // this is server-side visibility ONLY, no decision/behavior change).
+        // Default OFF; read-only observation of state already computed
+        // above. Scoped to PWA browser/Tizen sessions (isPwaBrowserClient())
+        // since that's the surface family this is diagnosing.
+        if (Sage.getBoolean("diag/log_pwa_codec_decision", false)
+            && mcsr != null && mcsr.isPwaBrowserClient())
+        {
+          try
+          {
+            String pwaDiagClientName = (uiMgr != null) ? uiMgr.getLocalUIClientName() : "EXTERNAL";
+            String pwaDiagPlatform = mcsr.getClientPlatform();
+            // The server can only distinguish browser vs Tizen sub-surface
+            // when the client explicitly reports CLIENT_PLATFORM; make the
+            // absence of that signal an explicit, loggable fact rather than
+            // silently defaulting -- that ambiguity is itself useful to the
+            // PWA team troubleshooting per-surface behavior.
+            String pwaDiagPlatformStr = (pwaDiagPlatform == null || pwaDiagPlatform.length() == 0)
+                ? "<unreported: server cannot distinguish browser/Tizen sub-surface for this session>"
+                : pwaDiagPlatform;
+            String pwaDiagSurfaceStr = (chosenSurfaceId != null && chosenSurfaceId.length() > 0)
+                ? ("surface=" + chosenSurfaceId + " xcodeMode=" + chosenSurfaceXcodeMode)
+                : "surface=<none: legacy V1/V2 negotiation, client did not advertise PLAYBACK_SURFACES>";
+            System.out.println("PWA_CODEC_DIAG client=" + pwaDiagClientName
+                + " clientPlatform=" + pwaDiagPlatformStr
+                + " declaredVideoCodecs=" + mcsr.getEffectiveVideoCodecs()
+                + " declaredAudioCodecs=" + mcsr.getEffectiveAudioCodecs()
+                + " mediaSupported[container=" + crContainer + " video=" + crVideo + " audio=" + crAudio + "]"
+                + " media[container=" + mediaContainer + " video=" + mediaVideo + " audio=" + mediaAudio
+                + " res=" + (mediaW > 0 && mediaH > 0 ? (mediaW + "x" + mediaH) : "n/a")
+                + " bitrateKbps=" + (sourceBitrateKbps > 0 ? String.valueOf(sourceBitrateKbps) : "n/a") + "]"
+                + " decision=" + (profileDecision != null ? profileDecision.decision : "n/a")
+                + " targetVideoCodec=" + (profileDecision != null ? profileDecision.targetVideoCodec : "n/a")
+                + " targetAudioCodec=" + (profileDecision != null ? profileDecision.targetAudioCodec : "n/a")
+                + " reason=" + (profileDecision != null ? profileDecision.reason : "n/a")
+                + " " + pwaDiagSurfaceStr);
+          }
+          catch (Throwable t)
+          {
+            // Diagnostic-only; never let logging failure affect playback.
+            if (Sage.DBG) System.out.println("PWA_CODEC_DIAG logging failed (ignored): " + t);
+          }
+        }
+
         // --- Session stickiness contract (per OPENURL) ---
         // The stream plan and target player are selected HERE and HERE ONLY.
         // Trickplay (pause/ff/rew/seek/jump) intentionally never reaches this

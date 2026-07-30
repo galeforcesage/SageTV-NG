@@ -7195,6 +7195,23 @@ public class MiniClientSageRenderer extends SageRenderer
   }
 
   /**
+   * Returns this client's effective video codec set (canonical SageTV codec
+   * names, uppercased) -- the client-reported VIDEO_CODECS, clamped to the
+   * resolved ClientProfile when strict clamping is enabled. May be
+   * {@code null} very early in negotiation.
+   *
+   * <p>TEMP PWA_CODEC_DIAG - added purely as a read-only diagnostic
+   * accessor (no behavior change) so the pwa_native/browserhd decision
+   * logging in MiniPlayer can report the client's full declared video
+   * codec set, mirroring {@link #getEffectiveAudioCodecs()}. Safe to keep
+   * or remove independently of the diagnostic log call sites.
+   */
+  public java.util.Set getEffectiveVideoCodecs()
+  {
+    return videoCodecs;
+  }
+
+  /**
    * Returns the schema-v2 capability constraints (interlaced gate, container
    * push/pull gate, audio decode gate) for this client, or {@code null} when
    * the client did not negotiate schema v2 or did not provide any constraint
