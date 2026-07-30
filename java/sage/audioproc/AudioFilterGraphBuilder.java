@@ -74,12 +74,22 @@ public final class AudioFilterGraphBuilder
 
     if (effective.isEqEnabled() && !effective.getBands().isEmpty())
     {
-      if (!caps.isEqualizerAvailable())
-        return Result.notBuildable("equalizer filter unavailable for EQ bands");
+      List<EqualizerBand> activeBands = new ArrayList<EqualizerBand>();
       for (EqualizerBand band : effective.getBands())
       {
-        stages.add(String.format(Locale.ROOT, "equalizer=f=%.2f:t=q:w=%.2f:g=%.2f",
-            band.getFrequencyHz(), EQ_BAND_Q, band.getGainDb()));
+        // Per canonical rule: omit disabled or flat (0 dB) bands from the filtergraph entirely.
+        if (band.isEnabled() && !band.isFlat())
+          activeBands.add(band);
+      }
+      if (!activeBands.isEmpty())
+      {
+        if (!caps.isEqualizerAvailable())
+          return Result.notBuildable("equalizer filter unavailable for EQ bands");
+        for (EqualizerBand band : activeBands)
+        {
+          stages.add(String.format(Locale.ROOT, "equalizer=f=%.2f:t=q:w=%.2f:g=%.2f",
+              band.getFrequencyHz(), band.getQ(), band.getGainDb()));
+        }
       }
     }
 

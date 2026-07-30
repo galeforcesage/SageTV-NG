@@ -17,9 +17,11 @@ package sage.audioproc;
 
 /**
  * Night-mode (dynamic-range suppression) selection: a {@link NightModeMode}
- * plus a {@link NightModeIntensity} strength. Immutable; {@code null}
- * constructor arguments are normalized to the safe defaults ({@link
- * NightModeMode#OFF}, {@link NightModeIntensity#LOW}).
+ * plus a {@link NightModeIntensity} strength, matching the canonical wire
+ * model {@code NightModeSettings: { enabled, effectiveNow, mode, intensity,
+ * controllability }}. Immutable; {@code null} constructor arguments are
+ * normalized to the safe defaults ({@link NightModeMode#OFF}, {@link
+ * NightModeIntensity#LOW}, {@link NightModeControllability#APP_SCOPED}).
  */
 public final class NightModeSettings
 {
@@ -28,11 +30,24 @@ public final class NightModeSettings
 
   private final NightModeMode mode;
   private final NightModeIntensity intensity;
+  private final boolean enabled;
+  private final boolean effectiveNow;
+  private final NightModeControllability controllability;
 
+  /** Convenience constructor: {@code enabled} defaults to {@code mode != OFF}; {@code effectiveNow} defaults to false. */
   public NightModeSettings(NightModeMode mode, NightModeIntensity intensity)
+  {
+    this(mode, intensity, mode != null && mode != NightModeMode.OFF, false, NightModeControllability.APP_SCOPED);
+  }
+
+  public NightModeSettings(NightModeMode mode, NightModeIntensity intensity, boolean enabled,
+      boolean effectiveNow, NightModeControllability controllability)
   {
     this.mode = mode == null ? NightModeMode.OFF : mode;
     this.intensity = intensity == null ? NightModeIntensity.LOW : intensity;
+    this.enabled = enabled;
+    this.effectiveNow = effectiveNow;
+    this.controllability = controllability == null ? NightModeControllability.APP_SCOPED : controllability;
   }
 
   public NightModeMode getMode()
@@ -45,9 +60,28 @@ public final class NightModeSettings
     return intensity;
   }
 
+  /** The client's master night-mode switch; {@code false} means off regardless of {@link #getMode()}. */
+  public boolean isEnabled()
+  {
+    return enabled;
+  }
+
+  /** {@code true} when the client reports night mode is currently in effect (e.g. within its schedule window). */
+  public boolean isEffectiveNow()
+  {
+    return effectiveNow;
+  }
+
+  /** Who/what actually controls a {@link NightModeMode#PLATFORM_NIGHT_MODE} request on the client; diagnostics-only. */
+  public NightModeControllability getControllability()
+  {
+    return controllability;
+  }
+
+  /** {@code true} when there is nothing for any DSP stage to do: disabled or mode is OFF. */
   public boolean isOff()
   {
-    return mode == NightModeMode.OFF;
+    return !enabled || mode == NightModeMode.OFF;
   }
 
   @Override
@@ -56,18 +90,20 @@ public final class NightModeSettings
     if (this == o) return true;
     if (!(o instanceof NightModeSettings)) return false;
     NightModeSettings other = (NightModeSettings) o;
-    return mode == other.mode && intensity == other.intensity;
+    return mode == other.mode && intensity == other.intensity && enabled == other.enabled;
   }
 
   @Override
   public int hashCode()
   {
-    return 31 * mode.hashCode() + intensity.hashCode();
+    int result = 31 * mode.hashCode() + intensity.hashCode();
+    return 31 * result + (enabled ? 1 : 0);
   }
 
   @Override
   public String toString()
   {
-    return "NightModeSettings[mode=" + mode + ", intensity=" + intensity + "]";
+    return "NightModeSettings[mode=" + mode + ", intensity=" + intensity + ", enabled=" + enabled
+        + ", effectiveNow=" + effectiveNow + ", controllability=" + controllability + "]";
   }
 }
