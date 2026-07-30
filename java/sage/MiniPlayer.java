@@ -1569,10 +1569,11 @@ public class MiniPlayer implements DVDMediaPlayer
                 }
               }
               // --- Server-side Audio Equalizer / AudioProcessing (v1) ---
-              // PURE AUDIO-STAGE OVERLAY, feature-flagged off by default
-              // (audioproc/enable_server_eq). Never touches video, never
-              // picks the audio codec/bitrate itself -- eqTargetCodec below
-              // is just an echo of whichever codec the existing selection
+              // PURE AUDIO-STAGE OVERLAY, gated solely by an explicit client
+              // request (location=SERVER + EQ enabled) -- see
+              // AudioProcessingResolver. Never touches video, never picks
+              // the audio codec/bitrate itself -- eqTargetCodec below is
+              // just an echo of whichever codec the existing selection
               // logic above (ffAcodec, or -- if the existing logic left the
               // mode's own default/copy in place -- the source's own codec,
               // so a "flip copy to re-encode" case re-encodes with the SAME
@@ -1584,7 +1585,7 @@ public class MiniPlayer implements DVDMediaPlayer
               // so MediaServer can disqualify -acodec copy for the audio
               // stage without picking a codec itself).
               // v1 scope: browserhd/browserhd_copyv fMP4 push only.
-              if (mcsr != null && Sage.getBoolean("audioproc/enable_server_eq", false))
+              if (mcsr != null)
               {
                 try
                 {
@@ -1600,7 +1601,7 @@ public class MiniPlayer implements DVDMediaPlayer
                     sage.audioproc.AudioFilterCapabilities ffmpegCaps =
                         sage.audioproc.FfmpegAudioFilterProbeService.probe(FFMPEGTranscoder.getTranscoderPath());
                     sage.audioproc.AudioProcessingPlan eqPlan = sage.audioproc.AudioProcessingResolver.resolve(
-                        apState, true, ffmpegCaps, srcAudioCodec, eqTargetCodec, 0, null);
+                        apState, ffmpegCaps, srcAudioCodec, eqTargetCodec, 0, null);
                     if (eqPlan.getResolvedLocation() == sage.audioproc.AudioProcessingLocation.SERVER
                         && eqPlan.getFilterGraph() != null && eqPlan.getFilterGraph().length() > 0)
                     {

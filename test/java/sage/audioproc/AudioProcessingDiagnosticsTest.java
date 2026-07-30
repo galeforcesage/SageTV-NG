@@ -24,10 +24,10 @@ public class AudioProcessingDiagnosticsTest
   @Test
   public void testNonePlanEventReportsErrorCodeAsReason()
   {
-    AudioProcessingPlan plan = AudioProcessingPlan.none("audioproc/enable_server_eq feature flag is disabled", "hashXYZ");
+    AudioProcessingPlan plan = AudioProcessingPlan.none("no client audio-processing state known for this session", "hashXYZ");
     Map<String, Object> event = AudioProcessingDiagnostics.buildEvent(null, null, plan);
     assertEquals(event.get("location"), "NONE");
-    assertEquals(event.get("errorCode"), "audioproc/enable_server_eq feature flag is disabled");
+    assertEquals(event.get("errorCode"), "no client audio-processing state known for this session");
     assertEquals(event.get("serverDspActive"), Boolean.FALSE);
     assertEquals(event.get("settingsHash"), "hashXYZ");
   }

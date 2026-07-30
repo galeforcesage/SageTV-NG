@@ -1414,7 +1414,7 @@ public class MediaServer implements Runnable
             // carried here via ";afeq=;afeqcodec=". Reconstruct a minimal
             // SERVER-location plan purely to hand the graph + target codec to
             // this transcode session -- FFMPEGTranscoder.isServerAudioEqActive()
-            // independently re-checks the audioproc/enable_server_eq flag before
+            // independently re-checks the plan's location/filtergraph before
             // acting, so this is a pure pass-through, never a second decision.
             if (surfEqGraph != null && surfEqGraph.length() > 0)
             {

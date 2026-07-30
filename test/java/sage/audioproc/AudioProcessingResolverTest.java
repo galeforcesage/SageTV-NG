@@ -24,18 +24,9 @@ public class AudioProcessingResolverTest
   }
 
   @Test
-  public void testFeatureFlagOffAlwaysResolvesToNone()
-  {
-    AudioProcessingClientState state = serverRequestState(true, false);
-    AudioProcessingPlan plan = AudioProcessingResolver.resolve(state, false, FULL_CAPS, "ac3", "aac", 48000, "stereo");
-    assertEquals(plan.getResolvedLocation(), AudioProcessingLocation.NONE);
-    assertTrue(plan.getReason().contains("flag"));
-  }
-
-  @Test
   public void testNullClientStateResolvesToNone()
   {
-    AudioProcessingPlan plan = AudioProcessingResolver.resolve(null, true, FULL_CAPS, "ac3", "aac", 48000, "stereo");
+    AudioProcessingPlan plan = AudioProcessingResolver.resolve(null, FULL_CAPS, "ac3", "aac", 48000, "stereo");
     assertEquals(plan.getResolvedLocation(), AudioProcessingLocation.NONE);
   }
 
@@ -46,7 +37,7 @@ public class AudioProcessingResolverTest
         .location(AudioProcessingLocation.CLIENT).eqEnabled(true).build();
     AudioProcessingClientState state = new AudioProcessingClientState("client1", AudioProcessingCapabilities.builder()
         .serverEqPlanSupported(true).build(), settings, false, System.currentTimeMillis());
-    AudioProcessingPlan plan = AudioProcessingResolver.resolve(state, true, FULL_CAPS, "ac3", "aac", 48000, "stereo");
+    AudioProcessingPlan plan = AudioProcessingResolver.resolve(state, FULL_CAPS, "ac3", "aac", 48000, "stereo");
     assertEquals(plan.getResolvedLocation(), AudioProcessingLocation.NONE);
   }
 
@@ -55,7 +46,7 @@ public class AudioProcessingResolverTest
   {
     // Legacy/STV clients never send AUDIO_PROCESSING_* messages at all, so
     // their state is simply absent -- must resolve to NONE, never SERVER.
-    AudioProcessingPlan plan = AudioProcessingResolver.resolve(null, true, FULL_CAPS, "ac3", "aac", 48000, "stereo");
+    AudioProcessingPlan plan = AudioProcessingResolver.resolve(null, FULL_CAPS, "ac3", "aac", 48000, "stereo");
     assertEquals(plan.getResolvedLocation(), AudioProcessingLocation.NONE);
   }
 
@@ -66,7 +57,7 @@ public class AudioProcessingResolverTest
         .location(AudioProcessingLocation.SERVER).eqEnabled(false).build();
     AudioProcessingClientState state = new AudioProcessingClientState("client1", AudioProcessingCapabilities.builder()
         .serverEqPlanSupported(true).build(), settings, false, System.currentTimeMillis());
-    AudioProcessingPlan plan = AudioProcessingResolver.resolve(state, true, FULL_CAPS, "ac3", "aac", 48000, "stereo");
+    AudioProcessingPlan plan = AudioProcessingResolver.resolve(state, FULL_CAPS, "ac3", "aac", 48000, "stereo");
     assertEquals(plan.getResolvedLocation(), AudioProcessingLocation.NONE);
   }
 
@@ -74,7 +65,7 @@ public class AudioProcessingResolverTest
   public void testClientCapabilitiesDoNotSupportServerPlanResolvesToNone()
   {
     AudioProcessingClientState state = serverRequestState(false, false);
-    AudioProcessingPlan plan = AudioProcessingResolver.resolve(state, true, FULL_CAPS, "ac3", "aac", 48000, "stereo");
+    AudioProcessingPlan plan = AudioProcessingResolver.resolve(state, FULL_CAPS, "ac3", "aac", 48000, "stereo");
     assertEquals(plan.getResolvedLocation(), AudioProcessingLocation.NONE);
   }
 
@@ -82,7 +73,7 @@ public class AudioProcessingResolverTest
   public void testDoubleProcessingPreventionWhenClientDspAlreadyActive()
   {
     AudioProcessingClientState state = serverRequestState(true, true);
-    AudioProcessingPlan plan = AudioProcessingResolver.resolve(state, true, FULL_CAPS, "ac3", "aac", 48000, "stereo");
+    AudioProcessingPlan plan = AudioProcessingResolver.resolve(state, FULL_CAPS, "ac3", "aac", 48000, "stereo");
     assertEquals(plan.getResolvedLocation(), AudioProcessingLocation.NONE);
     assertTrue(plan.getReason().toLowerCase().contains("double"));
     assertFalse(plan.isClientMustDisableDsp());
@@ -93,7 +84,7 @@ public class AudioProcessingResolverTest
   {
     AudioProcessingClientState state = serverRequestState(true, false);
     AudioFilterCapabilities noEq = AudioFilterCapabilities.builder().probeSucceeded(true).build(); // no filters available
-    AudioProcessingPlan plan = AudioProcessingResolver.resolve(state, true, noEq, "ac3", "aac", 48000, "stereo");
+    AudioProcessingPlan plan = AudioProcessingResolver.resolve(state, noEq, "ac3", "aac", 48000, "stereo");
     assertEquals(plan.getResolvedLocation(), AudioProcessingLocation.NONE);
     assertTrue(plan.getReason().contains("filtergraph"));
   }
@@ -102,7 +93,7 @@ public class AudioProcessingResolverTest
   public void testHappyPathResolvesToServerWithClientMustDisableDsp()
   {
     AudioProcessingClientState state = serverRequestState(true, false);
-    AudioProcessingPlan plan = AudioProcessingResolver.resolve(state, true, FULL_CAPS, "ac3", "aac", 48000, "stereo");
+    AudioProcessingPlan plan = AudioProcessingResolver.resolve(state, FULL_CAPS, "ac3", "aac", 48000, "stereo");
     assertEquals(plan.getResolvedLocation(), AudioProcessingLocation.SERVER);
     assertTrue(plan.isClientMustDisableDsp());
     assertNotNull(plan.getFilterGraph());
@@ -124,7 +115,7 @@ public class AudioProcessingResolverTest
     AudioProcessingCapabilities legacyCaps = AudioProcessingCapabilities.builder()
         .clientKind(ClientKind.LEGACY).serverEqPlanSupported(true).build();
     AudioProcessingClientState state = new AudioProcessingClientState("client1", legacyCaps, settings, false, 0L);
-    AudioProcessingPlan plan = AudioProcessingResolver.resolve(state, true, FULL_CAPS, "ac3", "aac", 48000, "stereo");
+    AudioProcessingPlan plan = AudioProcessingResolver.resolve(state, FULL_CAPS, "ac3", "aac", 48000, "stereo");
     assertEquals(plan.getResolvedLocation(), AudioProcessingLocation.NONE);
     assertTrue(plan.getReason().toLowerCase().contains("legacy"));
   }
@@ -135,7 +126,7 @@ public class AudioProcessingResolverTest
     AudioProcessingSettings settings = AudioProcessingSettings.builder()
         .location(AudioProcessingLocation.NONE).build();
     AudioProcessingClientState state = new AudioProcessingClientState("client1", AudioProcessingCapabilities.NONE, settings, false, 0L);
-    AudioProcessingPlan plan = AudioProcessingResolver.resolve(state, true, FULL_CAPS, null, null, 0, null);
+    AudioProcessingPlan plan = AudioProcessingResolver.resolve(state, FULL_CAPS, null, null, 0, null);
     assertEquals(plan.getResolvedLocation(), AudioProcessingLocation.NONE);
     assertNotNull(plan.getSettingsHash());
   }

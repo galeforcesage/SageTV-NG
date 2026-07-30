@@ -37,10 +37,13 @@ package sage.audioproc;
  * {@code AUDIO_PROCESSING_PLAN} message, with no client-side DSP currently
  * reported active (double-processing prevention), and with the ffmpeg
  * binary actually able to build the requested filtergraph. Any other case
- * -- flag off, no client state, {@code CLIENT}/{@code NONE} location,
+ * -- no client state, {@code CLIENT}/{@code NONE} location,
  * unsupported client, ambiguous/stale double-active state, or an
  * unbuildable filtergraph -- resolves to {@link AudioProcessingLocation#NONE}
- * with a diagnostic reason, never a guess or a partial plan.
+ * with a diagnostic reason, never a guess or a partial plan. There is no
+ * separate master on/off switch: the explicit client-signal gate above IS
+ * the net-neutrality guarantee -- any client that never asks for
+ * {@code location=SERVER} with EQ enabled is byte-for-byte unaffected.
  */
 public final class AudioProcessingResolver
 {
@@ -50,21 +53,17 @@ public final class AudioProcessingResolver
 
   /**
    * @param clientState the latest known audio-DSP state for this client (capabilities + settings + dspActive), or {@code null} if unknown
-   * @param featureEnabled the master feature-flag value ({@code audioproc/enable_server_eq}), evaluated by the caller
    * @param ffmpegCaps the current ffmpeg audio-filter capability probe result
    * @param sourceAudioCodec the source recording's audio codec (diagnostics/echo only)
    * @param targetAudioCodec the audio codec the EXISTING audio-selection logic already chose (diagnostics/echo only -- never chosen here)
    * @param sampleRate the target sample rate the existing pipeline already chose (diagnostics/echo only)
    * @param channelLayout the target channel layout the existing pipeline already chose (diagnostics/echo only)
    */
-  public static AudioProcessingPlan resolve(AudioProcessingClientState clientState, boolean featureEnabled,
+  public static AudioProcessingPlan resolve(AudioProcessingClientState clientState,
       AudioFilterCapabilities ffmpegCaps, String sourceAudioCodec, String targetAudioCodec,
       int sampleRate, String channelLayout)
   {
     String settingsHash = clientState == null ? null : clientState.getSettings().computeSettingsHash();
-
-    if (!featureEnabled)
-      return AudioProcessingPlan.none("audioproc/enable_server_eq feature flag is disabled", settingsHash);
 
     if (clientState == null)
       return AudioProcessingPlan.none("no client audio-processing state known for this session", null);
