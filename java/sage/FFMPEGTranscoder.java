@@ -181,6 +181,63 @@ public class FFMPEGTranscoder implements TranscodeEngine
     }
   }
 
+  /**
+   * Scans {@code xcodeParamsVec} (same token-scan style as
+   * {@link #maybeDisqualifyAudioCopyForServerEq}) for a video-stream-copy
+   * directive: {@code -vcodec}/{@code -c:v}/{@code -codec:v} followed by
+   * {@code copy}. Used to guard the auto-deinterlace injection below --
+   * modern ffmpeg hard-errors when a {@code -vf} filtergraph is combined with
+   * stream copy ("Filtergraph 'yadif' was specified, but codec copy was
+   * selected"), killing the process before it emits a single byte. This
+   * affects every copy-video xcodeMode template (mpeg2psremux, mpeg2tsremux,
+   * browserhd_remux, browserhd_copyv, audioonly, DVDAudioOnly) whenever the
+   * source is flagged interlaced -- both legacy media-extender push modes
+   * and the modern NG surface-decision-engine modes reach these templates.
+   * Real-encode paths (dynamic/dynamicts/dynamich264/browserhd full
+   * transcode/DVD/SVCD/music ladders) never set a copy video codec, so this
+   * check is always false there and their argv is completely unaffected.
+   */
+  @SuppressWarnings({"rawtypes","unchecked"})
+  static boolean isVideoCopySelected(java.util.ArrayList xcodeParamsVec)
+  {
+    for (int i = 0; i < xcodeParamsVec.size() - 1; i++)
+    {
+      Object o = xcodeParamsVec.get(i);
+      if (!(o instanceof String)) continue;
+      String tok = (String) o;
+      if (tok.equals("-vcodec") || tok.equals("-c:v") || tok.equals("-codec:v"))
+      {
+        Object v = xcodeParamsVec.get(i + 1);
+        if (v instanceof String && "copy".equalsIgnoreCase((String) v))
+          return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Pure decision helper (extracted for direct unit testing) for whether the
+   * automatic yadif deinterlace filter should be injected. True exactly when:
+   * the caller hasn't already asked for deinterlacing in either the legacy
+   * ({@code -deinterlace}) or modern ({@code yadif}) form, the source is
+   * flagged interlaced, the target height implies no half-height field
+   * output, the {@code xcode_auto_deinterlace} property is enabled, AND the
+   * video stage is NOT a stream copy (see {@link #isVideoCopySelected}) --
+   * modern ffmpeg hard-errors combining a {@code -vf} filtergraph with
+   * {@code -c:v}/{@code -vcodec copy} ("Filtergraph 'yadif' was specified,
+   * but codec copy was selected" -> "Error opening output file", zero bytes
+   * ever emitted). Copy means copy: no substitute filter is added when this
+   * returns false due to the copy check.
+   */
+  @SuppressWarnings({"rawtypes","unchecked"})
+  static boolean shouldAutoAddYadif(java.util.ArrayList xcodeParamsVec, String xcodeParams,
+      sage.media.format.VideoFormat srcVideo, int targetHeight, boolean autoDeinterlaceEnabled)
+  {
+    return xcodeParams.indexOf("-deinterlace") == -1 && xcodeParams.indexOf("yadif") == -1
+        && srcVideo != null && srcVideo.isInterlaced() && targetHeight > srcVideo.getHeight()/2
+        && autoDeinterlaceEnabled && !isVideoCopySelected(xcodeParamsVec);
+  }
+
   public long getAvailableTranscodeBytes()
   {
     if (bufferOutput)
@@ -762,6 +819,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
   public void setTranscodeFormat(String str, sage.media.format.ContainerFormat inSourceFormat)
   {
     sourceFormat = inSourceFormat;
+    xcodeModeName = str;
     if ("dynamic".equalsIgnoreCase(str))
       dynamicRateAdjust = true;
     else if ("dynamicts".equalsIgnoreCase(str))
@@ -1250,6 +1308,43 @@ public class FFMPEGTranscoder implements TranscodeEngine
   }
 
   /**
+   * True only for the confirmed modern NG surface-decision-engine copy-family
+   * xcodeModes: {@code mpeg2tsremux} (Tizen/AVPlay TV family), {@code
+   * browserhd_remux} and {@code browserhd_copyv} (pwa_mse/browser family).
+   * Deliberately name-scoped (via {@link #xcodeModeName}, captured verbatim
+   * from {@link #setTranscodeFormat(String, sage.media.format.ContainerFormat)})
+   * rather than inferred from output-format flags: {@code audioonly} ALSO
+   * emits {@code -f mpegts} and {@code mpeg2psremux} ALSO copies video, and
+   * both are reachable from the legacy Placeshifter/older-MiniClient push
+   * path (see {@code MiniPlayer.java}'s {@code !ngSession} block) — a
+   * format-flag heuristic would silently pull those legacy paths into the
+   * on-demand (VOD) probesize/analyzeduration tuning below, which is
+   * explicitly out of scope for that fix. Used only to gate Fix B (VOD probe
+   * tuning); never used to gate Fix A's copy-safety guard, which applies
+   * unconditionally to every xcodeMode.
+   */
+  boolean isModernCopyFamilyXcodeMode()
+  {
+    return "mpeg2tsremux".equalsIgnoreCase(xcodeModeName)
+        || "browserhd_remux".equalsIgnoreCase(xcodeModeName)
+        || "browserhd_copyv".equalsIgnoreCase(xcodeModeName);
+  }
+
+  /**
+   * Fix B gate: true when this instance's on-demand (VOD, {@code !activeFile})
+   * probesize/analyzeduration tuning should apply -- i.e. a source format is
+   * known to derive sane values from, AND the xcodeMode is one of the
+   * confirmed modern NG copy-family templates (see
+   * {@link #isModernCopyFamilyXcodeMode}). Extracted as a pure, directly
+   * testable decision so the VOD-tuning scope can be verified without
+   * invoking the full argv-assembly method.
+   */
+  boolean shouldApplyVodProbeTuning()
+  {
+    return !activeFile && isModernCopyFamilyXcodeMode() && sourceFormat != null;
+  }
+
+  /**
    * The shared {@code browserhd_copyv} pull-xcode preset hardcodes
    * {@code -tag:v hvc1} because its primary user is HEVC/ATSC3 video-copy (Chromium
    * MSE requires the {@code hvc1} sample-entry tag — parameter sets out-of-band in
@@ -1599,6 +1694,37 @@ public class FFMPEGTranscoder implements TranscodeEngine
         }
       }
     }
+    else if (shouldApplyVodProbeTuning())
+    {
+      // Fix B: on-demand (VOD) playback of a completed recording previously
+      // fell all the way through to ffmpeg's blind probesize/analyzeduration
+      // defaults here (this branch is the activeFile==false counterpart of
+      // the live-tune-in tuning above), which can take 5-11s+ on MPEG2-PS/TS
+      // sources before ffmpeg emits its first byte -- long enough that
+      // Tizen/AVPlay-style clients give up and disconnect before playback
+      // ever starts. Apply the SAME proven probesize/analyzeduration values
+      // already used for the live path (no new heuristic), scoped explicitly
+      // to the confirmed modern NG copy-family xcodeModes by name (see
+      // isModernCopyFamilyXcodeMode) so legacy on-demand playback (Windows/
+      // Mac Placeshifter, older MiniClients via dynamic/dynamicts/dynamich264/
+      // audioonly/mpeg2psremux) is completely unaffected -- byte-for-byte
+      // unchanged. If sourceFormat is unavailable (null), neither this nor
+      // the activeFile branch fires and ffmpeg's current default behavior is
+      // preserved automatically.
+      boolean videoCopyFmp4 = isVideoCopyToFmp4();
+      long probeSize = videoCopyFmp4
+          ? Sage.getLong("ffmpeg/live_probesize_videocopy", 8000000)
+          : Sage.getLong("ffmpeg/live_probesize", 1000000);
+      long analyzeDur = videoCopyFmp4
+          ? Sage.getLong("ffmpeg/live_analyzeduration_videocopy", 5000000)
+          : Sage.getLong("ffmpeg/live_analyzeduration", 1500000);
+      xcodeParamsVec.add("-probesize");
+      xcodeParamsVec.add(Long.toString(probeSize));
+      xcodeParamsVec.add("-analyzeduration");
+      xcodeParamsVec.add(Long.toString(analyzeDur));
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: VOD modern-copy-family xcodeMode=["
+          + xcodeModeName + "] — probesize=" + probeSize + " analyzeduration=" + analyzeDur);
+    }
 
     xcodeParamsVec.add("-i");
     if (currServer == null || currServer.length() == 0)
@@ -1820,10 +1946,13 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add(currVideoBitrateKbps*5000 + "");
 
       // FFmpeg 7.x: -deinterlace is removed; users now express deinterlace via -vf yadif.
-      // Skip auto-add if user already asked for either legacy or modern form.
-      if (xcodeParams.indexOf("-deinterlace") == -1 && xcodeParams.indexOf("yadif") == -1
-          && srcVideo != null && srcVideo.isInterlaced() && targetHeight > srcVideo.getHeight()/2 &&
-          Sage.getBoolean("xcode_auto_deinterlace", true))
+      // Skip auto-add if user already asked for either legacy or modern form, OR if the
+      // video stage is a stream copy (filter+copy is a hard ffmpeg error -- see
+      // shouldAutoAddYadif javadoc). Always false in this httpls/live branch since it
+      // always sets a real video encoder, kept for defense-in-depth/consistency with the
+      // other occurrence below.
+      if (shouldAutoAddYadif(xcodeParamsVec, xcodeParams, srcVideo, targetHeight,
+          Sage.getBoolean("xcode_auto_deinterlace", true)))
       {
         if (Sage.DBG) System.out.println("Automatically adding yadif deinterlace filter to transcoding process");
         xcodeParamsVec.add("-vf");
@@ -2186,14 +2315,28 @@ public class FFMPEGTranscoder implements TranscodeEngine
         }
       }
       // FFmpeg 7.x: -deinterlace is removed; users now express deinterlace via -vf yadif.
-      // Skip auto-add if user already asked for either legacy or modern form.
-      if (xcodeParams.indexOf("-deinterlace") == -1 && xcodeParams.indexOf("yadif") == -1
-          && srcVideo != null && srcVideo.isInterlaced() && targetHeight > srcVideo.getHeight()/2 &&
-          Sage.getBoolean("xcode_auto_deinterlace", true))
+      // Skip auto-add if user already asked for either legacy or modern form, OR if the
+      // video stage is a stream copy (filter+copy is a hard ffmpeg error: "Filtergraph
+      // 'yadif' was specified, but codec copy was selected" -> "Error opening output
+      // file", killing the process before it emits a single byte). This is the real
+      // fix site: this generic named-quality-template tokenizer branch is what parses
+      // mpeg2psremux/mpeg2tsremux/browserhd_remux/browserhd_copyv/audioonly/DVDAudioOnly
+      // -- every copy-video xcodeMode, legacy media-extender and modern NG surface alike
+      // -- and today unconditionally injects yadif whenever the source is flagged
+      // interlaced, regardless of whether the video is being copied. See
+      // shouldAutoAddYadif javadoc. Copy means copy -- no substitute filter is added.
+      if (shouldAutoAddYadif(xcodeParamsVec, xcodeParams, srcVideo, targetHeight,
+          Sage.getBoolean("xcode_auto_deinterlace", true)))
       {
         if (Sage.DBG) System.out.println("Automatically adding yadif deinterlace filter to transcoding process");
         xcodeParamsVec.add("-vf");
         xcodeParamsVec.add("yadif");
+      }
+      else if (Sage.DBG && srcVideo != null && srcVideo.isInterlaced() && targetHeight > srcVideo.getHeight()/2
+          && isVideoCopySelected(xcodeParamsVec))
+      {
+        System.out.println("FFMPEGTranscoder: skipping auto yadif deinterlace -- video codec is copy "
+            + "(filter+copy is a hard ffmpeg error; source will play back interlaced/as-copied)");
       }
       // Creating interlaced video doesn't work properly yet...
       /*if (xcodeParams.indexOf("-deinterlace") == -1 && srcVideo != null && srcVideo.isInterlaced() && targetHeight == srcVideo.getHeight())
@@ -3816,6 +3959,16 @@ public class FFMPEGTranscoder implements TranscodeEngine
   // cannot autodetect a muxer from.
   protected String rawCmdlineContainer = null;
   protected boolean activeFile;
+  // Raw xcodeMode name passed to setTranscodeFormat(String, ContainerFormat) --
+  // e.g. "mpeg2tsremux", "browserhd_remux", "dynamicts". Captured so the
+  // on-demand (non-activeFile) probesize/analyzeduration tuning below can be
+  // scoped to the confirmed modern NG copy-family xcodeModes ONLY, leaving
+  // legacy dynamic/dynamicts/dynamich264/audioonly/mpeg2psremux VOD playback
+  // completely untouched (current defaults preserved) unless/until separately
+  // validated for those. null when this instance was configured via the
+  // ContainerFormat-based setTranscodeFormat(ContainerFormat, ContainerFormat)
+  // overload instead (no named mode involved there).
+  protected String xcodeModeName;
   protected java.io.OutputStream xcodeStdin;
   // This is a set of buffers used to read from the transcode stream and to also send out the data. We keep
   // one extra buffer behind us in case the client needs to re-read something.
