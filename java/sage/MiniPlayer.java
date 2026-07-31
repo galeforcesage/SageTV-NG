@@ -99,6 +99,48 @@ public class MiniPlayer implements DVDMediaPlayer
   }
 
   /**
+   * Builds the wire-string value published as {@code CAP_EFFECTIVE_DELIVERY}
+   * (Protocol 2.1 surface capability model) from the winning surface's
+   * resolved delivery mode and, if applicable, its concrete server-native
+   * XCODE_SETUP mode. Extracted as a small pure helper -- distinct from the
+   * surface-plan's {@code chosenSurfaceDelivery} field itself, which the
+   * transport-forcing logic elsewhere keys on and must stay bare
+   * ({@code "pull"}/{@code "push"}/{@code "pull-xcode"}/{@code "hls"}) --
+   * so this wire-format concern can be unit tested in isolation.
+   * <p>
+   * For {@code pull-xcode}, the token is {@code "pull-xcode:" + xcodeMode}
+   * (e.g. {@code pull-xcode:mpeg2tsremux}) so the bridge maps it 1:1 to its
+   * {@code /msproxy?mode=<mode>} endpoint. For a true DIRECT_PLAY pull (no
+   * xcode mode), the token is {@code "pull:direct"} -- distinguishing it from
+   * a bare {@code "pull"} -- so the bridge routes to
+   * {@code /msproxy?mode=direct} (MediaServer SIZE/READ passthrough, proper
+   * seeking) instead of {@code /rawmedia} (raw byte-range disk read, no seek
+   * support). {@code pickDeliveryModeForDecision()} only ever returns bare
+   * {@code "pull"} for {@code Decision.DIRECT_PLAY}
+   * ({@link sage.client.PlaybackDecisionEngine}), so this is unambiguous.
+   * {@code push}/{@code hls} pass through unchanged.
+   *
+   * @param chosenSurfaceDelivery the winning surface's resolved delivery mode
+   *                              ({@code pull}/{@code push}/{@code pull-xcode}/{@code hls});
+   *                              null/empty returns null (caller skips emission)
+   * @param chosenSurfaceXcodeMode the concrete XCODE_SETUP mode when delivery
+   *                               is {@code pull-xcode} (e.g. {@code mpeg2tsremux}),
+   *                               or null/empty otherwise
+   * @return the value to publish via {@code CAP_EFFECTIVE_DELIVERY}, or null
+   *         if {@code chosenSurfaceDelivery} was null/empty
+   */
+  static String buildEffDeliveryToken(String chosenSurfaceDelivery, String chosenSurfaceXcodeMode)
+  {
+    if (chosenSurfaceDelivery == null || chosenSurfaceDelivery.length() == 0)
+      return null;
+    if (chosenSurfaceXcodeMode != null && chosenSurfaceXcodeMode.length() > 0)
+      return chosenSurfaceDelivery + ":" + chosenSurfaceXcodeMode;
+    if ("pull".equals(chosenSurfaceDelivery))
+      return "pull:direct";
+    return chosenSurfaceDelivery; // push, hls unchanged
+  }
+
+  /**
    * Collaborator seam for {@link #acquirePlayerSocketChannel(PlayerSocketProvider)}.
    * Decouples the bounded self-heal retry policy from the real
    * {@code MiniClientSageRenderer}/{@code SocketChannel} plumbing so the
@@ -1572,13 +1614,18 @@ public class MiniPlayer implements DVDMediaPlayer
           // Protocol 2.1: publish the effective delivery mode (and, for
           // pull-xcode, the concrete server-native XCODE_SETUP mode) so the
           // bridge maps CAP_EFFECTIVE_DELIVERY=pull-xcode:<mode> 1:1 to its
-          // /msproxy?mode=<mode> and the PWA stops sniffing on NG. For plain
-          // pull/push/hls just the mode name is sent (no xcode mode).
+          // /msproxy?mode=<mode> and the PWA stops sniffing on NG. For a
+          // true DIRECT_PLAY pull (no xcode mode), the token is "pull:direct"
+          // so the bridge routes to /msproxy?mode=direct (MediaServer
+          // SIZE/READ passthrough, proper seeking) instead of /rawmedia
+          // (raw byte-range disk read, no seek support). pickDeliveryModeForDecision()
+          // only ever returns bare "pull" for Decision.DIRECT_PLAY, so this
+          // is unambiguous. Only the outgoing wire string changes here --
+          // chosenSurfaceDelivery itself (used by the transport-forcing
+          // checks below) is left untouched. push/hls are unchanged.
           if (chosenSurfaceDelivery != null && chosenSurfaceDelivery.length() > 0)
           {
-            String effDelivery = (chosenSurfaceXcodeMode != null && chosenSurfaceXcodeMode.length() > 0)
-                ? chosenSurfaceDelivery + ":" + chosenSurfaceXcodeMode
-                : chosenSurfaceDelivery;
+            String effDelivery = buildEffDeliveryToken(chosenSurfaceDelivery, chosenSurfaceXcodeMode);
             // Protocol 2.1 option B: for the fMP4 modes that TRANSCODE audio
             // (browserhd, browserhd_copyv) carry the decision's best target
             // audio codec + source channel count as ";acodec=<v>;ac=<n>" so the

@@ -1,6 +1,8 @@
 package sage;
 
+import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 
 import org.testng.annotations.AfterMethod;
@@ -109,5 +111,62 @@ public class MiniPlayerTest
     boolean mediaExtender = false;
     assertFalse(MiniPlayer.legacyH264PushProfileApplies(ngSession, mediaExtender),
         "Kill-switch=false must disable the override even for a qualifying legacy client");
+  }
+
+  /**
+   * Tests for {@link MiniPlayer#buildEffDeliveryToken(String, String)}, the
+   * {@code CAP_EFFECTIVE_DELIVERY} wire-string builder (Protocol 2.1).
+   * DIRECT_PLAY's bare "pull" must become "pull:direct" (so the bridge
+   * routes to /msproxy?mode=direct instead of /rawmedia), while
+   * pull-xcode/push/hls and the null/empty no-emission case are unchanged.
+   */
+  @Test
+  public void testDirectPlayPullEmitsPullDirect()
+  {
+    assertEquals(MiniPlayer.buildEffDeliveryToken("pull", null), "pull:direct",
+        "DIRECT_PLAY's bare pull delivery must be labeled pull:direct so the bridge "
+            + "routes to /msproxy?mode=direct (proper seeking) instead of /rawmedia");
+  }
+
+  @Test
+  public void testDirectPlayPullEmitsPullDirectWithEmptyXcodeMode()
+  {
+    assertEquals(MiniPlayer.buildEffDeliveryToken("pull", ""), "pull:direct",
+        "An empty (non-null) xcode mode must be treated the same as null for the bare-pull case");
+  }
+
+  @Test
+  public void testPullXcodeModeUnchanged()
+  {
+    assertEquals(MiniPlayer.buildEffDeliveryToken("pull-xcode", "mpeg2tsremux"), "pull-xcode:mpeg2tsremux",
+        "pull-xcode delivery must still emit pull-xcode:<mode> unchanged");
+    assertEquals(MiniPlayer.buildEffDeliveryToken("pull-xcode", "browserhd_remux"), "pull-xcode:browserhd_remux");
+    assertEquals(MiniPlayer.buildEffDeliveryToken("pull-xcode", "browserhd_copyv"), "pull-xcode:browserhd_copyv");
+    assertEquals(MiniPlayer.buildEffDeliveryToken("pull-xcode", "audioonly"), "pull-xcode:audioonly");
+    assertEquals(MiniPlayer.buildEffDeliveryToken("pull-xcode", "browserhd"), "pull-xcode:browserhd");
+    assertEquals(MiniPlayer.buildEffDeliveryToken("pull-xcode", "dynamich264"), "pull-xcode:dynamich264");
+  }
+
+  @Test
+  public void testPushDeliveryUnchanged()
+  {
+    assertEquals(MiniPlayer.buildEffDeliveryToken("push", null), "push",
+        "push delivery (no xcode mode) must be emitted bare, unchanged");
+  }
+
+  @Test
+  public void testHlsDeliveryUnchanged()
+  {
+    assertEquals(MiniPlayer.buildEffDeliveryToken("hls", null), "hls",
+        "hls delivery (no xcode mode) must be emitted bare, unchanged");
+  }
+
+  @Test
+  public void testNullOrEmptyDeliveryYieldsNull()
+  {
+    assertNull(MiniPlayer.buildEffDeliveryToken(null, null),
+        "No chosen surface delivery (legacy/empty-surface path) must yield null -- caller skips emission");
+    assertNull(MiniPlayer.buildEffDeliveryToken("", null),
+        "Empty chosen surface delivery must yield null -- caller skips emission");
   }
 }
