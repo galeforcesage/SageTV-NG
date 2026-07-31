@@ -149,6 +149,197 @@ public class FFMPEGTranscoderTest
     assertFalse(transcoder.isVideoCopyToFmp4());
   }
 
+  // --- Fix A: yadif auto-add must never collide with a copy-video stage. ---
+  // Modern ffmpeg hard-errors "Filtergraph 'yadif' was specified, but codec
+  // copy was selected" -> "Error opening output file", killing the process
+  // in ~65ms with zero bytes ever emitted -- this is the actual root cause of
+  // the reported "~20s slow start" symptom on MPEG2-PS remux (mpeg2tsremux /
+  // browserhd_remux / browserhd_copyv / mpeg2psremux / audioonly / DVDAudioOnly
+  // all copy video, and are reachable from both legacy media-extender push
+  // and the modern NG surface-decision-engine). shouldAutoAddYadif is the
+  // single decision helper both call sites in startTranscode() now route
+  // through.
+
+  private static sage.media.format.VideoFormat interlacedSrcVideo(int height)
+  {
+    sage.media.format.VideoFormat v = new sage.media.format.VideoFormat();
+    v.setHeight(height);
+    v.setInterlaced(true);
+    return v;
+  }
+
+  @Test
+  public void testShouldAutoAddYadif_FalseWhenVideoIsCopy() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    // mpeg2tsremux-shaped copy-video vector, source flagged interlaced.
+    java.util.ArrayList<String> vec = new java.util.ArrayList<>(
+        java.util.Arrays.asList("-f", "mpegts", "-c:v", "copy", "-c:a", "copy", "-copyts"));
+    assertFalse(FFMPEGTranscoder.shouldAutoAddYadif(vec, "-f mpegts -c:v copy -c:a copy -copyts",
+        interlacedSrcVideo(480), 480, true));
+
+    // legacy -vcodec copy spelling (mpeg2psremux / audioonly video pass-through).
+    java.util.ArrayList<String> legacyVec = new java.util.ArrayList<>(
+        java.util.Arrays.asList("-f", "dvd", "-vcodec", "copy", "-acodec", "copy", "-copyts"));
+    assertFalse(FFMPEGTranscoder.shouldAutoAddYadif(legacyVec, "-f dvd -vcodec copy -acodec copy -copyts",
+        interlacedSrcVideo(480), 480, true));
+  }
+
+  @Test
+  public void testShouldAutoAddYadif_TrueWhenRealVideoEncode() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    // Real encode paths (dynamic/dynamicts/dynamich264/browserhd full
+    // transcode) never set a copy video codec -- yadif must still be added
+    // exactly as before this fix when interlaced + no explicit downscale.
+    java.util.ArrayList<String> vec = new java.util.ArrayList<>(
+        java.util.Arrays.asList("-f", "mpegts", "-c:v", "h264_nvenc", "-b:v", "4M"));
+    assertTrue(FFMPEGTranscoder.shouldAutoAddYadif(vec, "-f mpegts -c:v h264_nvenc -b:v 4M",
+        interlacedSrcVideo(480), 480, true));
+  }
+
+  @Test
+  public void testShouldAutoAddYadif_FalseCasesUnrelatedToCopy() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    java.util.ArrayList<String> encVec = new java.util.ArrayList<>(
+        java.util.Arrays.asList("-c:v", "h264_nvenc"));
+
+    // Not interlaced.
+    sage.media.format.VideoFormat progressive = new sage.media.format.VideoFormat();
+    progressive.setHeight(480);
+    progressive.setInterlaced(false);
+    assertFalse(FFMPEGTranscoder.shouldAutoAddYadif(encVec, "-c:v h264_nvenc", progressive, 480, true));
+
+    // Downscaled below half source height.
+    assertFalse(FFMPEGTranscoder.shouldAutoAddYadif(encVec, "-c:v h264_nvenc", interlacedSrcVideo(480), 200, true));
+
+    // User already asked for legacy/modern deinterlace.
+    assertFalse(FFMPEGTranscoder.shouldAutoAddYadif(encVec, "-c:v h264_nvenc -deinterlace",
+        interlacedSrcVideo(480), 480, true));
+    assertFalse(FFMPEGTranscoder.shouldAutoAddYadif(encVec, "-c:v h264_nvenc -vf yadif",
+        interlacedSrcVideo(480), 480, true));
+
+    // Property disabled.
+    assertFalse(FFMPEGTranscoder.shouldAutoAddYadif(encVec, "-c:v h264_nvenc", interlacedSrcVideo(480), 480, false));
+
+    // No source video format known.
+    assertFalse(FFMPEGTranscoder.shouldAutoAddYadif(encVec, "-c:v h264_nvenc", null, 480, true));
+  }
+
+  @Test
+  public void testIsVideoCopySelected() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    assertTrue(FFMPEGTranscoder.isVideoCopySelected(new java.util.ArrayList<>(
+        java.util.Arrays.asList("-c:v", "copy"))));
+    assertTrue(FFMPEGTranscoder.isVideoCopySelected(new java.util.ArrayList<>(
+        java.util.Arrays.asList("-vcodec", "copy"))));
+    assertTrue(FFMPEGTranscoder.isVideoCopySelected(new java.util.ArrayList<>(
+        java.util.Arrays.asList("-codec:v", "copy"))));
+    assertFalse(FFMPEGTranscoder.isVideoCopySelected(new java.util.ArrayList<>(
+        java.util.Arrays.asList("-c:v", "h264_nvenc"))));
+    assertFalse(FFMPEGTranscoder.isVideoCopySelected(new java.util.ArrayList<>()));
+  }
+
+  // --- Fix B: extend probesize/analyzeduration tuning to VOD playback, ---
+  // scoped explicitly to the confirmed modern NG copy-family xcodeModes by
+  // name (mpeg2tsremux / browserhd_remux / browserhd_copyv) so legacy
+  // Placeshifter/older-MiniClient on-demand playback (dynamic/dynamicts/
+  // dynamich264/audioonly/mpeg2psremux) is completely unaffected.
+
+  private static sage.media.format.ContainerFormat dummySourceFormat()
+  {
+    sage.media.format.ContainerFormat cf = new sage.media.format.ContainerFormat();
+    cf.setStreamFormats(new BitstreamFormat[] { new VideoFormat() });
+    return cf;
+  }
+
+  @Test
+  public void testShouldApplyVodProbeTuning_TrueForModernCopyFamilyWithKnownSourceFormat() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.activeFile = false;
+    t.sourceFormat = dummySourceFormat();
+
+    t.xcodeModeName = "mpeg2tsremux";
+    assertTrue(t.shouldApplyVodProbeTuning());
+    t.xcodeModeName = "browserhd_remux";
+    assertTrue(t.shouldApplyVodProbeTuning());
+    t.xcodeModeName = "browserhd_copyv";
+    assertTrue(t.shouldApplyVodProbeTuning());
+    // Case-insensitive match.
+    t.xcodeModeName = "MPEG2TSREMUX";
+    assertTrue(t.shouldApplyVodProbeTuning());
+  }
+
+  @Test
+  public void testShouldApplyVodProbeTuning_FalseForLegacyXcodeModes() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.activeFile = false;
+    t.sourceFormat = dummySourceFormat();
+
+    // Legacy Placeshifter/older-MiniClient on-demand playback modes must be
+    // completely unaffected by this fix.
+    for (String legacy : new String[] { "dynamic", "dynamicts", "dynamich264", "audioonly", "mpeg2psremux" })
+    {
+      t.xcodeModeName = legacy;
+      assertFalse(t.shouldApplyVodProbeTuning(), "legacy mode should not get VOD probe tuning: " + legacy);
+    }
+  }
+
+  @Test
+  public void testShouldApplyVodProbeTuning_FalseWhenActiveFile() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.activeFile = true; // live/channel-change path already handled separately above
+    t.sourceFormat = dummySourceFormat();
+    t.xcodeModeName = "mpeg2tsremux";
+    assertFalse(t.shouldApplyVodProbeTuning());
+  }
+
+  @Test
+  public void testShouldApplyVodProbeTuning_FalseWhenSourceFormatUnknown() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.activeFile = false;
+    t.sourceFormat = null; // fallback to current default (no probe tuning) behavior
+    t.xcodeModeName = "mpeg2tsremux";
+    assertFalse(t.shouldApplyVodProbeTuning());
+  }
+
+  // --- EQ copy-flip must still fire correctly after yadif suppression. ---
+  // The audio-side EQ stage (isServerAudioEqActive / maybeDisqualifyAudioCopyForServerEq)
+  // is entirely independent of the video-side yadif guard -- confirms Fix A
+  // does not regress the serverEQ REMUX-promotion feature (406d1603) on
+  // interlaced MPEG2 content.
+  @Test
+  public void testYadifSuppressionDoesNotAffectServerEqAudioCopyFlip() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.setServerAudioProcessingPlan(activeServerPlan("ac3"));
+    java.util.ArrayList<String> vec = new java.util.ArrayList<>(
+        java.util.Arrays.asList("-c:v", "copy", "-c:a", "copy", "-f", "mpegts"));
+
+    // Video is copy -> yadif must be suppressed even though the source is interlaced.
+    assertFalse(FFMPEGTranscoder.shouldAutoAddYadif(vec, "-c:v copy -c:a copy -f mpegts",
+        interlacedSrcVideo(480), 480, true));
+
+    // The independent audio EQ copy-flip must still fire on the very same vector.
+    assertTrue(t.isServerAudioEqActive());
+    t.maybeDisqualifyAudioCopyForServerEq(vec);
+    assertEquals(vec.get(0), "-c:v");
+    assertEquals(vec.get(1), "copy"); // video untouched by the audio EQ feature
+    assertEquals(vec.get(2), "-c:a");
+    assertEquals(vec.get(3), "ac3"); // audio re-encode now engaged for -af to attach to
+  }
+
   @Test
   public void testMaybeStripInapplicableHvc1Tag() throws Throwable
   {
