@@ -62,7 +62,9 @@ public class FFMPEGTranscodeJob extends TranscodeJob
           : targetFormat.getMetadataProperty(sage.media.format.MediaFormat.META_RAW_FFMPEG_CMDLINE);
       int tgtH = Ministry.parseTargetHeightFromPresetArgs(rawArgs);
       int tgtW = Ministry.parseTargetWidthFromPresetArgs(rawArgs);
-      if (Ministry.shouldAutoAiUpscale(srcH, tgtH))
+      Show aiUpscaleShow = null;
+      try { aiUpscaleShow = mf.getShow(); } catch (Throwable t) { /* leave null -> not excluded */ }
+      if (Ministry.shouldAutoAiUpscale(srcH, tgtH, aiUpscaleShow))
       {
         aiUpscalePhase = 1;
         aiTargetWidth = tgtW;

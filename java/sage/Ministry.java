@@ -1137,7 +1137,14 @@ public class Ministry implements Runnable
   //
   // Config knobs (Sage.properties):
   //   transcoder/ai_upscale_enabled              default true
-  //   transcoder/ai_upscale_max_source_height    default 720
+  //   transcoder/ai_upscale_max_source_height    default 720 (genre routing
+  //                                              disabled) / 1120 (genre
+  //                                              routing enabled) — see
+  //                                              ai_upscale_genre_routing_enabled
+  //                                              below. An explicit admin
+  //                                              override of this property
+  //                                              always wins over either
+  //                                              default.
   //   transcoder/ai_upscale_min_target_height    default 1080
   //   transcoder/ai_upscale_wrapper              default ${install}/bin/sage-ai-upscale.sh
   //   transcoder/ai_upscale_binary               default /usr/local/bin/realesrgan-ncnn-vulkan
@@ -1147,12 +1154,38 @@ public class Ministry implements Runnable
   //                                              (falls back to java.io.tmpdir)
   //   transcoder/ai_upscale_require_vulkan        default true
   //   transcoder/ai_upscale_probe_timeout_secs    default 60
+  //   transcoder/ai_upscale_probe_retry_backoff_secs default 30 — after a
+  //                                              FAILED probe, how long to
+  //                                              wait before re-probing
+  //                                              (avoids hammering a GPU
+  //                                              that's transiently busy).
+  //
+  // Genre-aware routing (kill-switched by
+  // transcoder/ai_upscale_genre_routing_enabled, default true):
+  //   Source height <= 720p: AI upscale for everything EXCEPT shows whose
+  //     category matches transcoder/ai_upscale_lanczos_categories_720
+  //     (default "News,Talk") -> those fall back to the preset's own
+  //     (Lanczos) scale.
+  //   Source height ~1080p (721-1120, to tolerate slightly-off "1080p"
+  //     sources): AI upscale for everything EXCEPT shows matching
+  //     transcoder/ai_upscale_lanczos_categories_1080 (default
+  //     "Sports,News,Talk,Nature").
+  //   Source height > ~1120: AI upscale never engages.
+  //   Category matching is case-insensitive startsWith against ANY of the
+  //   show's categories (Show.getCategories()); a null/empty show or
+  //   category list is NOT excluded (still gets AI when otherwise eligible).
+  //   When transcoder/ai_upscale_genre_routing_enabled=false, behavior falls
+  //   back exactly to the OLD single <=720p cap (no genre logic at all).
   //
   // No-GPU degradation: when ai_upscale_require_vulkan is true (default) the
   // chained job only engages if a Vulkan device is actually usable — probed
-  // once per JVM via `sage-ai-upscale.sh --probe`. On a host with no Vulkan
+  // per JVM via `sage-ai-upscale.sh --probe`. On a host with no Vulkan
   // GPU the rule declines and the transcode falls back to the preset's own
-  // (Lanczos) scale instead of failing mid-job.
+  // (Lanczos) scale instead of failing mid-job. A successful probe is
+  // cached for the life of the JVM; a FAILED probe is intentionally NOT
+  // cached permanently (only until the retry backoff elapses), since a
+  // transient GPU-busy/OOM condition (e.g. an unrelated process holding
+  // VRAM) should not silently disable AI upscale until server restart.
   // ──────────────────────────────────────────────────────────────────────
 
   private static final java.util.regex.Pattern SCALE_FILTER_PATTERN =
@@ -1180,18 +1213,74 @@ public class Ministry implements Runnable
     try { return Integer.parseInt(m.group(1)); } catch (NumberFormatException e) { return -1; }
   }
 
+  /** Upper bound (exclusive of the ">1080p" bucket) used to decide which
+   * genre-exclusion list applies once genre routing is enabled: sources at
+   * or below this height are treated as "~1080p" (never higher than this
+   * gets AI upscale at all under genre routing). */
+  private static final int GENRE_ROUTING_MAX_SOURCE_HEIGHT = 1120;
+
+  /** Source-height bucket boundary between the "720p" and "~1080p" genre
+   * exclusion lists. */
+  private static final int SOURCE_HEIGHT_720_BUCKET_MAX = 720;
+
   /**
    * Decide whether to activate the AI upscale chained-job path for a
    * particular source/target pair. Honors the master enable flag and the
-   * source/target height thresholds.
+   * source/target height thresholds. Legacy 2-arg entry point — no genre
+   * information available, so category-based exclusions never apply
+   * (equivalent to calling the 3-arg overload with categories=null).
    */
   public static boolean shouldAutoAiUpscale(int sourceHeight, int targetHeight)
   {
+    return shouldAutoAiUpscale(sourceHeight, targetHeight, (String[]) null);
+  }
+
+  /**
+   * Decide whether to activate the AI upscale chained-job path, factoring in
+   * the show's genre/category for the genre-aware routing matrix (see the
+   * class-level AI-upscale comment block above). Convenience overload that
+   * extracts categories from a {@link Show}; a null show is treated the same
+   * as no categories (not excluded).
+   */
+  public static boolean shouldAutoAiUpscale(int sourceHeight, int targetHeight, Show show)
+  {
+    return shouldAutoAiUpscale(sourceHeight, targetHeight, (show == null) ? null : show.getCategories());
+  }
+
+  /**
+   * Core decision logic. See the class-level AI-upscale comment block above
+   * for the full config-key reference and genre-routing matrix.
+   */
+  public static boolean shouldAutoAiUpscale(int sourceHeight, int targetHeight, String[] categories)
+  {
     if (!Sage.getBoolean("transcoder/ai_upscale_enabled", true)) return false;
-    int maxSrc = Sage.getInt("transcoder/ai_upscale_max_source_height", 720);
-    int minTgt = Sage.getInt("transcoder/ai_upscale_min_target_height", 1080);
     if (sourceHeight <= 0 || targetHeight <= 0) return false;
+
+    boolean genreRoutingEnabled = Sage.getBoolean("transcoder/ai_upscale_genre_routing_enabled", true);
+    // The effective source-height cap depends on whether genre routing is
+    // enabled: with it OFF we must reproduce the OLD behavior exactly
+    // (<=720p only); with it ON the cap rises to accommodate the "~1080p"
+    // bucket. An admin who has explicitly set the property always wins
+    // over either default, preserving backward compatibility.
+    int maxSrcDefault = genreRoutingEnabled ? GENRE_ROUTING_MAX_SOURCE_HEIGHT : SOURCE_HEIGHT_720_BUCKET_MAX;
+    int maxSrc = Sage.getInt("transcoder/ai_upscale_max_source_height", maxSrcDefault);
+    int minTgt = Sage.getInt("transcoder/ai_upscale_min_target_height", 1080);
     if (!(sourceHeight <= maxSrc && targetHeight >= minTgt)) return false;
+
+    if (genreRoutingEnabled)
+    {
+      String csvList = (sourceHeight <= SOURCE_HEIGHT_720_BUCKET_MAX)
+          ? Sage.get("transcoder/ai_upscale_lanczos_categories_720", "News,Talk")
+          : Sage.get("transcoder/ai_upscale_lanczos_categories_1080", "Sports,News,Talk,Nature");
+      if (isExcludedCategory(categories, csvList))
+      {
+        if (Sage.DBG) System.out.println("Ministry: AI upscale declined by genre routing (srcH=" + sourceHeight
+            + " tgtH=" + targetHeight + " categories=" + java.util.Arrays.toString(categories)
+            + " exclusionList=" + csvList + ")");
+        return false;
+      }
+    }
+
     // Only engage the chained AI-upscale job if a Vulkan device is actually
     // usable; otherwise decline so the caller runs a plain (Lanczos) preset
     // transcode rather than spawning an upscaler that would fail mid-job.
@@ -1204,35 +1293,115 @@ public class Ministry implements Runnable
     return true;
   }
 
-  /** Cached Vulkan-probe result: null=unprobed, TRUE/FALSE once determined. */
+  /**
+   * Case-insensitive "startsWith" match of any entry in {@code categories}
+   * against any comma-separated token in {@code csvList}. Returns false
+   * (not excluded) if either input is null/empty — an absent show/category
+   * never blocks AI upscale on its own.
+   */
+  static boolean isExcludedCategory(String[] categories, String csvList)
+  {
+    if (categories == null || categories.length == 0) return false;
+    if (csvList == null || csvList.length() == 0) return false;
+    String[] tokens = csvList.split(",");
+    for (int i = 0; i < categories.length; i++)
+    {
+      String cat = categories[i];
+      if (cat == null || cat.length() == 0) continue;
+      for (int j = 0; j < tokens.length; j++)
+      {
+        String tok = tokens[j].trim();
+        if (tok.length() == 0) continue;
+        if (cat.length() >= tok.length() && cat.regionMatches(true, 0, tok, 0, tok.length()))
+          return true;
+      }
+    }
+    return false;
+  }
+
+  /** Cached Vulkan-probe result: null=unprobed (or a prior failure that has
+   * since expired past the retry backoff), TRUE once a probe has actually
+   * succeeded. A failed probe is deliberately NEVER stored here — see
+   * {@link #aiUpscaleDeviceAvailable()}. */
   private static volatile Boolean aiUpscaleVulkanOK = null;
 
+  /** Wall-clock time (millis) of the most recent FAILED probe, or 0 if none
+   * (or the cache has since been reset/succeeded). Used to implement a
+   * short retry backoff so a persistently-unavailable GPU doesn't get
+   * re-probed on every single call. */
+  private static volatile long aiUpscaleLastFailedProbeMs = 0L;
+
   /**
-   * One-per-JVM probe: can the AI-upscale wrapper initialize a Vulkan device
-   * and upscale a trivial test frame? Result is cached. Gated by
+   * Per-JVM probe: can the AI-upscale wrapper initialize a Vulkan device
+   * and upscale a trivial test frame? Gated by
    * {@code transcoder/ai_upscale_require_vulkan} (default true) — set it to
    * false to skip the probe and assume the upscaler is usable.
+   * <p>
+   * Caching policy: a SUCCESSFUL probe is cached for the life of the JVM
+   * (Vulkan devices don't come and go). A FAILED probe is intentionally
+   * NOT cached permanently — a transient condition (GPU busy/OOM from an
+   * unrelated process, brief driver hiccup, etc.) would otherwise silently
+   * disable AI upscale until the server is restarted. Instead, failures are
+   * re-probed after {@code transcoder/ai_upscale_probe_retry_backoff_secs}
+   * (default 30s) so we don't hammer a busy GPU on every call either.
    */
   public static boolean aiUpscaleDeviceAvailable()
+  {
+    return aiUpscaleDeviceAvailable(Ministry::probeAiUpscaleVulkan);
+  }
+
+  /**
+   * Package-private overload that abstracts the actual probe subprocess
+   * call behind a {@link java.util.function.BooleanSupplier} so the
+   * caching/backoff logic can be unit tested without spawning a real
+   * process or waiting out the backoff window.
+   */
+  static boolean aiUpscaleDeviceAvailable(java.util.function.BooleanSupplier probeFn)
   {
     if (!Sage.getBoolean("transcoder/ai_upscale_require_vulkan", true))
       return true;
     Boolean cached = aiUpscaleVulkanOK;
-    if (cached != null) return cached.booleanValue();
+    if (cached != null && cached.booleanValue()) return true;
     synchronized (Ministry.class)
     {
-      if (aiUpscaleVulkanOK != null) return aiUpscaleVulkanOK.booleanValue();
-      boolean ok = probeAiUpscaleVulkan();
-      aiUpscaleVulkanOK = Boolean.valueOf(ok);
-      if (Sage.DBG)
-        System.out.println("Ministry: AI-upscale Vulkan probe -> "
-            + (ok ? "AVAILABLE" : "UNAVAILABLE (falling back to plain transcode)"));
+      cached = aiUpscaleVulkanOK;
+      if (cached != null && cached.booleanValue()) return true;
+      long backoffMs = Sage.getInt("transcoder/ai_upscale_probe_retry_backoff_secs", 30) * 1000L;
+      long now = System.currentTimeMillis();
+      if (aiUpscaleLastFailedProbeMs != 0L && (now - aiUpscaleLastFailedProbeMs) < backoffMs)
+      {
+        // Still within the backoff window since the last failed probe;
+        // decline without re-running the (potentially expensive) probe.
+        return false;
+      }
+      boolean ok = probeFn.getAsBoolean();
+      if (ok)
+      {
+        aiUpscaleVulkanOK = Boolean.TRUE;
+        aiUpscaleLastFailedProbeMs = 0L;
+        if (Sage.DBG) System.out.println("Ministry: AI-upscale Vulkan probe -> AVAILABLE");
+      }
+      else
+      {
+        // Do NOT cache the failure -- only the timestamp, so the next call
+        // (after the backoff elapses) re-probes instead of staying poisoned
+        // for the rest of the JVM's life.
+        aiUpscaleVulkanOK = null;
+        aiUpscaleLastFailedProbeMs = now;
+        if (Sage.DBG) System.out.println("Ministry: AI-upscale Vulkan probe -> UNAVAILABLE "
+            + "(falling back to plain transcode; will re-probe after " + (backoffMs / 1000) + "s)");
+      }
       return ok;
     }
   }
 
-  /** Reset the cached Vulkan-probe result so the next call re-probes. */
-  public static void resetAiUpscaleProbe() { aiUpscaleVulkanOK = null; }
+  /** Reset the cached Vulkan-probe result (and any pending retry backoff)
+   * so the next call re-probes immediately. */
+  public static void resetAiUpscaleProbe()
+  {
+    aiUpscaleVulkanOK = null;
+    aiUpscaleLastFailedProbeMs = 0L;
+  }
 
   private static boolean probeAiUpscaleVulkan()
   {
