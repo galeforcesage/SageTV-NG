@@ -25,6 +25,105 @@ public class FFMPEGTranscoder implements TranscodeEngine
       ".srt", ".eng.srt", ".cc.srt", ".vtt"
   };
 
+  // ──────────────────────────────────────────────────────────────────────
+  // Phantom-transcode reaping.
+  //
+  // Every streaming/placeshifter transcode spawns an ffmpeg child
+  // (xcodeProcess). Normally stopTranscode() destroys it when the playback
+  // session ends. But when the SageTV JVM is shut down (e.g. a `stopsage`
+  // during a deploy) while transcodes are still in flight, those children
+  // are NOT reliably torn down before the JVM exits -- they get reparented
+  // to init (PPID=1) and, because SageTV's custom `-stdinctrl` ffmpeg blocks
+  // waiting for stdin commands instead of exiting on stdin-EOF / stdout
+  // EPIPE, they linger indefinitely as "phantom" processes, holding CPU,
+  // file handles, and (for hwaccel modes) GPU/VRAM contexts until the
+  // container itself is restarted.
+  //
+  // To prevent that, every live ffmpeg child is tracked in this registry and
+  // a single JVM shutdown hook force-reaps any survivors on exit. This runs
+  // on the same SIGTERM path the existing "SageTV Shutdown" hook uses, so it
+  // reliably cleans up regardless of streaming-thread teardown ordering.
+  // Gated by media_server/reap_transcodes_on_shutdown (default true).
+  // ──────────────────────────────────────────────────────────────────────
+  private static final java.util.Set<Process> LIVE_TRANSCODE_PROCESSES =
+      java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<Process, Boolean>());
+  private static final java.util.concurrent.atomic.AtomicBoolean REAP_HOOK_INSTALLED =
+      new java.util.concurrent.atomic.AtomicBoolean(false);
+
+  /** Track a freshly-spawned ffmpeg child so it can be reaped on JVM
+   * shutdown if its session never gets a clean stopTranscode(). Installs the
+   * shutdown hook lazily on first use. */
+  static void registerLiveChild(Process p)
+  {
+    if (p == null) return;
+    LIVE_TRANSCODE_PROCESSES.add(p);
+    ensureReapHookInstalled();
+  }
+
+  /** Stop tracking a child that has been (or is being) cleanly torn down. */
+  static void unregisterLiveChild(Process p)
+  {
+    if (p == null) return;
+    LIVE_TRANSCODE_PROCESSES.remove(p);
+  }
+
+  private static void ensureReapHookInstalled()
+  {
+    if (!REAP_HOOK_INSTALLED.compareAndSet(false, true)) return;
+    try
+    {
+      Runtime.getRuntime().addShutdownHook(new Thread("FFMPEGTranscode-Reaper")
+      {
+        public void run() { reapLiveTranscodeProcesses(); }
+      });
+    }
+    catch (IllegalStateException alreadyShuttingDown)
+    {
+      // JVM is already in shutdown -- reap synchronously right now instead.
+      reapLiveTranscodeProcesses();
+    }
+    catch (Throwable t)
+    {
+      if (XCODE_DEBUG) System.out.println("Could not install transcode-reaper shutdown hook: " + t);
+    }
+  }
+
+  /** Force-kill every still-live tracked ffmpeg child (and its descendants,
+   * in case it was wrapped by nice/ionice). Best-effort and time-bounded so
+   * it can never stall JVM shutdown. Returns the number of processes it had
+   * to kill. */
+  static int reapLiveTranscodeProcesses()
+  {
+    if (!Sage.getBoolean("media_server/reap_transcodes_on_shutdown", true)) return 0;
+    java.util.List<Process> snapshot = new java.util.ArrayList<Process>(LIVE_TRANSCODE_PROCESSES);
+    int killed = 0;
+    // First pass: polite SIGTERM to each live child + descendants.
+    for (int i = 0; i < snapshot.size(); i++)
+    {
+      Process p = snapshot.get(i);
+      if (p == null || !p.isAlive()) continue;
+      killed++;
+      try { p.descendants().forEach(ProcessHandle::destroy); } catch (Throwable t) {}
+      try { p.destroy(); } catch (Throwable t) {}
+    }
+    if (killed > 0)
+    {
+      // Brief grace for clean exit, then SIGKILL any survivors.
+      try { Thread.sleep(800); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+      for (int i = 0; i < snapshot.size(); i++)
+      {
+        Process p = snapshot.get(i);
+        if (p == null || !p.isAlive()) continue;
+        try { p.descendants().forEach(ProcessHandle::destroyForcibly); } catch (Throwable t) {}
+        try { p.destroyForcibly(); } catch (Throwable t) {}
+      }
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: reaped " + killed
+          + " in-flight transcode process(es) on shutdown to avoid phantom ffmpeg leaks");
+    }
+    LIVE_TRANSCODE_PROCESSES.clear();
+    return killed;
+  }
+
   public FFMPEGTranscoder()
   {
   }
@@ -2747,6 +2846,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
     ProcessBuilder xcodePb = new ProcessBuilder(xcodeParamArray);
     Sage.applyTimeZoneToProcessBuilder(xcodePb);
     xcodeProcess = xcodePb.start();
+    // Track this child so a JVM shutdown (e.g. stopsage during a deploy)
+    // while it's still streaming reaps it instead of orphaning a phantom
+    // ffmpeg to PID 1. Cleared again in stopTranscode() on the normal path.
+    registerLiveChild(xcodeProcess);
     // We open up the error stream and consume that for status info. The transcoded data is consumed by reading
     // from stdout.
     xcodeDone = false;
@@ -3403,6 +3506,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (XCODE_DEBUG) System.out.println("Destroying old transcode process...");
     if (xcodeProcess != null)
     {
+      unregisterLiveChild(xcodeProcess);
       try
       {
         lastExitCode = xcodeProcess.exitValue();
