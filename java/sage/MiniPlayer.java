@@ -1433,6 +1433,10 @@ public class MiniPlayer implements DVDMediaPlayer
         String chosenSurfaceXcodeMode = null;
         int chosenSurfaceAudioStreamIndex = -1;
         int chosenSurfaceAudioChannels = 0;
+        // Item 2: audio-relative index (0-based across audio streams) the server
+        // must preselect when the winning surface declares
+        // AUDIO_TRACK_SELECTION_MODE=server; -1 = client-mode / legacy.
+        int chosenSurfaceServerAudioRelIndex = -1;
         sage.client.PlaybackSurfaceSet surfaces = (mcsr != null)
             ? mcsr.getPlaybackSurfaces() : sage.client.PlaybackSurfaceSet.empty();
         if (!surfaces.isEmpty() && Sage.getBoolean("miniplayer/use_playback_surfaces", true))
@@ -1504,6 +1508,24 @@ public class MiniPlayer implements DVDMediaPlayer
               chosenSurfaceAudioStreamIndex = winner.audioStreamChoice.audioFormat.getOrderIndex();
               chosenSurfaceAudioChannels = winner.audioStreamChoice.audioFormat.getChannels();
             }
+            // Item 2: if the winning surface asked the SERVER to preselect the
+            // audio track, compute the chosen stream's audio-relative index so
+            // the transcoder emits a single -map for that track only. Gated by
+            // playback/honor_server_audio_track_selection (def true) for safe
+            // rollback; client-mode surfaces leave the index at -1 (all audio).
+            if (winner.surface != null
+                && "server".equalsIgnoreCase(winner.surface.getAudioTrackSelectionMode())
+                && Sage.getBoolean("playback/honor_server_audio_track_selection", true)
+                && winner.audioStreamChoice != null && winner.audioStreamChoice.audioFormat != null
+                && cf != null)
+            {
+              chosenSurfaceServerAudioRelIndex =
+                  audioRelativeIndexOf(cf, winner.audioStreamChoice.audioFormat);
+              if (Sage.DBG) System.out.println("MiniPlayer surface decision (v2.1): "
+                  + "audioTrackSelectionMode=server on surface " + winner.surface.getId()
+                  + " — server preselect audioRelIndex=" + chosenSurfaceServerAudioRelIndex
+                  + " (orderIndex=" + chosenSurfaceAudioStreamIndex + ")");
+            }
             if (Sage.DBG) System.out.println("MiniPlayer surface decision (v2.1): winner=" + winner
                 + " audioStreamIdx=" + chosenSurfaceAudioStreamIndex
                 + " runnersUp=" + (ranked.size() - 1)
@@ -1514,6 +1536,84 @@ public class MiniPlayer implements DVDMediaPlayer
             System.out.println("MiniPlayer surface decision (v2.1): no servable surface "
                 + "(client advertised " + surfaces.size() + " but none met delivery filter); "
                 + "falling back to legacy V1/V2 path");
+          }
+        }
+
+        // === P1: mandate surfaces + fail-closed for NG sessions =============
+        // If this is an NG session (client speaks the surface protocol) but we
+        // produced NO surface decision -- either the client advertised no
+        // surfaces (handshake race) or advertised surfaces that all filtered
+        // out -- we must NOT fall through to the legacy V1/V2 negotiation,
+        // which can pick DIRECT_PLAY for codecs the client cannot decode.
+        // First re-request PLAYBACK_SURFACES (bounded retries) to cover the
+        // handshake race, re-evaluate, and if there is still no servable
+        // surface, FAIL CLOSED to a safe baseline transcode (never
+        // DIRECT_PLAY, never legacy). Gated to ngSession + surfaces feature on
+        // so legacy/non-NG sessions reach the legacy path byte-for-byte
+        // unchanged (see the `if (profileDecision == null)` block below).
+        if (profileDecision == null && ngSession && mcsr != null
+            && Sage.getBoolean("miniplayer/use_playback_surfaces", true))
+        {
+          int rerequestAttempts = Sage.getInt("miniplayer/surface_rerequest_attempts", 1);
+          for (int attempt = 1; attempt <= rerequestAttempts && profileDecision == null; attempt++)
+          {
+            if (Sage.DBG) System.out.println("MiniPlayer P1: NG session produced no servable "
+                + "surface -- re-requesting PLAYBACK_SURFACES (attempt " + attempt + "/"
+                + rerequestAttempts + ")");
+            try { mcsr.refreshPlaybackSurfaces(); }
+            catch (Throwable t)
+            {
+              if (Sage.DBG) System.out.println("MiniPlayer P1: surface re-request failed (ignored): " + t);
+            }
+            sage.client.PlaybackSurfaceSet retriedSurfaces = mcsr.getPlaybackSurfaces();
+            if (retriedSurfaces != null && !retriedSurfaces.isEmpty())
+            {
+              String clientAudioLang2 = mcsr.getCurrentClientAudioLanguage();
+              java.util.List<sage.client.PlaybackDecisionEngine.SurfaceDecision> ranked2 =
+                  sage.client.PlaybackDecisionEngine.evaluateSurfaces(retriedSurfaces,
+                      mediaContainer, mediaVideo, mediaAudio,
+                      mediaW, mediaH, sourceBitrateKbps, availableBwKbps, srcInterlaced,
+                      cf, clientAudioLang2);
+              if (!ranked2.isEmpty())
+              {
+                sage.client.PlaybackDecisionEngine.SurfaceDecision winner2 =
+                    sage.client.PlaybackDecisionEngine.promoteForServerEqIfRequested(
+                        ranked2, ranked2.get(0), isServerAudioEqRequested());
+                profileDecision = winner2.decision;
+                chosenSurfaceId = winner2.surface.getId();
+                chosenSurfaceDelivery = winner2.chosenDeliveryMode;
+                chosenSurfaceXcodeMode = winner2.chosenXcodeMode;
+                if (winner2.audioStreamChoice != null && winner2.audioStreamChoice.audioFormat != null)
+                {
+                  chosenSurfaceAudioStreamIndex = winner2.audioStreamChoice.audioFormat.getOrderIndex();
+                  chosenSurfaceAudioChannels = winner2.audioStreamChoice.audioFormat.getChannels();
+                }
+                if (winner2.surface != null
+                    && "server".equalsIgnoreCase(winner2.surface.getAudioTrackSelectionMode())
+                    && Sage.getBoolean("playback/honor_server_audio_track_selection", true)
+                    && winner2.audioStreamChoice != null && winner2.audioStreamChoice.audioFormat != null
+                    && cf != null)
+                {
+                  chosenSurfaceServerAudioRelIndex =
+                      audioRelativeIndexOf(cf, winner2.audioStreamChoice.audioFormat);
+                }
+                if (Sage.DBG) System.out.println("MiniPlayer P1: re-request recovered a servable "
+                    + "surface winner=" + winner2);
+              }
+            }
+          }
+          if (profileDecision == null)
+          {
+            String fcContainer = Sage.get("miniplayer/ng_failclosed_container", "FMP4");
+            String fcVideo = Sage.get("miniplayer/ng_failclosed_video", "H264");
+            String fcAudio = Sage.get("miniplayer/ng_failclosed_audio", "AAC");
+            profileDecision = sage.client.PlaybackDecisionEngine.safeBaselineTranscodeDecision(
+                fcContainer, fcVideo, fcAudio);
+            // chosenSurfaceId stays null so the effective-surface plumbing is
+            // skipped; the profile-authoritative TRANSCODE override forces a
+            // server-side transcode of this safe baseline.
+            System.out.println("NG session missing surfaces -- fail-closed to safe transcode ("
+                + fcVideo + "/" + fcAudio + " in " + fcContainer + ")");
           }
         }
 
@@ -1761,6 +1861,9 @@ public class MiniPlayer implements DVDMediaPlayer
               profileDecision != null ? profileDecision.targetVideoCodec : "",
               chosenSurfaceDelivery,
               chosenSurfaceAudioStreamIndex);
+          // Item 2: publish the server-preselect audio-relative index (must
+          // follow setCurrentSurfaceSelection, which resets it to -1).
+          mcsr.setCurrentSurfaceServerAudioSelection(chosenSurfaceServerAudioRelIndex);
           // Phase 2.5 transport override: honor the surface's declared
           // delivery mode as an authoritative signal for THIS stream. This
           // is orthogonal to the legacy transport-force block below (which
@@ -3935,6 +4038,32 @@ public class MiniPlayer implements DVDMediaPlayer
     {
       return yieldDecoderLockCount > 0;
     }
+  }
+
+  /**
+   * Item 2: compute the audio-RELATIVE index (0-based across audio streams
+   * only) of {@code chosen} within {@code cf}, for the server-preselect
+   * {@code -map 0:a:<n>} form. Matches by object identity first, then by the
+   * absolute stream {@code orderIndex}. Returns -1 when it cannot be resolved
+   * (caller then falls back to client-mode / all-audio).
+   */
+  static int audioRelativeIndexOf(sage.media.format.ContainerFormat cf,
+      sage.media.format.AudioFormat chosen)
+  {
+    if (cf == null || chosen == null) return -1;
+    sage.media.format.AudioFormat[] afs = cf.getAudioFormats(false);
+    if (afs == null) return -1;
+    for (int i = 0; i < afs.length; i++)
+    {
+      if (afs[i] == chosen) return i;
+    }
+    for (int i = 0; i < afs.length; i++)
+    {
+      if (afs[i] != null && afs[i].getOrderIndex() == chosen.getOrderIndex()
+          && chosen.getOrderIndex() >= 0)
+        return i;
+    }
+    return -1;
   }
 
   public void kickPusherThread()

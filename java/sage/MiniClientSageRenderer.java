@@ -7982,6 +7982,78 @@ public class MiniClientSageRenderer extends SageRenderer
   }
 
   /**
+   * P1: re-request the client's {@code PLAYBACK_SURFACES} advertisement (and,
+   * if any are advertised, the per-surface capability properties) mid-session
+   * and rebuild {@link #playbackSurfaces}. Used by {@link sage.MiniPlayer} to
+   * recover from a capability-handshake race in which an NG session opened a
+   * stream before its surface set had arrived.
+   *
+   * <p>Mirrors the negotiation-time discovery burst
+   * (see {@code executeCommand} PLAYBACK_SURFACE_* round). {@code synchronized}
+   * on this renderer so the GET_PROPERTY request/reply round trip is serialized
+   * with the render thread's other socket commands (same contract as
+   * {@link #loadImageMini}); reply FIFO is therefore preserved. Best-effort:
+   * any I/O error is swallowed (the caller fails closed to a safe transcode),
+   * and the previously-known surface set is left untouched on failure.
+   *
+   * @return {@code true} if a non-empty surface set is present after the
+   *   refresh, {@code false} otherwise.
+   */
+  public synchronized boolean refreshPlaybackSurfaces()
+  {
+    try
+    {
+      sendGetPropertyAsync("PLAYBACK_SURFACES");
+      sendBufferNow();
+      String surfacesProp = recvr.getStringReply();
+      java.util.List<String> surfaceIds =
+          sage.client.PlaybackSurfaceSet.split(surfacesProp);
+      if (surfaceIds.isEmpty())
+      {
+        if (Sage.DBG) System.out.println("MiniClient refreshPlaybackSurfaces: client still "
+            + "advertises no surfaces");
+        return playbackSurfaces != null && !playbackSurfaces.isEmpty();
+      }
+      for (String sid : surfaceIds)
+      {
+        sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_ROUTE");
+        sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_PRIORITY");
+        sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_DELIVERY_MODES");
+        sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_VIDEO_CODECS");
+        sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_CODECS");
+        sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_CONTAINERS");
+        sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_TRACK_ACCESS");
+        sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_TRACK_SELECTION_MODE");
+        sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_CONTAINER_RULES");
+      }
+      sendBufferNow();
+      final java.util.Map<String, String[]> rawSurfaceProps =
+          new java.util.LinkedHashMap<String, String[]>();
+      for (String sid : surfaceIds)
+      {
+        String[] props = new String[9];
+        for (int i = 0; i < 9; i++)
+          props[i] = recvr.getStringReply();
+        rawSurfaceProps.put(sid, props);
+      }
+      playbackSurfaces = sage.client.PlaybackSurfaceSet.build(
+          surfacesProp,
+          new java.util.function.Function<String, String[]>() {
+            @Override public String[] apply(String sid) { return rawSurfaceProps.get(sid); }
+          });
+      if (Sage.DBG) System.out.println("MiniClient refreshPlaybackSurfaces: rebuilt "
+          + playbackSurfaces);
+      return playbackSurfaces != null && !playbackSurfaces.isEmpty();
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("MiniClient refreshPlaybackSurfaces failed (ignored; "
+          + "caller fails closed): " + t);
+      return playbackSurfaces != null && !playbackSurfaces.isEmpty();
+    }
+  }
+
+  /**
    * Publish the winning {@link sage.client.PlaybackSurface}'s target
    * codecs + delivery mode for the current stream. Called by
    * {@link sage.MiniPlayer} at OPENURL, AFTER the surface-aware ranker
@@ -8019,6 +8091,33 @@ public class MiniClientSageRenderer extends SageRenderer
     this.currentSurfaceTargetVideoCodec = (targetVideoCodec == null) ? "" : targetVideoCodec;
     this.currentSurfaceDeliveryMode = (deliveryMode == null) ? "" : deliveryMode;
     this.currentSurfaceAudioStreamIndex = audioStreamIndex;
+    // Item 2: default to client-mode (-1); MiniPlayer overrides via
+    // setCurrentSurfaceServerAudioSelection when the winning surface asked
+    // the server to preselect the audio track.
+    this.currentSurfaceServerAudioRelIndex = -1;
+  }
+
+  /**
+   * Item 2: record the audio-RELATIVE index of the single audio track the
+   * SERVER must preselect for the current stream, when the winning surface
+   * declared {@code AUDIO_TRACK_SELECTION_MODE=server}. Pass {@code -1} to
+   * clear (client-mode surfaces + legacy — pass all audio). Must be called
+   * AFTER {@link #setCurrentSurfaceSelection}, which resets it to -1.
+   */
+  public void setCurrentSurfaceServerAudioSelection(int audioRelIndex)
+  {
+    this.currentSurfaceServerAudioRelIndex = audioRelIndex;
+  }
+
+  /**
+   * Item 2: audio-relative index the server must preselect for the current
+   * stream, or -1 for client-mode / legacy. Consumed by
+   * {@code HTTPLSServer.setupTranscoder} ->
+   * {@code FFMPEGTranscoder.setHttplsSurfaceServerAudioRelIndex}.
+   */
+  public int getCurrentSurfaceServerAudioRelIndex()
+  {
+    return currentSurfaceServerAudioRelIndex;
   }
 
   /** Winning surface id for the current stream, or "" for legacy sessions. */
@@ -9920,6 +10019,12 @@ public class MiniClientSageRenderer extends SageRenderer
   // by HTTPLSServer.setupTranscoder â†’ FFMPEGTranscoder.setHttplsSurfaceAudioStreamIndex
   // to emit the correct -map for the chosen audio track.
   private volatile int currentSurfaceAudioStreamIndex = -1;
+  // Item 2: audio-RELATIVE index (0-based across audio streams only) of the
+  // single track the SERVER must preselect when the winning surface declared
+  // AUDIO_TRACK_SELECTION_MODE=server. -1 = client-mode / legacy (pass all
+  // audio). Consumed by HTTPLSServer.setupTranscoder ->
+  // FFMPEGTranscoder.setHttplsSurfaceServerAudioRelIndex.
+  private volatile int currentSurfaceServerAudioRelIndex = -1;
   // --- Server-side Audio Equalizer / AudioProcessing (v1, additive) ---
   // Client-pushed state for AUDIO_PROCESSING_* messages (see
   // sage.audioproc.AudioProcessingResolver / AudioProcessingClientState).

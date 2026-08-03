@@ -282,4 +282,194 @@ public class PlaybackDecisionEngineTest
     assertSame(result, bestAudioTranscodeCandidate,
         "Should pick the first (best-ranked) matching candidate, not just any match");
   }
+
+  // =======================================================================
+  // Item 8: per-profile bandwidth_safety_factor cascade
+  // (playback/profile/<id>/bandwidth_safety_factor -> playback/bandwidth_safety_factor
+  //  -> 0.85f constant; out-of-(0,1] values rejected to 0.85f)
+  // =======================================================================
+  private static final String GLOBAL_BSF = "playback/bandwidth_safety_factor";
+  private static String profileBsfKey(String id) { return "playback/profile/" + id + "/bandwidth_safety_factor"; }
+
+  @Test
+  public void item8_perProfileOverrideWinsOverGlobal() throws Throwable
+  {
+    sage.TestUtils.initializeSageTVForTesting();
+    sage.Sage.putFloat(GLOBAL_BSF, 0.70f);
+    sage.Sage.putFloat(profileBsfKey("prof_a"), 0.50f);
+    try
+    {
+      assertEquals(PlaybackDecisionEngine.resolveBandwidthSafetyFactor("prof_a"), 0.50f, 0.0001f,
+          "Per-profile override must win over the global safety factor");
+    }
+    finally
+    {
+      sage.Sage.remove(profileBsfKey("prof_a"));
+      sage.Sage.remove(GLOBAL_BSF);
+    }
+  }
+
+  @Test
+  public void item8_absentProfileOverrideFallsBackToGlobal() throws Throwable
+  {
+    sage.TestUtils.initializeSageTVForTesting();
+    sage.Sage.putFloat(GLOBAL_BSF, 0.70f);
+    sage.Sage.remove(profileBsfKey("prof_missing"));
+    try
+    {
+      assertEquals(PlaybackDecisionEngine.resolveBandwidthSafetyFactor("prof_missing"), 0.70f, 0.0001f,
+          "Absent per-profile key must fall back to the global safety factor");
+    }
+    finally
+    {
+      sage.Sage.remove(GLOBAL_BSF);
+    }
+  }
+
+  @Test
+  public void item8_globalAbsentFallsBackToConstant() throws Throwable
+  {
+    sage.TestUtils.initializeSageTVForTesting();
+    sage.Sage.remove(GLOBAL_BSF);
+    sage.Sage.remove(profileBsfKey("prof_x"));
+    // No profile, no global -> the hard-coded 0.85f constant.
+    assertEquals(PlaybackDecisionEngine.resolveBandwidthSafetyFactor(null), 0.85f, 0.0001f,
+        "With neither key set, the cascade must resolve to the 0.85f constant");
+    assertEquals(PlaybackDecisionEngine.resolveBandwidthSafetyFactor("prof_x"), 0.85f, 0.0001f,
+        "Absent global + absent per-profile must still be 0.85f");
+  }
+
+  @Test
+  public void item8_outOfRangeValuesRejectedToConstant() throws Throwable
+  {
+    sage.TestUtils.initializeSageTVForTesting();
+    try
+    {
+      sage.Sage.putFloat(GLOBAL_BSF, 1.5f); // > 1 rejected
+      assertEquals(PlaybackDecisionEngine.resolveBandwidthSafetyFactor(null), 0.85f, 0.0001f,
+          "A safety factor > 1 must be rejected to 0.85f");
+      sage.Sage.putFloat(GLOBAL_BSF, 0.0f); // <= 0 rejected
+      assertEquals(PlaybackDecisionEngine.resolveBandwidthSafetyFactor(null), 0.85f, 0.0001f,
+          "A safety factor of 0 must be rejected to 0.85f");
+      sage.Sage.putFloat(profileBsfKey("prof_bad"), -0.2f);
+      assertEquals(PlaybackDecisionEngine.resolveBandwidthSafetyFactor("prof_bad"), 0.85f, 0.0001f,
+          "A negative per-profile safety factor must be rejected to 0.85f");
+    }
+    finally
+    {
+      sage.Sage.remove(GLOBAL_BSF);
+      sage.Sage.remove(profileBsfKey("prof_bad"));
+    }
+  }
+
+  // =======================================================================
+  // P1: safeBaselineTranscodeDecision -- fail-closed baseline for NG sessions
+  // =======================================================================
+  @Test
+  public void p1_safeBaselineDefaultsToH264AacFmp4Transcode()
+  {
+    PlaybackDecisionEngine.PlaybackDecision d =
+        PlaybackDecisionEngine.safeBaselineTranscodeDecision(null, null, null);
+    assertEquals(d.decision, PlaybackDecisionEngine.Decision.TRANSCODE,
+        "Fail-closed baseline must be a TRANSCODE, never DIRECT_PLAY");
+    assertEquals(d.targetContainer, "FMP4");
+    assertEquals(d.targetVideoCodec, "H264");
+    assertEquals(d.targetAudioCodec, "AAC");
+  }
+
+  @Test
+  public void p1_safeBaselineHonorsOverrides()
+  {
+    PlaybackDecisionEngine.PlaybackDecision d =
+        PlaybackDecisionEngine.safeBaselineTranscodeDecision("MP4", "HEVC", "AC3");
+    assertEquals(d.decision, PlaybackDecisionEngine.Decision.TRANSCODE);
+    assertEquals(d.targetContainer, "MP4");
+    assertEquals(d.targetVideoCodec, "HEVC");
+    assertEquals(d.targetAudioCodec, "AC3");
+  }
+
+  @Test
+  public void p1_safeBaselineNeverDirectPlay_evenWithEmptyStrings()
+  {
+    PlaybackDecisionEngine.PlaybackDecision d =
+        PlaybackDecisionEngine.safeBaselineTranscodeDecision("", "", "");
+    assertEquals(d.decision, PlaybackDecisionEngine.Decision.TRANSCODE);
+    assertEquals(d.targetContainer, "FMP4");
+    assertEquals(d.targetVideoCodec, "H264");
+    assertEquals(d.targetAudioCodec, "AAC");
+  }
+
+  // =======================================================================
+  // Item 3 (surface path): evaluateForSurface passthrough overload
+  // =======================================================================
+  private static PlaybackSurface aacOnlySurface()
+  {
+    // Supports MP4 + H264 + AAC only (NOT DTS).
+    return new PlaybackSurface("pwa_native", "route", 10,
+        java.util.Arrays.asList("pull-xcode"),
+        java.util.Arrays.asList("H264"),
+        java.util.Arrays.asList("AAC"),
+        java.util.Arrays.asList("MP4"));
+  }
+
+  @Test
+  public void item3_surfacePassthroughSupported_directPlays() throws Throwable
+  {
+    sage.TestUtils.initializeSageTVForTesting();
+    sage.Sage.put("playback/honor_audio_passthrough", "true");
+    // Source audio DTS is NOT in the surface's decode list, but the caller
+    // reports the client can passthrough it -> audio treated OK -> DIRECT_PLAY.
+    PlaybackDecisionEngine.PlaybackDecision d = PlaybackDecisionEngine.evaluateForSurface(
+        aacOnlySurface(), "MP4", "H264", "DTS", 1920, 1080, 0, 0,
+        /*sourceInterlaced=*/false, /*audioPassthroughSupported=*/true);
+    assertEquals(d.decision, PlaybackDecisionEngine.Decision.DIRECT_PLAY,
+        "Surface lacking DTS decode but with passthrough supported must DIRECT_PLAY (audio copy)");
+  }
+
+  @Test
+  public void item3_surfacePassthroughUnsupported_audioTranscodes() throws Throwable
+  {
+    sage.TestUtils.initializeSageTVForTesting();
+    sage.Sage.put("playback/honor_audio_passthrough", "true");
+    // Same source, but passthrough NOT supported -> audio codec mismatch ->
+    // AUDIO_TRANSCODE (video codec is fine, only audio needs re-encode).
+    PlaybackDecisionEngine.PlaybackDecision d = PlaybackDecisionEngine.evaluateForSurface(
+        aacOnlySurface(), "MP4", "H264", "DTS", 1920, 1080, 0, 0,
+        /*sourceInterlaced=*/false, /*audioPassthroughSupported=*/false);
+    assertEquals(d.decision, PlaybackDecisionEngine.Decision.AUDIO_TRANSCODE,
+        "Surface lacking DTS with no passthrough must AUDIO_TRANSCODE (existing behavior)");
+  }
+
+  @Test
+  public void item3_surfacePassthroughGateOff_audioTranscodes() throws Throwable
+  {
+    sage.TestUtils.initializeSageTVForTesting();
+    sage.Sage.put("playback/honor_audio_passthrough", "false");
+    try
+    {
+      // Even with passthrough "supported", the gate OFF must ignore it.
+      PlaybackDecisionEngine.PlaybackDecision d = PlaybackDecisionEngine.evaluateForSurface(
+          aacOnlySurface(), "MP4", "H264", "DTS", 1920, 1080, 0, 0,
+          /*sourceInterlaced=*/false, /*audioPassthroughSupported=*/true);
+      assertEquals(d.decision, PlaybackDecisionEngine.Decision.AUDIO_TRANSCODE,
+          "With honor_audio_passthrough=false the surface path must ignore passthrough");
+    }
+    finally
+    {
+      sage.Sage.put("playback/honor_audio_passthrough", "true");
+    }
+  }
+
+  @Test
+  public void item3_surfaceBaseOverloadDefaultsToNoPassthrough() throws Throwable
+  {
+    sage.TestUtils.initializeSageTVForTesting();
+    sage.Sage.put("playback/honor_audio_passthrough", "true");
+    // The pre-Item-3 9-arg overload must behave as passthrough=false.
+    PlaybackDecisionEngine.PlaybackDecision d = PlaybackDecisionEngine.evaluateForSurface(
+        aacOnlySurface(), "MP4", "H264", "DTS", 1920, 1080, 0, 0,
+        /*sourceInterlaced=*/false);
+    assertEquals(d.decision, PlaybackDecisionEngine.Decision.AUDIO_TRANSCODE,
+        "Base 9-arg overload must preserve pre-Item-3 behavior (no passthrough)");
+  }
 }
