@@ -169,4 +169,57 @@ public class MiniPlayerTest
     assertNull(MiniPlayer.buildEffDeliveryToken("", null),
         "Empty chosen surface delivery must yield null -- caller skips emission");
   }
+
+  // =======================================================================
+  // Item 2: audioRelativeIndexOf -- 0-based position of the chosen audio
+  // stream among the source's audio streams (for -map 0:a:<rel>).
+  // =======================================================================
+  private static sage.media.format.AudioFormat audio(int orderIndex)
+  {
+    sage.media.format.AudioFormat af = new sage.media.format.AudioFormat();
+    af.setOrderIndex(orderIndex);
+    return af;
+  }
+
+  @Test
+  public void testAudioRelativeIndexOf_multiAudioByIdentity()
+  {
+    sage.media.format.AudioFormat a0 = audio(1); // stream 1 (0 is video)
+    sage.media.format.AudioFormat a1 = audio(2);
+    sage.media.format.AudioFormat a2 = audio(3);
+    sage.media.format.VideoFormat v = new sage.media.format.VideoFormat();
+    v.setOrderIndex(0);
+    sage.media.format.ContainerFormat cf = new sage.media.format.ContainerFormat();
+    cf.setStreamFormats(new sage.media.format.BitstreamFormat[] { v, a0, a1, a2 });
+
+    assertEquals(MiniPlayer.audioRelativeIndexOf(cf, a0), 0,
+        "First audio stream must be audio-relative index 0 (not its absolute orderIndex)");
+    assertEquals(MiniPlayer.audioRelativeIndexOf(cf, a1), 1);
+    assertEquals(MiniPlayer.audioRelativeIndexOf(cf, a2), 2);
+  }
+
+  @Test
+  public void testAudioRelativeIndexOf_matchesByOrderIndexWhenNotSameInstance()
+  {
+    sage.media.format.AudioFormat a0 = audio(1);
+    sage.media.format.AudioFormat a1 = audio(2);
+    sage.media.format.ContainerFormat cf = new sage.media.format.ContainerFormat();
+    cf.setStreamFormats(new sage.media.format.BitstreamFormat[] { a0, a1 });
+
+    // A different object with the same orderIndex must still resolve.
+    assertEquals(MiniPlayer.audioRelativeIndexOf(cf, audio(2)), 1,
+        "Should fall back to matching by absolute orderIndex when not the same instance");
+  }
+
+  @Test
+  public void testAudioRelativeIndexOf_nullsAndMissingReturnMinusOne()
+  {
+    assertEquals(MiniPlayer.audioRelativeIndexOf(null, audio(1)), -1);
+    assertEquals(MiniPlayer.audioRelativeIndexOf(new sage.media.format.ContainerFormat(), null), -1);
+
+    sage.media.format.ContainerFormat cf = new sage.media.format.ContainerFormat();
+    cf.setStreamFormats(new sage.media.format.BitstreamFormat[] { audio(1) });
+    assertEquals(MiniPlayer.audioRelativeIndexOf(cf, audio(9)), -1,
+        "An audio stream not present in the container must return -1 (caller keeps all audio)");
+  }
 }

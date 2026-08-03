@@ -2901,6 +2901,12 @@ public class HTTPLSServer implements Runnable
             // the -map block picks the right track (language + quality aware).
             int surfAudIdx = mcsr.getCurrentSurfaceAudioStreamIndex();
             xcode.transcoder.setHttplsSurfaceAudioStreamIndex(surfAudIdx);
+            // Item 2: when the winning surface asked the server to preselect
+            // the audio track (AUDIO_TRACK_SELECTION_MODE=server), pass the
+            // audio-relative index so the transcoder emits a single -map for
+            // that track only. -1 (client-mode / legacy) leaves all audio.
+            xcode.transcoder.setHttplsSurfaceServerAudioRelIndex(
+                mcsr.getCurrentSurfaceServerAudioRelIndex());
             if (Sage.DBG && (surfAud.length() > 0 || surfVid.length() > 0))
               System.out.println("iOS HTTP server: surface v2.1 targets for '"
                   + mcsr.getCurrentSurfaceId() + "' audio=" + surfAud
