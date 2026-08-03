@@ -138,6 +138,70 @@ public class PlaybackDecisionEngine
   }
 
   /**
+   * Item 8: resolve the bandwidth safety factor via a per-profile cascade:
+   * <ol>
+   *   <li>{@code playback/profile/<profileId>/bandwidth_safety_factor} (when
+   *       {@code profileId} is non-empty and the key is present)</li>
+   *   <li>{@code playback/bandwidth_safety_factor} (global default)</li>
+   *   <li>the hard-coded {@code 0.85f} constant</li>
+   * </ol>
+   * Values outside {@code (0,1]} are rejected at each level and fall back to
+   * {@code 0.85f}. The surface-model flat paths (no profile in scope) pass
+   * {@code null} here and therefore resolve the global/constant only — by
+   * design; only the legacy profile-aware {@code evaluate()} threads a
+   * profile id. Mirrors the timeout-hardening cascade (profile -> default ->
+   * global -> constant).
+   *
+   * @param profileId resolved profile id, or {@code null}/empty for the flat
+   *                  surface paths (global lookup only)
+   * @return a sanitized safety factor in {@code (0,1]}
+   */
+  static float resolveBandwidthSafetyFactor(String profileId)
+  {
+    float global = sanitizeSafetyFactor(
+            sage.Sage.getFloat("playback/bandwidth_safety_factor", 0.85f));
+    if (profileId != null && profileId.length() > 0)
+    {
+          float perProfile = sage.Sage.getFloat(
+              "playback/profile/" + profileId + "/bandwidth_safety_factor", Float.NaN);
+          if (!Float.isNaN(perProfile))
+            return sanitizeSafetyFactor(perProfile);
+    }
+    return global;
+  }
+
+  /** Clamp an out-of-range safety factor back to the {@code 0.85f} default. */
+  private static float sanitizeSafetyFactor(float v)
+  {
+    return (v <= 0f || v > 1f) ? 0.85f : v;
+  }
+
+  /**
+   * P1: construct the fail-closed "safest baseline" {@link Decision#TRANSCODE}
+   * decision an NG session falls back to when it advertised no servable
+   * surface (missing PLAYBACK_SURFACES even after re-request, or every
+   * advertised surface filtered out by the delivery-mode gate). This NEVER
+   * returns DIRECT_PLAY — the whole point is to avoid pushing a codec the
+   * client may not decode. Targets default to H.264 video + AAC audio in an
+   * fMP4 container, overridable via {@code miniplayer/ng_failclosed_video},
+   * {@code miniplayer/ng_failclosed_audio}, {@code miniplayer/ng_failclosed_container}.
+   *
+   * @param container target container (e.g. "FMP4"); null/empty -> "FMP4"
+   * @param video     target video codec (e.g. "H264"); null/empty -> "H264"
+   * @param audio     target audio codec (e.g. "AAC");  null/empty -> "AAC"
+   */
+  public static PlaybackDecision safeBaselineTranscodeDecision(
+          String container, String video, String audio)
+  {
+    String c = (container == null || container.length() == 0) ? "FMP4" : container;
+    String v = (video == null || video.length() == 0) ? "H264" : video;
+    String a = (audio == null || audio.length() == 0) ? "AAC" : audio;
+    return new PlaybackDecision(Decision.TRANSCODE,
+            "NG session missing surfaces — fail-closed to safe transcode (" + v + "/" + a + " in " + c + ")",
+            c, v, a);
+  }
+
+  /**
    * Evaluate the playback decision for a given profile and media.
    *
    * Attempt chain:
@@ -324,6 +388,9 @@ public class PlaybackDecisionEngine
     // populated, or both null for a legacy client) is treated as UNKNOWN
     // and preserves the legacy profile-based behavior for that dimension.
     String constraintRejectReason = null;
+    // Item 3: set true when the client cannot decode the source audio codec
+    // but declared passthrough=true for it (bitstream to AVR). Kept audioOK.
+    boolean audioPassthrough = false;
     if (constraints != null && !constraints.isEmpty())
     {
       // Video gate: codec must have a row, AND if the row says interlaced=false
@@ -385,10 +452,31 @@ public class PlaybackDecisionEngine
         }
         else if (arow.decode == ClientConstraints.Tri.FALSE)
         {
-          audioOK = false;
-          String add = "audio " + mediaAudioCodec + " row decode=false";
-          constraintRejectReason = (constraintRejectReason == null)
-              ? add : constraintRejectReason + "; " + add;
+          // Item 3: honor audio passthrough. A client that cannot DECODE a
+          // codec to PCM may still be able to BITSTREAM/passthrough it to an
+          // AVR (e.g. DTS/TrueHD over HDMI). When the client's constraint row
+          // says passthrough=true, keep audioOK=true so the decision stays
+          // DIRECT_PLAY/REMUX (audio copy) instead of forcing an audio
+          // transcode that would strip the lossless bitstream. Gated by
+          // playback/honor_audio_passthrough (default true) for safe rollback:
+          // when false the passthrough Tri is ignored and the legacy
+          // decode-only reject stands.
+          if (sage.Sage.getBoolean("playback/honor_audio_passthrough", true)
+              && arow.passthrough == ClientConstraints.Tri.TRUE)
+          {
+            audioPassthrough = true;
+            if (sage.Sage.DBG)
+              System.out.println("PlaybackDecisionEngine: audio " + mediaAudioCodec
+                  + " decode=false but passthrough=true — honoring passthrough "
+                  + "(audio OK, no transcode; DIRECT_PLAY/REMUX audio copy)");
+          }
+          else
+          {
+            audioOK = false;
+            String add = "audio " + mediaAudioCodec + " row decode=false";
+            constraintRejectReason = (constraintRejectReason == null)
+                ? add : constraintRejectReason + "; " + add;
+          }
         }
       }
     }
@@ -423,8 +511,8 @@ public class PlaybackDecisionEngine
     int targetBitrateKbps = 0;
     if (sourceBitrateKbps > 0 && availableBandwidthKbps > 0)
     {
-      float safety = sage.Sage.getFloat("playback/bandwidth_safety_factor", 0.85f);
-      if (safety <= 0f || safety > 1f) safety = 0.85f;
+      // Item 8: per-profile cascade (this legacy path has a profile in scope).
+      float safety = resolveBandwidthSafetyFactor(profile != null ? profile.getProfileId() : null);
       int budgetKbps = (int) (availableBandwidthKbps * safety);
       if (sourceBitrateKbps > budgetKbps)
       {
@@ -453,7 +541,10 @@ public class PlaybackDecisionEngine
     if (containerOK && videoOK && audioOK && resolutionOK && bandwidthOK)
     {
       return new PlaybackDecision(Decision.DIRECT_PLAY,
-          "All formats compatible", mediaContainer, mediaVideoCodec, mediaAudioCodec);
+          audioPassthrough
+              ? "All formats compatible (audio " + mediaAudioCodec + " via client passthrough)"
+              : "All formats compatible",
+          mediaContainer, mediaVideoCodec, mediaAudioCodec);
     }
 
     // 2. Remux -- codecs OK, resolution+bw OK, but container mismatch
@@ -1209,22 +1300,49 @@ public class PlaybackDecisionEngine
       int sourceBitrateKbps, int availableBandwidthKbps,
       boolean sourceInterlaced)
   {
+    return evaluateForSurface(surface, mediaContainer, mediaVideoCodec, mediaAudioCodec,
+        mediaWidth, mediaHeight, sourceBitrateKbps, availableBandwidthKbps, sourceInterlaced,
+        /*audioPassthroughSupported=*/false);
+  }
+
+  /**
+   * Item 3 overload: honor audio passthrough on the surface path. When the
+   * surface does NOT natively decode the source audio codec but the caller
+   * knows the client can BITSTREAM/passthrough it ({@code
+   * audioPassthroughSupported=true} and the {@code playback/honor_audio_passthrough}
+   * gate is on), the audio dimension is treated as OK so the decision stays
+   * DIRECT_PLAY/REMUX (audio copy) instead of AUDIO_TRANSCODE. The base
+   * {@link #evaluateForSurface(PlaybackSurface, String, String, String, int,
+   * int, int, int, boolean)} passes {@code false} here, preserving the
+   * pre-Item-3 behavior for every existing caller.
+   */
+  public static PlaybackDecision evaluateForSurface(PlaybackSurface surface,
+      String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
+      int mediaWidth, int mediaHeight,
+      int sourceBitrateKbps, int availableBandwidthKbps,
+      boolean sourceInterlaced, boolean audioPassthroughSupported)
+  {
     if (surface == null)
       return new PlaybackDecision(Decision.DIRECT_PLAY, "No surface (legacy path)", null, null, null);
 
     boolean containerOK = surface.supportsContainer(mediaContainer);
     boolean videoOK = (mediaVideoCodec == null || mediaVideoCodec.length() == 0)
         || surface.supportsVideoCodec(mediaVideoCodec);
-    boolean audioOK = (mediaAudioCodec == null || mediaAudioCodec.length() == 0)
+    boolean audioNativelyOK = (mediaAudioCodec == null || mediaAudioCodec.length() == 0)
         || surface.supportsAudioCodec(mediaAudioCodec);
+    // Item 3: passthrough keeps the audio dimension OK (bitstream copy) when
+    // native decode is absent, gated for safe rollback.
+    boolean audioPassthrough = !audioNativelyOK && audioPassthroughSupported
+        && sage.Sage.getBoolean("playback/honor_audio_passthrough", true);
+    boolean audioOK = audioNativelyOK || audioPassthrough;
 
     // Bandwidth budget — identical to legacy path.
     boolean bandwidthOK = true;
     int targetBitrateKbps = 0;
     if (sourceBitrateKbps > 0 && availableBandwidthKbps > 0)
     {
-      float safety = sage.Sage.getFloat("playback/bandwidth_safety_factor", 0.85f);
-      if (safety <= 0f || safety > 1f) safety = 0.85f;
+      // Item 8: flat surface path — no profile in scope, resolve global.
+      float safety = resolveBandwidthSafetyFactor(null);
       int budgetKbps = (int) (availableBandwidthKbps * safety);
       if (sourceBitrateKbps > budgetKbps)
       {
@@ -1244,7 +1362,8 @@ public class PlaybackDecisionEngine
     // Case 1: Direct Play
     if (containerOK && videoOK && audioOK && bandwidthOK)
       return new PlaybackDecision(Decision.DIRECT_PLAY,
-          "surface " + surface.getId() + " covers container+video+audio",
+          "surface " + surface.getId() + " covers container+video"
+          + (audioPassthrough ? " (audio " + mediaAudioCodec + " via passthrough)" : "+audio"),
           mediaContainer, mediaVideoCodec, mediaAudioCodec);
 
     // Case 2: Remux — codecs OK, container wrong (bandwidth still must fit)
@@ -1547,8 +1666,8 @@ public class PlaybackDecisionEngine
     int targetBitrateKbps = 0;
     if (sourceBitrateKbps > 0 && availableBandwidthKbps > 0)
     {
-      float safety = sage.Sage.getFloat("playback/bandwidth_safety_factor", 0.85f);
-      if (safety <= 0f || safety > 1f) safety = 0.85f;
+      // Item 8: flat surface path — no profile in scope, resolve global.
+      float safety = resolveBandwidthSafetyFactor(null);
       int budgetKbps = (int) (availableBandwidthKbps * safety);
       if (sourceBitrateKbps > budgetKbps) { bandwidthOK = false; targetBitrateKbps = budgetKbps; }
     }

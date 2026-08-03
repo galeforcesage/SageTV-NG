@@ -2531,7 +2531,28 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // See if there's multiple audio streams which means we need to setup stream mappings. But
     // we can only setup stream mappings if we have index information in the format.
     boolean usedExplicitStreamMapping = false;
-    if (currAudioBitrateKbps > 0 && sourceFormat != null && sourceFormat.getNumAudioStreams() > 1 && currVideoBitrateKbps > 0)
+    // Item 2 (audioTrackSelectionMode="server"): highest-precedence audio map.
+    // When the winning surface asked the SERVER to preselect the audio track,
+    // emit exactly one video + one audio stream so downstream receives ONLY
+    // the chosen track (client-mode surfaces + legacy leave the rel index at
+    // -1 and fall through to the all-audio / language-select logic below).
+    if (!usedExplicitStreamMapping && currVideoBitrateKbps > 0 && currAudioBitrateKbps > 0)
+    {
+      String serverAudioMap = serverSelectAudioMapToken(
+          httplsSurfaceServerAudioRelIndex >= 0, httplsSurfaceServerAudioRelIndex);
+      if (serverAudioMap != null)
+      {
+        xcodeParamsVec.add("-map");
+        xcodeParamsVec.add("0:v:0");
+        xcodeParamsVec.add("-map");
+        xcodeParamsVec.add(serverAudioMap);
+        usedExplicitStreamMapping = true;
+        if (sage.Sage.DBG)
+          System.out.println("FFMPEGTranscoder: Item 2 server audio preselect -map 0:v:0 "
+              + serverAudioMap + " (audioTrackSelectionMode=server)");
+      }
+    }
+    if (!usedExplicitStreamMapping && currAudioBitrateKbps > 0 && sourceFormat != null && sourceFormat.getNumAudioStreams() > 1 && currVideoBitrateKbps > 0)
     {
       // Get the FFMPEG only format so we can go off the stream indexes that it wants for transcoding
       sage.media.format.ContainerFormat ffFormat = sage.media.format.FormatParser.getFFMPEGFileFormat(currFile.toString());
@@ -4236,6 +4257,45 @@ public class FFMPEGTranscoder implements TranscodeEngine
   public void setHttplsSurfaceAudioStreamIndex(int index)
   {
     this.httplsSurfaceAudioStreamIndex = index;
+  }
+
+  /**
+   * Item 2 (audioTrackSelectionMode="server"): audio-RELATIVE index (0-based
+   * across audio streams only) of the single track the SERVER must preselect
+   * and emit when the winning {@link sage.client.PlaybackSurface} declares
+   * {@code AUDIO_TRACK_SELECTION_MODE=server}. {@code >= 0} means "server
+   * preselect: map ONLY this audio track"; {@code -1} (the default) means
+   * client-mode / legacy — pass all audio and let the client demux.
+   *
+   * <p>Populated by {@code HTTPLSServer.setupTranscoder} from
+   * {@code MiniClientSageRenderer.getCurrentSurfaceServerAudioRelIndex()},
+   * which {@code MiniPlayer} sets from the winning surface's selection mode
+   * and the chosen audio stream's audio-relative position.
+   */
+  protected int httplsSurfaceServerAudioRelIndex = -1;
+
+  public void setHttplsSurfaceServerAudioRelIndex(int audioRelIndex)
+  {
+    this.httplsSurfaceServerAudioRelIndex = audioRelIndex;
+  }
+
+  /**
+   * Item 2 pure helper: build the audio {@code -map} target that selects ONLY
+   * the server-preselected audio track. Returns {@code "0:a:<n>"} when server
+   * audio selection is active and the audio-relative index is valid; {@code
+   * null} means "no server preselect — map all audio (client demuxes) / use
+   * the existing selection logic". Kept static + side-effect-free for unit
+   * testing.
+   *
+   * @param serverAudioSelect true when the winning surface asked the server to
+   *                          preselect the audio track
+   * @param audioRelativeIndex 0-based index across the source's audio streams
+   * @return the ffmpeg map token, or null for no override
+   */
+  static String serverSelectAudioMapToken(boolean serverAudioSelect, int audioRelativeIndex)
+  {
+    if (!serverAudioSelect || audioRelativeIndex < 0) return null;
+    return "0:a:" + audioRelativeIndex;
   }
 
   /** HLS / MPEG-TS segments may only carry AAC, AC-3 or E-AC-3 audio. */

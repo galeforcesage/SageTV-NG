@@ -369,5 +369,89 @@ public class ClientConstraintsTest
     assertEquals(d.decision, PlaybackDecisionEngine.Decision.DIRECT_PLAY);
     assertNull(d.preferredPlayer, "No switch when default already direct-plays");
   }
+
+  // -------------------- Item 3: honor audio passthrough --------------------
+  // Legacy evaluate() gate: a codec the client cannot DECODE (decode=false)
+  // but CAN bitstream/passthrough (passthrough=true) must stay audio-OK, so
+  // the decision is DIRECT_PLAY (audio copy), NOT a transcode that would
+  // strip the lossless bitstream. Gated by playback/honor_audio_passthrough.
+
+  private static ClientProfile dtsProfile()
+  {
+    return profile("android_avr",
+        Collections.singletonList("MPEG2-PS"),
+        Collections.singletonList("H.264"),
+        Arrays.asList("DTS", "AAC"),
+        ClientProfile.AUTO_REMUX_ON_FAILURE);
+  }
+
+  @Test
+  public void engine_audioDtsDecodeFalsePassthroughTrue_directPlays() throws Throwable
+  {
+    sage.TestUtils.initializeSageTVForTesting();
+    sage.Sage.put("playback/honor_audio_passthrough", "true");
+
+    ClientConstraints avr = ClientConstraints.parse("exoplayer",
+        "H.264;scan=progressive;interlaced=false;decoder=hw",
+        "DTS;decode=false;passthrough=true",
+        "MPEG2-PS;push=true;pull=true");
+
+    PlaybackDecisionEngine.PlaybackDecision d = PlaybackDecisionEngine.evaluate(
+        dtsProfile(), "MPEG2-PS", "H.264", "DTS", 1920, 1080,
+        false, 0, 0, avr, /*sourceInterlaced=*/false, /*isPushTransport=*/true);
+
+    assertEquals(d.decision, PlaybackDecisionEngine.Decision.DIRECT_PLAY,
+        "DTS decode=false but passthrough=true must DIRECT_PLAY (audio bitstreamed), "
+            + "not transcode");
+    assertEquals(d.targetAudioCodec, "DTS",
+        "Passthrough must keep the original DTS audio, not re-target it");
+  }
+
+  @Test
+  public void engine_audioDtsDecodeFalsePassthroughFalse_transcodes() throws Throwable
+  {
+    sage.TestUtils.initializeSageTVForTesting();
+    sage.Sage.put("playback/honor_audio_passthrough", "true");
+
+    ClientConstraints avr = ClientConstraints.parse("exoplayer",
+        "H.264;scan=progressive;interlaced=false;decoder=hw",
+        "DTS;decode=false;passthrough=false,AAC;decode=true;passthrough=false",
+        "MPEG2-PS;push=true;pull=true");
+
+    PlaybackDecisionEngine.PlaybackDecision d = PlaybackDecisionEngine.evaluate(
+        dtsProfile(), "MPEG2-PS", "H.264", "DTS", 1920, 1080,
+        false, 0, 0, avr, /*sourceInterlaced=*/false, /*isPushTransport=*/true);
+
+    assertEquals(d.decision, PlaybackDecisionEngine.Decision.TRANSCODE,
+        "DTS decode=false passthrough=false must transcode the audio (existing behavior), "
+            + "NOT direct-play");
+  }
+
+  @Test
+  public void engine_audioPassthroughGateOff_ignoresPassthroughTri() throws Throwable
+  {
+    sage.TestUtils.initializeSageTVForTesting();
+    // Safe rollback: with the gate OFF, passthrough=true is ignored and the
+    // legacy decode-only reject stands -> transcode.
+    sage.Sage.put("playback/honor_audio_passthrough", "false");
+    try
+    {
+      ClientConstraints avr = ClientConstraints.parse("exoplayer",
+          "H.264;scan=progressive;interlaced=false;decoder=hw",
+          "DTS;decode=false;passthrough=true",
+          "MPEG2-PS;push=true;pull=true");
+
+      PlaybackDecisionEngine.PlaybackDecision d = PlaybackDecisionEngine.evaluate(
+          dtsProfile(), "MPEG2-PS", "H.264", "DTS", 1920, 1080,
+          false, 0, 0, avr, /*sourceInterlaced=*/false, /*isPushTransport=*/true);
+
+      assertEquals(d.decision, PlaybackDecisionEngine.Decision.TRANSCODE,
+          "With honor_audio_passthrough=false the passthrough Tri must be ignored (transcode)");
+    }
+    finally
+    {
+      sage.Sage.put("playback/honor_audio_passthrough", "true");
+    }
+  }
 }
 

@@ -997,4 +997,27 @@ public class FFMPEGTranscoderTest
     t.setServerAudioProcessingPlan(activeServerPlan("ac3"));
     assertTrue(t.isServerAudioEqActive());
   }
+
+  // =======================================================================
+  // Item 2: server audio-track preselect (-map 0:a:<rel>) pure helper
+  // =======================================================================
+  @Test
+  public void testServerSelectAudioMapToken_activeSelection()
+  {
+    assertEquals(FFMPEGTranscoder.serverSelectAudioMapToken(true, 0), "0:a:0",
+        "Active server audio select with rel index 0 must map 0:a:0");
+    assertEquals(FFMPEGTranscoder.serverSelectAudioMapToken(true, 2), "0:a:2",
+        "Active server audio select with rel index 2 must map 0:a:2");
+  }
+
+  @Test
+  public void testServerSelectAudioMapToken_inactiveOrInvalid_returnsNull()
+  {
+    assertNull(FFMPEGTranscoder.serverSelectAudioMapToken(false, 1),
+        "Client-mode surfaces (serverAudioSelect=false) must map all audio (null token)");
+    assertNull(FFMPEGTranscoder.serverSelectAudioMapToken(true, -1),
+        "A negative rel index (legacy / unresolved) must map all audio (null token)");
+    assertNull(FFMPEGTranscoder.serverSelectAudioMapToken(false, -1),
+        "Both inactive and invalid must yield null");
+  }
 }
