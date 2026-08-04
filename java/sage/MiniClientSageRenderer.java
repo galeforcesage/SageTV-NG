@@ -816,10 +816,17 @@ public class MiniClientSageRenderer extends SageRenderer
       }
       java.nio.channels.SocketChannel sake = (java.nio.channels.SocketChannel) socketMap.get(clientName);
       long startWait = Sage.eventTime();
+      // Profile-aware acquisition budgets. Legacy / null-renderer sessions
+      // resolve to the historical 5000 / CLIENT_EXPIRE_TIME(30000) exactly;
+      // NG sessions may opt into tighter waits. This does NOT touch the three
+      // unrelated CLIENT_EXPIRE_TIME use-sites elsewhere in this class.
+      PlayerTimeoutPolicy.ProfileContext toCtx = PlayerTimeoutPolicy.forRenderer(mcsr);
+      long initialWait = PlayerTimeoutPolicy.initialWaitMs(toCtx);
+      long expireWait = PlayerTimeoutPolicy.expireWaitMs(toCtx);
       boolean reconnectLeft = (mcsr != null && mcsr.supportsForcedMediaReconnect);
       while (true)
       {
-        long maxWait = reconnectLeft ? 5000 : CLIENT_EXPIRE_TIME;
+        long maxWait = reconnectLeft ? initialWait : expireWait;
         while (sake == null && Sage.eventTime() - startWait < maxWait)
         {
           try

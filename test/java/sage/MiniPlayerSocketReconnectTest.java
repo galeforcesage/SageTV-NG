@@ -201,4 +201,36 @@ public class MiniPlayerSocketReconnectTest
     assertEquals(provider.getChannelCalls, 1);
     assertEquals(provider.reconnectCalls, 0, "No reconnect should be requested when only 1 attempt is configured");
   }
+
+  /**
+   * The profile-aware overload: an NG session with no property overrides uses
+   * the tightened NG policy (3 attempts) rather than the legacy default (2),
+   * without any base property being set. This proves the NG opt-in flows
+   * through {@code acquirePlayerSocketChannel} end-to-end. Legacy callers (the
+   * single-arg overload) are unaffected -- see the tests above, which all still
+   * observe 2 attempts.
+   */
+  @Test
+  public void testNgContextUsesTightenedAttemptPolicy() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    // Deliver the NG tightened policy via the ng_default tier (opt-in): 3
+    // attempts, plus zero backoff so the test stays fast.
+    Sage.put(PlayerTimeoutPolicy.PROFILE_PREFIX + PlayerTimeoutPolicy.NG_DEFAULT_ID
+        + "/" + PlayerTimeoutPolicy.SUF_ATTEMPTS, "3");
+    Sage.put(PlayerTimeoutPolicy.PROFILE_PREFIX + PlayerTimeoutPolicy.NG_DEFAULT_ID
+        + "/" + PlayerTimeoutPolicy.SUF_BACKOFF, "0");
+    FakeProvider provider = new FakeProvider();
+
+    SocketChannel result = MiniPlayer.acquirePlayerSocketChannel(
+        provider, PlayerTimeoutPolicy.of(true, "desktop_hevc_optin"));
+
+    assertNull(result);
+    assertEquals(provider.getChannelCalls, 3, "NG default policy is 3 attempts");
+    assertEquals(provider.reconnectCalls, 2, "Reconnect requested between each of the 3 NG attempts");
+    Sage.remove(PlayerTimeoutPolicy.PROFILE_PREFIX + PlayerTimeoutPolicy.NG_DEFAULT_ID
+        + "/" + PlayerTimeoutPolicy.SUF_ATTEMPTS);
+    Sage.remove(PlayerTimeoutPolicy.PROFILE_PREFIX + PlayerTimeoutPolicy.NG_DEFAULT_ID
+        + "/" + PlayerTimeoutPolicy.SUF_BACKOFF);
+  }
 }
