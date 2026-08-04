@@ -172,8 +172,7 @@ Per-client capability descriptor that drives the decision engine.
 - `java/sage/client/ClientProfileManager.java`,
   `ClientProfile.java`, `LiveTranscodeProfile.java`.
 - **Built-in profiles**: `hd_legacy_strict`, `desktop_default`,
-  `desktop_hevc_optin`, `android_modern`, `android_legacy`,
-  `pwa_safe`.
+  `desktop_hevc_optin`, `android_modern`, `android_legacy`.
 - **Profile fields**: containers, video/audio codec sets, allowHevc,
   autoRemux mode, max W/H, allowClientOverrides, liveTranscode
   (max/min/target kbps + scaling), preferPullContainers,

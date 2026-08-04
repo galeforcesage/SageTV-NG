@@ -92,29 +92,6 @@
         "scale_width": 0,
         "scale_height": 0
       }
-    },
-    "pwa_safe": {
-      "description": "PWA client - browser sandbox constraints",
-      "managed": true,
-      "containers": ["MP4"],
-      "video_codecs": ["H.264"],
-      "audio_codecs": ["AAC"],
-      "allow_hevc": false,
-      "auto_remux": "on_failure",
-      "max_video_width": 0,
-      "max_video_height": 0,
-      "allow_client_overrides": true,
-      "live_transcode": {
-        "prefer_atsc3": false,
-        "video_codec": "H264",
-        "audio_codec": "AAC",
-        "max_bitrate_kbps": 4000,
-        "video_bitrate_kbps": 3744,
-        "audio_bitrate_kbps": 256,
-        "hwenc_preset": "p4",
-        "scale_width": 1280,
-        "scale_height": 720
-      }
     }
   }
 }

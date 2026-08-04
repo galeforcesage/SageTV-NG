@@ -14,7 +14,7 @@ import static org.testng.Assert.*;
  *
  * Required test cases per PRD:
  * 1. schema_version missing → legacy behavior
- * 2. schema_version=2, profile=pwa_safe → MP4/H264/AAC only
+ * 2. Managed profile resolution and codec/container clamping
  * 3. HD300 → forced hd_legacy_strict + aggressive remux
  */
 public class ClientProfileTest
@@ -59,66 +59,10 @@ public class ClientProfileTest
   }
 
   // -----------------------------------------------------------------------
-  // Test Case 2: schema_version=2, profile=pwa_safe → MP4/H264/AAC only
+  // Test Case 2: managed profile codec/container clamping
+  // (the old static browser ceiling was removed — the only browser client,
+  //  PWA, is a full NG client routed by real capability; no static ceiling remains)
   // -----------------------------------------------------------------------
-  @Test
-  public void testPwaSafe_OnlyMP4H264AAC()
-  {
-    ClientProfileManager mgr = ClientProfileManager.getInstance();
-
-    // Managed client requesting pwa_safe
-    ClientProfile profile = mgr.resolveProfile(2, "pwa_safe", false, null, null);
-
-    assertNotNull(profile, "Managed client with schema_version=2 should get a resolved profile");
-    assertEquals(profile.getProfileId(), "pwa_safe");
-
-    // Containers: only MP4
-    assertTrue(profile.isContainerAllowed("MP4"), "pwa_safe must allow MP4");
-    assertFalse(profile.isContainerAllowed("MKV"), "pwa_safe must not allow MKV");
-    assertFalse(profile.isContainerAllowed("MPEG2-TS"), "pwa_safe must not allow MPEG2-TS");
-
-    // Video codecs: only H264
-    assertTrue(profile.isVideoCodecAllowed("H264"), "pwa_safe must allow H264");
-    assertFalse(profile.isVideoCodecAllowed("HEVC"), "pwa_safe must not allow HEVC");
-    assertFalse(profile.isAllowHevc(), "pwa_safe must have HEVC disabled");
-
-    // Audio codecs: only AAC
-    assertTrue(profile.isAudioCodecAllowed("AAC"), "pwa_safe must allow AAC");
-    assertFalse(profile.isAudioCodecAllowed("AC3"), "pwa_safe must not allow AC3");
-
-    // Auto-remux should be on_failure
-    assertTrue(profile.isAutoRemuxEnabled(), "pwa_safe should have auto-remux enabled");
-    assertFalse(profile.isAutoRemuxAggressive(), "pwa_safe should not use aggressive remux");
-  }
-
-  @Test
-  public void testPwaSafe_PlaybackDecision_H264InMKV()
-  {
-    ClientProfileManager mgr = ClientProfileManager.getInstance();
-    ClientProfile profile = mgr.resolveProfile(2, "pwa_safe", false, null, null);
-
-    // H264+AAC in MKV → should remux to MP4 (codecs OK, container wrong)
-    PlaybackDecisionEngine.PlaybackDecision decision =
-        PlaybackDecisionEngine.evaluate(profile, "MKV", "H264", "AAC", 1920, 1080, false);
-
-    assertEquals(decision.decision, PlaybackDecisionEngine.Decision.REMUX,
-        "H264+AAC in MKV should remux to MP4 for pwa_safe");
-    assertEquals(decision.targetContainer, "MP4");
-  }
-
-  @Test
-  public void testPwaSafe_PlaybackDecision_MPEG2InTS()
-  {
-    ClientProfileManager mgr = ClientProfileManager.getInstance();
-    ClientProfile profile = mgr.resolveProfile(2, "pwa_safe", false, null, null);
-
-    // MPEG2+AC3 in TS → should transcode (wrong codec + container)
-    PlaybackDecisionEngine.PlaybackDecision decision =
-        PlaybackDecisionEngine.evaluate(profile, "MPEG2-TS", "MPEG2-VIDEO", "AC3", 1920, 1080, false);
-
-    assertEquals(decision.decision, PlaybackDecisionEngine.Decision.TRANSCODE,
-        "MPEG2 in TS should transcode for pwa_safe (codec not supported)");
-  }
 
   // -----------------------------------------------------------------------
   // Test Case 3: HD300 → forced hd_legacy_strict + aggressive remux
@@ -239,12 +183,13 @@ public class ClientProfileTest
   {
     ClientProfileManager mgr = ClientProfileManager.getInstance();
 
-    // Try to enable HEVC on pwa_safe (which doesn't allow it)
+    // Try to enable HEVC on hd_legacy_strict (which doesn't allow it). A client
+    // override must never exceed the profile's HEVC ceiling.
     Map<String, String> overrides = new HashMap<>();
     overrides.put("allow_hevc", "true");
-    ClientProfile profile = mgr.resolveProfile(2, "pwa_safe", false, null, overrides);
+    ClientProfile profile = mgr.resolveProfile(2, "hd_legacy_strict", false, null, overrides);
 
-    assertFalse(profile.isAllowHevc(), "pwa_safe should not allow HEVC even if client requests it");
+    assertFalse(profile.isAllowHevc(), "hd_legacy_strict should not allow HEVC even if client requests it");
   }
 
   @Test
@@ -280,7 +225,6 @@ public class ClientProfileTest
     assertTrue(ids.contains("desktop_default"), "Must have desktop_default");
     assertTrue(ids.contains("desktop_hevc_optin"), "Must have desktop_hevc_optin");
     assertTrue(ids.contains("android_modern"), "Must have android_modern");
-    assertTrue(ids.contains("pwa_safe"), "Must have pwa_safe");
   }
 
   // -----------------------------------------------------------------------
@@ -289,41 +233,6 @@ public class ClientProfileTest
   // resolving a profile — intersecting client-reported capabilities with
   // the profile's allowed codecs/containers.
   // -----------------------------------------------------------------------
-
-  @Test
-  public void testProfileClamping_PwaSafe_ClampsClientCodecs()
-  {
-    ClientProfileManager mgr = ClientProfileManager.getInstance();
-    ClientProfile profile = mgr.resolveProfile(2, "pwa_safe", false, null, null);
-
-    // Simulate a client that reports broad capabilities (like Android MiniClient)
-    // Note: SageTV clients report "H.264" (with dot) via createSetFromString().toUpperCase()
-    Set<String> clientVideoCodecs = new HashSet<>(Arrays.asList("H.264", "HEVC", "MPEG2-VIDEO", "MPEG4"));
-    Set<String> clientAudioCodecs = new HashSet<>(Arrays.asList("AAC", "AC3", "MP2", "MP3", "FLAC"));
-    Set<String> clientPushContainers = new HashSet<>(Arrays.asList("MPEG2-PS", "MPEG2-TS", "MP4", "MKV"));
-    Set<String> clientPullContainers = new HashSet<>(Arrays.asList("MPEG2-PS", "MPEG2-TS", "MP4", "MKV"));
-
-    // Apply profile clamping (same logic as initMini)
-    clientVideoCodecs.retainAll(profile.getVideoCodecs());
-    if (!profile.isAllowHevc())
-    {
-      clientVideoCodecs.remove("HEVC");
-      clientVideoCodecs.remove("H265");
-    }
-    clientAudioCodecs.retainAll(profile.getAudioCodecs());
-    clientPushContainers.retainAll(profile.getContainers());
-    clientPullContainers.retainAll(profile.getContainers());
-
-    // After clamping: pwa_safe should leave only MP4/H.264/AAC
-    assertEquals(clientVideoCodecs, new HashSet<>(Arrays.asList("H.264")),
-        "pwa_safe clamping should leave only H.264");
-    assertEquals(clientAudioCodecs, new HashSet<>(Arrays.asList("AAC")),
-        "pwa_safe clamping should leave only AAC");
-    assertEquals(clientPushContainers, new HashSet<>(Arrays.asList("MP4")),
-        "pwa_safe clamping should leave only MP4 for push");
-    assertEquals(clientPullContainers, new HashSet<>(Arrays.asList("MP4")),
-        "pwa_safe clamping should leave only MP4 for pull");
-  }
 
   @Test
   public void testProfileClamping_HD300_ClampsHEVC()
@@ -436,17 +345,58 @@ public class ClientProfileTest
   }
 
   @Test
-  public void testAutoDetect_PWAClient()
+  public void testAutoDetect_NgPwaClient_Hevc_RoutesToDesktopHevcOptin()
   {
     ClientProfileManager mgr = ClientProfileManager.getInstance();
 
-    // PWA/iOS: iPhoneMode=true (GFX_FIXED_PAR was set)
-    Set<String> videoCodecs = new HashSet<>(Arrays.asList("H264"));
-    ClientProfile profile = mgr.autoDetectProfile("aabbccddee03", false, true, "", videoCodecs, null);
+    // NG client, isIOS=true (GFX_FIXED_PAR rendering hint), HEVC advertised,
+    // non-extender, ngVersion 1.0. GFX_FIXED_PAR is NOT a capability signal, so
+    // the client must be routed by its real caps → desktop_hevc_optin,
+    // NOT clamped to a static browser ceiling.
+    Set<String> videoCodecs = new HashSet<>(Arrays.asList("H264", "HEVC"));
+    Set<String> audioCodecs = new HashSet<>(Arrays.asList("AAC", "EAC3", "AC4"));
+    ClientProfile profile = mgr.autoDetectProfile("aabbccddee0a", false, true, "", "1.0",
+        videoCodecs, audioCodecs, null);
 
     assertNotNull(profile);
-    assertEquals(profile.getProfileId(), "pwa_safe",
-        "iOS/PWA client should auto-detect to pwa_safe");
+    assertEquals(profile.getProfileId(), "desktop_hevc_optin",
+        "NG isIOS client with HEVC must route by capability to desktop_hevc_optin");
+  }
+
+  @Test
+  public void testAutoDetect_NgPwaClient_NoHevc_RoutesToDesktopDefault()
+  {
+    ClientProfileManager mgr = ClientProfileManager.getInstance();
+
+    // NG client, isIOS=true, NO HEVC, non-extender, ngVersion 1.0 → routed by
+    // capability to desktop_default.
+    Set<String> videoCodecs = new HashSet<>(Arrays.asList("H264"));
+    Set<String> audioCodecs = new HashSet<>(Arrays.asList("AAC", "EAC3"));
+    ClientProfile profile = mgr.autoDetectProfile("aabbccddee0c", false, true, "", "1.0",
+        videoCodecs, audioCodecs, null);
+
+    assertNotNull(profile);
+    assertEquals(profile.getProfileId(), "desktop_default",
+        "NG isIOS client without HEVC must route by capability to desktop_default");
+  }
+
+  @Test
+  public void testAutoDetect_NonNgIsIos_RoutesByCapability()
+  {
+    ClientProfileManager mgr = ClientProfileManager.getInstance();
+
+    // GFX_FIXED_PAR (isIOS) is only a rendering hint and no longer selects a
+    // profile. There is no non-NG browser client, but a non-NG isIOS client
+    // (ngVersion=null) now also routes by real capability: H264-only + non-extender
+    // → desktop_default. The old static browser ceiling has been removed entirely.
+    Set<String> videoCodecs = new HashSet<>(Arrays.asList("H264"));
+    Set<String> audioCodecs = new HashSet<>(Arrays.asList("AAC"));
+    ClientProfile profile = mgr.autoDetectProfile("aabbccddee0b", false, true, "", null,
+        videoCodecs, audioCodecs, null);
+
+    assertNotNull(profile);
+    assertEquals(profile.getProfileId(), "desktop_default",
+        "isIOS is a rendering hint only; client must route by capability to desktop_default");
   }
 
   @Test
@@ -500,15 +450,15 @@ public class ClientProfileTest
     ClientProfileManager mgr = ClientProfileManager.getInstance();
 
     // Set admin override in properties
-    sage.Sage.put("miniclient/profile/aabbccddee07", "pwa_safe");
+    sage.Sage.put("miniclient/profile/aabbccddee07", "hd_legacy_strict");
     try
     {
-      // This would normally be desktop_default, but admin overrides it
+      // This would normally be desktop_hevc_optin (non-extender + HEVC), but admin overrides it
       Set<String> videoCodecs = new HashSet<>(Arrays.asList("H264", "HEVC", "MPEG2-VIDEO"));
       ClientProfile profile = mgr.autoDetectProfile("aabbccddee07", false, false, "", videoCodecs, null);
 
       assertNotNull(profile);
-      assertEquals(profile.getProfileId(), "pwa_safe",
+      assertEquals(profile.getProfileId(), "hd_legacy_strict",
           "Admin override should take precedence over auto-detection");
     }
     finally
