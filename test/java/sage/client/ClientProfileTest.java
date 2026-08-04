@@ -60,8 +60,8 @@ public class ClientProfileTest
 
   // -----------------------------------------------------------------------
   // Test Case 2: managed profile codec/container clamping
-  // (pwa_safe removed — the only browser client, PWA, is a full NG client
-  //  routed by real capability; no static browser ceiling remains)
+  // (the old static browser ceiling was removed — the only browser client,
+  //  PWA, is a full NG client routed by real capability; no static ceiling remains)
   // -----------------------------------------------------------------------
 
   // -----------------------------------------------------------------------
@@ -351,8 +351,8 @@ public class ClientProfileTest
 
     // NG client, isIOS=true (GFX_FIXED_PAR rendering hint), HEVC advertised,
     // non-extender, ngVersion 1.0. GFX_FIXED_PAR is NOT a capability signal, so
-    // the client must be routed by its real caps (rule 4 → desktop_hevc_optin),
-    // NOT clamped to pwa_safe.
+    // the client must be routed by its real caps → desktop_hevc_optin,
+    // NOT clamped to a static browser ceiling.
     Set<String> videoCodecs = new HashSet<>(Arrays.asList("H264", "HEVC"));
     Set<String> audioCodecs = new HashSet<>(Arrays.asList("AAC", "EAC3", "AC4"));
     ClientProfile profile = mgr.autoDetectProfile("aabbccddee0a", false, true, "", "1.0",
@@ -360,7 +360,7 @@ public class ClientProfileTest
 
     assertNotNull(profile);
     assertEquals(profile.getProfileId(), "desktop_hevc_optin",
-        "NG isIOS client with HEVC must route by capability to desktop_hevc_optin, not pwa_safe");
+        "NG isIOS client with HEVC must route by capability to desktop_hevc_optin");
   }
 
   @Test
@@ -369,7 +369,7 @@ public class ClientProfileTest
     ClientProfileManager mgr = ClientProfileManager.getInstance();
 
     // NG client, isIOS=true, NO HEVC, non-extender, ngVersion 1.0 → routed by
-    // capability to desktop_default (rule 7), NOT pwa_safe.
+    // capability to desktop_default.
     Set<String> videoCodecs = new HashSet<>(Arrays.asList("H264"));
     Set<String> audioCodecs = new HashSet<>(Arrays.asList("AAC", "EAC3"));
     ClientProfile profile = mgr.autoDetectProfile("aabbccddee0c", false, true, "", "1.0",
@@ -377,7 +377,7 @@ public class ClientProfileTest
 
     assertNotNull(profile);
     assertEquals(profile.getProfileId(), "desktop_default",
-        "NG isIOS client without HEVC must route by capability to desktop_default, not pwa_safe");
+        "NG isIOS client without HEVC must route by capability to desktop_default");
   }
 
   @Test
@@ -388,7 +388,7 @@ public class ClientProfileTest
     // GFX_FIXED_PAR (isIOS) is only a rendering hint and no longer selects a
     // profile. There is no non-NG browser client, but a non-NG isIOS client
     // (ngVersion=null) now also routes by real capability: H264-only + non-extender
-    // → desktop_default. pwa_safe has been removed entirely.
+    // → desktop_default. The old static browser ceiling has been removed entirely.
     Set<String> videoCodecs = new HashSet<>(Arrays.asList("H264"));
     Set<String> audioCodecs = new HashSet<>(Arrays.asList("AAC"));
     ClientProfile profile = mgr.autoDetectProfile("aabbccddee0b", false, true, "", null,
@@ -396,7 +396,7 @@ public class ClientProfileTest
 
     assertNotNull(profile);
     assertEquals(profile.getProfileId(), "desktop_default",
-        "isIOS is a rendering hint only; client must route by capability to desktop_default (pwa_safe removed)");
+        "isIOS is a rendering hint only; client must route by capability to desktop_default");
   }
 
   @Test
