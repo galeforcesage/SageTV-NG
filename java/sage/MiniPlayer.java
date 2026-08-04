@@ -195,10 +195,31 @@ public class MiniPlayer implements DVDMediaPlayer
    */
   static java.nio.channels.SocketChannel acquirePlayerSocketChannel(PlayerSocketProvider provider)
   {
+    return acquirePlayerSocketChannel(provider, PlayerTimeoutPolicy.LEGACY);
+  }
+
+  /**
+   * Profile-aware form of {@link #acquirePlayerSocketChannel(PlayerSocketProvider)}.
+   * The retry policy (attempts + backoff) is resolved through
+   * {@link PlayerTimeoutPolicy} using {@code ctx}. Passing
+   * {@link PlayerTimeoutPolicy#LEGACY} (as the single-arg overload does)
+   * reproduces the historical {@code attempts=2 / backoff=250} behavior exactly;
+   * NG sessions may opt into a different policy without affecting legacy clients.
+   *
+   * @param provider supplies/reconnects the real channel; null returns null
+   * @param ctx      profile context selecting the timeout tier
+   * @return a usable (open + connected) channel, or null if every attempt
+   *         was exhausted
+   */
+  static java.nio.channels.SocketChannel acquirePlayerSocketChannel(PlayerSocketProvider provider,
+      PlayerTimeoutPolicy.ProfileContext ctx)
+  {
     if (provider == null)
       return null;
-    int maxAttempts = Math.max(1, Sage.getInt("miniplayer/player_socket_reconnect_attempts", 2));
-    long backoffMs = Math.max(0, Sage.getLong("miniplayer/player_socket_reconnect_backoff_ms", 250));
+    if (ctx == null)
+      ctx = PlayerTimeoutPolicy.LEGACY;
+    int maxAttempts = PlayerTimeoutPolicy.attempts(ctx);
+    long backoffMs = PlayerTimeoutPolicy.backoffMs(ctx);
     for (int attempt = 0; attempt < maxAttempts; attempt++)
     {
       java.nio.channels.SocketChannel sc = provider.getChannel();
@@ -4752,7 +4773,7 @@ public class MiniPlayer implements DVDMediaPlayer
         if (mcsr != null)
           mcsr.forceMediaReconnect();
       }
-    });
+    }, PlayerTimeoutPolicy.forRenderer(mcsr));
 
     String clientName = (uiMgr == null ? "EXTERNAL" : uiMgr.getLocalUIClientName());
     if (clientSocket == null)
@@ -5663,6 +5684,10 @@ public class MiniPlayer implements DVDMediaPlayer
       in = is;
       alive = true;
       bb = java.nio.ByteBuffer.allocate(64);
+      // Resolve the reply-timeout against the (now-established) session's
+      // profile. Legacy sessions keep the historical 30000ms; NG sessions may
+      // opt into a tighter reply wait. Overwrites the legacy inline default.
+      timeout = PlayerTimeoutPolicy.connectionTimeoutMs(PlayerTimeoutPolicy.forRenderer(mcsr));
     }
 
     public void run()
