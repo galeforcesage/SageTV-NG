@@ -450,12 +450,14 @@ public class ClientProfileTest
   }
 
   @Test
-  public void testAutoDetect_NgPwaClient_RoutesToDesktopHevcOptin()
+  public void testAutoDetect_NgPwaClient_Hevc_RoutesToDesktopHevcOptin()
   {
     ClientProfileManager mgr = ClientProfileManager.getInstance();
 
-    // NG PWA: isIOS=true (GFX_FIXED_PAR) but advertises ngVersion 1.0. NG clients
-    // drive the surface path, so they must NOT be clamped to pwa_safe (AAC-only).
+    // NG client, isIOS=true (GFX_FIXED_PAR rendering hint), HEVC advertised,
+    // non-extender, ngVersion 1.0. GFX_FIXED_PAR is NOT a capability signal, so
+    // the client must be routed by its real caps (rule 4 → desktop_hevc_optin),
+    // NOT clamped to pwa_safe.
     Set<String> videoCodecs = new HashSet<>(Arrays.asList("H264", "HEVC"));
     Set<String> audioCodecs = new HashSet<>(Arrays.asList("AAC", "EAC3", "AC4"));
     ClientProfile profile = mgr.autoDetectProfile("aabbccddee0a", false, true, "", "1.0",
@@ -463,7 +465,24 @@ public class ClientProfileTest
 
     assertNotNull(profile);
     assertEquals(profile.getProfileId(), "desktop_hevc_optin",
-        "NG PWA client (ngVersion>=1.0) must route to desktop_hevc_optin, not pwa_safe");
+        "NG isIOS client with HEVC must route by capability to desktop_hevc_optin, not pwa_safe");
+  }
+
+  @Test
+  public void testAutoDetect_NgPwaClient_NoHevc_RoutesToDesktopDefault()
+  {
+    ClientProfileManager mgr = ClientProfileManager.getInstance();
+
+    // NG client, isIOS=true, NO HEVC, non-extender, ngVersion 1.0 → routed by
+    // capability to desktop_default (rule 7), NOT pwa_safe.
+    Set<String> videoCodecs = new HashSet<>(Arrays.asList("H264"));
+    Set<String> audioCodecs = new HashSet<>(Arrays.asList("AAC", "EAC3"));
+    ClientProfile profile = mgr.autoDetectProfile("aabbccddee0c", false, true, "", "1.0",
+        videoCodecs, audioCodecs, null);
+
+    assertNotNull(profile);
+    assertEquals(profile.getProfileId(), "desktop_default",
+        "NG isIOS client without HEVC must route by capability to desktop_default, not pwa_safe");
   }
 
   @Test
@@ -480,22 +499,6 @@ public class ClientProfileTest
     assertNotNull(profile);
     assertEquals(profile.getProfileId(), "pwa_safe",
         "Legacy (non-NG) PWA client must still route to pwa_safe");
-  }
-
-  @Test
-  public void testAutoDetect_NgPwaClient_V2_RoutesToDesktopHevcOptin()
-  {
-    ClientProfileManager mgr = ClientProfileManager.getInstance();
-
-    // NG PWA with ngVersion 2.0 → desktop_hevc_optin.
-    Set<String> videoCodecs = new HashSet<>(Arrays.asList("H264", "HEVC"));
-    Set<String> audioCodecs = new HashSet<>(Arrays.asList("AAC", "EAC3", "AC4"));
-    ClientProfile profile = mgr.autoDetectProfile("aabbccddee0c", false, true, "", "2.0",
-        videoCodecs, audioCodecs, null);
-
-    assertNotNull(profile);
-    assertEquals(profile.getProfileId(), "desktop_hevc_optin",
-        "NG PWA client (ngVersion=2.0) must route to desktop_hevc_optin");
   }
 
   @Test

@@ -94,7 +94,7 @@
       }
     },
     "pwa_safe": {
-      "description": "PWA client - browser sandbox constraints (LEGACY non-NG browser clients only; NG PWA clients use desktop_hevc_optin via the surface path, not this ceiling)",
+      "description": "PWA client - browser sandbox constraints (LEGACY non-NG browser clients only; GFX_FIXED_PAR is a rendering hint, so NG clients bypass this ceiling and route by their actual reported capabilities)",
       "managed": true,
       "containers": ["MP4"],
       "video_codecs": ["H.264"],

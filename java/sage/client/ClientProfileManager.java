@@ -433,9 +433,10 @@ public class ClientProfileManager
 
     // PWA / browser: deliberately conservative — MSE baseline. LEGACY non-NG
     // browser clients only (stock 9.x placeshifter that sets GFX_FIXED_PAR but
-    // doesn't speak Protocol v2.1). NG PWA clients are routed PAST this profile
-    // to desktop_hevc_optin via autoDetectProfile rule 2.5 — they drive the
-    // surface path and must never be clamped below their honest advertisement.
+    // doesn't speak Protocol v2.1). NG clients bypass this ceiling — GFX_FIXED_PAR
+    // is only a rendering hint, so NG isIOS clients are routed by their actual
+    // reported capabilities (autoDetectProfile rules 4-7) and must never be
+    // clamped below their honest advertisement.
     profiles.put("pwa_safe", new ClientProfile(
         "pwa_safe", "PWA client", true,
         Arrays.asList("MP4"), Arrays.asList("H.264"), Arrays.asList("AAC"),
@@ -535,9 +536,8 @@ public class ClientProfileManager
    * Detection rules (evaluated in order):
    * 1. Admin override via Sage.properties: miniclient/profile/{clientName}
    * 2. HDx00 extender (firmware match) → hd_legacy_strict
-   * 2.5. NG iOS/PWA (ngVersion &gt;= 1.0) → desktop_hevc_optin (skip pwa_safe;
-   *      NG clients drive the surface path, not the static profile ceiling)
-   * 3. iOS/PWA client (iPhoneMode=true), legacy non-NG only → pwa_safe
+   * 3. Legacy iOS/PWA (non-NG only, GFX_FIXED_PAR) → pwa_safe; NG clients skip
+   *    to rules 4-7 and route by their actual reported capabilities
    * 4. Non-extender with HEVC in video codecs → desktop_hevc_optin
    * 5. Extender (no mouse) with HEVC → android_modern
    * 6. Extender (no mouse) without HEVC → hd_legacy_strict
@@ -545,7 +545,8 @@ public class ClientProfileManager
    *
    * @param clientName MAC-based client identifier for admin override lookup
    * @param isExtender true if INPUT_DEVICES has no MOUSE
-   * @param isIOS true if GFX_FIXED_PAR was set (iPhoneMode)
+   * @param isIOS true if GFX_FIXED_PAR was set (rendering hint, NOT a capability
+   *              signal; NG clients bypass this for profile selection)
    * @param firmwareVersion FIRMWARE_VERSION string
    * @param clientVideoCodecs the VIDEO_CODECS set reported by client
    * @param clientStreamingProtocols the STREAMING_PROTOCOLS set reported by client
@@ -615,23 +616,14 @@ public class ClientProfileManager
         return getOrFallback("hd_legacy_strict");
       }
 
-      // 2.5. NG PWA/iOS client: never clamp to pwa_safe. NG clients drive the
-      // surface path; the static profile is only a legacy ceiling. Route to
-      // desktop_hevc_optin (widest codec set incl. EAC3/AC4) so e.g. AC-4 audio
-      // transcodes to EAC3, not AAC. Non-NG iOS/browser clients still fall
-      // through to pwa_safe below.
-      if (isIOS && isNgAtLeast(ngVersion, 1, 0))
+      // 3. Legacy iOS/PWA (non-NG only). GFX_FIXED_PAR is a rendering hint, NOT a
+      // capability signal; NG clients bypass this and are routed by their actual
+      // reported capabilities (rules 4-7 below), since they declare codecs/surfaces
+      // directly. Old 9.x browser placeshifter (non-NG) still needs the conservative
+      // AAC ceiling because it exchanges no surfaces.
+      if (isIOS && !isNgAtLeast(ngVersion, 1, 0))
       {
-        if (sage.Sage.DBG) System.out.println("ClientProfileManager: NG PWA client (ng="
-            + ngVersion + ") → desktop_hevc_optin (NG clients use surface path, not profile ceiling)");
-        return getOrFallback("desktop_hevc_optin");
-      }
-
-      // 3. iOS / PWA client (LEGACY non-NG browser clients only; NG PWA is
-      // routed to desktop_hevc_optin by rule 2.5 above).
-      if (isIOS)
-      {
-        if (sage.Sage.DBG) System.out.println("ClientProfileManager: Auto-detected iOS/PWA client → pwa_safe");
+        if (sage.Sage.DBG) System.out.println("ClientProfileManager: Legacy non-NG iOS/PWA client → pwa_safe");
         return getOrFallback("pwa_safe");
       }
 
