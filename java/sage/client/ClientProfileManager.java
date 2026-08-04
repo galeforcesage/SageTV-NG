@@ -431,7 +431,11 @@ public class ClientProfileManager
         Arrays.asList("MPEG1", "MP2", "MPG1L2", "MP3", "MPG1L3", "VORBIS", "AAC", "AAC-HE", "FLAC", "ALAC", "PCM", "PCM_S16LE", "DTS", "DCA", "DTS-HD", "DTS-MA", "AC3", "EAC3", "EC-3", "DOLBYTRUEHD", "OPUS"),
         true, ClientProfile.AUTO_REMUX_ON_FAILURE, 0, 0, true));
 
-    // PWA / browser: deliberately conservative — MSE baseline.
+    // PWA / browser: deliberately conservative — MSE baseline. LEGACY non-NG
+    // browser clients only (stock 9.x placeshifter that sets GFX_FIXED_PAR but
+    // doesn't speak Protocol v2.1). NG PWA clients are routed PAST this profile
+    // to desktop_hevc_optin via autoDetectProfile rule 2.5 — they drive the
+    // surface path and must never be clamped below their honest advertisement.
     profiles.put("pwa_safe", new ClientProfile(
         "pwa_safe", "PWA client", true,
         Arrays.asList("MP4"), Arrays.asList("H.264"), Arrays.asList("AAC"),
@@ -531,7 +535,9 @@ public class ClientProfileManager
    * Detection rules (evaluated in order):
    * 1. Admin override via Sage.properties: miniclient/profile/{clientName}
    * 2. HDx00 extender (firmware match) → hd_legacy_strict
-   * 3. iOS/PWA client (iPhoneMode=true) → pwa_safe
+   * 2.5. NG iOS/PWA (ngVersion &gt;= 1.0) → desktop_hevc_optin (skip pwa_safe;
+   *      NG clients drive the surface path, not the static profile ceiling)
+   * 3. iOS/PWA client (iPhoneMode=true), legacy non-NG only → pwa_safe
    * 4. Non-extender with HEVC in video codecs → desktop_hevc_optin
    * 5. Extender (no mouse) with HEVC → android_modern
    * 6. Extender (no mouse) without HEVC → hd_legacy_strict
@@ -609,7 +615,20 @@ public class ClientProfileManager
         return getOrFallback("hd_legacy_strict");
       }
 
-      // 3. iOS / PWA client
+      // 2.5. NG PWA/iOS client: never clamp to pwa_safe. NG clients drive the
+      // surface path; the static profile is only a legacy ceiling. Route to
+      // desktop_hevc_optin (widest codec set incl. EAC3/AC4) so e.g. AC-4 audio
+      // transcodes to EAC3, not AAC. Non-NG iOS/browser clients still fall
+      // through to pwa_safe below.
+      if (isIOS && isNgAtLeast(ngVersion, 1, 0))
+      {
+        if (sage.Sage.DBG) System.out.println("ClientProfileManager: NG PWA client (ng="
+            + ngVersion + ") → desktop_hevc_optin (NG clients use surface path, not profile ceiling)");
+        return getOrFallback("desktop_hevc_optin");
+      }
+
+      // 3. iOS / PWA client (LEGACY non-NG browser clients only; NG PWA is
+      // routed to desktop_hevc_optin by rule 2.5 above).
       if (isIOS)
       {
         if (sage.Sage.DBG) System.out.println("ClientProfileManager: Auto-detected iOS/PWA client → pwa_safe");

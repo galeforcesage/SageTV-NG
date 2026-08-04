@@ -450,6 +450,55 @@ public class ClientProfileTest
   }
 
   @Test
+  public void testAutoDetect_NgPwaClient_RoutesToDesktopHevcOptin()
+  {
+    ClientProfileManager mgr = ClientProfileManager.getInstance();
+
+    // NG PWA: isIOS=true (GFX_FIXED_PAR) but advertises ngVersion 1.0. NG clients
+    // drive the surface path, so they must NOT be clamped to pwa_safe (AAC-only).
+    Set<String> videoCodecs = new HashSet<>(Arrays.asList("H264", "HEVC"));
+    Set<String> audioCodecs = new HashSet<>(Arrays.asList("AAC", "EAC3", "AC4"));
+    ClientProfile profile = mgr.autoDetectProfile("aabbccddee0a", false, true, "", "1.0",
+        videoCodecs, audioCodecs, null);
+
+    assertNotNull(profile);
+    assertEquals(profile.getProfileId(), "desktop_hevc_optin",
+        "NG PWA client (ngVersion>=1.0) must route to desktop_hevc_optin, not pwa_safe");
+  }
+
+  @Test
+  public void testAutoDetect_LegacyPwaClient_StillPwaSafe()
+  {
+    ClientProfileManager mgr = ClientProfileManager.getInstance();
+
+    // Legacy PWA (non-NG): ngVersion=null → still clamps to pwa_safe (backward compat).
+    Set<String> videoCodecs = new HashSet<>(Arrays.asList("H264"));
+    Set<String> audioCodecs = new HashSet<>(Arrays.asList("AAC"));
+    ClientProfile profile = mgr.autoDetectProfile("aabbccddee0b", false, true, "", null,
+        videoCodecs, audioCodecs, null);
+
+    assertNotNull(profile);
+    assertEquals(profile.getProfileId(), "pwa_safe",
+        "Legacy (non-NG) PWA client must still route to pwa_safe");
+  }
+
+  @Test
+  public void testAutoDetect_NgPwaClient_V2_RoutesToDesktopHevcOptin()
+  {
+    ClientProfileManager mgr = ClientProfileManager.getInstance();
+
+    // NG PWA with ngVersion 2.0 → desktop_hevc_optin.
+    Set<String> videoCodecs = new HashSet<>(Arrays.asList("H264", "HEVC"));
+    Set<String> audioCodecs = new HashSet<>(Arrays.asList("AAC", "EAC3", "AC4"));
+    ClientProfile profile = mgr.autoDetectProfile("aabbccddee0c", false, true, "", "2.0",
+        videoCodecs, audioCodecs, null);
+
+    assertNotNull(profile);
+    assertEquals(profile.getProfileId(), "desktop_hevc_optin",
+        "NG PWA client (ngVersion=2.0) must route to desktop_hevc_optin");
+  }
+
+  @Test
   public void testAutoDetect_HD300Extender()
   {
     ClientProfileManager mgr = ClientProfileManager.getInstance();
