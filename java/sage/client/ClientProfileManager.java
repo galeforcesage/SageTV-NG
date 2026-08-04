@@ -431,12 +431,6 @@ public class ClientProfileManager
         Arrays.asList("MPEG1", "MP2", "MPG1L2", "MP3", "MPG1L3", "VORBIS", "AAC", "AAC-HE", "FLAC", "ALAC", "PCM", "PCM_S16LE", "DTS", "DCA", "DTS-HD", "DTS-MA", "AC3", "EAC3", "EC-3", "DOLBYTRUEHD", "OPUS"),
         true, ClientProfile.AUTO_REMUX_ON_FAILURE, 0, 0, true));
 
-    // PWA / browser: deliberately conservative — MSE baseline.
-    profiles.put("pwa_safe", new ClientProfile(
-        "pwa_safe", "PWA client", true,
-        Arrays.asList("MP4"), Arrays.asList("H.264"), Arrays.asList("AAC"),
-        false, ClientProfile.AUTO_REMUX_ON_FAILURE, 0, 0, true));
-
     if (sage.Sage.DBG) System.out.println("ClientProfileManager: Loaded " + profiles.size() + " default profiles");
   }
 
@@ -531,15 +525,19 @@ public class ClientProfileManager
    * Detection rules (evaluated in order):
    * 1. Admin override via Sage.properties: miniclient/profile/{clientName}
    * 2. HDx00 extender (firmware match) → hd_legacy_strict
-   * 3. iOS/PWA client (iPhoneMode=true) → pwa_safe
-   * 4. Non-extender with HEVC in video codecs → desktop_hevc_optin
-   * 5. Extender (no mouse) with HEVC → android_modern
-   * 6. Extender (no mouse) without HEVC → hd_legacy_strict
-   * 7. Non-extender (has mouse) → desktop_default
+   * 3. Non-extender with HEVC in video codecs → desktop_hevc_optin
+   * 4. Extender (no mouse) with HEVC → android_modern
+   * 5. Extender (no mouse) without HEVC → hd_legacy_strict
+   * 6. Non-extender (has mouse) → desktop_default
+   *
+   * Note: GFX_FIXED_PAR (isIOS) is a rendering hint, not a capability or
+   * identity signal, and no longer selects a profile. The only browser client
+   * (PWA) is a full NG client routed by its real capabilities above.
    *
    * @param clientName MAC-based client identifier for admin override lookup
    * @param isExtender true if INPUT_DEVICES has no MOUSE
-   * @param isIOS true if GFX_FIXED_PAR was set (iPhoneMode)
+   * @param isIOS true if GFX_FIXED_PAR was set (rendering hint, NOT a
+   *              capability/identity signal; no longer used for profile selection)
    * @param firmwareVersion FIRMWARE_VERSION string
    * @param clientVideoCodecs the VIDEO_CODECS set reported by client
    * @param clientStreamingProtocols the STREAMING_PROTOCOLS set reported by client
@@ -609,12 +607,12 @@ public class ClientProfileManager
         return getOrFallback("hd_legacy_strict");
       }
 
-      // 3. iOS / PWA client
-      if (isIOS)
-      {
-        if (sage.Sage.DBG) System.out.println("ClientProfileManager: Auto-detected iOS/PWA client → pwa_safe");
-        return getOrFallback("pwa_safe");
-      }
+      // Note: GFX_FIXED_PAR (isIOS) is a rendering hint, NOT a capability or
+      // identity signal, so it no longer selects a profile. The only browser
+      // client (PWA) is a full NG client that declares its own codecs/surfaces
+      // and is routed by the capability-based rules below. The old pwa_safe
+      // AAC ceiling has been removed — there is no non-NG browser client (the
+      // legacy placeshifter was a Java desktop app, not a browser).
 
       // 4-5. Check for HEVC support
       boolean hasHevc = clientVideoCodecs != null &&

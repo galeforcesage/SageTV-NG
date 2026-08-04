@@ -1941,7 +1941,7 @@ public class MiniPlayer implements DVDMediaPlayer
       // (browser canPlayType probing, ExoPlayer/IJK decoder matrix), so their
       // reported PULL_AV_CONTAINERS / codec sets are RELIABLE and must win over
       // a static server-side profile. Example: Safari genuinely decodes HEVC
-      // even though the conservative pwa_safe profile lists only H.264 — forcing
+      // even though a static server-side profile might list only H.264 — forcing
       // a transcode there would ignore the client's real capability. So this
       // correction applies ONLY to legacy (non-NG) clients whose self-report is
       // a fixed list, not to NG clients whose self-report reflects real decoders.
