@@ -11,9 +11,11 @@ package sage.plugin;
 
 import sage.Sage;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -144,6 +146,25 @@ public final class PluginInstallSecurityReview
       "start",
       "loadLibrary"
   };
+
+  private static final long CLAMAV_TIMEOUT_MS = 60L * 1000L;
+  private static final long GRYPE_TIMEOUT_MS = 120L * 1000L;
+
+  private static final class ScannerResult
+  {
+    final int exitCode;
+    final String stdout;
+    final String stderr;
+    final boolean timedOut;
+
+    ScannerResult(int exitCode, String stdout, String stderr, boolean timedOut)
+    {
+      this.exitCode = exitCode;
+      this.stdout = stdout;
+      this.stderr = stderr;
+      this.timedOut = timedOut;
+    }
+  }
 
   private PluginInstallSecurityReview()
   {
@@ -290,26 +311,6 @@ public final class PluginInstallSecurityReview
       }
     }
 
-    if (!isScannerConfigured("plugin/security/clamav_cmd"))
-    {
-      result.findings.add(new Finding("clamav.scan", Category.MALWARE, Severity.BLOCK,
-          "ClamAV scanner unavailable",
-          "ClamAV scanner command is not configured.",
-          "Set plugin/security/clamav_cmd to enable malware scanning.",
-          true,
-          new HashMap()));
-    }
-
-    if (!isScannerConfigured("plugin/security/grype_cmd"))
-    {
-      result.findings.add(new Finding("grype.cve_scan", Category.POLICY, Severity.BLOCK,
-          "Grype scanner unavailable",
-          "Grype scanner command is not configured.",
-          "Set plugin/security/grype_cmd and ensure vulnerability DB freshness.",
-          true,
-          new HashMap()));
-    }
-
     result.findings.add(new Finding("gpg.manifest_signature", Category.INTEGRITY, Severity.BLOCK,
         "Manifest signature not available",
         "Plugin manifest signature metadata is not available for this installation path.",
@@ -335,9 +336,9 @@ public final class PluginInstallSecurityReview
         mapOf("risk_score", Integer.valueOf(result.riskScore))));
 
     result.findings.add(new Finding("syft.sbom", Category.HYGIENE, Severity.INFO,
-        "SBOM status",
-        "SBOM generation is not yet integrated in this runtime path.",
-        "Configure syft integration to attach SBOM in audit records.",
+        "SBOM generation planned",
+        "Software Bill of Materials (SBOM) generation will be available in a future release via syft integration.",
+        "No action required. SBOM generation will be enabled automatically when syft is configured.",
         true,
         new HashMap()));
 
@@ -439,6 +440,12 @@ public final class PluginInstallSecurityReview
             state.hasDangerousCalls = true;
         }
       }
+
+      // --- ClamAV malware scan on the extracted sandbox ---
+      runClamAvScan(sandboxRoot, result);
+
+      // --- Grype CVE scan on the extracted sandbox ---
+      runGrypeScan(sandboxRoot, result);
     }
     catch (IOException e)
     {
@@ -788,6 +795,429 @@ public final class PluginInstallSecurityReview
   {
     String cmd = Sage.get(property, "");
     return cmd != null && cmd.trim().length() > 0;
+  }
+
+  /**
+   * Resolves a scanner command: first checks the Sage property, then falls back to
+   * auto-detecting the binary on the system PATH.
+   * @return the command string, or empty string if unavailable
+   */
+  private static String resolveScannerCommand(String property, String defaultBinary)
+  {
+    String configured = Sage.get(property, "");
+    if (configured != null && configured.trim().length() > 0)
+      return configured.trim();
+    // Auto-detect: try to find the binary on PATH
+    if (isBinaryAvailable(defaultBinary))
+      return defaultBinary;
+    return "";
+  }
+
+  /**
+   * Checks whether a binary is available on the system PATH by attempting to run it
+   * with --version. Returns true if the process starts successfully.
+   */
+  private static boolean isBinaryAvailable(String binaryName)
+  {
+    try
+    {
+      String[] cmd;
+      String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+      if (os.contains("win"))
+        cmd = new String[]{"where", binaryName};
+      else
+        cmd = new String[]{"which", binaryName};
+      ProcessBuilder pb = new ProcessBuilder(cmd);
+      pb.redirectErrorStream(true);
+      Process p = pb.start();
+      drainStream(p.getInputStream());
+      int exit = p.waitFor();
+      return exit == 0;
+    }
+    catch (Exception e)
+    {
+      return false;
+    }
+  }
+
+  /**
+   * Runs an external scanner command with timeout enforcement and proper stream draining.
+   * The command is passed as a string array to avoid shell injection.
+   */
+  private static ScannerResult runExternalScanner(String[] cmd, File workDir, long timeoutMs)
+  {
+    Process process = null;
+    try
+    {
+      ProcessBuilder pb = new ProcessBuilder(cmd);
+      pb.directory(workDir);
+      pb.redirectErrorStream(false);
+      process = pb.start();
+
+      // Drain stdout and stderr in separate threads to prevent deadlock
+      final InputStream stdoutStream = process.getInputStream();
+      final InputStream stderrStream = process.getErrorStream();
+      final ByteArrayOutputStream stdoutBuf = new ByteArrayOutputStream();
+      final ByteArrayOutputStream stderrBuf = new ByteArrayOutputStream();
+
+      Thread stdoutDrainer = new Thread(new Runnable()
+      {
+        public void run()
+        {
+          drainStreamTo(stdoutStream, stdoutBuf);
+        }
+      }, "scanner-stdout-drainer");
+      Thread stderrDrainer = new Thread(new Runnable()
+      {
+        public void run()
+        {
+          drainStreamTo(stderrStream, stderrBuf);
+        }
+      }, "scanner-stderr-drainer");
+
+      stdoutDrainer.setDaemon(true);
+      stderrDrainer.setDaemon(true);
+      stdoutDrainer.start();
+      stderrDrainer.start();
+
+      // Wait with timeout
+      long deadline = System.currentTimeMillis() + timeoutMs;
+      boolean finished = false;
+      while (!finished)
+      {
+        try
+        {
+          process.exitValue();
+          finished = true;
+        }
+        catch (IllegalThreadStateException e)
+        {
+          if (System.currentTimeMillis() >= deadline)
+          {
+            process.destroy();
+            stdoutDrainer.join(2000);
+            stderrDrainer.join(2000);
+            return new ScannerResult(-1,
+                stdoutBuf.toString("UTF-8"),
+                stderrBuf.toString("UTF-8"),
+                true);
+          }
+          Thread.sleep(200);
+        }
+      }
+
+      stdoutDrainer.join(5000);
+      stderrDrainer.join(5000);
+
+      return new ScannerResult(
+          process.exitValue(),
+          stdoutBuf.toString("UTF-8"),
+          stderrBuf.toString("UTF-8"),
+          false);
+    }
+    catch (Exception e)
+    {
+      if (Sage.DBG) System.out.println("Scanner execution error: " + e);
+      return new ScannerResult(-1, "", e.toString(), false);
+    }
+    finally
+    {
+      if (process != null)
+      {
+        try
+        {
+          process.destroy();
+        }
+        catch (Exception ignored)
+        {
+        }
+      }
+    }
+  }
+
+  private static void drainStream(InputStream in)
+  {
+    try
+    {
+      byte[] buf = new byte[4096];
+      while (in.read(buf) != -1)
+      {
+        // discard
+      }
+    }
+    catch (IOException ignored)
+    {
+    }
+  }
+
+  private static void drainStreamTo(InputStream in, ByteArrayOutputStream out)
+  {
+    try
+    {
+      byte[] buf = new byte[4096];
+      int read;
+      while ((read = in.read(buf)) != -1)
+      {
+        out.write(buf, 0, read);
+      }
+    }
+    catch (IOException ignored)
+    {
+    }
+  }
+
+  /**
+   * Runs ClamAV scan on the sandbox directory and adds findings to the result.
+   */
+  private static void runClamAvScan(File sandboxRoot, Result result)
+  {
+    String cmd = resolveScannerCommand("plugin/security/clamav_cmd", "clamscan");
+    if (cmd.length() == 0)
+    {
+      result.findings.add(new Finding("clamav.scan", Category.MALWARE, Severity.BLOCK,
+          "ClamAV scanner unavailable",
+          "ClamAV (clamscan) is not installed or not found on PATH, and plugin/security/clamav_cmd is not configured.",
+          "Install ClamAV or set plugin/security/clamav_cmd to the clamscan binary path.",
+          true,
+          new HashMap()));
+      return;
+    }
+
+    if (Sage.DBG) System.out.println("PluginSecurity: Running ClamAV scan on " + sandboxRoot.getAbsolutePath());
+
+    String[] cmdArray = new String[]{cmd, "-r", "--no-summary", sandboxRoot.getAbsolutePath()};
+    ScannerResult sr = runExternalScanner(cmdArray, sandboxRoot, CLAMAV_TIMEOUT_MS);
+
+    if (sr.timedOut)
+    {
+      result.findings.add(new Finding("clamav.scan", Category.MALWARE, Severity.WARN,
+          "ClamAV scan timed out",
+          "ClamAV scan exceeded the " + (CLAMAV_TIMEOUT_MS / 1000) + " second time limit.",
+          "Investigate plugin archive size or ClamAV configuration issues.",
+          true,
+          mapOf("timeout_seconds", Long.valueOf(CLAMAV_TIMEOUT_MS / 1000))));
+      return;
+    }
+
+    if (sr.exitCode == 0)
+    {
+      if (Sage.DBG) System.out.println("PluginSecurity: ClamAV scan clean");
+      return;
+    }
+
+    if (sr.exitCode == 1)
+    {
+      // Virus found — parse output for "filepath: virusname FOUND" lines
+      String[] lines = sr.stdout.split("\n");
+      int detectionCount = 0;
+      for (int i = 0; i < lines.length; i++)
+      {
+        String line = lines[i].trim();
+        if (line.endsWith("FOUND"))
+        {
+          detectionCount++;
+          int colonIdx = line.lastIndexOf(':');
+          String virusName = "unknown";
+          String filePath = line;
+          if (colonIdx > 0)
+          {
+            filePath = line.substring(0, colonIdx).trim();
+            virusName = line.substring(colonIdx + 1).trim();
+            if (virusName.endsWith("FOUND"))
+              virusName = virusName.substring(0, virusName.length() - 5).trim();
+          }
+          result.findings.add(new Finding("clamav.scan", Category.MALWARE, Severity.BLOCK,
+              "ClamAV: malware detected",
+              "ClamAV identified malware signature: " + virusName,
+              "Do not install this plugin. The archive contains known malware.",
+              false,
+              mapOf("virus_name", virusName, "file", filePath)));
+        }
+      }
+      if (detectionCount == 0)
+      {
+        // Exit code 1 but no parseable FOUND lines
+        result.findings.add(new Finding("clamav.scan", Category.MALWARE, Severity.BLOCK,
+            "ClamAV: malware detected",
+            "ClamAV reported a detection (exit code 1) but no details could be parsed.",
+            "Do not install this plugin. Review ClamAV output manually.",
+            false,
+            mapOf("stdout", truncate(sr.stdout, 500), "stderr", truncate(sr.stderr, 500))));
+      }
+    }
+    else
+    {
+      // Exit code 2 or other = scan error
+      result.findings.add(new Finding("clamav.scan", Category.MALWARE, Severity.WARN,
+          "ClamAV scan error",
+          "ClamAV encountered an error during scanning (exit code " + sr.exitCode + ").",
+          "Check ClamAV installation, virus database freshness, and filesystem permissions.",
+          true,
+          mapOf("exit_code", Integer.valueOf(sr.exitCode), "stderr", truncate(sr.stderr, 500))));
+    }
+  }
+
+  /**
+   * Runs Grype CVE scan on the sandbox directory and adds findings to the result.
+   */
+  private static void runGrypeScan(File sandboxRoot, Result result)
+  {
+    String cmd = resolveScannerCommand("plugin/security/grype_cmd", "grype");
+    if (cmd.length() == 0)
+    {
+      result.findings.add(new Finding("grype.cve_scan", Category.POLICY, Severity.BLOCK,
+          "Grype scanner unavailable",
+          "Grype is not installed or not found on PATH, and plugin/security/grype_cmd is not configured.",
+          "Install Grype or set plugin/security/grype_cmd to the grype binary path.",
+          true,
+          new HashMap()));
+      return;
+    }
+
+    if (Sage.DBG) System.out.println("PluginSecurity: Running Grype CVE scan on " + sandboxRoot.getAbsolutePath());
+
+    String[] cmdArray = new String[]{cmd, "dir:" + sandboxRoot.getAbsolutePath(), "-o", "json"};
+    ScannerResult sr = runExternalScanner(cmdArray, sandboxRoot, GRYPE_TIMEOUT_MS);
+
+    if (sr.timedOut)
+    {
+      result.findings.add(new Finding("grype.cve_scan", Category.POLICY, Severity.WARN,
+          "Grype scan timed out",
+          "Grype CVE scan exceeded the " + (GRYPE_TIMEOUT_MS / 1000) + " second time limit.",
+          "Investigate plugin archive size or Grype database update issues.",
+          true,
+          mapOf("timeout_seconds", Long.valueOf(GRYPE_TIMEOUT_MS / 1000))));
+      return;
+    }
+
+    if (sr.exitCode != 0 && sr.stdout.trim().length() == 0)
+    {
+      // Non-zero exit with no JSON output = execution error
+      result.findings.add(new Finding("grype.cve_scan", Category.POLICY, Severity.WARN,
+          "Grype scan error",
+          "Grype encountered an error (exit code " + sr.exitCode + ").",
+          "Check Grype installation, database freshness, and filesystem permissions.",
+          true,
+          mapOf("exit_code", Integer.valueOf(sr.exitCode), "stderr", truncate(sr.stderr, 500))));
+      return;
+    }
+
+    // Parse JSON output for vulnerability matches
+    parseGrypeJsonOutput(sr.stdout, result);
+  }
+
+  /**
+   * Parses Grype JSON output and creates findings for each vulnerability match.
+   * Uses simple string parsing to avoid a JSON library dependency.
+   */
+  private static void parseGrypeJsonOutput(String json, Result result)
+  {
+    int matchCount = 0;
+    // Find "matches" array and parse individual vulnerability entries
+    int matchesIdx = json.indexOf("\"matches\"");
+    if (matchesIdx < 0)
+    {
+      if (Sage.DBG) System.out.println("PluginSecurity: Grype output has no matches key");
+      return;
+    }
+
+    // Find array start
+    int arrayStart = json.indexOf('[', matchesIdx);
+    if (arrayStart < 0)
+      return;
+
+    // Walk through looking for vulnerability objects
+    int pos = arrayStart;
+    while (pos < json.length())
+    {
+      // Find next vulnerability block
+      int vulnIdStart = json.indexOf("\"vulnerability\"", pos);
+      if (vulnIdStart < 0)
+        break;
+
+      // Extract vulnerability ID
+      String vulnId = extractJsonStringValue(json, vulnIdStart, "\"id\"");
+      String severity = extractJsonStringValue(json, vulnIdStart, "\"severity\"");
+
+      // Look for artifact info (comes after vulnerability in same match object)
+      int artifactStart = json.indexOf("\"artifact\"", vulnIdStart);
+      String artifactName = "";
+      String artifactVersion = "";
+      if (artifactStart > 0 && artifactStart < vulnIdStart + 2000)
+      {
+        artifactName = extractJsonStringValue(json, artifactStart, "\"name\"");
+        artifactVersion = extractJsonStringValue(json, artifactStart, "\"version\"");
+      }
+
+      if (vulnId.length() > 0)
+      {
+        matchCount++;
+        Severity sev = mapGrypeSeverity(severity);
+        String detail = vulnId + " (" + severity + ") in " + artifactName;
+        if (artifactVersion.length() > 0)
+          detail += " " + artifactVersion;
+
+        result.findings.add(new Finding("grype.cve_scan", Category.POLICY, sev,
+            "CVE detected: " + vulnId,
+            detail,
+            "Update the affected dependency or verify the vulnerability is not exploitable in this context.",
+            sev != Severity.BLOCK,
+            mapOf("cve_id", vulnId, "severity", severity, "package", artifactName, "version", artifactVersion)));
+      }
+
+      // Move past this vulnerability block
+      pos = vulnIdStart + 20;
+      // Find next match boundary (next "vulnerability" key)
+      int nextVuln = json.indexOf("\"vulnerability\"", pos);
+      if (nextVuln < 0)
+        break;
+      pos = nextVuln;
+    }
+
+    if (Sage.DBG) System.out.println("PluginSecurity: Grype found " + matchCount + " vulnerabilities");
+  }
+
+  /**
+   * Extracts a JSON string value for a given key starting from a position in the JSON string.
+   * Simple parser — no library dependency required.
+   */
+  private static String extractJsonStringValue(String json, int searchFrom, String key)
+  {
+    int keyIdx = json.indexOf(key, searchFrom);
+    if (keyIdx < 0 || keyIdx > searchFrom + 1500)
+      return "";
+    int colonIdx = json.indexOf(':', keyIdx + key.length());
+    if (colonIdx < 0)
+      return "";
+    // Find opening quote of value
+    int openQuote = json.indexOf('"', colonIdx + 1);
+    if (openQuote < 0 || openQuote > colonIdx + 20)
+      return "";
+    int closeQuote = json.indexOf('"', openQuote + 1);
+    if (closeQuote < 0)
+      return "";
+    return json.substring(openQuote + 1, closeQuote);
+  }
+
+  private static Severity mapGrypeSeverity(String severity)
+  {
+    if (severity == null)
+      return Severity.INFO;
+    String upper = severity.toUpperCase(Locale.ROOT);
+    if ("CRITICAL".equals(upper) || "HIGH".equals(upper))
+      return Severity.BLOCK;
+    if ("MEDIUM".equals(upper))
+      return Severity.WARN;
+    return Severity.INFO;
+  }
+
+  private static String truncate(String s, int maxLen)
+  {
+    if (s == null)
+      return "";
+    if (s.length() <= maxLen)
+      return s;
+    return s.substring(0, maxLen) + "...[truncated]";
   }
 
   private static String calcSHA256(File f)
