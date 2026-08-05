@@ -858,6 +858,106 @@ public class PluginAPI {
         }
         return new Integer(0);
       }});
+    rft.put(new PredefinedJEPFunction("Plugin", "GetPluginInstallSecuritySummary", new String[] { "Plugin" })
+    {
+      /**
+       * Runs the plugin install security preflight and returns a human-readable multi-line
+       * summary of the findings, suitable for display in an STV popup.
+       * The summary includes the risk score, tier, and up to 8 severity-tagged findings.
+       * @param Plugin the specified Plugin object
+       * @return a formatted multi-line String summarizing the security review; empty string on error
+       * @since 9.3
+       *
+       * @declaration public String GetPluginInstallSecuritySummary(Plugin Plugin);
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        sage.plugin.PluginWrapper pluggy = getPlugin(stack);
+        if (pluggy == null)
+          return "";
+        java.util.Map review;
+        if (Sage.client)
+        {
+          stack.push(pluggy);
+          Object rv = makeNetworkedCall(stack);
+          if (rv instanceof java.util.Map)
+            review = (java.util.Map) rv;
+          else
+            return "";
+        }
+        else
+        {
+          review = sage.plugin.CorePluginManager.getInstance().getPluginInstallSecurityReview(pluggy, stack.getUIMgr(), null);
+        }
+        if (review == null)
+          return "";
+        Object err = review.get("error");
+        if (err != null && err.toString().length() > 0)
+          return "Security Review Error: " + err;
+
+        // Build header
+        StringBuffer sb = new StringBuffer();
+        Object riskObj = review.get("risk_score");
+        Object tierObj = review.get("tier");
+        int risk = 0;
+        int tier = 1;
+        if (riskObj instanceof Number) risk = ((Number) riskObj).intValue();
+        if (tierObj instanceof Number) tier = ((Number) tierObj).intValue();
+        sb.append("Security Review: Risk Score ").append(risk).append(" / Tier ").append(tier);
+        sb.append('\n');
+
+        // Format findings
+        Object findingsObj = review.get("findings");
+        Object[] findings = null;
+        if (findingsObj instanceof Object[])
+          findings = (Object[]) findingsObj;
+        if (findings == null || findings.length == 0)
+        {
+          sb.append("No findings.");
+          return sb.toString();
+        }
+
+        int maxDisplay = 8;
+        int displayed = 0;
+        for (int i = 0; i < findings.length && displayed < maxDisplay; i++)
+        {
+          if (!(findings[i] instanceof java.util.Map))
+            continue;
+          java.util.Map f = (java.util.Map) findings[i];
+          String severity = f.get("severity") == null ? "INFO" : f.get("severity").toString();
+          String label;
+          if ("BLOCK".equals(severity))
+            label = "HIGH";
+          else if ("WARN".equals(severity))
+            label = "MEDIUM";
+          else
+            label = "LOW";
+          String title = f.get("title") == null ? "" : f.get("title").toString();
+          String detail = f.get("detail") == null ? "" : f.get("detail").toString();
+
+          sb.append('\n').append('[').append(label).append("] ").append(title);
+          if (detail.length() > 0)
+          {
+            // Truncate detail to keep lines short for TV UI
+            if (detail.length() > 60)
+              detail = detail.substring(0, 57) + "...";
+            sb.append(" - ").append(detail);
+          }
+
+          // Note overridable blocks
+          if ("BLOCK".equals(severity))
+          {
+            Object overridable = f.get("overridable");
+            if (Boolean.TRUE.equals(overridable))
+              sb.append("  (override available)");
+          }
+          displayed++;
+        }
+
+        if (findings.length > maxDisplay)
+          sb.append("\n\n... and ").append(findings.length - maxDisplay).append(" more findings");
+
+        return sb.toString();
+      }});
     rft.put(new PredefinedJEPFunction("Plugin", "GetPluginInstallRequiredAcceptanceChecks", new String[] { "Plugin" })
     {
       /**

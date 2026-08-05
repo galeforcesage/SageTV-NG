@@ -112505,6 +112505,53 @@
                                                                        <ns0:MouseTransparency>false</ns0:MouseTransparency>
                                                                       </ns0:Text>
                                                                      </ns0:Action>
+                                                                     <ns0:Conditional Name="SecurityReviewPending" Sym="NGSR-100020">
+                                                                      <ns0:Action Name="SecuritySummary" Sym="NGSR-100021">
+                                                                       <ns0:Text Name="SecurityReviewText" Sym="NGSR-100022">
+                                                                        <ns0:AutosizeText>false</ns0:AutosizeText>
+                                                                        <ns0:WrapText>true</ns0:WrapText>
+                                                                        <ns0:TextAlignment>0.5</ns0:TextAlignment>
+                                                                        <ns0:Animation>0,250,0</ns0:Animation>
+                                                                        <ns0:TextShadow>true</ns0:TextShadow>
+                                                                        <ns0:DisableFontScaling>false</ns0:DisableFontScaling>
+                                                                        <ns0:IgnoreThemeProps>true</ns0:IgnoreThemeProps>
+                                                                        <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
+                                                                        <ns0:MouseTransparency>false</ns0:MouseTransparency>
+                                                                       </ns0:Text>
+                                                                      </ns0:Action>
+                                                                      <ns0:Item Name="Override &amp; Install" Sym="NGSR-100023">
+                                                                       <ns0:Action Name="InstallRes = InstallPluginWithRiskAcceptance(PluginToInstall, RequiredChecks, true)" Sym="NGSR-100024">
+                                                                        <ns0:Action Name="InstallDone = true" Sym="NGSR-100025">
+                                                                         <ns0:Action Name="SecurityReviewPending = false" Sym="NGSR-100026">
+                                                                          <ns0:Action Name="Refresh()" Sym="NGSR-100027">
+                                                                           <ns0:Action Name="&quot;REM Handle results after override install.&quot;" Sym="NGSR-100030" />
+                                                                           <ns0:Conditional Name="StringStartsWith(InstallRes, &quot;RESTART&quot;)" Sym="NGSR-100031">
+                                                                            <ns0:Action Name="Fork()" Sym="NGSR-100032">
+                                                                             <ns0:Action Name="CloseOptionsMenu( ThisDialogName, true )" Sym="NGSR-100033">
+                                                                              <ns0:OptionsMenu Name="Ask to Restart after Plugin Install/Update" Sym="NGSR-100034">
+                                                                               <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+                                                                               <ns0:Action Name="&quot;SageTV needs to be restarted in order to complete the Plugin &quot; + If(IsUpdateInstall, &quot;Update&quot;, &quot;Install&quot;) + &quot;.\n \nWould you like to restart SageTV now?\n \n&quot;" Sym="NGSR-100035">
+                                                                                <ns0:Text Name="Restart" Sym="NGSR-100036" />
+                                                                               </ns0:Action>
+                                                                               <ns0:Action Name="&quot;Note: Plugins that require a restart to complete &quot; + If(IsUpdateInstall, &quot;their update&quot;, &quot;installation&quot;) + &quot; may be marked as Failed until a restart is performed.\n \n&quot;" Sym="NGSR-100037">
+                                                                                <ns0:Text Name="" Sym="NGSR-100038" />
+                                                                               </ns0:Action>
+                                                                               <ns0:Item Ref="40640" Name="Restart Now" />
+                                                                               <ns0:Item Ref="40680" Name="Restart Later" />
+                                                                               <ns0:Listener Ref="40682" Name="Options" />
+                                                                              </ns0:OptionsMenu>
+                                                                             </ns0:Action>
+                                                                            </ns0:Action>
+                                                                           </ns0:Conditional>
+                                                                          </ns0:Action>
+                                                                         </ns0:Action>
+                                                                        </ns0:Action>
+                                                                       </ns0:Action>
+                                                                      </ns0:Item>
+                                                                      <ns0:Item Name="Cancel" Sym="NGSR-100028">
+                                                                       <ns0:Action Name="CloseOptionsMenu()" Sym="NGSR-100029" />
+                                                                      </ns0:Item>
+                                                                     </ns0:Conditional>
                                                                      <ns0:Conditional ID="40745" Name="InstallDone" Sym="NFLX1-1589380">
                                                                       <ns0:Item Name="Close" Sym="NFLX1-1589336">
                                                                        <ns0:Action Name="CloseOptionsMenu()" Sym="NFLX1-1589337">
@@ -112611,29 +112658,44 @@
                                                                         <ns0:Action Name="OrigThemeList = DataUnion(ThemeList)" Sym="OPUS4A-184790" />
                                                                        </ns0:Conditional>
                                                                       </ns0:Action>
-                                                                      <ns0:Action Name="InstallRes = InstallPlugin(PluginToInstall)" Sym="NFLX1-1589325">
-                                                                       <ns0:Action Name="InstallDone = true" Sym="NFLX1-1589381">
-                                                                        <ns0:Action Name="Refresh()" Sym="NFLX1-1589382">
-                                                                         <ns0:Action Name="&quot;REM Handle results after plugin install/update.&quot;" Sym="OPUS4A-184731" />
-                                                                         <ns0:Conditional ID="40771" Name="StringStartsWith(InstallRes, &quot;RESTART&quot;)" Sym="NFLX1-1589467">
-                                                                          <ns0:Action Name="Fork()" Sym="NFLX1-1589468">
-                                                                           <ns0:Action Name="CloseOptionsMenu( ThisDialogName, true )" Sym="NFLX1-1589469">
-                                                                            <ns0:OptionsMenu Name="Ask to Restart after Plugin Install/Update" Sym="NFLX1-1589470">
-                                                                             <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
-                                                                             <ns0:Action Name="&quot;SageTV needs to be restarted in order to complete the Plugin &quot; + If(IsUpdateInstall, &quot;Update&quot;, &quot;Install&quot;) + &quot;.\n \nWould you like to restart SageTV now?\n \n&quot;" Sym="NFLX1-1589471">
-                                                                              <ns0:Text Name="Restart" Sym="NFLX1-1589472" />
-                                                                             </ns0:Action>
-                                                                             <ns0:Action Name="&quot;Note: Plugins that require a restart to complete &quot; + If(IsUpdateInstall, &quot;their update&quot;, &quot;installation&quot;) + &quot; may be marked as Failed until a restart is performed.\n \n&quot;" Sym="OPUS4A-184351">
-                                                                              <ns0:Text Name="" Sym="OPUS4A-184352" />
-                                                                             </ns0:Action>
-                                                                             <ns0:Item Ref="40640" Name="Restart Now" />
-                                                                             <ns0:Item Ref="40680" Name="Restart Later" />
-                                                                             <ns0:Listener Ref="40682" Name="Options" />
-                                                                            </ns0:OptionsMenu>
+                                                                      <ns0:Action Name="SecurityReview = GetPluginInstallSecurityReview(PluginToInstall)" Sym="NGSR-100010">
+                                                                       <ns0:Action Name="RequiredChecks = GetPluginInstallRequiredAcceptanceChecks(PluginToInstall)" Sym="NGSR-100011">
+                                                                        <ns0:Conditional Name="Size(RequiredChecks) &gt; 0" Sym="NGSR-100012">
+                                                                         <ns0:Branch Name="true" Sym="NGSR-100013">
+                                                                          <ns0:Action Name="SecuritySummary = GetPluginInstallSecuritySummary(PluginToInstall)" Sym="NGSR-100014">
+                                                                           <ns0:Action Name="SecurityReviewPending = true" Sym="NGSR-100015">
+                                                                            <ns0:Action Name="Refresh()" Sym="NGSR-100016" />
                                                                            </ns0:Action>
                                                                           </ns0:Action>
-                                                                         </ns0:Conditional>
-                                                                        </ns0:Action>
+                                                                         </ns0:Branch>
+                                                                         <ns0:Branch Name="else" Sym="NGSR-100017">
+                                                                          <ns0:Action Name="InstallRes = InstallPlugin(PluginToInstall)" Sym="NFLX1-1589325">
+                                                                           <ns0:Action Name="InstallDone = true" Sym="NFLX1-1589381">
+                                                                            <ns0:Action Name="Refresh()" Sym="NFLX1-1589382">
+                                                                             <ns0:Action Name="&quot;REM Handle results after plugin install/update.&quot;" Sym="OPUS4A-184731" />
+                                                                             <ns0:Conditional ID="40771" Name="StringStartsWith(InstallRes, &quot;RESTART&quot;)" Sym="NFLX1-1589467">
+                                                                              <ns0:Action Name="Fork()" Sym="NFLX1-1589468">
+                                                                               <ns0:Action Name="CloseOptionsMenu( ThisDialogName, true )" Sym="NFLX1-1589469">
+                                                                                <ns0:OptionsMenu Name="Ask to Restart after Plugin Install/Update" Sym="NFLX1-1589470">
+                                                                                 <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+                                                                                 <ns0:Action Name="&quot;SageTV needs to be restarted in order to complete the Plugin &quot; + If(IsUpdateInstall, &quot;Update&quot;, &quot;Install&quot;) + &quot;.\n \nWould you like to restart SageTV now?\n \n&quot;" Sym="NFLX1-1589471">
+                                                                                  <ns0:Text Name="Restart" Sym="NFLX1-1589472" />
+                                                                                 </ns0:Action>
+                                                                                 <ns0:Action Name="&quot;Note: Plugins that require a restart to complete &quot; + If(IsUpdateInstall, &quot;their update&quot;, &quot;installation&quot;) + &quot; may be marked as Failed until a restart is performed.\n \n&quot;" Sym="OPUS4A-184351">
+                                                                                  <ns0:Text Name="" Sym="OPUS4A-184352" />
+                                                                                 </ns0:Action>
+                                                                                 <ns0:Item Ref="40640" Name="Restart Now" />
+                                                                                 <ns0:Item Ref="40680" Name="Restart Later" />
+                                                                                 <ns0:Listener Ref="40682" Name="Options" />
+                                                                                </ns0:OptionsMenu>
+                                                                               </ns0:Action>
+                                                                              </ns0:Action>
+                                                                             </ns0:Conditional>
+                                                                            </ns0:Action>
+                                                                           </ns0:Action>
+                                                                          </ns0:Action>
+                                                                         </ns0:Branch>
+                                                                        </ns0:Conditional>
                                                                        </ns0:Action>
                                                                       </ns0:Action>
                                                                      </ns0:Hook>
@@ -112644,6 +112706,15 @@
                                                                       <ns0:Value>""</ns0:Value>
                                                                      </ns0:Attribute>
                                                                      <ns0:Attribute ID="40750" Name="OrigThemeList" Sym="OPUS4A-184805">
+                                                                      <ns0:Value>null</ns0:Value>
+                                                                     </ns0:Attribute>
+                                                                     <ns0:Attribute Name="SecurityReviewPending" Sym="NGSR-100001">
+                                                                      <ns0:Value>false</ns0:Value>
+                                                                     </ns0:Attribute>
+                                                                     <ns0:Attribute Name="SecuritySummary" Sym="NGSR-100002">
+                                                                      <ns0:Value>""</ns0:Value>
+                                                                     </ns0:Attribute>
+                                                                     <ns0:Attribute Name="RequiredChecks" Sym="NGSR-100003">
                                                                       <ns0:Value>null</ns0:Value>
                                                                      </ns0:Attribute>
                                                                     </ns0:OptionsMenu>
