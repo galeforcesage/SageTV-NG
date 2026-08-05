@@ -176,7 +176,7 @@ public class MediaServer implements Runnable
     // mpeg2tsremux -- TV/AVPlay REMUX: copy video + audio into MPEG-TS (Chromium MSE cannot
     //   demux TS, so this is the TV surface's remux, never the browser's). Server-native now.
     Sage.put(XCODE_QUALITIES_PROPERTY_ROOT + "mpeg2tsremux",
-        "-f mpegts -c:v copy -c:a copy -copyts");
+        "-f mpegts -muxdelay 0 -muxpreload 0 -c:v copy -c:a copy -copyts");
     extraFileSet = new java.util.HashSet();
     String extraFilesProp = Sage.get("media_server/extra_allowed_files", "miniclient");
     java.util.StringTokenizer toker = new java.util.StringTokenizer(extraFilesProp, ";");
