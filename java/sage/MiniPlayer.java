@@ -1024,6 +1024,14 @@ public class MiniPlayer implements DVDMediaPlayer
       // below can be read as `if (ngSession) { honor surface plan } else { legacy }`
       // instead of bolting on scattered !isNgCapableSession() patches after the fact.
       boolean ngSession = false;
+      // NG early surface verdict variables — declared at method scope so all gates
+      // below (#2-#8) can reference them regardless of nesting.
+      String ngEarlyDelivery = null;
+      sage.client.PlaybackDecisionEngine.PlaybackDecision ngEarlyDecision = null;
+      String ngEarlyTargetVideo = null;
+      String ngEarlyTargetAudio = null;
+      String ngEarlyXcodeMode = null;
+      int ngEarlyBitrateKbps = 0;
       isMpeg2PS = sage.media.format.MediaFormat.MPEG2_PS.equals(currMF.getContainerFormat());
       if (mcsr != null)
       {
@@ -1073,22 +1081,6 @@ public class MiniPlayer implements DVDMediaPlayer
         }
         else
         {
-          containerSupported = clientDoesPull = mcsr.isSupportedPullContainerFormat(currMF.getContainerFormat());
-          
-          // Check the audio & video formats
-          String vidForm = currMF.getPrimaryVideoFormat();
-          String audForm = currMF.getPrimaryAudioFormat();
-          
-          videoCodecSupported = mcsr.isSupportedVideoCodec(vidForm);
-          audioCodecSupported = mcsr.isSupportedAudioCodec(audForm);
-          
-          if (clientDoesPull)
-          {
-            if (vidForm.length() > 0 && !mcsr.isSupportedVideoCodec(vidForm))
-              clientDoesPull = false;
-            if (audForm.length() > 0 && !mcsr.isSupportedAudioCodec(audForm))
-              clientDoesPull = false;
-          }
           fixedPushFormat = mcsr.getFixedPushMediaFormat();
           fixedPushRemuxFormat = mcsr.getFixedPushRemuxFormat();
 
@@ -1098,8 +1090,6 @@ public class MiniPlayer implements DVDMediaPlayer
           // decision with real bandwidth is still computed later (~L1094); this
           // early pass only decides pull(DIRECT_PLAY) vs hls(TRANSCODE) for the
           // httpls gate. evaluateSurfaces is pure, so the double call is safe.
-          String ngEarlyDelivery = null;
-          sage.client.PlaybackDecisionEngine.PlaybackDecision ngEarlyDecision = null;
           if (ngSession && Sage.getBoolean("miniplayer/use_playback_surfaces", true))
           {
             sage.client.PlaybackSurfaceSet ngEarlySurfaces = mcsr.getPlaybackSurfaces();
@@ -1124,7 +1114,59 @@ public class MiniPlayer implements DVDMediaPlayer
               {
                 ngEarlyDelivery = ngEranked.get(0).chosenDeliveryMode;
                 ngEarlyDecision = ngEranked.get(0).decision;
+                ngEarlyTargetVideo = ngEranked.get(0).decision.targetVideoCodec;
+                ngEarlyTargetAudio = ngEranked.get(0).decision.targetAudioCodec;
+                ngEarlyXcodeMode = ngEranked.get(0).chosenXcodeMode;
+                ngEarlyBitrateKbps = ngEranked.get(0).decision.targetBitrateKbps;
               }
+            }
+          }
+
+          // --- NG-first Gate #2: clientDoesPull ---
+          // For NG sessions, derive clientDoesPull from the surface's chosen delivery mode
+          // rather than probing codec/container support with legacy heuristics.
+          if (ngSession && Sage.getBoolean("miniplayer/ng_override_2", true)
+              && ngEarlyDelivery != null)
+          {
+            boolean legacyClientDoesPull = mcsr.isSupportedPullContainerFormat(currMF.getContainerFormat());
+            String vidForm = currMF.getPrimaryVideoFormat();
+            String audForm = currMF.getPrimaryAudioFormat();
+            if (legacyClientDoesPull)
+            {
+              if (vidForm.length() > 0 && !mcsr.isSupportedVideoCodec(vidForm))
+                legacyClientDoesPull = false;
+              if (audForm.length() > 0 && !mcsr.isSupportedAudioCodec(audForm))
+                legacyClientDoesPull = false;
+            }
+            // NG override: pull/pull-xcode/direct → clientDoesPull=true; push/hls → false
+            clientDoesPull = "pull".equals(ngEarlyDelivery)
+                || "pull-xcode".equals(ngEarlyDelivery)
+                || "direct".equals(ngEarlyDelivery);
+            // Still populate codec support flags for downstream consumers
+            containerSupported = mcsr.isSupportedPullContainerFormat(currMF.getContainerFormat());
+            videoCodecSupported = mcsr.isSupportedVideoCodec(vidForm);
+            audioCodecSupported = mcsr.isSupportedAudioCodec(audForm);
+            if (Sage.DBG) System.out.println("MiniPlayer: NG-first: #2 clientDoesPull override"
+                + " ngEarlyDelivery=" + ngEarlyDelivery
+                + " old=" + legacyClientDoesPull + " new=" + clientDoesPull);
+          }
+          else
+          {
+            containerSupported = clientDoesPull = mcsr.isSupportedPullContainerFormat(currMF.getContainerFormat());
+
+            // Check the audio & video formats
+            String vidForm = currMF.getPrimaryVideoFormat();
+            String audForm = currMF.getPrimaryAudioFormat();
+
+            videoCodecSupported = mcsr.isSupportedVideoCodec(vidForm);
+            audioCodecSupported = mcsr.isSupportedAudioCodec(audForm);
+
+            if (clientDoesPull)
+            {
+              if (vidForm.length() > 0 && !mcsr.isSupportedVideoCodec(vidForm))
+                clientDoesPull = false;
+              if (audForm.length() > 0 && !mcsr.isSupportedAudioCodec(audForm))
+                clientDoesPull = false;
             }
           }
 
@@ -1155,6 +1197,64 @@ public class MiniPlayer implements DVDMediaPlayer
             }
           }
 
+          // --- NG-first Gate #3: push codec probes ---
+          // For NG sessions, the push codec flags (clientDoesMPEG2Push, h264PushOK,
+          // clientCanDoMpeg4, clientCanDoMPEGHD) were computed from the legacy
+          // isSupportedPushContainerFormat/isSupportedVideoCodec probes above. Override
+          // them based on the surface verdict: for pull/DIRECT_PLAY they're irrelevant
+          // (set false so push-mode formatters don't fire); for TRANSCODE, derive
+          // from the surface's target video codec.
+          if (ngSession && Sage.getBoolean("miniplayer/ng_override_3", true)
+              && ngEarlyDecision != null)
+          {
+            boolean oldMPEG2Push = clientDoesMPEG2Push;
+            boolean oldH264Push = h264PushOK;
+            boolean oldCanMpeg4 = clientCanDoMpeg4;
+            boolean oldCanMPEGHD = clientCanDoMPEGHD;
+            if (ngEarlyDecision.decision == sage.client.PlaybackDecisionEngine.Decision.DIRECT_PLAY)
+            {
+              // DIRECT_PLAY via pull — push codec flags are irrelevant
+              clientDoesMPEG2Push = false;
+              h264PushOK = false;
+              clientCanDoMpeg4 = false;
+              clientCanDoMPEGHD = false;
+            }
+            else
+            {
+              // TRANSCODE/REMUX — derive from target video codec
+              String tv = (ngEarlyTargetVideo != null) ? ngEarlyTargetVideo.toUpperCase(java.util.Locale.ROOT) : "";
+              clientDoesMPEG2Push = tv.contains("MPEG2") || tv.contains("MPEG-2");
+              h264PushOK = tv.contains("H264") || tv.contains("H.264") || tv.contains("AVC");
+              clientCanDoMpeg4 = tv.contains("MPEG4") || tv.contains("MPEG-4") || tv.contains("H264")
+                  || tv.contains("H.264") || tv.contains("AVC") || tv.contains("HEVC") || tv.contains("H.265");
+              clientCanDoMPEGHD = tv.contains("MPEG2") && (ngEarlyTargetVideo != null && ngEarlyTargetVideo.contains("@HL"));
+            }
+            if (Sage.DBG) System.out.println("MiniPlayer: NG-first: #3 push codec probes override"
+                + " ngDecision=" + ngEarlyDecision.decision + " ngTargetVideo=" + ngEarlyTargetVideo
+                + " clientDoesMPEG2Push old=" + oldMPEG2Push + " new=" + clientDoesMPEG2Push
+                + " h264PushOK old=" + oldH264Push + " new=" + h264PushOK
+                + " clientCanDoMpeg4 old=" + oldCanMpeg4 + " new=" + clientCanDoMpeg4
+                + " clientCanDoMPEGHD old=" + oldCanMPEGHD + " new=" + clientCanDoMPEGHD);
+          }
+
+          // --- NG-first Gate #4: Bandwidth probe ---
+          // For NG + DIRECT_PLAY: skip the bandwidth probe entirely (no transcode
+          // → no rate adaptation needed). Set sentinel BW to prevent lowBandwidth.
+          // For NG + TRANSCODE: still run the probe but apply surface bitrate target.
+          if (ngSession && Sage.getBoolean("miniplayer/ng_override_4", true)
+              && ngEarlyDecision != null
+              && ngEarlyDecision.decision == sage.client.PlaybackDecisionEngine.Decision.DIRECT_PLAY)
+          {
+            uiBandwidthEstimate = mcsr.getEstimatedBandwidth();
+            if (uiBandwidthEstimate < 500000)
+              uiBandwidthEstimate = 50000000; // sentinel: no transcode needed
+            if (Sage.DBG) System.out.println("MiniPlayer: NG-first: #4 bandwidth probe SKIPPED"
+                + " (DIRECT_PLAY — no transcode, no rate adaptation needed)"
+                + " uiBandwidthEstimate=" + uiBandwidthEstimate);
+            lastAverageEstimatedPushBitrate = (int)uiBandwidthEstimate;
+          }
+          else
+          {
           uiBandwidthEstimate = mcsr.getEstimatedBandwidth();
           // Disable transcoding on the fly
           if (uiBandwidthEstimate < 500000 && (clientCanDoMpeg4 || httpls))
@@ -1278,6 +1378,21 @@ public class MiniPlayer implements DVDMediaPlayer
           if (Sage.DBG) System.out.println("MiniPlayer got an estimate from the UI on bandwidth of " + uiBandwidthEstimate/1000 + "Kbps");
           // Set the average to be our initial estimate so we can use it to filter out bad estimated bandwidth values initially
           lastAverageEstimatedPushBitrate = (int)uiBandwidthEstimate;
+          // NG-first Gate #4 (TRANSCODE path): apply surface bitrate target if available
+          if (ngSession && Sage.getBoolean("miniplayer/ng_override_4", true)
+              && ngEarlyDecision != null
+              && ngEarlyDecision.decision != sage.client.PlaybackDecisionEngine.Decision.DIRECT_PLAY
+              && ngEarlyBitrateKbps > 0)
+          {
+            long oldBw = uiBandwidthEstimate;
+            // Use surface's target bitrate as the effective bandwidth cap (convert Kbps → bps)
+            uiBandwidthEstimate = Math.min(uiBandwidthEstimate, (long)ngEarlyBitrateKbps * 1000L);
+            lastAverageEstimatedPushBitrate = (int)uiBandwidthEstimate;
+            if (Sage.DBG) System.out.println("MiniPlayer: NG-first: #4 bandwidth probe CAPPED"
+                + " by surface bitrate target=" + ngEarlyBitrateKbps + "Kbps"
+                + " old=" + oldBw + " new=" + uiBandwidthEstimate);
+          }
+          } // end Gate #4 else (legacy bandwidth probe path)
         }
       }
       else
@@ -1286,10 +1401,27 @@ public class MiniPlayer implements DVDMediaPlayer
       }
 
       // NOTE: We should really check the media's rate against our bandwidth and not use 2Mbps as the bounds
-      if (!pureLocal && mcsr != null && (mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS) ||
-          mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_TS)) && uiBandwidthEstimate < Sage.getInt("miniplayer/min_bandwidth_for_no_transcode", 2000000) && clientCanDoMpeg4)
+      // --- NG-first Gate #5: lowBandwidth determination ---
+      if (ngSession && Sage.getBoolean("miniplayer/ng_override_5", true)
+          && ngEarlyDecision != null
+          && ngEarlyDecision.decision == sage.client.PlaybackDecisionEngine.Decision.DIRECT_PLAY)
       {
-        lowBandwidth = true;
+        // NG + DIRECT_PLAY: never set lowBandwidth (no transcode needed)
+        if (Sage.DBG) System.out.println("MiniPlayer: NG-first: #5 lowBandwidth SUPPRESSED"
+            + " (DIRECT_PLAY — transcoding not applicable)"
+            + " legacy-would-be=" + (!pureLocal && mcsr != null
+                && (mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS)
+                    || mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_TS))
+                && uiBandwidthEstimate < Sage.getInt("miniplayer/min_bandwidth_for_no_transcode", 2000000)
+                && clientCanDoMpeg4));
+      }
+      else
+      {
+        if (!pureLocal && mcsr != null && (mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS) ||
+            mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_TS)) && uiBandwidthEstimate < Sage.getInt("miniplayer/min_bandwidth_for_no_transcode", 2000000) && clientCanDoMpeg4)
+        {
+          lowBandwidth = true;
+        }
       }
 
       boolean useOriginalAudioTrack = true;
@@ -1955,7 +2087,33 @@ public class MiniPlayer implements DVDMediaPlayer
         clientDoesPull = false;
       }
 
-      if (clientDoesPull && (httpls || pureLocal || !clientDoesMPEG2Push || !clientCanDoMpeg4 || uiBandwidthEstimate >= Sage.getInt("miniplayer/min_bandwidth_for_no_transcode", 2000000)))
+      // --- NG-first Gate #6: Pull-vs-push mode selection ---
+      // For NG sessions, honor the surface's chosen delivery mode directly rather
+      // than the legacy compound condition (clientDoesPull && (httpls||...)).
+      if (ngSession && Sage.getBoolean("miniplayer/ng_override_6", true)
+          && ngEarlyDelivery != null)
+      {
+        boolean legacyPullResult = clientDoesPull && (httpls || pureLocal || !clientDoesMPEG2Push || !clientCanDoMpeg4 || uiBandwidthEstimate >= Sage.getInt("miniplayer/min_bandwidth_for_no_transcode", 2000000));
+        // NG override: pull/pull-xcode/direct → pull mode, push → push mode, hls → pull (httpls already set)
+        if ("pull".equals(ngEarlyDelivery) || "pull-xcode".equals(ngEarlyDelivery)
+            || "direct".equals(ngEarlyDelivery) || "hls".equals(ngEarlyDelivery))
+        {
+          pushMode = false;
+          if (Sage.DBG) System.out.println("MiniPlayer: NG-first: #6 pull-vs-push override → PULL"
+              + " ngEarlyDelivery=" + ngEarlyDelivery + " legacy-would-be="
+              + (legacyPullResult ? "pull" : "push"));
+        }
+        else
+        {
+          // "push" delivery mode
+          pushMode = true;
+          useNioTransfers = Sage.getBoolean("use_nio_transfers", false);
+          if (Sage.DBG) System.out.println("MiniPlayer: NG-first: #6 pull-vs-push override → PUSH"
+              + " ngEarlyDelivery=" + ngEarlyDelivery + " legacy-would-be="
+              + (legacyPullResult ? "pull" : "push"));
+        }
+      }
+      else if (clientDoesPull && (httpls || pureLocal || !clientDoesMPEG2Push || !clientCanDoMpeg4 || uiBandwidthEstimate >= Sage.getInt("miniplayer/min_bandwidth_for_no_transcode", 2000000)))
       {
         if (Sage.DBG) System.out.println("MiniPlayer is using Pull mode playback");
         // Pull mode is being used
@@ -1974,6 +2132,54 @@ public class MiniPlayer implements DVDMediaPlayer
         if (Sage.DBG) System.out.println("MiniPlayer is using Push mode playback");
         pushMode = true; // shouldPush(majorTypeHint, minorTypeHint);
         useNioTransfers = Sage.getBoolean("use_nio_transfers", false);
+
+        // --- NG-first Gate #7: Push transcode format selection ---
+        // For NG sessions in push mode + TRANSCODE, use the surface's target codecs
+        // and xcodeMode directly instead of the legacy codec-probing format logic.
+        boolean ngGate7Applied = false;
+        if (ngSession && Sage.getBoolean("miniplayer/ng_override_7", true)
+            && ngEarlyDecision != null
+            && (ngEarlyDecision.decision == sage.client.PlaybackDecisionEngine.Decision.TRANSCODE
+                || ngEarlyDecision.decision == sage.client.PlaybackDecisionEngine.Decision.REMUX
+                || ngEarlyDecision.decision == sage.client.PlaybackDecisionEngine.Decision.AUDIO_TRANSCODE)
+            && "push".equals(ngEarlyDelivery))
+        {
+          ngGate7Applied = true;
+          transcoded = true;
+          useOriginalAudioTrack = false;
+          // Build prefTranscodeMode from surface targets
+          if (ngEarlyXcodeMode != null && ngEarlyXcodeMode.length() > 0)
+          {
+            prefTranscodeMode = ngEarlyXcodeMode;
+          }
+          else
+          {
+            // Derive from target codecs
+            String tVid = (ngEarlyTargetVideo != null) ? ngEarlyTargetVideo.toUpperCase(java.util.Locale.ROOT) : "";
+            if (tVid.contains("H264") || tVid.contains("H.264") || tVid.contains("AVC"))
+              prefTranscodeMode = "dynamich264";
+            else if (tVid.contains("MPEG2") || tVid.contains("MPEG-2"))
+              prefTranscodeMode = (mcsr != null && mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS))
+                  ? "dynamic" : "dynamicts";
+            else
+              prefTranscodeMode = "dynamich264"; // safe default for modern clients
+          }
+          // For AUDIO_TRANSCODE (video copy), override to audioonly mode
+          if (ngEarlyDecision.decision == sage.client.PlaybackDecisionEngine.Decision.AUDIO_TRANSCODE)
+          {
+            prefTranscodeMode = "audioonly";
+            useOriginalAudioTrack = false;
+          }
+          dynamicRateAdjust = (ngEarlyBitrateKbps > 0);
+          if (Sage.DBG) System.out.println("MiniPlayer: NG-first: #7 push transcode format override"
+              + " ngDecision=" + ngEarlyDecision.decision
+              + " ngTargetVideo=" + ngEarlyTargetVideo + " ngTargetAudio=" + ngEarlyTargetAudio
+              + " ngXcodeMode=" + ngEarlyXcodeMode
+              + " prefTranscodeMode=" + prefTranscodeMode + " dynamicRateAdjust=" + dynamicRateAdjust);
+        }
+
+        if (!ngGate7Applied)
+        {
         // Check for transcoding
         // NOTE: Always transcode when we're doing push mode with the placeshifter. Non-transcoded push mode
         // doesn't work all that well and people usually connect that way when they want to experiment with transcoding.
@@ -2205,6 +2411,7 @@ public class MiniPlayer implements DVDMediaPlayer
         // Removed so Shield (legacy client) can be tested raw. Galaxy Tab still
         // fails — re-add a client-aware version (MAC/name match) once we know
         // which clients truly cannot decode HEVC.)
+        } // end if (!ngGate7Applied) — legacy push format selection
       }
 
       // --- Profile decision diagnostic + authoritative override (schema v2) ---
@@ -3008,6 +3215,43 @@ public class MiniPlayer implements DVDMediaPlayer
       {
         // Do this now since we may use it below for determining if we're localhost or not & setting up the stv:// URL hostname
         String theURL = null;
+        // --- NG-first Gate #8: URL construction ---
+        // For NG sessions, use the surface delivery mode to determine the URL form
+        // directly, bypassing the legacy hostname/protocol/pureLocal ladder.
+        if (ngSession && Sage.getBoolean("miniplayer/ng_override_8", true)
+            && ngEarlyDelivery != null
+            && !(majorTypeHint == MediaFile.MEDIATYPE_DVD && file == null))
+        {
+          if ("hls".equals(ngEarlyDelivery) || httpls)
+          {
+            // HLS → iosstream URL
+            String ipPort = "HOSTNAME";
+            String forced = Sage.get("forced_external_httpls_addr_port", "");
+            if (forced != null && forced.length() > 0)
+              ipPort = forced;
+            theURL = "http://" + ipPort + "/iosstream_" + uiMgr.getLocalUIClientName() + "_" + currMF.id + "_" + VideoFrame.getVideoFrameForPlayer(this).getCurrSegment() + "_list.m3u8";
+          }
+          else if (pureLocal)
+          {
+            theURL = hostname;
+          }
+          else
+          {
+            // pull/pull-xcode/direct → stv:// (bridge rewrites to /rawmedia or /msproxy)
+            if (hostname != null && hostname.equals(Sage.get("alternate_media_server", "")))
+              theURL = "stv://" + hostname + (Sage.getBoolean("use_alternate_streaming_ports", false) ?
+                  ":7817" : "") + "/" + file.getAbsolutePath();
+            else if (mcsr.isStreamingProtocolSupported("stv") && (!IOUtils.isLocalhostSocket(clientSocket.socket()) || timeshifted))
+              theURL = "stv://" + clientSocket.socket().getLocalAddress().getHostAddress() + "/" + file.getAbsolutePath();
+            else
+              theURL = file.getAbsolutePath();
+          }
+          if (Sage.DBG) System.out.println("MiniPlayer: NG-first: #8 URL construction override"
+              + " ngEarlyDelivery=" + ngEarlyDelivery + " httpls=" + httpls
+              + " theURL=" + theURL);
+        }
+        else
+        {
         if (majorTypeHint == MediaFile.MEDIATYPE_DVD && file == null)
           theURL = "dvd://";
         else if (httpls)
@@ -3044,6 +3288,7 @@ public class MiniPlayer implements DVDMediaPlayer
           theURL = "stv://" + clientSocket.socket().getLocalAddress().getHostAddress() + "/" + file.getAbsolutePath();
         else
           theURL = file.getAbsolutePath();
+        } // end Gate #8 else (legacy URL construction)
         // NG pull-mode format hint: append MIME triplet so client skips probing
         if (ngSession && theURL != null && !theURL.startsWith("dvd") && currMF != null)
         {
