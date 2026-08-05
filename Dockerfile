@@ -207,7 +207,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglx0 \
     libegl1 \
     libopengl0 \
+    `# === ClamAV antivirus scanner for plugin security review ===` \
+    clamav \
+    clamav-freshclam \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Update ClamAV virus definitions (build-time bootstrap; runtime freshclam keeps it current)
+RUN freshclam --quiet || true
+
+# Install Grype vulnerability scanner
+RUN curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
 
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
