@@ -1990,14 +1990,71 @@ public class CorePluginManager implements Runnable
       else
         priority = sage.msg.SystemMessage.INFO_PRIORITY;
 
-      String firstUnresolved = unresolved.isEmpty() ? "none" : unresolved.get(0).toString();
-      String msgText = "Plugin security review " + decision.toUpperCase() + ": " + plug.getName() +
-          " (" + plug.getId() + ") v" + plug.getVersion() +
-          " risk=" + review.riskScore +
-          " tier=" + review.tier +
-          " unresolved=" + unresolved.size() +
-          " overridden=" + overridden.size() +
-          " first_unresolved=" + firstUnresolved;
+      StringBuffer msgBuf = new StringBuffer();
+      msgBuf.append("Plugin security review ").append(decision.toUpperCase()).append(": ");
+      msgBuf.append(plug.getName()).append(" (").append(plug.getId()).append(") v").append(plug.getVersion());
+      msgBuf.append("\nRisk: ").append(review.riskScore).append("/100 | Tier: ").append(review.tier);
+      msgBuf.append(" | Findings: ").append(review.findings.size());
+      msgBuf.append(" (").append(unresolved.size()).append(" unresolved, ").append(overridden.size()).append(" overridden)");
+
+      // Findings breakdown
+      java.util.ArrayList overridableCheckNames = new java.util.ArrayList();
+      int shown = 0;
+      int maxFindings = 10;
+      boolean truncated = false;
+      for (int i = 0; i < review.findings.size(); i++)
+      {
+        PluginInstallSecurityReview.Finding f = (PluginInstallSecurityReview.Finding) review.findings.get(i);
+        // After showing 5 findings, only show HIGH/MEDIUM
+        if (shown >= 5 && f.severity == PluginInstallSecurityReview.Severity.INFO)
+          continue;
+        if (shown >= maxFindings)
+        {
+          truncated = true;
+          break;
+        }
+
+        String severityLabel;
+        if (f.severity == PluginInstallSecurityReview.Severity.BLOCK)
+          severityLabel = "HIGH";
+        else if (f.severity == PluginInstallSecurityReview.Severity.WARN)
+          severityLabel = "MEDIUM";
+        else
+          severityLabel = "LOW";
+
+        boolean isOverridden = overridden.contains(f.check);
+        boolean isUnresolved = unresolved.contains(f.check);
+
+        msgBuf.append("\n\n[").append(severityLabel).append("] ").append(f.title != null ? f.title : f.check);
+        if (isOverridden)
+          msgBuf.append(" (OVERRIDDEN)");
+        if (f.detail != null && f.detail.length() > 0)
+          msgBuf.append("\n  ").append(f.detail);
+        if (isUnresolved)
+        {
+          msgBuf.append("\n  Status: UNRESOLVED");
+          if (f.remediation != null && f.remediation.length() > 0)
+            msgBuf.append("\n  Remediation: ").append(f.remediation);
+        }
+
+        if (f.overridable || (f.severity != PluginInstallSecurityReview.Severity.INFO && isUnresolved))
+          overridableCheckNames.add(f.check);
+
+        shown++;
+      }
+      if (truncated)
+        msgBuf.append("\n\n... and ").append(review.findings.size() - shown).append(" additional finding(s) not shown.");
+
+      // Override guidance for unresolved findings
+      if (!unresolved.isEmpty())
+      {
+        msgBuf.append("\n\nTo override and install: Use InstallPluginWithRiskAcceptance API with checks:");
+        for (int i = 0; i < unresolved.size(); i++)
+          msgBuf.append("\n  ").append(unresolved.get(i).toString());
+        msgBuf.append("\nOr set plugin/security/allow_override_hard_blocks=true in Sage.properties.");
+      }
+
+      String msgText = msgBuf.toString();
 
       java.util.Properties props = new java.util.Properties();
       props.setProperty("Category", "PluginSecurityReview");
