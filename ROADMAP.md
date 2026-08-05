@@ -590,22 +590,11 @@ RTX VSR) — the items below are the ones not previously captured.
   GPU is on the current host, so this is untestable until hardware +
   an appropriately-built ffmpeg are available.
 
-- **MiniPlayer push-mode transcode GPU offload (high priority).**
-  When a MiniClient's profile doesn't support the source codec (e.g.
-  HEVC source + `desktop_default` profile without HEVC), `MiniPlayer`
-  forces a push-mode transcode via `FFMPEGTranscoder`'s legacy format
-  builder. This path produces `-vcodec mpeg4 -f dvd -s 1280x720` at
-  1 Mbps — 2008-era quality, pure CPU, ignores `HwEncoder` entirely.
-  This is the most common transcode trigger for legacy Windows and
-  Android clients watching HEVC/ATSC3 content. Fix: wire
-  `HwEncoder.pick()` into the MiniPlayer push-transcode codec
-  selection so it uses `h264_nvenc` (or software `libx264`) with
-  modern rate control instead of `mpeg4`/DVD. Output format should be
-  MPEG-TS H.264 (universally playable by all MiniClients) at a
-  bitrate appropriate to the client's reported bandwidth. The
-  HTTPLSServer live-tune fix (`httplsMode` NVENC wiring) is a
-  template for this — same pattern, different entry point.
-  Effort: 4–8 hours.
+- ~~**MiniPlayer push-mode transcode GPU offload (high priority).**~~
+  ✅ done — shipped as the "Modern H.264 MPEG-TS push" path in
+  `FFMPEGTranscoder.java:2077+`. Replaces legacy `mpeg4`/DVD with
+  H.264 via `h264_nvenc` (or `libx264` fallback), bandwidth-adaptive,
+  wired through `HwEncoder.pick()`. See `Done` section.
 
 - **NVDEC thumbnail generation (low value — likely rejected).** Proposed
   as a library-rescan speed-up, but thumbnails are single-frame
@@ -627,61 +616,9 @@ RTX VSR) — the items below are the ones not previously captured.
 
 ## Playback track
 
-- **NG-first decision ordering in `MiniPlayer.load()` (hoist the NG ruling to
-  the top).**
-  Today the NG capability ruling is computed too late in `load()`: `mcsr` (and
-  therefore `isNgCapableSession()`) is known at line ~659, but the surface
-  decision (`evaluateSurfaces` → delivery / DIRECT_PLAY-vs-TRANSCODE) doesn't
-  run until ~line 1094 — *after* the legacy `iPhoneMode → httpls` latch (~830),
-  the bandwidth probe (832-951), and the legacy pull/push heuristics. So every
-  legacy determination fires first and we bolt on `!isNgCapableSession()`
-  patches after the fact. Goal: compute the NG ruling FIRST, then each legacy
-  branch becomes a clean `if (ngSession) { honor surface plan } else { legacy }`.
-
-  **Bandwidth split (why the hoist is safe).** The surface capability verdict
-  (which surface, DIRECT_PLAY vs TRANSCODE, delivery mode) is bandwidth-
-  independent — pure codec/container matching. Only `targetBitrateKbps` needs
-  `availableBwKbps`, and `targetBitrateKbps` is currently **unused in
-  MiniPlayer** (only logged). So the capability/delivery verdict can be hoisted
-  above the bandwidth probe (pass `availableBwKbps=0`); refine the bitrate
-  target after the probe for the TRANSCODE case only. For DIRECT_PLAY NG
-  sessions the bandwidth probe can be skipped entirely (no transcode → no rate
-  adaptation).
-
-  **Legacy determination → NG override matrix** (each becomes `if (ngSession)…`):
-  | # | Legacy determination (load()) | NG signal that overrides it |
-  |---|---|---|
-  | 1 | `httpls` latch (`isIOSClient()`, ~830) | surface delivery mode: suppress for surface `pull`/DIRECT_PLAY, keep for surface `hls`/TRANSCODE |
-  | 2 | `clientDoesPull` (pull container+codec, ~808) | surface `DELIVERY_MODES` + `VIDEO/AUDIO_CODECS` |
-  | 3 | `clientDoesMPEG2Push` / `clientCanDoMpeg4` / `clientCanDoMPEGHD` | surface video codec set |
-  | 4 | bandwidth probe (832-951) | skip for surface DIRECT_PLAY; else feed target bitrate |
-  | 5 | `lowBandwidth` (962) | surface decision + `targetBitrateKbps` |
-  | 6 | pull-vs-push mode (`if clientDoesPull && (httpls||…)`, ~1035) | surface `chosenDeliveryMode` |
-  | 7 | push transcode format select (`dynamic`/`dynamicts`/`fixedPush`, 1560-1690) | surface target video/audio codecs |
-  | 8 | URL construction (`iosstream`/`stv://`/file, ~2300-2330) | surface delivery → `hls`=iosstream, `pull`=`stv://` (bridge rewrites) |
-
-  **The old `stv://` blocker is OBSOLETE (bridge rewrite).** An earlier version of
-  this item claimed the URL builder needed a rewrite because a browser can't
-  consume `stv://`. That is no longer true: the PWA bridge's `_loadPullMode`
-  (`public/js/media/player.js`) rewrites `stv://<host>/path` (and `file://` and a
-  bare `/path`) → `<bridge>/rawmedia?path=<path>`, a byte-range HTTP endpoint; the
-  bridge runs on the SageTV host and streams the raw file straight off disk —
-  which also sidesteps the separate `stv://` media-server port. For codecs the
-  browser can't natively decode, the pull path falls back to the bridge
-  `/transcode` endpoint. So the server can emit its existing `stv://` pull URL for
-  an NG DIRECT_PLAY decision and it routes cleanly to the browser via the bridge.
-  No URL-builder rewrite is required — only gating `httpls` on the surface
-  delivery mode (which needs the surface *verdict* computed above the ~830 latch,
-  i.e. the hoist).
-
-  **Landing order.** (a) Hoist `ngSession` + the surface capability verdict to
-  the top, behavior-preserving, instrument every override point (structural half
-  — DONE, no behavior change). (b) Gate the `httpls` latch on the hoisted surface
-  verdict: suppress for `pull`/DIRECT_PLAY (routes via bridge `/rawmedia`), keep
-  for `hls`/TRANSCODE (server-side NVENC HLS). (c) Flip the remaining matrix
-  branches one at a time, verifying per branch. (Server-side transcode stays the
-  path for TRANSCODE; the bridge `/transcode` is only a client-side fallback for
-  a capability-report mismatch.)
+- ~~**NG-first decision ordering in `MiniPlayer.load()` (hoist the NG ruling to
+  the top).**~~ ✅ done — shipped in commit `819da971`. All gates #1–#8 wired
+  with kill-switches (`miniplayer/ng_override_N`). See `Done` section.
 
 - **Playback Surface capability model (Protocol 2.1) — replaces device /
   browser / OS-based negotiation.**
@@ -848,37 +785,11 @@ RTX VSR) — the items below are the ones not previously captured.
     restart must drop follow mode (the `activefile` → `inactivefile`
     stdin-ctrl transition) — a state the completed-file case never hits.
 
-- **Audio-only transcode when only the audio codec mismatches.** In
-  `PlaybackDecisionEngine.evaluate()` the REMUX branch only fires when
-  BOTH video and audio codecs are supported and just the container is
-  wrong. When the video codec is fine but the AUDIO codec is unsupported
-  (e.g. AC-4/DTS on a client that lacks it), the decision falls through to
-  the full TRANSCODE branch. It does set `targetVideo = mediaVideoCodec`
-  (source codec unchanged), but the transcoder must then emit
-  `-c:v copy` (stream-copy the video, transcode only the audio, then mux)
-  rather than re-encoding the video. Verify `FFMPEGTranscoder` honors the
-  copy opportunity when `targetVideo == sourceVideo`; if it re-encodes
-  video unnecessarily, add an explicit audio-only path. Payoff: keeps
-  trickplay fast (no video encode = no cold-restart cost) AND fixes the
-  audio incompatibility. Cross-references the existing AC-4→EAC3
-  audio-only path in the deployed jar (see userMemory sagetv-deploy notes).
-
-  **Completed recording vs live TV differ materially:**
-  - *Completed recording* (static file): video stream-copy is trivial;
-    even the seek-restart is far cheaper than full transcode (demux + copy
-    + audio re-encode + mux, no video decode/encode). Straightforward win.
-  - *Live TV / in-progress* — this is the PRIMARY win and the ATSC 3.0
-    case: HEVC video + AC-4 audio live recording on a client that can't
-    decode AC-4 → copy HEVC passthrough + AC-4→EAC3 audio transcode + mux,
-    following the growing file. This is essentially "REMUX + light audio
-    transcode": real-time-safe and, because there is NO video encode, it
-    drastically lowers the seek-restart cost — so **Item 2 partially
-    subsumes Item 1 for the audio-mismatch case**. This directly matches
-    the AC-4→EAC3 audio-only path already deployed (userMemory
-    sagetv-deploy). Recommendation: make audio-only-transcode the default
-    whenever video codec + resolution + bandwidth are OK and only audio
-    fails, for BOTH live and completed sources — it is the best single
-    lever for live ATSC 3.0 trickplay.
+- ~~**Audio-only transcode when only the audio codec mismatches.**~~ ✅ done —
+  implemented at `FFMPEGTranscoder.java:939+`. Video copy + audio re-encode
+  when only audio mismatches (e.g. AC-4→EAC3 with HEVC copy). Full ladder:
+  eac3→ac3→aac→mp2. `HwEncoder.pick()` integrated for optional video
+  re-encode. See `Done` section.
 
 - **HLS segment retention window (iOS / PWA trickplay).**
   Concretizes option (b) of the transcode-seek-reuse item above,
@@ -1469,3 +1380,19 @@ Estimated effort: 1–3 months  •  Risk: High  •  Expected gain: Catbert ski
   [sagetv-deploy CHANGELOG](https://github.com/galeforcesage/sagetv-deploy/blob/master/CHANGELOG.md)
 - Java 21 / Lucene 4.10.4 / Docker multi-stage / G1GC tuning
 - Samsung TV Plus IPTV plugin — `be92eeee`
+- **`-muxdelay 0 -muxpreload 0` on mpeg2ts remux** — `367475ae`.
+  Eliminates initial PTS offset that caused A/V desync on remux-to-mpegts
+  output (push-mode and HLS).
+- **Audio-only transcode (video copy + audio re-encode)** —
+  `FFMPEGTranscoder.java:939+`. When only audio codec mismatches (e.g.
+  AC-4→EAC3 with HEVC copy), emits `-c:v copy` + audio transcode. Full
+  codec ladder: eac3→ac3→aac→mp2. `HwEncoder.pick()` integrated for
+  optional video re-encode path.
+- **MiniPlayer push-mode GPU offload** — `FFMPEGTranscoder.java:2077+`.
+  "Modern H.264 MPEG-TS push" replaces legacy `mpeg4`/DVD with H.264 via
+  `h264_nvenc` (or `libx264` fallback), bandwidth-adaptive, wired through
+  `HwEncoder.pick()`.
+- **NG-first decision ordering in `MiniPlayer.load()`** — `819da971`.
+  Hoists the NG capability ruling to the top of `load()`. All 8 legacy
+  determination gates wired with kill-switches
+  (`miniplayer/ng_override_N`).
