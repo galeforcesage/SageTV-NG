@@ -1002,6 +1002,12 @@ public final class PluginInstallSecurityReview
     if (sr.exitCode == 0)
     {
       if (Sage.DBG) System.out.println("PluginSecurity: ClamAV scan clean");
+      result.findings.add(new Finding("clamav.scan", Category.MALWARE, Severity.INFO,
+          "ClamAV scan clean",
+          "ClamAV scanned the extracted plugin sandbox successfully; no malware signatures were detected.",
+          "No action required.",
+          true,
+          mapOf("exit_code", Integer.valueOf(sr.exitCode))));
       return;
     }
 
@@ -1103,14 +1109,23 @@ public final class PluginInstallSecurityReview
     }
 
     // Parse JSON output for vulnerability matches
-    parseGrypeJsonOutput(sr.stdout, result);
+    int matchCount = parseGrypeJsonOutput(sr.stdout, result);
+    if (matchCount == 0)
+    {
+      result.findings.add(new Finding("grype.cve_scan", Category.POLICY, Severity.INFO,
+          "Grype scan clean",
+          "Grype vulnerability scan completed on package contents; 0 CVEs were detected.",
+          "No action required.",
+          true,
+          mapOf("cve_count", Integer.valueOf(0))));
+    }
   }
 
   /**
    * Parses Grype JSON output and creates findings for each vulnerability match.
    * Uses simple string parsing to avoid a JSON library dependency.
    */
-  private static void parseGrypeJsonOutput(String json, Result result)
+  private static int parseGrypeJsonOutput(String json, Result result)
   {
     int matchCount = 0;
     // Find "matches" array and parse individual vulnerability entries
@@ -1118,13 +1133,13 @@ public final class PluginInstallSecurityReview
     if (matchesIdx < 0)
     {
       if (Sage.DBG) System.out.println("PluginSecurity: Grype output has no matches key");
-      return;
+      return 0;
     }
 
     // Find array start
     int arrayStart = json.indexOf('[', matchesIdx);
     if (arrayStart < 0)
-      return;
+      return 0;
 
     // Walk through looking for vulnerability objects
     int pos = arrayStart;
@@ -1175,6 +1190,7 @@ public final class PluginInstallSecurityReview
     }
 
     if (Sage.DBG) System.out.println("PluginSecurity: Grype found " + matchCount + " vulnerabilities");
+    return matchCount;
   }
 
   /**
