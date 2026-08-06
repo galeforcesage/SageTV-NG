@@ -110779,7 +110779,7 @@
     <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
     <ns0:MouseTransparency>false</ns0:MouseTransparency>
     <ns0:Action Name="&quot;REM Set footer tip text.&quot;" Sym="OPUS4A-183025">
-     <ns0:Action Name="FooterTipText = If( IsLocalRestartNeeded() || IsServerRestartNeeded(), OptionsRestartText, OptionsText )" Sym="OPUS4A-183026">
+     <ns0:Action Name="FooterTipText = If( IsServerRestartNeeded() || (IsLocalRestartNeeded() &amp;&amp; !gIsUIReloadNeeded), OptionsRestartText, OptionsText )" Sym="OPUS4A-183026">
       <ns0:Conditional Name="PluginListMode" Sym="NFLX1-1589283">
        <ns0:Branch Name="else" Sym="NFLX1-1589286">
         <ns0:Panel Name="Invalid plugin mode" Sym="OPUS4A-182237">
@@ -112535,7 +112535,7 @@
                                                                      <ns0:Conditional ID="40745" Name="InstallDone" Sym="NFLX1-1589380">
                                                                       <ns0:Item Name="Close" Sym="NFLX1-1589336">
                                                                        <ns0:Action Name="CloseOptionsMenu()" Sym="NFLX1-1589337">
-                                                                        <ns0:Conditional Name="IsLocalRestartNeeded() || IsServerRestartNeeded()" Sym="NGSR-100039">
+                                                                        <ns0:Conditional Name="IsServerRestartNeeded() || (IsLocalRestartNeeded() &amp;&amp; (GetPluginType(PluginToInstall) != &quot;STVI&quot;))" Sym="NGSR-100039">
                                                                          <ns0:Branch Name="true" Sym="NGSR-100040">
                                                                           <ns0:Action Name="Fork()" Sym="NGSR-100032">
                                                                            <ns0:OptionsMenu Name="Ask to Restart after Plugin Install/Update" Sym="NGSR-100034">
@@ -112908,7 +112908,7 @@
    <ns0:Action Ref="2640" Name="&quot;REM Reset reverse ani..." />
    <ns0:Action ID="2722" Name="&quot;REM Check for need to restart SageTV due to plugin changes.&quot;" Sym="OPUS4A-183019">
     <ns0:Conditional Name="ContinueProcessing" Sym="OPUS4A-183020">
-     <ns0:Conditional Name="(IsLocalRestartNeeded() || IsServerRestartNeeded()) &amp;&amp; !Reloaded" Sym="NFLX1-1589414">
+     <ns0:Conditional Name="(IsServerRestartNeeded() || (IsLocalRestartNeeded() &amp;&amp; !gIsUIReloadNeeded)) &amp;&amp; !Reloaded" Sym="NFLX1-1589414">
       <ns0:OptionsMenu ID="40901" Name="Ask to restart SageTV for plugins" Sym="NFLX1-1589415">
        <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
        <ns0:Action Name="&quot;SageTV needs to be restarted in order to complete a prior Plugin installation, update, or removal.\n \nWould you like to restart SageTV now?\n \n&quot;" Sym="NFLX1-1589418">
@@ -113913,7 +113913,7 @@
         </ns0:Conditional>
        </ns0:Action>
        <ns0:Action Name="&quot;REM Add restart option, if needed.&quot;" Sym="OPUS4A-183028">
-        <ns0:Conditional Name="IsLocalRestartNeeded() || IsServerRestartNeeded()" Sym="OPUS4A-183027">
+        <ns0:Conditional Name="IsServerRestartNeeded() || (IsLocalRestartNeeded() &amp;&amp; !gIsUIReloadNeeded)" Sym="OPUS4A-183027">
          <ns0:Item Name="Restart SageTV" Sym="OPUS4A-183029">
           <ns0:OptionsMenu Ref="40901" Name="Ask to restart SageTV ..." />
          </ns0:Item>
