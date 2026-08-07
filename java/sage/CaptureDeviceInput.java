@@ -29,6 +29,10 @@ public class CaptureDeviceInput
   private static final String VIDEO_CROSSBAR_TYPE = "video_crossbar_type";
   private static final String VIDEO_CROSSBAR_INDEX = "video_crossbar_index";
   private static final String DEVICE_NAME = "device_name";
+  private static final String SOURCE_VALIDITY_STATE = "source_validity/state";
+  private static final String SOURCE_VALIDITY_REASON = "source_validity/reason";
+  private static final String SOURCE_VALIDITY_FIRST_INVALID_AT = "source_validity/first_invalid_at";
+  private static final String SOURCE_VALIDITY_LAST_CHECKED_AT = "source_validity/last_checked_at";
   static final String BROADCAST_STANDARD = "broadcast_standard";
   public static final String BRIGHTNESS = "brightness";
   public static final String CONTRAST = "contrast";
@@ -248,6 +252,10 @@ public class CaptureDeviceInput
       }
     }
     broadcastStd = Sage.get(prefs + BROADCAST_STANDARD, "");
+    sourceValidityState = Sage.get(prefs + SOURCE_VALIDITY_STATE, "");
+    sourceValidityReason = Sage.get(prefs + SOURCE_VALIDITY_REASON, "");
+    sourceValidityFirstInvalidAt = Sage.getLong(prefs + SOURCE_VALIDITY_FIRST_INVALID_AT, 0);
+    sourceValidityLastCheckedAt = Sage.getLong(prefs + SOURCE_VALIDITY_LAST_CHECKED_AT, 0);
   }
   void writePrefs()
   {
@@ -265,6 +273,7 @@ public class CaptureDeviceInput
     Sage.putInt(prefs + SATURATION, saturation);
     Sage.putInt(prefs + SHARPNESS, sharpness);
     Sage.put(prefs + BROADCAST_STANDARD, broadcastStd);
+    writeVideoSourceValidityPrefs();
   }
 
   public CaptureDeviceInput getWeirdRFCompanion(int chanNum)
@@ -284,7 +293,12 @@ public class CaptureDeviceInput
     // stale disabled state when setup re-applies the input's existing lineup.
     if (inProvID != 0 && capDev.isDisabled())
       capDev.setDisabled(false);
-    if (providerID == inProvID) return;
+    if (providerID == inProvID)
+    {
+      if (inProvID == 0 || getProviderSourceInvalidReason() == null)
+        clearInvalidVideoSource();
+      return;
+    }
     // NOTE: For digital TV sources; if we're re-using a provider that was already scanned on another
     // device we want to copy over the .frq file which defines all the specific channel carriers.
     if (crossbarType == DIGITAL_TUNER_CROSSBAR_INDEX)
@@ -329,6 +343,7 @@ public class CaptureDeviceInput
       NetworkClient.distributeRecursivePropertyChange(oldInput.prefs);
     }
     providerID = inProvID;
+    clearInvalidVideoSource();
     writePrefs();
     NetworkClient.distributeRecursivePropertyChange(prefs);
     // We need to reset the EPG station cache so trigger a data source reload as well
@@ -370,6 +385,60 @@ public class CaptureDeviceInput
   public int getType() { return crossbarType; }
   public int getIndex() { return crossbarIndex; }
   public long getProviderID() { return providerID; }
+  public boolean hasValidProviderSource()
+  {
+    return providerID != 0 && getProviderSourceInvalidReason() == null;
+  }
+  public String getProviderSourceInvalidReason()
+  {
+    if (providerID == 0)
+      return null;
+    EPGDataSource ds = EPG.getInstance().getSourceForProviderID(providerID);
+    if (ds == null)
+      return VideoSourceValidity.REASON_MISSING_EPG_DATA_SOURCE;
+    return null;
+  }
+  public String getInvalidVideoSourceState() { return sourceValidityState; }
+  public String getInvalidVideoSourceReason() { return sourceValidityReason; }
+  public long getInvalidVideoSourceFirstDetectedAt() { return sourceValidityFirstInvalidAt; }
+  public boolean markInvalidVideoSource(String reason, long now)
+  {
+    if (reason == null || reason.length() == 0)
+      throw new IllegalArgumentException("reason must not be blank");
+    long newFirstInvalidAt = sourceValidityFirstInvalidAt;
+    if (newFirstInvalidAt == 0 || !reason.equals(sourceValidityReason))
+      newFirstInvalidAt = now;
+    String newState = VideoSourceValidity.resolveState(newFirstInvalidAt, now);
+    boolean surfacedChange = !newState.equals(sourceValidityState) ||
+        !reason.equals(sourceValidityReason) || sourceValidityFirstInvalidAt != newFirstInvalidAt;
+    if (!surfacedChange && sourceValidityLastCheckedAt == now)
+      return false;
+    sourceValidityState = newState;
+    sourceValidityReason = reason;
+    sourceValidityFirstInvalidAt = newFirstInvalidAt;
+    sourceValidityLastCheckedAt = now;
+    writeVideoSourceValidityPrefs();
+    if (surfacedChange)
+      NetworkClient.distributeRecursivePropertyChange(prefs + "source_validity");
+    return surfacedChange;
+  }
+  public boolean clearInvalidVideoSource()
+  {
+    if (sourceValidityState.length() == 0 && sourceValidityReason.length() == 0 &&
+        sourceValidityFirstInvalidAt == 0 && sourceValidityLastCheckedAt == 0)
+      return false;
+    sourceValidityState = "";
+    sourceValidityReason = "";
+    sourceValidityFirstInvalidAt = 0;
+    sourceValidityLastCheckedAt = 0;
+    writeVideoSourceValidityPrefs();
+    NetworkClient.distributeRecursivePropertyChange(prefs + "source_validity");
+    return true;
+  }
+  public boolean shouldPruneInvalidVideoSource(long now)
+  {
+    return VideoSourceValidity.shouldPrune(sourceValidityFirstInvalidAt, now);
+  }
   public String getTuningMode() { return tuningMode; }
   public void setTuningMode(String x)
   {
@@ -589,6 +658,24 @@ public class CaptureDeviceInput
         (!Sage.getBoolean("mmc/disable_dvbs_epg_data_scanning", true) || !"DVB-S".equals(getBroadcastStandard()));
   }
 
+  private void writeVideoSourceValidityPrefs()
+  {
+    if (sourceValidityState.length() == 0)
+    {
+      Sage.remove(prefs + SOURCE_VALIDITY_STATE);
+      Sage.remove(prefs + SOURCE_VALIDITY_REASON);
+      Sage.remove(prefs + SOURCE_VALIDITY_FIRST_INVALID_AT);
+      Sage.remove(prefs + SOURCE_VALIDITY_LAST_CHECKED_AT);
+    }
+    else
+    {
+      Sage.put(prefs + SOURCE_VALIDITY_STATE, sourceValidityState);
+      Sage.put(prefs + SOURCE_VALIDITY_REASON, sourceValidityReason);
+      Sage.putLong(prefs + SOURCE_VALIDITY_FIRST_INVALID_AT, sourceValidityFirstInvalidAt);
+      Sage.putLong(prefs + SOURCE_VALIDITY_LAST_CHECKED_AT, sourceValidityLastCheckedAt);
+    }
+  }
+
   private int crossbarIndex = -1; // this is the RF channel if its a tuner and this is > 1
   private int crossbarType; // tuner1, comp2, s3
   private String lastChannel = "";
@@ -607,4 +694,8 @@ public class CaptureDeviceInput
   private int saturation = -1;
 
   private String broadcastStd = "";
+  private String sourceValidityState = "";
+  private String sourceValidityReason = "";
+  private long sourceValidityFirstInvalidAt;
+  private long sourceValidityLastCheckedAt;
 }
