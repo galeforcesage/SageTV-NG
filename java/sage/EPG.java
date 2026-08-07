@@ -399,6 +399,7 @@ public final class EPG implements Runnable
       buildSourcesFromPrefs();
     if (rebuildLineups)
       buildLineupsFromPrefs();
+    mmc.refreshConfiguredVideoSourceValidity();
   }
 
   void resetViewableStationsCache()
@@ -632,6 +633,7 @@ public final class EPG implements Runnable
     {
 
       try{
+        runConfiguredVideoSourceMaintenance(false);
 
         if(Sage.getBoolean("wizard/" + SCHEDULED_EPG_UPDATE, false)){
             if (Sage.DBG) System.out.println("EPG next scheduled maintenance offset is " + Sage.getInt("wizard/" + SCHEDULED_EPG_UPDATE_OFFSET, 0));
@@ -951,6 +953,15 @@ public final class EPG implements Runnable
     {
       sources.notifyAll();
     }
+  }
+
+  private void runConfiguredVideoSourceMaintenance(boolean force)
+  {
+    long now = Sage.time();
+    if (!force && now - lastConfiguredVideoSourceMaintenance < VideoSourceValidity.getScanIntervalMs())
+      return;
+    mmc.refreshConfiguredVideoSourceValidity();
+    lastConfiguredVideoSourceMaintenance = now;
   }
 
   void goingActive()
@@ -1751,6 +1762,7 @@ public final class EPG implements Runnable
   private boolean autodial;
 
   private EPGDataSource currDS;
+  private long lastConfiguredVideoSourceMaintenance;
   private boolean alive = true;
   private java.io.File logoDir;
   private java.util.Map<String, java.io.File> logoMap;

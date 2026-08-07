@@ -312,6 +312,82 @@ public class MMC
     return false;
   }
 
+  public boolean refreshConfiguredVideoSourceValidity()
+  {
+    boolean changedAny = false;
+    boolean prunedAny = false;
+    long now = Sage.time();
+    CaptureDeviceInput[] allInputs = getAllInputs();
+    for (int i = 0; i < allInputs.length; i++)
+    {
+      CaptureDeviceInput cdi = allInputs[i];
+      if (cdi.getProviderID() == 0)
+      {
+        if (cdi.clearInvalidVideoSource())
+          changedAny = true;
+        continue;
+      }
+
+      String invalidReason = cdi.getProviderSourceInvalidReason();
+      if (invalidReason == null)
+      {
+        if (cdi.clearInvalidVideoSource())
+        {
+          System.out.println("Cleared invalid video source marker for " + cdi);
+          changedAny = true;
+        }
+        continue;
+      }
+
+      if (cdi.markInvalidVideoSource(invalidReason, now))
+      {
+        System.out.println("Marked video source '" + cdi + "' stale due to " + invalidReason +
+            " (provider_id=" + cdi.getProviderID() + ")");
+        changedAny = true;
+      }
+
+      if (!Sage.client && cdi.shouldPruneInvalidVideoSource(now))
+      {
+        System.out.println("Pruning invalid video source '" + cdi + "' after " +
+            Sage.durFormat(now - cdi.getInvalidVideoSourceFirstDetectedAt()) +
+            " because " + invalidReason + " (provider_id=" + cdi.getProviderID() + ")");
+        cdi.setProvider(0);
+        prunedAny = true;
+        changedAny = true;
+      }
+    }
+
+    if (prunedAny)
+      changedAny = removeUnusedLineupsOnly() || changedAny;
+
+    return changedAny;
+  }
+
+  public boolean cleanupUnusedLineups()
+  {
+    boolean changedAny = refreshConfiguredVideoSourceValidity();
+    changedAny = removeUnusedLineupsOnly() || changedAny;
+    EPG.getInstance().kick();
+    SchedulerSelector.getInstance().kick(false);
+    return changedAny;
+  }
+
+  private boolean removeUnusedLineupsOnly()
+  {
+    boolean killedAny = false;
+    EPGDataSource[] allDS = EPG.getInstance().getDataSources();
+    for (int i = 0; i < allDS.length; i++)
+    {
+      if (!isProviderUsed(allDS[i].getProviderID()))
+      {
+        System.out.println("Removing unused EPG lineup for provider ID:" + allDS[i].getProviderID());
+        EPG.getInstance().removeDataSource(allDS[i]);
+        killedAny = true;
+      }
+    }
+    return killedAny;
+  }
+
   public CaptureDeviceInput[] getConfiguredInputs()
   {
     java.util.ArrayList rv = new java.util.ArrayList();
@@ -322,7 +398,7 @@ public class MMC
       for (int i = 0; i < testEncoder.srcConfigs.size(); i++)
       {
         CaptureDeviceInput tempConfig = testEncoder.srcConfigs.get(i);
-        if (tempConfig.getProviderID() != 0)
+        if (tempConfig.hasValidProviderSource())
           rv.add(tempConfig);
       }
     }
@@ -339,7 +415,7 @@ public class MMC
       for (int i = 0; i < testEncoder.srcConfigs.size(); i++)
       {
         CaptureDeviceInput tempConfig = testEncoder.srcConfigs.get(i);
-        if (tempConfig.getProviderID() != 0)
+        if (tempConfig.hasValidProviderSource())
           rv.add(tempConfig.toString());
       }
     }
@@ -356,7 +432,7 @@ public class MMC
       for (int i = 0; i < testEncoder.srcConfigs.size(); i++)
       {
         CaptureDeviceInput tempConfig = testEncoder.srcConfigs.get(i);
-        if (tempConfig.getProviderID() != 0)
+        if (tempConfig.hasValidProviderSource())
         {
           rv.add(testEncoder);
           break;

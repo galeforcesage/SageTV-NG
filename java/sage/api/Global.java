@@ -655,18 +655,7 @@ public class Global {
         // Execute this on the server if we're the client; but then clean us up locally since removals
         // aren't propogated in the property exchange. But do it first so anything the server has that we don't
         // gets propogated back down correctly
-        boolean killedAny = false;
-        EPGDataSource[] allDS = EPG.getInstance().getDataSources();
-        for (int i = 0; i < allDS.length; i++)
-        {
-          if (!MMC.getInstance().isProviderUsed(allDS[i].getProviderID()))
-          {
-            EPG.getInstance().removeDataSource(allDS[i]);
-            killedAny = true;
-          }
-        }
-        EPG.getInstance().kick();
-        SchedulerSelector.getInstance().kick(false);
+        boolean killedAny = MMC.getInstance().cleanupUnusedLineups();
         if (Sage.client)
         {
           return makeNetworkedCall(stack);
