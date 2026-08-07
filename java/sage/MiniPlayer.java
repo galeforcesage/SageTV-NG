@@ -1686,9 +1686,15 @@ public class MiniPlayer implements DVDMediaPlayer
         if (profileDecision == null && ngSession && mcsr != null
             && Sage.getBoolean("miniplayer/use_playback_surfaces", true))
         {
-          int rerequestAttempts = Sage.getInt("miniplayer/surface_rerequest_attempts", 1);
+          int rerequestAttempts = Sage.getInt("miniplayer/surface_rerequest_attempts", 3);
+          long rerequestDelayMs = Sage.getLong("miniplayer/surface_rerequest_delay_ms", 150);
           for (int attempt = 1; attempt <= rerequestAttempts && profileDecision == null; attempt++)
           {
+            if (rerequestDelayMs > 0)
+            {
+              try { Thread.sleep(rerequestDelayMs); }
+              catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+            }
             if (Sage.DBG) System.out.println("MiniPlayer P1: NG session produced no servable "
                 + "surface -- re-requesting PLAYBACK_SURFACES (attempt " + attempt + "/"
                 + rerequestAttempts + ")");
