@@ -1,7 +1,7 @@
 # SageTV-NG Roadmap
 
 Living document of post-modernization work, ordered by priority within
-each track. Items move to a `## Done` section once shipped.
+each track. Completed items move to [COMPLETED.md](COMPLETED.md) once shipped.
 
 ---
 
@@ -81,22 +81,6 @@ Phases 0–3 cover real-world need without touching the broadcast stack.
 
 ## FFmpeg track
 
-- ~~**Unify on a single SageTV-patched, AC-4-capable FFmpeg binary.**~~
-  ✅ done — see `Done` section. Unified binary deployed at
-  `/opt/sagetv/server/ffmpeg` with all four SageTV custom flags,
-  AC-4 decode, NVENC, libx265, libfdk-aac. Old scripts
-  (`build-modern-ffmpeg.sh`, `build-ac4-ffmpeg.sh`,
-  `ffmpeg-wrapper.sh`) deleted. Design doc:
-  [docs/FFMPEG_UNIFICATION_PLAN.md](docs/FFMPEG_UNIFICATION_PLAN.md).
-- ~~**6.x → 7.x CLI audit.**~~ ✅ done — see `Done` section. Full
-  inventory of every direct ffmpeg invocation in `FFMPEGTranscoder`,
-  `HwEncoder`, `AC4TranscodeJob`, `HTTPLSServer`, `MediaFile`,
-  `Ministry`, `FormatParser`, `CaptionExtractionJob`. Final
-  remaining legacy-x264 option soup inside the `MPEG4*-H.264 MKV`
-  preset strings (`-coder`, `-flags +loop`, `-partitions`,
-  `-me_method`, `-subq`, `-flags2`, `-wpredp`, etc.) is intentionally
-  left for the larger *Offline transcode preset modernization
-  (Ministry)* rewrite below.
 - **Plugin-installed FFmpeg libraries audit.** Some plugins in
   [OpenSageTV/sagetv-plugin-repo](https://github.com/OpenSageTV/sagetv-plugin-repo)
   ship their own old FFmpeg .so/.jar (Phoenix media utilities, BMT
@@ -481,49 +465,6 @@ already tracked above (libnpp/cuda-nvcc rebuild, AI-upscale container
 bind + `graphics` capability, vendor-agnostic `_SW` presets, HLS/DASH,
 RTX VSR) — the items below are the ones not previously captured.
 
-- **No-GPU / GPU-absent graceful degradation (cross-cutting, required).**
-  `HwEncoder` already probes the ffmpeg binary once per JVM and falls
-  back through `nvenc,vaapi,qsv,amf,videotoolbox,none` to
-  `libx264`/`libx265`, so encoder *selection* is already vendor-safe.
-  The gap is that the modernized `Ministry` presets hardcode
-  `h264_nvenc`/`hevc_nvenc` and `-hwaccel cuda` in the command string and
-  bypass `HwEncoder`. On a host with no NVENC those presets fail outright.
-  Work: (1) route preset codec + `-hwaccel` selection through
-  `HwEncoder.pick()` at job-build time so `_NV` presets auto-rewrite to
-  software (`libx264`/`libx265`, drop `-hwaccel cuda`) when no GPU is
-  detected — or land the vendor-agnostic `_SW` catalogue (Option A above)
-  and auto-select; ~~(2) gate the AI-upscale path on a successful Vulkan
-  device probe and skip (log + fall back to Lanczos or straight encode)
-  when absent;~~ ✅ **done** — `Ministry.shouldAutoAiUpscale` now calls
-  `aiUpscaleDeviceAvailable()`, a one-per-JVM cached probe that shells out
-  to `sage-ai-upscale.sh --probe` (upscales a trivial 16×16 test frame,
-  exit 0 iff a Vulkan device initializes). When no Vulkan GPU is present
-  the rule declines and the transcode falls back to the preset's own
-  Lanczos scale instead of failing mid-job. Lazy (fires on first
-  qualifying SD→HD job, never per-playback), knobs
-  `transcoder/ai_upscale_require_vulkan` (default true) and
-  `transcoder/ai_upscale_probe_timeout_secs` (default 60).
-  ~~(3) make the container GPU reservation opt-in (base
-  `docker-compose.yml` is already CPU-only; GPU is layered via override)
-  and have startup log the detected encoder tier once.~~ ✅ **done** —
-  base [docker-compose.yml](docker-compose.yml) stays CPU-only and runs
-  anywhere; NVIDIA GPU (NVENC + Vulkan `graphics` cap + Real-ESRGAN bind)
-  is layered via the opt-in [docker-compose.gpu.yml](docker-compose.gpu.yml)
-  (`docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d`).
-  Startup encoder-tier log already landed with the live-path NVENC wiring
-  (`Ministry`). ~~**Remaining for this item: only sub-point (1)** — routing
-  the offline `_NV` presets' codec/`-hwaccel` through `HwEncoder` (partly
-  covered by `buildPresetSpec`/`stripCudaHwaccel`) or the `_SW` catalogue.~~
-  ✅ **done** — per-vendor preset blocks landed (`6a799164`). All 10 GPU
-  presets now carry `args_nv=`/`global_nv=` (NVENC params) and `args_sw=`
-  (libx264/libx265 with correct `-preset medium`/`slow`, `-crf` instead of
-  NVENC `-rc:v vbr`/`-cq:v`). `Ministry.buildPresetSpec()` selects the
-  block via `pickVendorBlock()` → `"nv"` for NVENC, `"sw"` for everything
-  else. Future vendors add `args_vaapi=`/`args_qsv=` blocks + extend
-  `pickVendorBlock()`. DVD preset unchanged (software-only, no variants).
-  Non-NVIDIA hosts now get a working transcode path. **All three sub-points
-  complete; this item is closed.**
-
 - **Comskip external GPU engine (speculative).** `CommercialDetectionJob`
   already supports `commercial_detection/engine=external` with a
   templated command (`external_recorded_args` /
@@ -536,23 +477,6 @@ RTX VSR) — the items below are the ones not previously captured.
   verify the property key match: the job reads
   `commercial_detection/external_engine_path` while the manager
   get/set uses its own key — confirm before relying on the UI hook.)
-
-- ~~**Live-tune NVENC audit (small).**~~ ✅ audit done + NVENC/software
-  wiring landed. Finding confirmed: the live on-the-fly HLS transcode
-  path built its command with a hardcoded `-vcodec libx264` (plus the
-  legacy x264 option soup: `-coder`, `-partitions`, `-me_method`,
-  `-subq`, `-direct-pred`, `-wpredp`, `-rc-lookahead`, `-trellis`, …)
-  in `FFMPEGTranscoder`'s `httplsMode` block, and never consulted
-  `HwEncoder`. `LiveTranscodeProfile.hwAccel` was parsed/stored but
-  `PlaybackDecisionEngine` only ever read its `maxBitrateKbps`, so the
-  `hw_accel` field was effectively dead and concurrent MiniClient live
-  transcodes silently bottlenecked on CPU. **Fix:** the `httplsMode`
-  encoder is now chosen via `HwEncoder.pick("h264")` — `h264_nvenc`
-  with NVENC-appropriate rate control (`-preset`, `-rc:v vbr`, `-g`,
-  `-profile:v high`) when an NVIDIA GPU + nvenc-capable ffmpeg is
-  present, else the original `libx264` block unchanged (no-GPU hosts
-  keep working). NVENC preset knob:
-  `multimedia/hwaccel/nvenc/live_preset` (default `p4`).
 
 - **AMD / Intel live transcode (VAAPI / QSV / AMF) — not yet wired.**
   The live/HLS path above engages **NVENC only**; on AMD/Intel hosts it
@@ -590,12 +514,6 @@ RTX VSR) — the items below are the ones not previously captured.
   GPU is on the current host, so this is untestable until hardware +
   an appropriately-built ffmpeg are available.
 
-- ~~**MiniPlayer push-mode transcode GPU offload (high priority).**~~
-  ✅ done — shipped as the "Modern H.264 MPEG-TS push" path in
-  `FFMPEGTranscoder.java:2077+`. Replaces legacy `mpeg4`/DVD with
-  H.264 via `h264_nvenc` (or `libx264` fallback), bandwidth-adaptive,
-  wired through `HwEncoder.pick()`. See `Done` section.
-
 - **NVDEC thumbnail generation (low value — likely rejected).** Proposed
   as a library-rescan speed-up, but thumbnails are single-frame
   seek+extract operations where per-file NVDEC context init typically
@@ -615,10 +533,6 @@ RTX VSR) — the items below are the ones not previously captured.
   focus; not planned.
 
 ## Playback track
-
-- ~~**NG-first decision ordering in `MiniPlayer.load()` (hoist the NG ruling to
-  the top).**~~ ✅ done — shipped in commit `819da971`. All gates #1–#8 wired
-  with kill-switches (`miniplayer/ng_override_N`). See `Done` section.
 
 - **Playback Surface capability model (Protocol 2.1) — replaces device /
   browser / OS-based negotiation.**
@@ -785,12 +699,6 @@ RTX VSR) — the items below are the ones not previously captured.
     restart must drop follow mode (the `activefile` → `inactivefile`
     stdin-ctrl transition) — a state the completed-file case never hits.
 
-- ~~**Audio-only transcode when only the audio codec mismatches.**~~ ✅ done —
-  implemented at `FFMPEGTranscoder.java:939+`. Video copy + audio re-encode
-  when only audio mismatches (e.g. AC-4→EAC3 with HEVC copy). Full ladder:
-  eac3→ac3→aac→mp2. `HwEncoder.pick()` integrated for optional video
-  re-encode. See `Done` section.
-
 - **HLS segment retention window (iOS / PWA trickplay).**
   Concretizes option (b) of the transcode-seek-reuse item above,
   specifically for the HLS iPhoneMode path (`HTTPLSServer` /
@@ -847,19 +755,10 @@ RTX VSR) — the items below are the ones not previously captured.
   the language per show without changing the global default.
 - **CTA-708 captions in HEVC SEI.** Accessibility win; needs SEI
   extraction or pass-through to client.
-- ~~**Comskip end-to-end verification.**~~ ✅ code audit complete
-  (`8d94cb23`). All four stages verified intact: (1) `Seeker` →
-  `CommercialDetectionManager.onRecordingStarted/Stopped` → `submitJob`
-  → `CommercialDetectionJob.runComskip()` constructs correct command,
-  (2) `EdlWriter.readEdl()` parses standard EDL → `SkipMatrix.fromEdlSegments()`
-  builds binary-search struct, (3) `VideoFrame.checkCommercialSkip()` monitors
-  position every cycle with boundary-aware wake, auto-seeks past commercials,
-  (4) REW preroll (`~line 1845`) uses `SkipMatrix.getCommercialStart()` to land
-  15s before break. Additionally, `isEnabled()` now auto-detects: if
-  `commercial_detection/enabled` has never been set, checks whether the comskip
-  binary exists at the configured path — no manual Sage.properties edit needed.
-  **Remaining: runtime verification test** (enable comskip on a real recording,
-  confirm `.edl` appears, confirm auto-skip fires during playback).
+- **Comskip runtime verification test.** Code audit and wiring complete
+  (see [COMPLETED.md](COMPLETED.md)); the remaining task is a runtime
+  verification on a real recording — enable comskip, confirm the `.edl`
+  appears, and confirm auto-skip fires during playback.
 - **Container/host TZ-mismatch resilience.** Today Sage relies on the
   `time_zone=` property to call `TimeZone.setDefault()` (`Sage.java`
   ~line 1078). When that property is unset OR the container OS clock
@@ -1140,11 +1039,7 @@ useful):
 
 The STV (UI definition) optimization toolkit lives in `docs/STV_Cleanup/`. Phases 1–3 are largely shipped (script-driven; see `docs/STV_Cleanup/PHASE1_RESULTS.md`). Phase 4 is long-term scope.
 
-### Phase 1 — Widget Deduplication  *(shipped)*
-
-Estimated effort: 2–3 days  •  Risk: Low  •  Expected gain: 10–20% file size reduction
-
-Implemented in `docs/STV_Cleanup/stv_deduplicator.py`. Already run against `stvs/SageTV7/SageTV7.xml` — removed 6,715 redundant definitions per `docs/STV_Cleanup/PHASE1_RESULTS.md`.
+### Phase 1 — Widget Deduplication  *(shipped — see [COMPLETED.md](COMPLETED.md))*
 
 ### Phase 2 — Expression Caching  *(in progress — build-time layer complete)*
 
@@ -1229,13 +1124,8 @@ Estimated effort: 1–3 months  •  Risk: High  •  Expected gain: Catbert ski
 
 ## Done
 
-- **SBBI UPnP → JUPnP migration complete.** `PlaceshifterNATManager`
-  fully ported to `org.jupnp:org.jupnp:3.0.3` + `org.jupnp.support:3.0.3`
-  (Maven dependencies); all behaviour and Sage.properties keys preserved.
-  Vendored `third_party/UPnPLib/sbbi-upnplib-1.0.3.jar` removed and
-  `build/copyserverfiles.sh` no longer copies it into
-  `serverrelease/JARs/`. Fixes long-standing IPv6 / multi-NIC bugs on
-  multi-homed servers.
+Completed items have moved to [COMPLETED.md](COMPLETED.md), which records how
+each shipped feature was deployed and how it works.
 - **Build system: Maven runtime deps now actually shipped to `JARs/`.**
   `Sage.jar` is a *thin* jar (project classes + resources only), so the
   Maven-resolved `org.jupnp`, `slf4j-api`, `logback-*`, JOGL/GlueGen, etc.
