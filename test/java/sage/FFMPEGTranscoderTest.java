@@ -1,6 +1,7 @@
 package sage;
 
 import org.testng.annotations.Test;
+import sage.media.format.AudioFormat;
 import sage.media.format.BitstreamFormat;
 import sage.media.format.ContainerFormat;
 import sage.media.format.VideoFormat;
@@ -376,7 +377,112 @@ public class FFMPEGTranscoderTest
     assertTrue(hevcParams.contains("hvc1"), "hvc1 must be kept for HEVC source");
   }
 
-    private void expectSize(int[] sizes, int w, int h)
+  // Builds a ContainerFormat whose primary audio track is the given codec, with
+  // an H.264 primary video track (the browserhd_remux source shape).
+  private static ContainerFormat h264PlusAudio(String audioCodec)
+  {
+    ContainerFormat cf = new ContainerFormat();
+    VideoFormat vf = new VideoFormat();
+    vf.setFormatName(sage.media.format.MediaFormat.H264);
+    AudioFormat af = new AudioFormat();
+    af.setFormatName(audioCodec);
+    cf.setStreamFormats(new BitstreamFormat[] {vf, af});
+    return cf;
+  }
+
+  private static java.util.ArrayList remuxCopyVec()
+  {
+    return new java.util.ArrayList(java.util.Arrays.asList("-c:v", "copy", "-c:a", "copy"));
+  }
+
+  @Test
+  public void testOutputMuxFormatAndMp4FamilyTarget() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+
+    // Explicit -f in the preset is the source of truth (streamed-to-stdout case:
+    // outputFile is null, exactly the browserhd_remux/copyv pull path).
+    t.xcodeParams = "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof -c:v copy -c:a copy";
+    assertEquals(t.outputMuxFormat(), "mp4");
+    assertTrue(t.isMp4FamilyMuxTarget(), "streamed -f mp4 must count as an MP4-family mux target");
+
+    // -movflags must NOT be misread as an -f value.
+    t.xcodeParams = "-movflags +faststart -f mpegts -c:v copy -c:a copy";
+    assertEquals(t.outputMuxFormat(), "mpegts");
+    assertFalse(t.isMp4FamilyMuxTarget(), "mpegts is not MP4-family");
+
+    // Whole MP4 family recognized.
+    for (String fam : new String[] {"mp4", "m4v", "mov", "3gp", "psp", "ipod"})
+    {
+      t.xcodeParams = "-f " + fam + " -c:v copy -c:a copy";
+      assertTrue(t.isMp4FamilyMuxTarget(), fam + " should be MP4-family");
+    }
+
+    // No -f and no output file -> unknown, not MP4-family.
+    t.xcodeParams = "-c:v copy -c:a copy";
+    assertNull(t.outputMuxFormat());
+    assertFalse(t.isMp4FamilyMuxTarget());
+
+    // Falls back to the output filename extension when no explicit -f is present.
+    t.xcodeParams = "-c:v copy -c:a copy";
+    t.outputFile = new File("/tmp/out.mp4");
+    assertEquals(t.outputMuxFormat(), "mp4");
+    assertTrue(t.isMp4FamilyMuxTarget());
+    t.outputFile = new File("/tmp/out.mkv");
+    assertEquals(t.outputMuxFormat(), "mkv");
+    assertFalse(t.isMp4FamilyMuxTarget());
+  }
+
+  @Test
+  public void testNeedsAacAdtstoAscBsf() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+
+    // THE FIX: AAC stream-copy into stdout-streamed fragmented MP4 (browserhd_remux)
+    // must inject aac_adtstoasc, even though outputFile is null.
+    t.xcodeParams = "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof -c:v copy -c:a copy";
+    t.sourceFormat = h264PlusAudio(sage.media.format.MediaFormat.AAC);
+    assertTrue(t.needsAacAdtstoAscBsf(remuxCopyVec()),
+        "AAC copy into streamed MP4 must require the aac_adtstoasc bitstream filter");
+
+    // AC3 audio: filter would error on non-AAC, so it must NOT be added (this is
+    // why US-broadcast AC3 remux has always worked and hid the bug).
+    t.sourceFormat = h264PlusAudio(sage.media.format.MediaFormat.AC3);
+    assertFalse(t.needsAacAdtstoAscBsf(remuxCopyVec()),
+        "AC3 copy must not get aac_adtstoasc");
+
+    // AAC but audio is being re-encoded (not copied): the encoder emits ASC
+    // directly, so no bitstream filter.
+    t.sourceFormat = h264PlusAudio(sage.media.format.MediaFormat.AAC);
+    java.util.ArrayList reencode = new java.util.ArrayList(
+        java.util.Arrays.asList("-c:v", "copy", "-c:a", "aac"));
+    assertFalse(t.needsAacAdtstoAscBsf(reencode),
+        "AAC re-encode must not get aac_adtstoasc");
+
+    // AAC copy but the mux target is MPEG-TS (not MP4): ADTS is correct framing
+    // there, so no filter.
+    t.xcodeParams = "-f mpegts -c:v copy -c:a copy -copyts";
+    assertFalse(t.needsAacAdtstoAscBsf(remuxCopyVec()),
+        "AAC copy into MPEG-TS must not get aac_adtstoasc");
+
+    // AAC copy into MP4 but the filter is already present: don't double-add.
+    t.xcodeParams = "-f mp4 -c:v copy -c:a copy";
+    java.util.ArrayList already = new java.util.ArrayList(
+        java.util.Arrays.asList("-c:v", "copy", "-c:a", "copy", "-bsf:a", "aac_adtstoasc"));
+    assertFalse(t.needsAacAdtstoAscBsf(already),
+        "must not re-add aac_adtstoasc when already present");
+
+    // AAC copy into a file-based MP4 (library remux) still works via the filename
+    // fallback -- the original in-scope case is preserved.
+    t.xcodeParams = "-c:v copy -c:a copy";
+    t.outputFile = new File("/tmp/out.mp4");
+    assertTrue(t.needsAacAdtstoAscBsf(remuxCopyVec()),
+        "AAC copy into a file .mp4 must still require aac_adtstoasc");
+  }
+
+  private void expectSize(int[] sizes, int w, int h)
   {
     assertEquals(sizes[0], w);
     assertEquals(sizes[1], h);

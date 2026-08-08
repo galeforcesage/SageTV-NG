@@ -1394,8 +1394,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
    * {@code hvcC}/{@code avcC} decoder config come ENTIRELY from the source
    * stream's in-band parameter sets (VPS/SPS/PPS for HEVC), because there is no
    * encoder to supply them. Detected from the verbatim preset string
-   * ({@link #xcodeParams}) since the streaming path writes to stdout (so
-   * {@link #isMp4FamilyOutput()}, which keys off the output filename, is false).
+   * ({@link #xcodeParams}) since the streaming path writes to stdout (so the
+   * filename-based fallback in {@link #outputMuxFormat()} is unavailable).
    */
   boolean isVideoCopyToFmp4()
   {
@@ -2645,9 +2645,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (embedSubtitleStreams)
     {
       // Preserve subtitle streams when possible. MP4-family outputs require a
-      // text subtitle codec, so use mov_text there.
+      // text subtitle codec, so use mov_text there. Uses the mux-target test
+      // (not the filename-only isMp4FamilyOutput) so stdout-streamed MP4 remux
+      // modes pick mov_text too instead of an invalid "copy".
       xcodeParamsVec.add("-c:s");
-      xcodeParamsVec.add(isMp4FamilyOutput() ? "mov_text" : "copy");
+      xcodeParamsVec.add(isMp4FamilyMuxTarget() ? "mov_text" : "copy");
     }
 
     // NOTE: Don't use interlaced ME/DCT on MPEG4 content
@@ -2694,16 +2696,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
     maybeDisqualifyAudioCopyForServerEq(xcodeParamsVec);
     boolean audioIsCopy = isAudioCopySelected(xcodeParamsVec);
     // MP4-family + AAC stream-copy: AAC from an ADTS-framed source (MPEG-TS)
-    // must be converted to ASC via the aac_adtstoasc bitstream filter or the
-    // mp4 muxer rejects the header ("Malformed AAC bitstream detected"). Verified
-    // safe to always apply for AAC copy -- it passes already-ASC AAC (MKV/MP4)
-    // through unchanged. Gated on AAC only (the filter errors on non-AAC) and on
-    // copy only (re-encode emits ASC directly). Fixes browserhd_remux on
-    // H.264+AAC MPEG-TS sources; harmless for library MKV/MP4 remux.
-    if (audioIsCopy && isMp4FamilyOutput() && sourceFormat != null
-        && sourceFormat.getAudioFormat() != null
-        && sage.media.format.MediaFormat.AAC.equals(sourceFormat.getAudioFormat().getFormatName())
-        && !xcodeParamsVec.contains("aac_adtstoasc"))
+    // must be reframed to ASC via aac_adtstoasc or the mp4 muxer rejects the
+    // header ("Malformed AAC bitstream detected") and aborts the whole remux,
+    // killing the copied video too. See needsAacAdtstoAscBsf() -- the mux-target
+    // test covers both file and stdout-streamed MP4 (browserhd_remux/copyv).
+    if (needsAacAdtstoAscBsf(xcodeParamsVec))
     {
       if (Sage.DBG) System.out.println("FFMPEGTranscoder: adding -bsf:a aac_adtstoasc "
           + "(AAC stream-copy into MP4-family container)");
@@ -3513,11 +3510,77 @@ public class FFMPEGTranscoder implements TranscodeEngine
     }
   }
 
-  private boolean isMp4FamilyOutput()
+  /**
+   * The ffmpeg output muxer this transcode targets, lower-cased, or {@code null}
+   * when it cannot be determined. This is the single source of truth for "what
+   * container are we writing." It prefers an explicit {@code -f <fmt>} in the
+   * verbatim preset ({@link #xcodeParams}) — which is how the streaming
+   * pull-xcode modes ({@code browserhd_remux} / {@code browserhd_copyv}) select
+   * fragmented MP4 while writing to stdout with {@code outputFile == null} — and
+   * otherwise infers from the output filename extension for file transcodes that
+   * let ffmpeg pick the muxer from the name.
+   */
+  String outputMuxFormat()
   {
-    if (outputFile == null) return false;
-    String name = outputFile.getName().toLowerCase();
-    return name.endsWith(".mp4") || name.endsWith(".m4v") || name.endsWith(".3gp") || name.endsWith(".psp");
+    if (xcodeParams != null)
+    {
+      java.util.StringTokenizer st = new java.util.StringTokenizer(xcodeParams, " ");
+      while (st.hasMoreTokens())
+      {
+        if ("-f".equals(st.nextToken()) && st.hasMoreTokens())
+          return st.nextToken().toLowerCase();
+      }
+    }
+    if (outputFile != null)
+    {
+      String name = outputFile.getName().toLowerCase();
+      int dot = name.lastIndexOf('.');
+      if (dot >= 0) return name.substring(dot + 1);
+    }
+    return null;
+  }
+
+  /**
+   * True when the output muxer is an MP4-family container, regardless of whether
+   * it is written to a file or streamed to stdout. Derived from the single
+   * {@link #outputMuxFormat()} source of truth, so it correctly recognizes the
+   * stdout-streamed browser remux modes that a filename-only check (the former
+   * {@code isMp4FamilyOutput}) missed. This is the check to use for any
+   * MP4-muxer-specific command requirement (e.g. the AAC {@code aac_adtstoasc}
+   * bitstream filter, or {@code mov_text} subtitle codec).
+   */
+  boolean isMp4FamilyMuxTarget()
+  {
+    String f = outputMuxFormat();
+    if (f == null) return false;
+    return f.equals("mp4") || f.equals("m4v") || f.equals("mov")
+        || f.equals("3gp") || f.equals("psp") || f.equals("ipod");
+  }
+
+  /**
+   * True when an explicit {@code -bsf:a aac_adtstoasc} must be injected before
+   * ffmpeg runs: the audio track is being stream-copied, the mux target is
+   * MP4-family (file or stdout — see {@link #isMp4FamilyMuxTarget()}), the
+   * source audio is AAC (ADTS-framed inside MPEG-TS), and no {@code
+   * aac_adtstoasc} filter is already present. MP4 requires raw AAC with an
+   * in-sample-entry {@code AudioSpecificConfig}, so a TS&rarr;MP4 remux of ADTS
+   * AAC that omits the filter makes the mp4 muxer reject the header
+   * ("Malformed AAC bitstream detected") and abort the entire remux — which
+   * kills the copied video too, producing a black, silent player. The filter is
+   * safe to always apply for AAC copy: already-ASC AAC (from MKV/MP4) passes
+   * through unchanged. Gated on AAC only (the filter errors on non-AAC) and on
+   * copy only (a re-encode emits ASC directly). Fixes {@code browserhd_remux}
+   * of H.264/AAC MPEG-TS to fragmented MP4 for PWA/browser clients.
+   */
+  boolean needsAacAdtstoAscBsf(java.util.ArrayList xcodeParamsVec)
+  {
+    if (xcodeParamsVec == null) return false;
+    return isAudioCopySelected(xcodeParamsVec)
+        && isMp4FamilyMuxTarget()
+        && sourceFormat != null
+        && sourceFormat.getAudioFormat() != null
+        && sage.media.format.MediaFormat.AAC.equals(sourceFormat.getAudioFormat().getFormatName())
+        && !xcodeParamsVec.contains("aac_adtstoasc");
   }
 
   public void stopTranscode()
