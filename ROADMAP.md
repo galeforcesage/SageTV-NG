@@ -1037,7 +1037,7 @@ The STV (UI definition) optimization toolkit lives in `docs/STV_Cleanup/`. Phase
 
 ### Phase 1 — Widget Deduplication  *(shipped — see [COMPLETED.md](COMPLETED.md))*
 
-### Phase 2 — Expression Caching  *(in progress — build-time layer complete)*
+### Phase 2 — Expression Caching  *(runtime layer validated — measurement pending)*
 
 Estimated effort: 1–2 weeks  •  Risk: Medium  •  Expected gain: 60–80% selection lag reduction
 
@@ -1048,18 +1048,23 @@ expressions repeated within a screen subtree and emits
 `SetLocal`/`GetLocal` patch plans. This layer is complete and usable
 today (`--report` for dry-run, `--apply` for output).
 
-The **runtime layer** is a separate concern: STV XML hooks and Java
-callbacks must invalidate or refresh cached locals when state changes
-(focus move, selection change, setting change). This layer is not in the
-Python patcher — it belongs in SageTV7.xml event Actions and optionally
-in Java property-change listeners. PRD AC-2.5 (state-change correctness)
-depends on this runtime layer being present.
+The **runtime layer** investigation (2026-08-09) confirmed that:
+- The build-time patcher already emits `FocusGained` refresh hooks for
+  all 7 slots that need them (list/table screens where focus changes the
+  evaluated item).
+- The remaining 7 slots are in single-item popups, OSD overlays, or
+  config wizards where the cached expression's input is static for the
+  screen lifetime — no invalidation needed.
+- Settings screens that modify properties call `Refresh()` which
+  re-enters the menu and re-runs all `BeforeMenuLoad` seeds.
+- No Java-side changes are required (no property event bus exists or is
+  needed).
 
-Current status: **patch generation complete; runtime invalidation hooks
-pending.** See `docs/STV_Cleanup/PHASE2_NOTES.md` for the full
-architecture breakdown and AC mapping, and
-`docs/STV_Cleanup/PHASE2_RUNTIME_DESIGN.md` for the runtime-layer
-investigation plan.
+Current status: **both layers complete; AC-2.4 timing measurement
+pending.** The measurement task is: capture focus-move repaint time on
+Favorites Manager (cached STV vs unpatched baseline), document ≥ 50%
+reduction. See `docs/STV_Cleanup/PHASE2_RUNTIME_DESIGN.md` for full
+investigation results.
 
 ### Phase 2 hygiene — Review and remove dead `_c_*` SetLocal seeds in SageTV7.xml  *(done — see [COMPLETED.md](COMPLETED.md))*
 
