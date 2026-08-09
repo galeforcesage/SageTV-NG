@@ -2937,8 +2937,8 @@ public class CorePluginManager implements Runnable
         int idx2b = minVer.indexOf('.');
         do
         {
-          int t = Integer.parseInt((idx1b == -1) ? target.substring(idx1a) : target.substring(idx1a, idx1b));
-          int m = Integer.parseInt((idx2b == -1) ? minVer.substring(idx2a) : minVer.substring(idx2a, idx2b));
+          long t = Long.parseLong((idx1b == -1) ? target.substring(idx1a) : target.substring(idx1a, idx1b));
+          long m = Long.parseLong((idx2b == -1) ? minVer.substring(idx2a) : minVer.substring(idx2a, idx2b));
           if (t < m)
             return false;
           if (t > m)
@@ -2962,8 +2962,8 @@ public class CorePluginManager implements Runnable
         int idx2b = maxVer.indexOf('.');
         do
         {
-          int t = Integer.parseInt((idx1b == -1) ? target.substring(idx1a) : target.substring(idx1a, idx1b));
-          int m = Integer.parseInt((idx2b == -1) ? maxVer.substring(idx2a) : maxVer.substring(idx2a, idx2b));
+          long t = Long.parseLong((idx1b == -1) ? target.substring(idx1a) : target.substring(idx1a, idx1b));
+          long m = Long.parseLong((idx2b == -1) ? maxVer.substring(idx2a) : maxVer.substring(idx2a, idx2b));
           if (t > m)
             return false;
           if (t < m)
