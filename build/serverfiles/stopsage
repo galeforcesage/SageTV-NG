@@ -14,6 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+# Stops the SageTV server process. Works in two modes:
+#   1. Traditional (startsagecore): reads PID from /var/run/sagetv.pid
+#   2. State-managed container (entrypoint-state.sh): finds the java child
+#      of the entrypoint supervisor and removes .sage-run so the supervisor
+#      does not respawn it.
+#
 case $0 in
 /*)
    sagepath="$0"
@@ -28,32 +34,59 @@ echo Changing to SageTV directory $sagepath
 cd $sagepath
 
 PIDFILE=/var/run/sagetv.pid
+RUNFILE=.sage-run
 
 # You can use the sagesettings file to overwrite settings
 if [ -e sagesettings ] ; then
 	. sagesettings
 fi
 
-if [ -e $PIDFILE ] ; then
-   sagepid=`cat $PIDFILE`
-   running=`ps --pid $sagepid | grep java`
-   if [ "$running" = "" ]; then
-      echo SageTV not currently running
-      exit 1
+# --- Locate the sage java PID ---
+sagepid=""
+
+# Method 1: traditional pidfile (written by startsagecore)
+if [ -e "$PIDFILE" ] ; then
+   sagepid=$(cat "$PIDFILE")
+   running=$(ps --pid "$sagepid" 2>/dev/null | grep java)
+   if [ -z "$running" ]; then
+      sagepid=""
    fi
-   kill $sagepid
-   killcount=0
-   while [ "$killcount" -lt "30" ]
-   do
-      running=`ps --pid $sagepid | grep java`
-      if [ "$running" = "" ]; then
-         exit 0      
-      fi
-      killcount=`expr $killcount + 1`
-      sleep 1
-      echo .
-   done
-   echo SageTV service did not stop within 30 seconds
-   exit 1 
 fi
+
+# Method 2: state-managed container — java is a child of the entrypoint (PPID=7)
+if [ -z "$sagepid" ]; then
+   sagepid=$(ps -eo pid,ppid,comm 2>/dev/null | awk '$3=="java" && $2==7 {print $1; exit}')
+fi
+
+# Method 3: fallback — any java running sage.Sage
+if [ -z "$sagepid" ]; then
+   sagepid=$(pgrep -f 'sage\.Sage' 2>/dev/null | head -1)
+fi
+
+if [ -z "$sagepid" ]; then
+   echo "SageTV not currently running"
+   exit 1
+fi
+
+echo "Stopping SageTV (pid $sagepid)"
+
+# Remove .sage-run so the entrypoint supervisor won't respawn java
+if [ -e "$RUNFILE" ]; then
+   rm -f "$RUNFILE"
+   echo "Removed $RUNFILE (supervisor will not respawn)"
+fi
+
+kill "$sagepid"
+killcount=0
+while [ "$killcount" -lt "30" ]; do
+   if ! kill -0 "$sagepid" 2>/dev/null; then
+      echo "SageTV stopped"
+      exit 0
+   fi
+   killcount=$((killcount + 1))
+   sleep 1
+   echo -n .
+done
+echo
+echo "SageTV service did not stop within 30 seconds"
 exit 1

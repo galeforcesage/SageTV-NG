@@ -14,6 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+# Starts the SageTV server process. Works in two modes:
+#   1. State-managed container (entrypoint-state.sh): creates .sage-run so
+#      the supervisor loop respawns java automatically.
+#   2. Traditional (bare metal / non-supervised): launches startsagecore.
+#
 case $0 in
 /*)
    sagepath="$0"
@@ -28,27 +33,35 @@ echo Changing to SageTV directory $sagepath
 cd $sagepath
 
 PIDFILE=/var/run/sagetv.pid
+RUNFILE=.sage-run
 
 # You can use the sagesettings file to overwrite settings
 if [ -e sagesettings ] ; then
 	. sagesettings
 fi
 
-if [ -e $PIDFILE ] ; then
-   sagepid=`cat $PIDFILE`
-   running=`ps --pid $sagepid | grep java`
-   if [ "$running" != "" ]; then
-      echo Already running
-      exit 1
-   fi
+# Check if already running
+sagepid=$(pgrep -f 'sage\.Sage' 2>/dev/null | head -1)
+if [ -n "$sagepid" ]; then
+   echo "Already running (pid $sagepid)"
+   exit 1
 fi
 
+# Detect state-managed container: entrypoint-state.sh is PID 7's script
+if ps -p 7 -o cmd= 2>/dev/null | grep -q 'entrypoint-state'; then
+   # Supervised mode: just create .sage-run and the supervisor respawns java
+   touch "$RUNFILE"
+   echo "Created $RUNFILE — supervisor will respawn SageTV"
+   exit 0
+fi
+
+# Traditional mode: launch startsagecore directly
 #NOTE: Linux users should put their license key inside of the
 #'activkey' file in the SageTV folder
 
-chmod 777 /var/media/videos
-chmod 777 /var/media/pictures
-chmod 777 /var/media/music
+chmod 777 /var/media/videos 2>/dev/null || true
+chmod 777 /var/media/pictures 2>/dev/null || true
+chmod 777 /var/media/music 2>/dev/null || true
 
 ./startsagecore <&- &
 exit 0
