@@ -2998,14 +2998,16 @@ public class CorePluginManager implements Runnable
     else if (v1.length() == 0) return 1;
     else if (v2.length() == 0) return -1;
     // Make sure the target is less than the minimum
+    // Use Long.parseLong to avoid NumberFormatException from DevRepoSAXHandler's
+    // yyMMddHHmm timestamp suffixes which exceed Integer.MAX_VALUE for years >= 2022
     int idx1a = 0;
     int idx1b = v1.indexOf('.');
     int idx2a = 0;
     int idx2b = v2.indexOf('.');
     do
     {
-      int t = Integer.parseInt((idx1b == -1) ? v1.substring(idx1a) : v1.substring(idx1a, idx1b));
-      int m = Integer.parseInt((idx2b == -1) ? v2.substring(idx2a) : v2.substring(idx2a, idx2b));
+      long t = Long.parseLong((idx1b == -1) ? v1.substring(idx1a) : v1.substring(idx1a, idx1b));
+      long m = Long.parseLong((idx2b == -1) ? v2.substring(idx2a) : v2.substring(idx2a, idx2b));
       if (t > m)
         return 1;
       if (t < m)
