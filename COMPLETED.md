@@ -7,6 +7,54 @@ without re-reading the roadmap history.
 
 ---
 
+## STV Optimization
+
+### Phase 2 hygiene — Remove dead `_c_*` SetLocal seeds
+
+- **What shipped.** Removed 33 dead `SetLocal` actions across 6 orphaned
+  `_c_*` cache slots from `SageTV7.xml`. These slots were seeded on menu
+  load but had zero corresponding `GetLocal` reads anywhere in the file —
+  pure wasted work on every screen entry.
+- **Dead slots removed:**
+
+  | Slot | Seeds removed |
+  |---|---|
+  | `_c_GetProperty_display_video_on_menus_XIf_Active` | 19 |
+  | `_c_GetCurrentMediaFile` | 8 |
+  | `_c_GetProperty_video_menu_style_XWindow` | 2 |
+  | `_c_GetProperty_slideshow_when_finished_do_xGoToL` | 2 |
+  | `_c_GetCurrentPlaylist` | 1 |
+  | `_c_GetElement_PluginTypesList_0` | 1 |
+
+- **How deployed.** Edited `stvs/SageTV7/SageTV7.xml` in repo; deploy to
+  container via normal STV update path.
+- **How it works.** The Phase 2 build-time cache patcher (`stv_cache_patcher.py`)
+  emits `SetLocal`/`GetLocal` pairs. These 6 slots were leftover from
+  earlier STV reworks that removed the read sites but left the seeds.
+  Removing them saves 33 unnecessary `GetProperty`/`GetCurrentMediaFile`/
+  `GetElement` evaluations per menu load cycle.
+
+---
+
+## Native parser
+
+### Rebuild + deploy `libMPEGParser.so`
+
+- **What shipped.** Rebuilt `libMPEGParser.so` with HEVC + AC-4 stream-type
+  patches (commit `6c09aae3`) replacing the May 2021 stock binary. Gives
+  ATSC 1-style instant codec ID for recorded ATSC3 files (FormatParser uses
+  MPEGParser too).
+- **How deployed.** Rebuilt binary deployed to
+  `/opt/sagetv/server/libMPEGParser.so` on 2026-06-26 (original backed up
+  as `.orig`). 64-bit ELF, x86-64, with debug_info.
+- **How it works.** The native shared library is loaded by `FormatParser`
+  via JNI to identify stream types in MPEG-TS/PS containers. The patched
+  source adds HEVC (stream type 0x24) and AC-4 (stream type 0xAC) to the
+  parser's codec-detection tables in
+  `native/ax/Native2.0/NativeCore/TSFilter.c`.
+
+---
+
 ## FFmpeg / encoding
 
 ### Unified SageTV-patched, AC-4-capable FFmpeg binary

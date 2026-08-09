@@ -8234,8 +8234,6 @@
    <ns0:Value>GetProperty("ui/focus_follows_mouse",true)</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Main_Menu">
-   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="16" Name="MediaPlayer OSD" Sym="BASE-44375">
@@ -19032,8 +19030,6 @@
    </ns0:Action>
   </ns0:Hook>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-MediaPlayer_OSD">
-   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentPlaylist&quot;, GetCurrentPlaylist())" />
    <ns0:Action Name="SetLocal(&quot;_c_GetProperty_ask_delete_at_EOF_Xmanual_only&quot;, GetProperty(&quot;ask_delete_at_EOF&quot;,&quot;Xmanual_only&quot;))" />
   </ns0:Action>
  </ns0:Menu>
@@ -31940,7 +31936,6 @@
    <ns0:Value>InfoJobID</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-SageRecordings_Video">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="618" Name="Browser - Music" Sym="BASE-51622">
@@ -41856,7 +41851,6 @@
   <ns0:Attribute Ref="10949" Name="NumberRows" />
   <ns0:Attribute Ref="10950" Name="NumberColumns" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Browser_-_Music">
-   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="677" Name="Browser - Photos" Sym="BASE-51625">
@@ -87332,7 +87326,6 @@
    <ns0:Value>"System Messages"</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-System_Messages">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="983" Name="Embedded - Firmware Update" Sym="NFLX1-1595816">
@@ -113995,7 +113988,6 @@
    <ns0:Value>"Plugins"</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Plugin_List">
-   <ns0:Action Name="SetLocal(&quot;_c_GetElement_PluginTypesList_0&quot;, GetElement(PluginTypesList,0))" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="2452" Name="Channel Setup" Sym="BASE-52025">
@@ -121907,7 +121899,6 @@
   <ns0:Attribute Ref="44631" Name="InfoThumbSource" />
   <ns0:Attribute Ref="44632" Name="InfoThumbType" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Detailed_Info_-_Musi">
-   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="4118" Name="TV Library" Sym="BASE-51654">
@@ -126943,7 +126934,6 @@
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Detailed_Info_-_Vide">
    <ns0:Action Name="SetLocal(&quot;_c_GetShowEpisode_Airing&quot;, GetShowEpisode(Airing))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="11196" Name="Detailed Info - Recording" Sym="BASE-57832">
@@ -132885,7 +132875,6 @@
   <ns0:Attribute Ref="46363" Name="PeopleWithPicsList" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Detailed_Info_-_Reco">
    <ns0:Action Name="SetLocal(&quot;_c_GetShowEpisode_Airing&quot;, GetShowEpisode(Airing))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="11665" Name="Browser - Music, By Song Set" Sym="BASE-53337">
@@ -142590,10 +142579,8 @@
    <ns0:Value>Time()</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Picture_Slideshow">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_slideshow_when_finished_do_xGoToL&quot;, GetProperty(&quot;slideshow_when_finished_do&quot;, &quot;xGoToLib&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Picture_Slideshow">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_slideshow_when_finished_do_xGoToL&quot;, GetProperty(&quot;slideshow_when_finished_do&quot;, &quot;xGoToLib&quot;))" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu ID="21486" Name="Weather - Extended Forecast" Sym="BASE-71244">
@@ -147655,10 +147642,8 @@
   <ns0:Attribute Ref="33526" Name="TableUIComp" />
   <ns0:Attribute Ref="33527" Name="TableUIComp2" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Theme_Header_&amp;_Foote">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Theme_Header_Footer_only">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu ID="22513" Name="Configuration Wizard - Show EULA Agreement" Sym="BASE-54852">
@@ -169335,7 +169320,6 @@
   <ns0:Attribute Ref="44632" Name="InfoThumbType" />
   <ns0:Attribute Ref="46363" Name="PeopleWithPicsList" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Detailed_Info_-_Airi">
-   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="51935" Name="Configuration Wizard - Parental Controls Usage" Sym="BASE-83238">
@@ -180339,10 +180323,8 @@
    </ns0:Conditional>
   </ns0:Hook>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Configuration_Wizard">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Configuration_Wizard_Ask">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu ID="60805" Name="Setup Wizard - IRTuner Plugin Select" Sym="BASE-84182">
@@ -185316,10 +185298,8 @@
    <ns0:Value>null</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Theme_Preview_and_In">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Theme_Preview_and_Info_T">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu Name="Detailed Setup - Home Server" Sym="BASE-44350">
@@ -189248,10 +189228,8 @@
    </ns0:Action>
   </ns0:Hook>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-VideoBG_THEME">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-VideoBG_THEME">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu Name="Search Menu" Sym="BASE-85858">
@@ -196880,10 +196858,8 @@
    </ns0:Panel>
   </ns0:Panel>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-THEME_ORGANIZER_3">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-THEME_ORGANIZER_3">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu ID="68272" Name="Theme Preview Top Right with Info Below" Sym="OPUS4A-126312">
@@ -198564,13 +198540,8 @@
   <ns0:Attribute Ref="33526" Name="TableUIComp" />
   <ns0:Attribute Ref="33527" Name="TableUIComp2" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Theme_Preview_Top_Ri">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_video_menu_style_XWindow&quot;, GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Theme_Preview_Top_Right_">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_video_menu_style_XWindow&quot;, GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;))" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu Name="Xtra: Disk Space Bar" Sym="BASE-85950">
@@ -213003,10 +212974,8 @@
   <ns0:Attribute Ref="33526" Name="TableUIComp" />
   <ns0:Attribute Ref="33527" Name="TableUIComp2" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Theme_Preview_Top_Ri">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Theme_Preview_Top_Right_">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu ID="70510" Name="Theme Preview Top Right with Thumb Below for Info Menus " Sym="OPUS4A-175999">
@@ -213225,10 +213194,8 @@
   <ns0:Attribute Ref="68754" Name="MenuInfoStartX" />
   <ns0:Attribute Ref="68755" Name="MenuInfoStartY" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Theme_Preview_Top_Ri">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Theme_Preview_Top_Right_">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Theme ID="72648" Name="" Sym="BASE-88419">

@@ -69,10 +69,6 @@ Phases 0–3 cover real-world need without touching the broadcast stack.
 
 ## Native parser track
 
-- **Rebuild + deploy `libMPEGParser.so`.** Source already has HEVC +
-  AC-4 stream-type patches (commit `6c09aae3`); deployed binary is the
-  May 2021 stock build. Rebuild gives ATSC 1-style instant codec ID for
-  recorded ATSC3 files (FormatParser uses MPEGParser too). Low risk.
 - **Native HEVC SPS parser.** Drop the `ffprobe-ac4` dependency for
   resolution / fps / aspect-ratio. ~300 LOC C in
   `native/ax/Native2.0/NativeCore/ESAnalyzer.c`.
@@ -1065,23 +1061,7 @@ architecture breakdown and AC mapping, and
 `docs/STV_Cleanup/PHASE2_RUNTIME_DESIGN.md` for the runtime-layer
 investigation plan.
 
-### Phase 2 hygiene — Review and remove 31 dead `_c_*` SetLocal seeds in SageTV7.xml
-
-Estimated effort: ~1 hour  •  Risk: Low–Medium  •  Expected gain: 31 fewer `GetProperty`/`GetCurrentMediaFile`/`GetElement` calls per menu load
-
-Five `_c_<callsig>` cache slots are seeded by `SetLocal(...)` on menu load but have zero corresponding `GetLocal(...)` reads anywhere in the file:
-
-| Cache slot | Seed sites |
-|---|---|
-| `_c_GetProperty_display_video_on_menus_XIf_Active` | 19 |
-| `_c_GetCurrentMediaFile` | 8 |
-| `_c_GetProperty_video_menu_style_XWindow` | 2 |
-| `_c_GetCurrentPlaylist` | 1 |
-| `_c_GetElement_PluginTypesList_0` | 1 (orphaned by the 2026-06-30 plugin menu fix) |
-
-**Risk before removing:** any of these could be a read that got accidentally deleted during a past UI rework — removing the seed would then mask the real bug. For each slot, before deletion, grep upstream `google/sagetv` and our git history for the read sites to confirm they were intentionally retired (not lost). If the read was lost, restore it; otherwise drop the seed.
-
-**Reward:** very small per-menu load latency reduction; less dead code in the STV.
+### Phase 2 hygiene — Review and remove dead `_c_*` SetLocal seeds in SageTV7.xml  *(done — see [COMPLETED.md](COMPLETED.md))*
 
 ### Phase 3 — Theme Chain Flattening
 
