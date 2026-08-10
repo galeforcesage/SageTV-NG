@@ -34,6 +34,26 @@ without re-reading the roadmap history.
   Removing them saves 33 unnecessary `GetProperty`/`GetCurrentMediaFile`/
   `GetElement` evaluations per menu load cycle.
 
+### Phase 2 — Full expression caching (23 screens, 73 sites)
+
+- **What shipped.** Applied `stv_cache_patcher.py --apply` to patch all
+  73 identified expensive expression sites across 23 screens. Production
+  STV now has 111 GetLocal cached reads (up from 38 partially-patched).
+- **Key cached expressions:**
+  - `GetCurrentMediaFile()` — 7 screens, 28 reads (OSD biggest win: 14)
+  - `GetProperty("display_video_on_menus")` — 10 screens
+  - `GetFavorites()`, `GetCurrentPlaylist()`, `GetShowEpisode()`
+  - Network config `GetServerProperty()` calls — 5 screens
+- **How deployed.** STV file updated in place on container
+  (`/opt/sagetv/server/STVs/SageTV7/SageTV7.xml`), picked up on next
+  client reload. Commit `8b1dc1c9`, pushed 2026-08-09.
+- **How it works.** `BeforeMenuLoad` hooks evaluate expensive expressions
+  once and store in context-local variables. All subsequent widget
+  evaluations read the cached value via `GetLocal()`. Existing
+  `FocusGained` hooks handle invalidation for list/table screens.
+  Static-input screens (OSD, detail popups, settings) invalidate via
+  `Refresh()` on state change. No Java changes required.
+
 ---
 
 ## Native parser

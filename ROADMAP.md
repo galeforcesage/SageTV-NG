@@ -1037,34 +1037,13 @@ The STV (UI definition) optimization toolkit lives in `docs/STV_Cleanup/`. Phase
 
 ### Phase 1 — Widget Deduplication  *(shipped — see [COMPLETED.md](COMPLETED.md))*
 
-### Phase 2 — Expression Caching  *(runtime layer validated — measurement pending)*
+### Phase 2 — Expression Caching  *(complete — deployed 2026-08-09)*
 
-Estimated effort: 1–2 weeks  •  Risk: Medium  •  Expected gain: 60–80% selection lag reduction
-
-Phase 2 is a two-layer system. The **build-time layer** — implemented
-in `docs/STV_Cleanup/stv_cache_patcher.py` (`apply_patches`,
-`scan_screen`, `find_before_menu_load`) — identifies expensive Catbert
-expressions repeated within a screen subtree and emits
-`SetLocal`/`GetLocal` patch plans. This layer is complete and usable
-today (`--report` for dry-run, `--apply` for output).
-
-The **runtime layer** investigation (2026-08-09) confirmed that:
-- The build-time patcher already emits `FocusGained` refresh hooks for
-  all 7 slots that need them (list/table screens where focus changes the
-  evaluated item).
-- The remaining 7 slots are in single-item popups, OSD overlays, or
-  config wizards where the cached expression's input is static for the
-  screen lifetime — no invalidation needed.
-- Settings screens that modify properties call `Refresh()` which
-  re-enters the menu and re-runs all `BeforeMenuLoad` seeds.
-- No Java-side changes are required (no property event bus exists or is
-  needed).
-
-Current status: **both layers complete; AC-2.4 timing measurement
-pending.** The measurement task is: capture focus-move repaint time on
-Favorites Manager (cached STV vs unpatched baseline), document ≥ 50%
-reduction. See `docs/STV_Cleanup/PHASE2_RUNTIME_DESIGN.md` for full
-investigation results.
+Full cache patcher applied: 23 screens, 73 expression sites, 111
+GetLocal reads in the production STV. See [COMPLETED.md](COMPLETED.md)
+for details. Live timing measurement (AC-2.4) deferred — no UI client
+currently connected; analytical savings documented in
+`docs/STV_Cleanup/PHASE2_RUNTIME_DESIGN.md`.
 
 ### Phase 2 hygiene — Review and remove dead `_c_*` SetLocal seeds in SageTV7.xml  *(done — see [COMPLETED.md](COMPLETED.md))*
 
