@@ -9106,8 +9106,8 @@
           <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
           <ns0:MouseTransparency>false</ns0:MouseTransparency>
           <ns0:Action Ref="3037" Name="&quot;REM Display top OSD a..." />
-          <ns0:Action Name="mf = GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="OPUS4A-176840">
-           <ns0:Action Name="pl = GetLocal(&quot;_c_GetCurrentPlaylist&quot;)" Sym="OPUS4A-176841">
+          <ns0:Action Name="mf = GetCurrentMediaFile()" Sym="OPUS4A-176840">
+           <ns0:Action Name="pl = GetCurrentPlaylist()" Sym="OPUS4A-176841">
             <ns0:Conditional Name="IsTVFile(mf)" Sym="OPUS4A-176842">
              <ns0:Branch Name="true" Sym="OPUS4A-176843">
               <ns0:Panel Name="TV Details" Sym="OPUS4A-176845">
@@ -10485,7 +10485,7 @@
     </ns0:Conditional>
    </ns0:Action>
    <ns0:Action Name="OSDBottomIsOn = false" Sym="BASE-52432">
-    <ns0:Conditional Name="(DisplayTimebarStatus &amp;&amp; HasMediaFile() &amp;&amp; ( (!IsCurrentMediaFileDVD() &amp;&amp; !IsBluRay(GetLocal(&quot;_c_GetCurrentMediaFile&quot;))) || (GetDVDCurrentDomain() == 4) || (GetDVDCurrentDomain() == 10)))" Sym="OPUS4A-176800">
+    <ns0:Conditional Name="(DisplayTimebarStatus &amp;&amp; HasMediaFile() &amp;&amp; ( (!IsCurrentMediaFileDVD() &amp;&amp; !IsBluRay(GetCurrentMediaFile())) || (GetDVDCurrentDomain() == 4) || (GetDVDCurrentDomain() == 10)))" Sym="OPUS4A-176800">
      <ns0:Action Name="OSDBottomIsOn = true" Sym="OPUS4A-176801">
       <ns0:Panel Name="Bottom OSD Area" Sym="OPUS4A-176802">
        <ns0:AnchorX>0.5</ns0:AnchorX>
@@ -10591,7 +10591,7 @@
            <ns0:Attribute Name="mf" Sym="BASE-52543">
             <ns0:Value>null</ns0:Value>
            </ns0:Attribute>
-           <ns0:Action Name="mf = GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-52544">
+           <ns0:Action Name="mf = GetCurrentMediaFile()" Sym="BASE-52544">
             <ns0:Conditional Name="IsCurrentMediaFileDVD() || IsBluRay(mf)" Sym="BASE-52545">
              <ns0:Branch Name="true" Sym="BASE-52546">
               <ns0:Action Name="AiringDuration = GetMediaDuration()" Sym="BASE-52547">
@@ -17801,7 +17801,7 @@
   </ns0:Listener>
   <ns0:Listener Name="RecordListener" Sym="BASE-53627">
    <ns0:ListenerEvent>Record</ns0:ListenerEvent>
-   <ns0:Action Name="Airing = GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-53628">
+   <ns0:Action Name="Airing = GetCurrentMediaFile()" Sym="BASE-53628">
     <ns0:Conditional Name="Airing != null" Sym="BASE-53629">
      <ns0:Conditional Name="IsTVFile(Airing)" Sym="BASE-53630">
       <ns0:Branch Name="true" Sym="BASE-53631">
@@ -18200,7 +18200,7 @@
    <ns0:ListenerEvent>Favorite</ns0:ListenerEvent>
    <ns0:Action Name="&quot;REM Handle the Favorite command, if allowed.&quot;" Sym="OPUS4A-218171">
     <ns0:Conditional Name="HasPermission( &quot;RecordingSchedule&quot; )" Sym="OPUS4A-218172">
-     <ns0:Action Name="Airing = GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-53654">
+     <ns0:Action Name="Airing = GetCurrentMediaFile()" Sym="BASE-53654">
       <ns0:Conditional Name="Airing != null" Sym="BASE-53655">
        <ns0:Conditional Name="IsTVFile(Airing)" Sym="BASE-53656">
         <ns0:Action Name="WasFavoriteAlready = IsFavorite(Airing)" Sym="OPUS4A-214184">
@@ -18237,7 +18237,7 @@
   <ns0:Listener Name="Delete" Sym="BASE-53673">
    <ns0:ListenerEvent>Delete</ns0:ListenerEvent>
    <ns0:Conditional Name="HasPermission( &quot;Delete&quot; )" Sym="OPUS4A-218089">
-    <ns0:Action Name="MediaFile = GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-53674">
+    <ns0:Action Name="MediaFile = GetCurrentMediaFile()" Sym="BASE-53674">
      <ns0:Conditional Name="!IsCurrentMediaFileRecording() &amp;&amp; !IsCurrentMediaFileDVD() &amp;&amp; !IsBluRay(MediaFile) &amp;&amp; IsTVFile(MediaFile)" Sym="BASE-53675">
       <ns0:OptionsMenu Name="confirm" Sym="BASE-53676">
        <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
@@ -18462,7 +18462,7 @@
   </ns0:Listener>
   <ns0:Listener Name="" Sym="BASE-53741">
    <ns0:ListenerEvent>Stop</ns0:ListenerEvent>
-   <ns0:Action Name="MediaFile = GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-53742">
+   <ns0:Action Name="MediaFile = GetCurrentMediaFile()" Sym="BASE-53742">
     <ns0:Action ID="5648" Name="ShowVideoBGWidget = false" Sym="BASE-53361">
      <ns0:Action Name="CloseAndWaitUntilClosed()" Sym="OPUS4-95798">
       <ns0:Action Ref="5949" Name="&quot;REM If Stopping a dow..." />
@@ -18473,7 +18473,7 @@
   </ns0:Listener>
   <ns0:Listener Name="" Sym="BASE-53743">
    <ns0:ListenerEvent>Watched</ns0:ListenerEvent>
-   <ns0:Action Name="Airing = GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-53744">
+   <ns0:Action Name="Airing = GetCurrentMediaFile()" Sym="BASE-53744">
     <ns0:Conditional Name="Airing != null" Sym="BASE-53745">
      <ns0:Conditional Name="IsTVFile(Airing)" Sym="BASE-53746">
       <ns0:Branch Name="true" Sym="BASE-53747">
@@ -18497,7 +18497,7 @@
    <ns0:ListenerEvent>Don't Like</ns0:ListenerEvent>
    <ns0:Action Name="&quot;REM Handle the Don't Like command, if allowed.&quot;" Sym="OPUS4A-218213">
     <ns0:Conditional Name="HasPermission( &quot;RecordingSchedule&quot; )" Sym="OPUS4A-218214">
-     <ns0:Action Name="Airing = GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-53752">
+     <ns0:Action Name="Airing = GetCurrentMediaFile()" Sym="BASE-53752">
       <ns0:Conditional Name="Airing != null" Sym="BASE-53753">
        <ns0:Conditional Name="IsTVFile(Airing)" Sym="BASE-53754">
         <ns0:Action Name="DisplayInfo = true" Sym="BASE-53755">
@@ -18511,7 +18511,7 @@
   </ns0:Listener>
   <ns0:Listener Name="" Sym="BASE-53763">
    <ns0:ListenerEvent>Input</ns0:ListenerEvent>
-   <ns0:Conditional Name="IsLinuxOS() &amp;&amp; IsFileCurrentlyRecording(GetLocal(&quot;_c_GetCurrentMediaFile&quot;))" Sym="BASE-53764">
+   <ns0:Conditional Name="IsLinuxOS() &amp;&amp; IsFileCurrentlyRecording(GetCurrentMediaFile())" Sym="BASE-53764">
     <ns0:Action Name="cdi = GetCaptureDeviceInputBeingViewed()" Sym="BASE-53765">
      <ns0:Conditional Name="StringIndexOf(GetCaptureDeviceInputName(cdi), &quot;_&quot;) &gt;= 0" Sym="BASE-53766">
       <ns0:Action Name="AddStaticContext(&quot;InputType&quot;, GetPhysicalInputType(cdi))" Sym="BASE-53767">
@@ -18654,7 +18654,7 @@
    <ns0:Action Name="IsWatchingLive = IsCaptureDeviceInUseByALiveClient(GetCaptureDeviceForInput(GetCaptureDeviceInputRecordingMediaFile(MediaFile)))" Sym="BASE-53795" />
    <ns0:Action Ref="6118" Name="&quot;REM If this is a musi..." />
    <ns0:Action Name="&quot;REM If in a playlist, show OSD when track changes, if should do so.&quot;" Sym="BASE-53802">
-    <ns0:Conditional Name="GetLocal(&quot;_c_GetCurrentPlaylist&quot;) != null" Sym="BASE-53803">
+    <ns0:Conditional Name="GetCurrentPlaylist() != null" Sym="BASE-53803">
      <ns0:Conditional Name="(IsCurrentMediaFileMusic() &amp;&amp; GetProperty(&quot;ui/playlist_change_display_osd/music&quot;,true)) || (!IsCurrentMediaFileMusic() &amp;&amp; GetProperty(&quot;ui/playlist_change_display_osd/video&quot;,true))" Sym="OPUS4-107903">
       <ns0:Action Ref="6122" Name="&quot;REM Show OSD temporar..." />
      </ns0:Conditional>
@@ -18667,8 +18667,8 @@
     <ns0:Action ID="5961" Name="&quot;REM Return to menu where media may have come from&quot;" Sym="BASE-53365">
      <ns0:Conditional Name="true" Sym="BASE-53366">
       <ns0:Action Name="&quot;REM First, for a TV recording, see if the use should be asked about file deletion.&quot;" Sym="BASE-53367">
-       <ns0:Conditional Name="(GetLocal(&quot;_c_GetCurrentPlaylist&quot;) == null) &amp;&amp; !( (GetAiringStartTime(MediaFile) &lt; Time()) &amp;&amp; (GetAiringEndTime(MediaFile) &gt; Time()) )" Sym="BASE-53368">
-        <ns0:Conditional Name="CheckToDelete &amp;&amp; (GetLocal(&quot;_c_GetProperty_ask_delete_at_EOF_Xmanual_only&quot;) != &quot;Xnever&quot;)" Sym="BASE-53369">
+       <ns0:Conditional Name="(GetCurrentPlaylist() == null) &amp;&amp; !( (GetAiringStartTime(MediaFile) &lt; Time()) &amp;&amp; (GetAiringEndTime(MediaFile) &gt; Time()) )" Sym="BASE-53368">
+        <ns0:Conditional Name="CheckToDelete &amp;&amp; (GetProperty(&quot;ask_delete_at_EOF&quot;,&quot;Xmanual_only&quot;) != &quot;Xnever&quot;)" Sym="BASE-53369">
          <ns0:Action Name="AskToDelete = false" Sym="BASE-53370" />
          <ns0:Conditional Name="IsFavorite(MediaFile)" Sym="BASE-53371">
           <ns0:Conditional Name="!IsAutoDelete(GetFavoriteForAiring(MediaFile))" Sym="BASE-53372">
@@ -18678,7 +18678,7 @@
          <ns0:Conditional Name="IsManualRecord(MediaFile)" Sym="BASE-53374">
           <ns0:Action ID="6133" Name="AskToDelete = true" Sym="BASE-53373" />
          </ns0:Conditional>
-         <ns0:Conditional Name="GetLocal(&quot;_c_GetProperty_ask_delete_at_EOF_Xmanual_only&quot;) == &quot;Xalways&quot;" Sym="BASE-53375">
+         <ns0:Conditional Name="GetProperty(&quot;ask_delete_at_EOF&quot;,&quot;Xmanual_only&quot;) == &quot;Xalways&quot;" Sym="BASE-53375">
           <ns0:Action Name="AskToDelete = true" Sym="BASE-53376" />
          </ns0:Conditional>
          <ns0:Conditional Name="VideoDownloadMF != null" Sym="BASE-53377">
@@ -18884,7 +18884,7 @@
      <ns0:Action Ref="3722" Name="&quot;REM Update info that ..." />
     </ns0:Action>
    </ns0:Action>
-   <ns0:Conditional Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-53825">
+   <ns0:Conditional Name="GetCurrentMediaFile()" Sym="BASE-53825">
     <ns0:Branch Name="null" Sym="BASE-53826">
      <ns0:Action ID="6226" Name="IsMusicPlayback = false" Sym="BASE-53801" />
      <ns0:Conditional Name="Reloaded" Sym="BASE-53827">
@@ -18909,13 +18909,13 @@
     </ns0:Branch>
    </ns0:Conditional>
    <ns0:Conditional Name="ContinueMenuLoad" Sym="OPUS4-95794">
-    <ns0:Action Name="IsVideoDownload = (VideoDownloadMF == GetLocal(&quot;_c_GetCurrentMediaFile&quot;))" Sym="BASE-53829">
+    <ns0:Action Name="IsVideoDownload = (VideoDownloadMF == GetCurrentMediaFile())" Sym="BASE-53829">
      <ns0:Conditional Name="IsVideoDownload" Sym="BASE-53830">
       <ns0:Action Name="VideoDownloadType = OnlineVideoPlaybackType" Sym="BASE-53831" />
      </ns0:Conditional>
     </ns0:Action>
     <ns0:Action Name="OSDMenuIsActive = true" Sym="BASE-53832" />
-    <ns0:Action Name="IsWatchingLive = IsCaptureDeviceInUseByALiveClient(GetCaptureDeviceForInput(GetCaptureDeviceInputRecordingMediaFile(GetLocal(&quot;_c_GetCurrentMediaFile&quot;))))" Sym="BASE-53833" />
+    <ns0:Action Name="IsWatchingLive = IsCaptureDeviceInUseByALiveClient(GetCaptureDeviceForInput(GetCaptureDeviceInputRecordingMediaFile(GetCurrentMediaFile())))" Sym="BASE-53833" />
    </ns0:Conditional>
   </ns0:Hook>
   <ns0:Hook Name="BeforeMenuUnload" Sym="BASE-53834">
@@ -19299,7 +19299,7 @@
       <ns0:Conditional Name="DisplayInfo || DisplayVolStatus || DisplayChanStatus" Sym="BASE-53971">
        <ns0:Action Name="RefreshNeeded = true" Sym="BASE-53972" />
       </ns0:Conditional>
-      <ns0:Conditional Name="(DisplayTimebarStatus &amp;&amp; HasMediaFile() &amp;&amp; ( (!IsCurrentMediaFileDVD() &amp;&amp; !IsBluRay(GetLocal(&quot;_c_GetCurrentMediaFile&quot;))) || (GetDVDCurrentDomain() == 4) || (GetDVDCurrentDomain() == 10)))" Sym="BASE-53973">
+      <ns0:Conditional Name="(DisplayTimebarStatus &amp;&amp; HasMediaFile() &amp;&amp; ( (!IsCurrentMediaFileDVD() &amp;&amp; !IsBluRay(GetCurrentMediaFile())) || (GetDVDCurrentDomain() == 4) || (GetDVDCurrentDomain() == 10)))" Sym="BASE-53973">
        <ns0:Action Name="RefreshNeeded = true" Sym="BASE-53974" />
       </ns0:Conditional>
       <ns0:Conditional Name="IsMediaPlayerSignalLost()" Sym="BASE-53975">
@@ -19316,11 +19316,11 @@
     <ns0:Action Ref="6113" Name="&quot;REM Release the UI lo..." />
    </ns0:Action>
   </ns0:Hook>
-  <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-MediaPlayer_OSD">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_ask_delete_at_EOF_Xmanual_only&quot;, GetProperty(&quot;ask_delete_at_EOF&quot;,&quot;Xmanual_only&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentPlaylist&quot;, GetCurrentPlaylist())" />
-  </ns0:Action>
+
+
+
+
+
  </ns0:Menu>
  <ns0:Menu ID="240" Name="SageRecordings SHORTCUTS" Sym="BASE-44353">
   <ns0:Hook Name="BeforeMenuLoad" Sym="BASE-49145">
