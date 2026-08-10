@@ -271,6 +271,22 @@ public class MiniPlayer implements DVDMediaPlayer
   public static final int MEDIACMD_DVD_NEWCELL = 32;
   public static final int MEDIACMD_DVD_CLUT = 33;
 
+  // NG-only: pre-stream metadata announcement. Sent BEFORE MEDIACMD_OPENURL so the
+  // client can pre-configure its decoder pipeline (codec, resolution, audio tracks)
+  // without probing the stream. Only sent when the client advertises the "STREAMINFO"
+  // capability during NG negotiation. Legacy clients never see this command.
+  public static final int MEDIACMD_STREAMINFO = 40;
+
+  // Client reply bitmask for MEDIACMD_STREAMINFO (returned as the int ACK):
+  //   bit 0: client parsed the JSON payload successfully
+  //   bit 1: client pre-configured video decoder (no probe needed)
+  //   bit 2: client pre-configured audio decoder(s) (no probe needed)
+  //   bit 3: client requests server to delay openURL until stream-ready (advisory)
+  public static final int STREAMINFO_ACK_PARSED    = 0x01;
+  public static final int STREAMINFO_ACK_VIDEO_OK  = 0x02;
+  public static final int STREAMINFO_ACK_AUDIO_OK  = 0x04;
+  public static final int STREAMINFO_ACK_WAIT_READY = 0x08;
+
   public static final int PUSHBUFFER_SUBPIC_FLAG = 0x40;
   public static final int PUSHBUFFER_SUBPIC_PAL_FLAG = 0x200;
   public static final int SUBPIC_DISABLE_STREAM = 0x2000;
@@ -3214,6 +3230,49 @@ public class MiniPlayer implements DVDMediaPlayer
             if (Sage.DBG) System.out.println("MiniPlayer: NG push-mode format hint -> " + formatString);
           }
         }
+        // ── NG STREAMINFO: send full metadata BEFORE openURL so the client can
+        // pre-configure its pipeline. Only sent to NG clients that advertise the
+        // "STREAMINFO" capability. Legacy clients skip this entirely — their path
+        // is unchanged. The client receives the JSON, sets up codecs/renderers,
+        // then openURL arrives and the client connects immediately (no probing).
+        if (ngSession && mcsr != null && mcsr.hasClientCapability("STREAMINFO"))
+        {
+          sage.media.format.ContainerFormat streamInfoCf = null;
+          String streamInfoWireContainer = null;
+          long streamInfoDuration = 0;
+          boolean streamInfoLive = timeshifted;
+          // Determine the ContainerFormat that describes the WIRE bytes
+          if (currMF != null)
+          {
+           streamInfoCf = currMF.getFileFormat();
+           if (streamInfoCf != null && "true".equals(streamInfoCf.getMetadataProperty("VARIED_FORMAT")))
+             streamInfoCf = sage.media.format.FormatParser.getFileFormat(file);
+          }
+          // If we're remuxing/transcoding, the wire format differs from source
+          if (usingRemuxer && mpegSrc != null && mpegSrc.getTranscoder() instanceof RemuxTranscodeEngine)
+          {
+           streamInfoCf = ((RemuxTranscodeEngine) mpegSrc.getTranscoder()).getTargetFormat();
+          }
+          else if (serverSideTranscoding && "mpeg2psremux".equals(prefTranscodeMode))
+          {
+           // Wire is PS even though source may be TS
+           streamInfoWireContainer = sage.media.format.MediaFormat.MPEG2_PS;
+          }
+          // Duration from the format (0 for live)
+          if (streamInfoCf != null && !timeshifted)
+           streamInfoDuration = streamInfoCf.getDuration();
+          if (streamInfoCf != null)
+          {
+           int siAck = sendStreamInfo0(streamInfoCf, streamInfoWireContainer,
+               streamInfoDuration, streamInfoLive);
+           // If client requested WAIT_READY, the openURL below serves as
+           // the implicit "stream is ready" signal (transcoder already inited above).
+           if ((siAck & STREAMINFO_ACK_PARSED) != 0 && Sage.DBG)
+             System.out.println("MiniPlayer: client confirmed STREAMINFO parse"
+                 + ((siAck & STREAMINFO_ACK_VIDEO_OK) != 0 ? " +video" : "")
+                 + ((siAck & STREAMINFO_ACK_AUDIO_OK) != 0 ? " +audio" : ""));
+          }
+        }
         if (!openURL0("push:" + formatString))
           throw new PlaybackException();
       }
@@ -3316,6 +3375,18 @@ public class MiniPlayer implements DVDMediaPlayer
                   + (aMime != null ? aMime : "");
               if (Sage.DBG) System.out.println("MiniPlayer: NG pull-mode format hint -> " + theURL);
             }
+          }
+        }
+        // ── NG STREAMINFO for pull/direct-play (same logic, different path) ──
+        if (ngSession && mcsr != null && mcsr.hasClientCapability("STREAMINFO"))
+        {
+          sage.media.format.ContainerFormat pullCf = (currMF != null) ? currMF.getFileFormat() : null;
+          if (pullCf != null && "true".equals(pullCf.getMetadataProperty("VARIED_FORMAT")))
+            pullCf = sage.media.format.FormatParser.getFileFormat(file);
+          if (pullCf != null)
+          {
+            long pullDur = timeshifted ? 0 : pullCf.getDuration();
+            sendStreamInfo0(pullCf, null, pullDur, timeshifted);
           }
         }
         if (!openURL0(theURL))
@@ -5265,6 +5336,191 @@ public class MiniPlayer implements DVDMediaPlayer
       }
     }
     return false;
+  }
+
+  /**
+   * Sends a MEDIACMD_STREAMINFO payload to an NG client BEFORE openURL.
+   * <p>
+   * The payload is a UTF-8 JSON object containing all known stream metadata so the
+   * client can pre-configure its decoder pipeline (codec selection, MediaFormat creation,
+   * audio track routing) without probing the stream.
+   * <p>
+   * This method is a no-op (returns 0) if the player socket is not connected.
+   * Legacy clients must NEVER receive this command — callers gate on
+   * {@code ngSession && mcsr.hasClientCapability("STREAMINFO")}.
+   *
+   * @param cf        the ContainerFormat for the stream about to be pushed/pulled
+   * @param wireContainer override container name for the wire format (e.g. when remuxing
+   *                      from TS to PS); null = use cf's own container name
+   * @param durationMs    total duration in milliseconds (0 if live/unknown)
+   * @param isLive        true if this is a live/timeshifted stream
+   * @return the client's ACK bitmask (see STREAMINFO_ACK_* constants), or 0 on failure
+   */
+  protected int sendStreamInfo0(sage.media.format.ContainerFormat cf,
+      String wireContainer, long durationMs, boolean isLive)
+  {
+    if (clientSocket == null || cf == null)
+      return 0;
+    try
+    {
+      if (clientInStream == null)
+        clientInStream = new FastPusherReply(clientSocket);
+
+      StringBuilder json = new StringBuilder(512);
+      json.append('{');
+
+      // Protocol version for future extensibility
+      json.append("\"v\":1,");
+
+      // Container
+      String container = (wireContainer != null) ? wireContainer : cf.getFormatName();
+      json.append("\"container\":\"").append(escapeJsonStr(container)).append("\",");
+
+      // Duration & live flag
+      if (durationMs > 0)
+        json.append("\"duration_ms\":").append(durationMs).append(',');
+      json.append("\"live\":").append(isLive).append(',');
+
+      // Bitrate
+      if (cf.getBitrate() > 0)
+        json.append("\"bitrate\":").append(cf.getBitrate()).append(',');
+
+      // Video tracks
+      sage.media.format.BitstreamFormat[] streams = cf.getStreamFormats();
+      boolean hasVideo = false;
+      boolean hasAudio = false;
+      if (streams != null && streams.length > 0)
+      {
+        json.append("\"video\":[");
+        boolean firstV = true;
+        for (int i = 0; i < streams.length; i++)
+        {
+          if (streams[i] instanceof sage.media.format.VideoFormat)
+          {
+            sage.media.format.VideoFormat vf = (sage.media.format.VideoFormat) streams[i];
+            if (!firstV) json.append(',');
+            firstV = false;
+            hasVideo = true;
+            json.append('{');
+            json.append("\"codec\":\"").append(escapeJsonStr(vf.getFormatName())).append('"');
+            if (vf.getWidth() > 0) json.append(",\"width\":").append(vf.getWidth());
+            if (vf.getHeight() > 0) json.append(",\"height\":").append(vf.getHeight());
+            if (vf.getFps() > 0) json.append(",\"fps\":").append(vf.getFps());
+            if (vf.getFpsNum() > 0 && vf.getFpsDen() > 0)
+              json.append(",\"fps_num\":").append(vf.getFpsNum()).append(",\"fps_den\":").append(vf.getFpsDen());
+            if (vf.getArNum() > 0 && vf.getArDen() > 0)
+              json.append(",\"ar_num\":").append(vf.getArNum()).append(",\"ar_den\":").append(vf.getArDen());
+            json.append(",\"interlaced\":").append(vf.isInterlaced());
+            if (vf.getId() != null && vf.getId().length() > 0)
+              json.append(",\"id\":\"").append(escapeJsonStr(vf.getId())).append('"');
+            // MIME type for client decoder selection
+            String vMime = toMimeType(vf.getFormatName());
+            if (vMime != null) json.append(",\"mime\":\"").append(vMime).append('"');
+            json.append('}');
+          }
+        }
+        json.append("],");
+
+        // Audio tracks
+        json.append("\"audio\":[");
+        boolean firstA = true;
+        for (int i = 0; i < streams.length; i++)
+        {
+          if (streams[i] instanceof sage.media.format.AudioFormat)
+          {
+            sage.media.format.AudioFormat af = (sage.media.format.AudioFormat) streams[i];
+            if (!firstA) json.append(',');
+            firstA = false;
+            hasAudio = true;
+            json.append('{');
+            json.append("\"codec\":\"").append(escapeJsonStr(af.getFormatName())).append('"');
+            if (af.getChannels() > 0) json.append(",\"channels\":").append(af.getChannels());
+            if (af.getSamplingRate() > 0) json.append(",\"sample_rate\":").append(af.getSamplingRate());
+            if (af.getBitsPerSample() > 0) json.append(",\"bits_per_sample\":").append(af.getBitsPerSample());
+            if (af.getBitrate() > 0) json.append(",\"bitrate\":").append(af.getBitrate());
+            String lang = af.getLanguage();
+            if (lang != null && lang.length() > 0) json.append(",\"language\":\"").append(escapeJsonStr(lang)).append('"');
+            json.append(",\"primary\":").append(af.isPrimary());
+            if (af.getId() != null && af.getId().length() > 0)
+              json.append(",\"id\":\"").append(escapeJsonStr(af.getId())).append('"');
+            String aMime = toMimeType(af.getFormatName());
+            if (aMime != null) json.append(",\"mime\":\"").append(aMime).append('"');
+            json.append('}');
+          }
+        }
+        json.append("],");
+
+        // Subtitle tracks
+        json.append("\"subtitle\":[");
+        boolean firstS = true;
+        for (int i = 0; i < streams.length; i++)
+        {
+          if (streams[i] instanceof sage.media.format.SubpictureFormat)
+          {
+            sage.media.format.SubpictureFormat sf = (sage.media.format.SubpictureFormat) streams[i];
+            if (!firstS) json.append(',');
+            firstS = false;
+            json.append('{');
+            json.append("\"codec\":\"").append(escapeJsonStr(sf.getFormatName())).append('"');
+            String sLang = sf.getLanguage();
+            if (sLang != null && sLang.length() > 0) json.append(",\"language\":\"").append(escapeJsonStr(sLang)).append('"');
+            if (sf.getId() != null && sf.getId().length() > 0)
+              json.append(",\"id\":\"").append(escapeJsonStr(sf.getId())).append('"');
+            json.append('}');
+          }
+        }
+        json.append(']');
+      }
+      else
+      {
+        json.append("\"video\":[],\"audio\":[],\"subtitle\":[]");
+      }
+
+      json.append('}');
+
+      byte[] payload = json.toString().getBytes(Sage.I18N_CHARSET);
+      sockBuf.clear();
+      sockBuf.putInt(MEDIACMD_STREAMINFO << 24 | payload.length + 1 + 4);
+      sockBuf.putInt(payload.length + 1);
+      sockBuf.put(payload, 0, payload.length);
+      sockBuf.put((byte) 0); // null terminator
+      sockBuf.flip();
+      while (sockBuf.hasRemaining())
+        clientSocket.write(sockBuf);
+
+      int ack = clientInStream.readInt();
+      if (Sage.DBG) System.out.println("MiniPlayer: STREAMINFO sent (" + payload.length
+          + " bytes), client ACK=0x" + Integer.toHexString(ack)
+          + (hasVideo ? " video" : "") + (hasAudio ? " audio" : ""));
+      return ack;
+    }
+    catch (Exception e)
+    {
+      if (Sage.DBG) System.out.println("MiniPlayer: STREAMINFO send failed: " + e);
+      return 0;
+    }
+  }
+
+  /** Minimal JSON string escaping (quotes, backslashes, control chars). */
+  private static String escapeJsonStr(String s)
+  {
+    if (s == null) return "";
+    StringBuilder sb = null;
+    for (int i = 0; i < s.length(); i++)
+    {
+      char c = s.charAt(i);
+      String esc = null;
+      if (c == '"') esc = "\\\"";
+      else if (c == '\\') esc = "\\\\";
+      else if (c < 0x20) esc = "\\u" + String.format("%04x", (int) c);
+      if (esc != null)
+      {
+        if (sb == null) { sb = new StringBuilder(s.length() + 16); sb.append(s, 0, i); }
+        sb.append(esc);
+      }
+      else if (sb != null) sb.append(c);
+    }
+    return sb != null ? sb.toString() : s;
   }
 
   protected long getMediaTimeMillis0()
