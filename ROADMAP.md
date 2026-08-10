@@ -986,11 +986,19 @@ currently connected; analytical savings documented in
 
 ### Phase 2 hygiene — Review and remove dead `_c_*` SetLocal seeds in SageTV7.xml  *(done — see [COMPLETED.md](COMPLETED.md))*
 
-### Phase 3 — Theme Chain Flattening
+### Phase 3 — Theme Chain Flattening  *(deferred — low priority)*
 
 Estimated effort: 2–3 weeks  •  Risk: Medium  •  Expected gain: O(depth)→O(1) per property lookup at paint time
 
 Pre-resolve theme inheritance chains and write final property values directly onto each theme widget, eliminating ancestor traversal at paint time. Implemented in `docs/STV_Cleanup/stv_theme_flattener.py` (`flatten`). Script is functional; awaiting integration into a full Phase 1 → 2 → 3 pipeline run.
+
+**Status: Skipping for now.** This is a micro-optimization for a code
+path that isn't the bottleneck — theme chains are 2–4 levels deep and
+resolve via sub-microsecond HashMap lookups. Server is headless; the
+MiniClient does its own rendering. STVi plugin compatibility is
+preserved (runtime inheritance still works; flattening just shortens
+chains), but the real-world gain is negligible vs. higher-impact items
+like ATSC1 EPG scanning or vendor-agnostic transcode presets.
 
 ### Phase 4 — Screen Isolation & Modularization  *(long-term)*
 
