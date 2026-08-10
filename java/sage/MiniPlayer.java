@@ -2838,6 +2838,12 @@ public class MiniPlayer implements DVDMediaPlayer
         sage.media.format.ContainerFormat currFileFormat = currMF.getFileFormat();
         if (currFileFormat != null && "true".equals(currFileFormat.getMetadataProperty("VARIED_FORMAT")))
           currFileFormat = sage.media.format.FormatParser.getFileFormat(file);
+        // ── NG STREAMINFO for RemotePusher path ──
+        if (ngSession && mcsr != null && mcsr.hasClientCapability("STREAMINFO") && currFileFormat != null)
+        {
+          sendStreamInfo0(currFileFormat, null,
+              timeshifted ? 0 : currFileFormat.getDuration(), timeshifted);
+        }
         if (!openURL0("push://" + hostname + (Sage.getBoolean("use_alternate_streaming_ports", false) ?
             ":31098" : "") + "/session/" + rpSrc.getSessionID() + "?" +
             (currFileFormat == null ? "" : currFileFormat.getFullPropertyString(false, timeshifted ? "live=1;" : null))))
