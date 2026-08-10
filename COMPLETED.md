@@ -56,6 +56,27 @@ without re-reading the roadmap history.
 
 ---
 
+## Offline transcode
+
+### Ministry preset modernization (NVENC screen-tier catalogue)
+
+- **What shipped.** Replaced 2008-era hardcoded preset arrays (Razr, PSP,
+  iPod, iPhone, AppleTV, DVD, MPEG4, MPEG4 HDTV) with a disk-loaded,
+  NVENC-aware screen-tier catalogue: PHONE_LOW/STD/HIGH, TABLET_10/12,
+  TV_1080_COMPAT, TV_4K_HEVC, ARCHIVE_HEVC_MKV, UPSCALE_1440/2160.
+- **How deployed.** Presets live in `Sage.properties` under
+  `transcoder/formats/*` keys (cuda hwaccel + h264_nvenc/hevc_nvenc).
+  Java loads from `presets/transcoder/*.properties` on disk at boot,
+  with `DEAD_FORMAT_NAMES` array to auto-remove legacy entries.
+- **How it works.** `Ministry.java` loads preset `.properties` files,
+  substitutes `%V264%`/`%V265%` hardware encoder tokens via
+  `HwEncoder.pick()`, writes generated `transcoder/formats/*` entries.
+  Sort order auto-migrates from legacy `iPod;iPhone;...` default to
+  screen-tier order. `SUBSTITUTE_FORMAT_NAMES` maps old deinterlaced
+  names to nearest modern preset for saved job migration.
+
+---
+
 ## Native parser
 
 ### Rebuild + deploy `libMPEGParser.so`

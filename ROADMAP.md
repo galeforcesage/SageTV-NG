@@ -118,73 +118,12 @@ Phases 0–3 cover real-world need without touching the broadcast stack.
   reason about the transcoder command by reading two structs instead
   of tracing 800 lines of imperative appends.
 
-### Offline transcode preset modernization (`Ministry`)
+### Offline transcode preset modernization (`Ministry`)  *(complete — deployed 2026)*
 
-Replace the legacy 2008-era offline transcode profile catalogue in
-[java/sage/Ministry.java](java/sage/Ministry.java) — `Razr-*` (already
-dead), `PSP-*`, `iPod-*`, `iPhone-*`, `AppleTV-*`, `MPEG4 HDTV-*`,
-`MPEG4-*`, `DVD-*` — with a screen-class-driven catalogue tuned for
-the RTX 2060 (Turing NVENC: H.264 + HEVC, no AV1) on the host. **No
-live-tune path; offline `Ministry`/`Transcode To...` queue only.**
-
-**New screen-tier presets** (h264_nvenc / hevc_nvenc, NVDEC+NVENC,
-MP4 + `+faststart`, AAC stereo by default):
-
-| Preset | Target | Codec | Resolution | VBR cq/bitrate |
-|---|---|---|---|---|
-| `PHONE_LOW` | small screens / low bandwidth | h264_nvenc | 640x360 | cq 23, 1.2-1.5 Mbps |
-| `PHONE_STD` | typical phones | h264_nvenc | 1280x720 | cq 23, 3.5-4.5 Mbps |
-| `PHONE_HIGH_1080` | phones on Wi-Fi / local | hevc_nvenc | 1920x1080 | cq 24, 6-7.5 Mbps |
-| `TABLET_10_1080` | 10" tablets | hevc_nvenc | 1920x1080 | cq 23, 8-10 Mbps |
-| `TABLET_12_1440` | 12-13" tablets (sharp UI/text) | hevc_nvenc | 2560x1440 | cq 23, 12-14 Mbps |
-| `TV_1080_COMPAT` | TVs/streamers, broad compat | h264_nvenc | 1920x1080 | cq 21, 10-12 Mbps |
-| `TV_4K_HEVC` | 4K TVs / Shield / ATV 4K | hevc_nvenc | 3840x2160 | cq 24, 18-24 Mbps |
-| `ARCHIVE_HEVC_MKV` | archival (replaces `MPEG4 HDTV-*` / `MPEG4-*`) | hevc_nvenc | source (cap 2160p) | cq 22, audio copy |
-| `DVD_LEGACY_MPEG2` | DVD-Video authoring (NTSC/PAL) | mpeg2video | 720x480 / 720x576 | 8 Mbps, AC3 192k |
-
-**Optional offline upscale** for 1080 masters destined for large
-screens (separate preset; produces a new file, never the live path):
-
-- `UPSCALE_1440_FROM_1080` — basic GPU scale (`scale_npp=2560:1440:interp_algo=lanczos`) + hevc_nvenc (cq 23, 12-14 Mbps), audio copy, MKV.
-- `UPSCALE_2160_FROM_1080` — basic GPU scale (`scale_npp=3840:2160:interp_algo=lanczos`) + hevc_nvenc (cq 24, 18-24 Mbps), audio copy, MKV.
-- AI-upscale variant: external tool runs first (Real-ESRGAN /
-  Topaz / etc.) producing 1440p/2160p intermediate; second stage
-  encodes with the same hevc_nvenc settings. Kept as a separate
-  job by design — the AI step is the slow part.
-
-**Canonical command shape** (PHONE_STD example):
-
-```
-ffmpeg -hwaccel cuda -hwaccel_output_format cuda -i "IN" \
-  -vf "scale_npp=1280:720:interp_algo=lanczos" \
-  -c:v h264_nvenc -preset p5 -rc:v vbr -cq:v 23 \
-  -b:v 3500k -maxrate 4500k -bufsize 9000k \
-  -c:a aac -b:a 160k -ac 2 \
-  -movflags +faststart "OUT.mp4"
-```
-
-HEVC-in-MP4 presets should also accept an optional `-tag:v hvc1` for
-iOS/Apple-player compatibility.
-
-**Implementation notes.**
-- Storage: drop the hardcoded `PREDEFINED_TRANSCODER_FORMATS` table
-  and load from `transcoder/presets/*.properties` so users / plugins
-  can add their own without recompiling.
-- Translate the property-style preset into the existing
-  `MCompressionDetails=...;[bf=vid;...][bf=aud;...]` form that
-  `FFMPEGTranscoder` already consumes (or, better, plumb a new
-  raw-cmdline path so we stop converting `cq`/`hwaccel` back through
-  the legacy `bf=`/`f=`/`br=` token grammar).
-- STV menu: regenerate the "Transcode To..." menu items from the
-  preset catalogue at runtime; remove the dead Razr/PSP/iPod/iPhone
-  menu entries.
-- Migration: any saved jobs (`transcoder/jobs/*`) referencing
-  retired names map to the closest new preset, with a one-time log
-  message naming the substitution.
-- Hardware probe: detect NVENC availability via
-  `HwEncoder.pick("h264")` / `HwEncoder.pick("hevc")` and fall back
-  to `libx264` / `libx265` software encoders when the host has no
-  NVENC. (RTX 2060 = Turing: H.264 + HEVC; no AV1 encode.)
+Fully modernized: NVENC-aware screen-tier catalogue deployed to container
+via `Sage.properties`, Java code loads presets from disk (`.properties`
+files), legacy names kept only in `DEAD_FORMAT_NAMES` removal list.
+See [COMPLETED.md](COMPLETED.md) for details.
 
 ### Vendor-agnostic preset coverage  *(follow-up to Ministry mod.)*
 
