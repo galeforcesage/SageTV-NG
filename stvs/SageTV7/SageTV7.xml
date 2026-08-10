@@ -4,7 +4,7 @@
   <ns0:VideoBackground>false</ns0:VideoBackground>
   <ns0:Theme Ref="1" Name="MainMenuTheme 7" />
   <ns0:Action Name="&quot;REM Determine whether to display preview window.&quot;" Sym="OPUS4A-174931">
-   <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))) || (&quot;XAlways&quot; == GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)))" Sym="OPUS4A-174933">
+   <ns0:Conditional Name="!IsMusicFile(GetLocal(&quot;_c_GetCurrentMediaFile&quot;)) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))) || (&quot;XAlways&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)))" Sym="OPUS4A-174933">
     <ns0:Panel Name="Video Preview Panel" Sym="OPUS4A-174934">
      <ns0:AnchorX>=MenuPreviewStartX</ns0:AnchorX>
      <ns0:AnchorY>=MenuPreviewStartY + HeaderPanelHeight</ns0:AnchorY>
@@ -89,7 +89,7 @@
          <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
          <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
          <ns0:MouseTransparency>false</ns0:MouseTransparency>
-         <ns0:Action Name="GetAiringChannelNumber(GetCurrentMediaFile()) + &quot; &quot; + GetChannelName(GetCurrentMediaFile())" Sym="OPUS4A-174944">
+         <ns0:Action Name="GetAiringChannelNumber(GetLocal(&quot;_c_GetCurrentMediaFile&quot;)) + &quot; &quot; + GetChannelName(GetLocal(&quot;_c_GetCurrentMediaFile&quot;))" Sym="OPUS4A-174944">
           <ns0:Text Name="" Sym="OPUS4A-174945">
            <ns0:AnchorX>0.5</ns0:AnchorX>
            <ns0:AutosizeText>true</ns0:AutosizeText>
@@ -2724,7 +2724,293 @@
         </ns0:Attribute>
         <ns0:Action Ref="963" Name="&quot;REM Start a library i..." />
        </ns0:Item>
-        <ns0:Item Name="Download Queue Management" Sym="NGDLQ-1100" xmlns="urn:tv.sage/stv"><ns0:Attribute Name="ButtonText" Sym="NGDLQ-1101"><ns0:Value>"Download Queue Management"</ns0:Value></ns0:Attribute><ns0:Attribute Name="ThisItem" Sym="NGDLQ-1102"><ns0:Value>"xItemSetupDownloadQueue"</ns0:Value></ns0:Attribute><ns0:Attribute Name="SubMenuType" Sym="NGDLQ-1103"><ns0:Value>null</ns0:Value></ns0:Attribute><ns0:Action Name="&quot;Server download queue management.&quot;" Sym="NGDLQ-1104"><ns0:OptionsMenu Name="DownloadQueueManagement" Sym="NGDLQ-1105"><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:Action Name="&quot;Recording Copy Transfer Queue:\n \n&quot;" Sym="NGDLQ-1106"><ns0:Text Name="" Sym="NGDLQ-1107" /></ns0:Action><ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() == 0" Sym="NGDLQ-1500"><ns0:Panel Name="QueueEmpty" Sym="NGDLQ-1501"><ns0:FixedWidth>1.0</ns0:FixedWidth><ns0:PadX>.02</ns0:PadX><ns0:PadY>.02</ns0:PadY><ns0:Insets>.02</ns0:Insets><ns0:WrapHNav>false</ns0:WrapHNav><ns0:WrapVNav>false</ns0:WrapVNav><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:Text Name="Queue:" Sym="NGDLQ-1502"><ns0:AnchorX>0.0</ns0:AnchorX><ns0:FixedWidth>0.7</ns0:FixedWidth><ns0:AutosizeText>false</ns0:AutosizeText><ns0:WrapText>true</ns0:WrapText><ns0:TextShadow>true</ns0:TextShadow><ns0:DisableFontScaling>false</ns0:DisableFontScaling><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps></ns0:Text><ns0:Action Name="&quot;No items in queue.&quot;" Sym="NGDLQ-1503"><ns0:Text Name="(No queued recordings)" Sym="NGDLQ-1504" /></ns0:Action><ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." /></ns0:Panel></ns0:Conditional><ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 1" Sym="NGDLQ-1510"><ns0:Item Name="QueueItem1" Sym="NGDLQ-1511"><ns0:Action Name="&quot;Manage queue item #1.&quot;" Sym="NGDLQ-1512"><ns0:OptionsMenu Name="DownloadQueueItem1" Sym="NGDLQ-1513"><ns0:Action Name="GetRecordingCopyTransferQueueItemLabel(1)" Sym="NGDLQ-1514"><ns0:Text Name="" Sym="NGDLQ-1515" /></ns0:Action><ns0:Panel Name="QueueItem1Progress" Sym="NGDLQ-1516"><ns0:FixedWidth>1.0</ns0:FixedWidth><ns0:PadX>.02</ns0:PadX><ns0:PadY>.02</ns0:PadY><ns0:Insets>.02</ns0:Insets><ns0:WrapHNav>false</ns0:WrapHNav><ns0:WrapVNav>false</ns0:WrapVNav><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:Text Name="Progress:" Sym="NGDLQ-1517"><ns0:AnchorX>0.0</ns0:AnchorX><ns0:FixedWidth>0.45</ns0:FixedWidth><ns0:AutosizeText>false</ns0:AutosizeText><ns0:WrapText>true</ns0:WrapText><ns0:TextShadow>true</ns0:TextShadow><ns0:DisableFontScaling>false</ns0:DisableFontScaling><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps></ns0:Text><ns0:Action Name="GetRecordingCopyTransferQueueItemProgressText(1)" Sym="NGDLQ-1518"><ns0:Text Name="" Sym="NGDLQ-1519" /></ns0:Action><ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." /></ns0:Panel><ns0:Panel Name="QueueItem1Pause" Sym="NGDLQ-1520"><ns0:FixedWidth>1.0</ns0:FixedWidth><ns0:PadX>.02</ns0:PadX><ns0:PadY>.02</ns0:PadY><ns0:Insets>.02</ns0:Insets><ns0:WrapHNav>false</ns0:WrapHNav><ns0:WrapVNav>false</ns0:WrapVNav><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:Text Name="Pause:" Sym="NGDLQ-1521"><ns0:AnchorX>0.0</ns0:AnchorX><ns0:FixedWidth>0.7</ns0:FixedWidth><ns0:AutosizeText>false</ns0:AutosizeText><ns0:WrapText>true</ns0:WrapText><ns0:TextShadow>true</ns0:TextShadow><ns0:DisableFontScaling>false</ns0:DisableFontScaling><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps></ns0:Text><ns0:Item Name="QueueItem1PauseBtn" Sym="NGDLQ-1522"><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:BackgroundComponent>false</ns0:BackgroundComponent><ns0:Action Name="PauseRecordingCopyTransferQueueItem(1)" Sym="NGDLQ-1523"><ns0:Action Name="Refresh()" Sym="NGDLQ-1524" /></ns0:Action><ns0:Text Name="Pause" Sym="NGDLQ-1525" /></ns0:Item><ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." /></ns0:Panel><ns0:Panel Name="QueueItem1Cancel" Sym="NGDLQ-1526"><ns0:FixedWidth>1.0</ns0:FixedWidth><ns0:PadX>.02</ns0:PadX><ns0:PadY>.02</ns0:PadY><ns0:Insets>.02</ns0:Insets><ns0:WrapHNav>false</ns0:WrapHNav><ns0:WrapVNav>false</ns0:WrapVNav><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:Text Name="Cancel:" Sym="NGDLQ-1527"><ns0:AnchorX>0.0</ns0:AnchorX><ns0:FixedWidth>0.7</ns0:FixedWidth><ns0:AutosizeText>false</ns0:AutosizeText><ns0:WrapText>true</ns0:WrapText><ns0:TextShadow>true</ns0:TextShadow><ns0:DisableFontScaling>false</ns0:DisableFontScaling><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps></ns0:Text><ns0:Item Name="QueueItem1CancelBtn" Sym="NGDLQ-1528"><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:BackgroundComponent>false</ns0:BackgroundComponent><ns0:Action Name="CancelRecordingCopyTransferQueueItem(1)" Sym="NGDLQ-1529"><ns0:Action Name="Refresh()" Sym="NGDLQ-1530" /></ns0:Action><ns0:Text Name="Cancel" Sym="NGDLQ-1531" /></ns0:Item><ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." /></ns0:Panel><ns0:Item Name="Close" Sym="NGDLQ-1532"><ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1533" /></ns0:Item><ns0:Theme Ref="2131" Name="MutliSelectOptionsTheme" /></ns0:OptionsMenu></ns0:Action><ns0:Action Name="GetRecordingCopyTransferQueueItemLabel(1)" Sym="NGDLQ-1534"><ns0:Text Name="" Sym="NGDLQ-1535" /></ns0:Action></ns0:Item></ns0:Conditional><ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 2" Sym="NGDLQ-1540"><ns0:Item Name="QueueItem2" Sym="NGDLQ-1541"><ns0:Action Name="&quot;Manage queue item #2.&quot;" Sym="NGDLQ-1542"><ns0:OptionsMenu Name="DownloadQueueItem2" Sym="NGDLQ-1543"><ns0:Action Name="GetRecordingCopyTransferQueueItemLabel(2)" Sym="NGDLQ-1544"><ns0:Text Name="" Sym="NGDLQ-1545" /></ns0:Action><ns0:Action Name="GetRecordingCopyTransferQueueItemProgressText(2)" Sym="NGDLQ-1546"><ns0:Text Name="" Sym="NGDLQ-1547" /></ns0:Action><ns0:Item Name="Pause" Sym="NGDLQ-1548"><ns0:Action Name="PauseRecordingCopyTransferQueueItem(2)" Sym="NGDLQ-1549"><ns0:Action Name="Refresh()" Sym="NGDLQ-1550" /></ns0:Action></ns0:Item><ns0:Item Name="Cancel" Sym="NGDLQ-1551"><ns0:Action Name="CancelRecordingCopyTransferQueueItem(2)" Sym="NGDLQ-1552"><ns0:Action Name="Refresh()" Sym="NGDLQ-1553" /></ns0:Action></ns0:Item><ns0:Item Name="Close" Sym="NGDLQ-1554"><ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1555" /></ns0:Item><ns0:Theme Ref="2131" Name="MutliSelectOptionsTheme" /></ns0:OptionsMenu></ns0:Action><ns0:Action Name="GetRecordingCopyTransferQueueItemLabel(2)" Sym="NGDLQ-1556"><ns0:Text Name="" Sym="NGDLQ-1557" /></ns0:Action></ns0:Item></ns0:Conditional><ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 3" Sym="NGDLQ-1560"><ns0:Item Name="QueueItem3" Sym="NGDLQ-1561"><ns0:Action Name="&quot;Manage queue item #3.&quot;" Sym="NGDLQ-1562"><ns0:OptionsMenu Name="DownloadQueueItem3" Sym="NGDLQ-1563"><ns0:Action Name="GetRecordingCopyTransferQueueItemLabel(3)" Sym="NGDLQ-1564"><ns0:Text Name="" Sym="NGDLQ-1565" /></ns0:Action><ns0:Action Name="GetRecordingCopyTransferQueueItemProgressText(3)" Sym="NGDLQ-1566"><ns0:Text Name="" Sym="NGDLQ-1567" /></ns0:Action><ns0:Item Name="Pause" Sym="NGDLQ-1568"><ns0:Action Name="PauseRecordingCopyTransferQueueItem(3)" Sym="NGDLQ-1569"><ns0:Action Name="Refresh()" Sym="NGDLQ-1570" /></ns0:Action></ns0:Item><ns0:Item Name="Cancel" Sym="NGDLQ-1571"><ns0:Action Name="CancelRecordingCopyTransferQueueItem(3)" Sym="NGDLQ-1572"><ns0:Action Name="Refresh()" Sym="NGDLQ-1573" /></ns0:Action></ns0:Item><ns0:Item Name="Close" Sym="NGDLQ-1574"><ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1575" /></ns0:Item><ns0:Theme Ref="2131" Name="MutliSelectOptionsTheme" /></ns0:OptionsMenu></ns0:Action><ns0:Action Name="GetRecordingCopyTransferQueueItemLabel(3)" Sym="NGDLQ-1576"><ns0:Text Name="" Sym="NGDLQ-1577" /></ns0:Action></ns0:Item></ns0:Conditional><ns0:Panel Name="PauseAll" Sym="NGDLQ-1114"><ns0:FixedWidth>1.0</ns0:FixedWidth><ns0:PadX>.02</ns0:PadX><ns0:PadY>.02</ns0:PadY><ns0:Insets>.02</ns0:Insets><ns0:WrapHNav>false</ns0:WrapHNav><ns0:WrapVNav>false</ns0:WrapVNav><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:Text Name="Pause Active/Queued:" Sym="NGDLQ-1115"><ns0:AnchorX>0.0</ns0:AnchorX><ns0:FixedWidth>0.7</ns0:FixedWidth><ns0:AutosizeText>false</ns0:AutosizeText><ns0:WrapText>true</ns0:WrapText><ns0:TextShadow>true</ns0:TextShadow><ns0:DisableFontScaling>false</ns0:DisableFontScaling><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps></ns0:Text><ns0:Item Name="PauseAllBtn" Sym="NGDLQ-1116"><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:BackgroundComponent>false</ns0:BackgroundComponent><ns0:Action Name="PauseAllRecordingCopyTransfers()" Sym="NGDLQ-1117"><ns0:Action Name="Refresh()" Sym="NGDLQ-1118" /></ns0:Action><ns0:Text Name="Pause All" Sym="NGDLQ-1119" /></ns0:Item><ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." /></ns0:Panel><ns0:Panel Name="ResumeAll" Sym="NGDLQ-1120"><ns0:FixedWidth>1.0</ns0:FixedWidth><ns0:PadX>.02</ns0:PadX><ns0:PadY>.02</ns0:PadY><ns0:Insets>.02</ns0:Insets><ns0:WrapHNav>false</ns0:WrapHNav><ns0:WrapVNav>false</ns0:WrapVNav><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:Text Name="Resume Paused:" Sym="NGDLQ-1121"><ns0:AnchorX>0.0</ns0:AnchorX><ns0:FixedWidth>0.7</ns0:FixedWidth><ns0:AutosizeText>false</ns0:AutosizeText><ns0:WrapText>true</ns0:WrapText><ns0:TextShadow>true</ns0:TextShadow><ns0:DisableFontScaling>false</ns0:DisableFontScaling><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps></ns0:Text><ns0:Item Name="ResumeAllBtn" Sym="NGDLQ-1122"><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:BackgroundComponent>false</ns0:BackgroundComponent><ns0:Action Name="ResumeAllRecordingCopyTransfers()" Sym="NGDLQ-1123"><ns0:Action Name="Refresh()" Sym="NGDLQ-1124" /></ns0:Action><ns0:Text Name="Resume All" Sym="NGDLQ-1125" /></ns0:Item><ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." /></ns0:Panel><ns0:Panel Name="ClearCompleted" Sym="NGDLQ-1126"><ns0:FixedWidth>1.0</ns0:FixedWidth><ns0:PadX>.02</ns0:PadX><ns0:PadY>.02</ns0:PadY><ns0:Insets>.02</ns0:Insets><ns0:WrapHNav>false</ns0:WrapHNav><ns0:WrapVNav>false</ns0:WrapVNav><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:Text Name="Clear Completed:" Sym="NGDLQ-1127"><ns0:AnchorX>0.0</ns0:AnchorX><ns0:FixedWidth>0.7</ns0:FixedWidth><ns0:AutosizeText>false</ns0:AutosizeText><ns0:WrapText>true</ns0:WrapText><ns0:TextShadow>true</ns0:TextShadow><ns0:DisableFontScaling>false</ns0:DisableFontScaling><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps></ns0:Text><ns0:Item Name="ClearCompletedBtn" Sym="NGDLQ-1128"><ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps><ns0:BackgroundComponent>false</ns0:BackgroundComponent><ns0:Action Name="ClearCompletedRecordingCopyTransfers()" Sym="NGDLQ-1129"><ns0:Action Name="Refresh()" Sym="NGDLQ-1130" /></ns0:Action><ns0:Text Name="Clear Completed" Sym="NGDLQ-1131" /></ns0:Item><ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." /></ns0:Panel><ns0:Action Name="&quot;\n \n&quot;" Sym="NGDLQ-1132"><ns0:Text Name="" Sym="NGDLQ-1133" /></ns0:Action><ns0:Item Name="Close" Sym="NGDLQ-1134"><ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1135" /></ns0:Item><ns0:Theme Ref="2131" Name="MutliSelectOptionsTheme" /></ns0:OptionsMenu></ns0:Action></ns0:Item>
+       <ns0:Item Name="Download Queue Management" Sym="NGDLQ-1100">
+        <ns0:Attribute Name="ButtonText" Sym="NGDLQ-1101">
+         <ns0:Value>"Download Queue Management"</ns0:Value>
+        </ns0:Attribute>
+        <ns0:Attribute Name="ThisItem" Sym="NGDLQ-1102">
+         <ns0:Value>"xItemSetupDownloadQueue"</ns0:Value>
+        </ns0:Attribute>
+        <ns0:Attribute Name="SubMenuType" Sym="NGDLQ-1103">
+         <ns0:Value>null</ns0:Value>
+        </ns0:Attribute>
+        <ns0:Action Name="&quot;Server download queue management.&quot;" Sym="NGDLQ-1104">
+         <ns0:OptionsMenu Name="DownloadQueueManagement" Sym="NGDLQ-1105">
+          <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+          <ns0:Action Name="&quot;Recording Copy Transfer Queue:\n \n&quot;" Sym="NGDLQ-1106">
+           <ns0:Text Name="" Sym="NGDLQ-1107" />
+          </ns0:Action>
+          <ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() == 0" Sym="NGDLQ-1500">
+           <ns0:Panel Name="QueueEmpty" Sym="NGDLQ-1501">
+            <ns0:FixedWidth>1.0</ns0:FixedWidth>
+            <ns0:PadX>.02</ns0:PadX>
+            <ns0:PadY>.02</ns0:PadY>
+            <ns0:Insets>.02</ns0:Insets>
+            <ns0:WrapHNav>false</ns0:WrapHNav>
+            <ns0:WrapVNav>false</ns0:WrapVNav>
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Text Name="Queue:" Sym="NGDLQ-1502">
+             <ns0:AnchorX>0.0</ns0:AnchorX>
+             <ns0:FixedWidth>0.7</ns0:FixedWidth>
+             <ns0:AutosizeText>false</ns0:AutosizeText>
+             <ns0:WrapText>true</ns0:WrapText>
+             <ns0:TextShadow>true</ns0:TextShadow>
+             <ns0:DisableFontScaling>false</ns0:DisableFontScaling>
+             <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            </ns0:Text>
+            <ns0:Action Name="&quot;No items in queue.&quot;" Sym="NGDLQ-1503">
+             <ns0:Text Name="(No queued recordings)" Sym="NGDLQ-1504" />
+            </ns0:Action>
+            <ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." />
+           </ns0:Panel>
+          </ns0:Conditional>
+          <ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 1" Sym="NGDLQ-1510">
+           <ns0:Item Name="QueueItem1" Sym="NGDLQ-1511">
+            <ns0:Action Name="&quot;Manage queue item #1.&quot;" Sym="NGDLQ-1512">
+             <ns0:OptionsMenu Name="DownloadQueueItem1" Sym="NGDLQ-1513">
+              <ns0:Action Name="GetRecordingCopyTransferQueueItemLabel(1)" Sym="NGDLQ-1514">
+               <ns0:Text Name="" Sym="NGDLQ-1515" />
+              </ns0:Action>
+              <ns0:Panel Name="QueueItem1Progress" Sym="NGDLQ-1516">
+               <ns0:FixedWidth>1.0</ns0:FixedWidth>
+               <ns0:PadX>.02</ns0:PadX>
+               <ns0:PadY>.02</ns0:PadY>
+               <ns0:Insets>.02</ns0:Insets>
+               <ns0:WrapHNav>false</ns0:WrapHNav>
+               <ns0:WrapVNav>false</ns0:WrapVNav>
+               <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+               <ns0:Text Name="Progress:" Sym="NGDLQ-1517">
+                <ns0:AnchorX>0.0</ns0:AnchorX>
+                <ns0:FixedWidth>0.45</ns0:FixedWidth>
+                <ns0:AutosizeText>false</ns0:AutosizeText>
+                <ns0:WrapText>true</ns0:WrapText>
+                <ns0:TextShadow>true</ns0:TextShadow>
+                <ns0:DisableFontScaling>false</ns0:DisableFontScaling>
+                <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+               </ns0:Text>
+               <ns0:Action Name="GetRecordingCopyTransferQueueItemProgressText(1)" Sym="NGDLQ-1518">
+                <ns0:Text Name="" Sym="NGDLQ-1519" />
+               </ns0:Action>
+               <ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." />
+              </ns0:Panel>
+              <ns0:Panel Name="QueueItem1Pause" Sym="NGDLQ-1520">
+               <ns0:FixedWidth>1.0</ns0:FixedWidth>
+               <ns0:PadX>.02</ns0:PadX>
+               <ns0:PadY>.02</ns0:PadY>
+               <ns0:Insets>.02</ns0:Insets>
+               <ns0:WrapHNav>false</ns0:WrapHNav>
+               <ns0:WrapVNav>false</ns0:WrapVNav>
+               <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+               <ns0:Text Name="Pause:" Sym="NGDLQ-1521">
+                <ns0:AnchorX>0.0</ns0:AnchorX>
+                <ns0:FixedWidth>0.7</ns0:FixedWidth>
+                <ns0:AutosizeText>false</ns0:AutosizeText>
+                <ns0:WrapText>true</ns0:WrapText>
+                <ns0:TextShadow>true</ns0:TextShadow>
+                <ns0:DisableFontScaling>false</ns0:DisableFontScaling>
+                <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+               </ns0:Text>
+               <ns0:Item Name="QueueItem1PauseBtn" Sym="NGDLQ-1522">
+                <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+                <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
+                <ns0:Action Name="PauseRecordingCopyTransferQueueItem(1)" Sym="NGDLQ-1523">
+                 <ns0:Action Name="Refresh()" Sym="NGDLQ-1524" />
+                </ns0:Action>
+                <ns0:Text Name="Pause" Sym="NGDLQ-1525" />
+               </ns0:Item>
+               <ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." />
+              </ns0:Panel>
+              <ns0:Panel Name="QueueItem1Cancel" Sym="NGDLQ-1526">
+               <ns0:FixedWidth>1.0</ns0:FixedWidth>
+               <ns0:PadX>.02</ns0:PadX>
+               <ns0:PadY>.02</ns0:PadY>
+               <ns0:Insets>.02</ns0:Insets>
+               <ns0:WrapHNav>false</ns0:WrapHNav>
+               <ns0:WrapVNav>false</ns0:WrapVNav>
+               <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+               <ns0:Text Name="Cancel:" Sym="NGDLQ-1527">
+                <ns0:AnchorX>0.0</ns0:AnchorX>
+                <ns0:FixedWidth>0.7</ns0:FixedWidth>
+                <ns0:AutosizeText>false</ns0:AutosizeText>
+                <ns0:WrapText>true</ns0:WrapText>
+                <ns0:TextShadow>true</ns0:TextShadow>
+                <ns0:DisableFontScaling>false</ns0:DisableFontScaling>
+                <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+               </ns0:Text>
+               <ns0:Item Name="QueueItem1CancelBtn" Sym="NGDLQ-1528">
+                <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+                <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
+                <ns0:Action Name="CancelRecordingCopyTransferQueueItem(1)" Sym="NGDLQ-1529">
+                 <ns0:Action Name="Refresh()" Sym="NGDLQ-1530" />
+                </ns0:Action>
+                <ns0:Text Name="Cancel" Sym="NGDLQ-1531" />
+               </ns0:Item>
+               <ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." />
+              </ns0:Panel>
+              <ns0:Item Name="Close" Sym="NGDLQ-1532">
+               <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1533" />
+              </ns0:Item>
+              <ns0:Theme Ref="2131" Name="MutliSelectOptionsTheme" />
+             </ns0:OptionsMenu>
+            </ns0:Action>
+            <ns0:Action Name="GetRecordingCopyTransferQueueItemLabel(1)" Sym="NGDLQ-1534">
+             <ns0:Text Name="" Sym="NGDLQ-1535" />
+            </ns0:Action>
+           </ns0:Item>
+          </ns0:Conditional>
+          <ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 2" Sym="NGDLQ-1540">
+           <ns0:Item Name="QueueItem2" Sym="NGDLQ-1541">
+            <ns0:Action Name="&quot;Manage queue item #2.&quot;" Sym="NGDLQ-1542">
+             <ns0:OptionsMenu Name="DownloadQueueItem2" Sym="NGDLQ-1543">
+              <ns0:Action Name="GetRecordingCopyTransferQueueItemLabel(2)" Sym="NGDLQ-1544">
+               <ns0:Text Name="" Sym="NGDLQ-1545" />
+              </ns0:Action>
+              <ns0:Action Name="GetRecordingCopyTransferQueueItemProgressText(2)" Sym="NGDLQ-1546">
+               <ns0:Text Name="" Sym="NGDLQ-1547" />
+              </ns0:Action>
+              <ns0:Item Name="Pause" Sym="NGDLQ-1548">
+               <ns0:Action Name="PauseRecordingCopyTransferQueueItem(2)" Sym="NGDLQ-1549">
+                <ns0:Action Name="Refresh()" Sym="NGDLQ-1550" />
+               </ns0:Action>
+              </ns0:Item>
+              <ns0:Item Name="Cancel" Sym="NGDLQ-1551">
+               <ns0:Action Name="CancelRecordingCopyTransferQueueItem(2)" Sym="NGDLQ-1552">
+                <ns0:Action Name="Refresh()" Sym="NGDLQ-1553" />
+               </ns0:Action>
+              </ns0:Item>
+              <ns0:Item Name="Close" Sym="NGDLQ-1554">
+               <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1555" />
+              </ns0:Item>
+              <ns0:Theme Ref="2131" Name="MutliSelectOptionsTheme" />
+             </ns0:OptionsMenu>
+            </ns0:Action>
+            <ns0:Action Name="GetRecordingCopyTransferQueueItemLabel(2)" Sym="NGDLQ-1556">
+             <ns0:Text Name="" Sym="NGDLQ-1557" />
+            </ns0:Action>
+           </ns0:Item>
+          </ns0:Conditional>
+          <ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 3" Sym="NGDLQ-1560">
+           <ns0:Item Name="QueueItem3" Sym="NGDLQ-1561">
+            <ns0:Action Name="&quot;Manage queue item #3.&quot;" Sym="NGDLQ-1562">
+             <ns0:OptionsMenu Name="DownloadQueueItem3" Sym="NGDLQ-1563">
+              <ns0:Action Name="GetRecordingCopyTransferQueueItemLabel(3)" Sym="NGDLQ-1564">
+               <ns0:Text Name="" Sym="NGDLQ-1565" />
+              </ns0:Action>
+              <ns0:Action Name="GetRecordingCopyTransferQueueItemProgressText(3)" Sym="NGDLQ-1566">
+               <ns0:Text Name="" Sym="NGDLQ-1567" />
+              </ns0:Action>
+              <ns0:Item Name="Pause" Sym="NGDLQ-1568">
+               <ns0:Action Name="PauseRecordingCopyTransferQueueItem(3)" Sym="NGDLQ-1569">
+                <ns0:Action Name="Refresh()" Sym="NGDLQ-1570" />
+               </ns0:Action>
+              </ns0:Item>
+              <ns0:Item Name="Cancel" Sym="NGDLQ-1571">
+               <ns0:Action Name="CancelRecordingCopyTransferQueueItem(3)" Sym="NGDLQ-1572">
+                <ns0:Action Name="Refresh()" Sym="NGDLQ-1573" />
+               </ns0:Action>
+              </ns0:Item>
+              <ns0:Item Name="Close" Sym="NGDLQ-1574">
+               <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1575" />
+              </ns0:Item>
+              <ns0:Theme Ref="2131" Name="MutliSelectOptionsTheme" />
+             </ns0:OptionsMenu>
+            </ns0:Action>
+            <ns0:Action Name="GetRecordingCopyTransferQueueItemLabel(3)" Sym="NGDLQ-1576">
+             <ns0:Text Name="" Sym="NGDLQ-1577" />
+            </ns0:Action>
+           </ns0:Item>
+          </ns0:Conditional>
+          <ns0:Panel Name="PauseAll" Sym="NGDLQ-1114">
+           <ns0:FixedWidth>1.0</ns0:FixedWidth>
+           <ns0:PadX>.02</ns0:PadX>
+           <ns0:PadY>.02</ns0:PadY>
+           <ns0:Insets>.02</ns0:Insets>
+           <ns0:WrapHNav>false</ns0:WrapHNav>
+           <ns0:WrapVNav>false</ns0:WrapVNav>
+           <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+           <ns0:Text Name="Pause Active/Queued:" Sym="NGDLQ-1115">
+            <ns0:AnchorX>0.0</ns0:AnchorX>
+            <ns0:FixedWidth>0.7</ns0:FixedWidth>
+            <ns0:AutosizeText>false</ns0:AutosizeText>
+            <ns0:WrapText>true</ns0:WrapText>
+            <ns0:TextShadow>true</ns0:TextShadow>
+            <ns0:DisableFontScaling>false</ns0:DisableFontScaling>
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+           </ns0:Text>
+           <ns0:Item Name="PauseAllBtn" Sym="NGDLQ-1116">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
+            <ns0:Action Name="PauseAllRecordingCopyTransfers()" Sym="NGDLQ-1117">
+             <ns0:Action Name="Refresh()" Sym="NGDLQ-1118" />
+            </ns0:Action>
+            <ns0:Text Name="Pause All" Sym="NGDLQ-1119" />
+           </ns0:Item>
+           <ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." />
+          </ns0:Panel>
+          <ns0:Panel Name="ResumeAll" Sym="NGDLQ-1120">
+           <ns0:FixedWidth>1.0</ns0:FixedWidth>
+           <ns0:PadX>.02</ns0:PadX>
+           <ns0:PadY>.02</ns0:PadY>
+           <ns0:Insets>.02</ns0:Insets>
+           <ns0:WrapHNav>false</ns0:WrapHNav>
+           <ns0:WrapVNav>false</ns0:WrapVNav>
+           <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+           <ns0:Text Name="Resume Paused:" Sym="NGDLQ-1121">
+            <ns0:AnchorX>0.0</ns0:AnchorX>
+            <ns0:FixedWidth>0.7</ns0:FixedWidth>
+            <ns0:AutosizeText>false</ns0:AutosizeText>
+            <ns0:WrapText>true</ns0:WrapText>
+            <ns0:TextShadow>true</ns0:TextShadow>
+            <ns0:DisableFontScaling>false</ns0:DisableFontScaling>
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+           </ns0:Text>
+           <ns0:Item Name="ResumeAllBtn" Sym="NGDLQ-1122">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
+            <ns0:Action Name="ResumeAllRecordingCopyTransfers()" Sym="NGDLQ-1123">
+             <ns0:Action Name="Refresh()" Sym="NGDLQ-1124" />
+            </ns0:Action>
+            <ns0:Text Name="Resume All" Sym="NGDLQ-1125" />
+           </ns0:Item>
+           <ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." />
+          </ns0:Panel>
+          <ns0:Panel Name="ClearCompleted" Sym="NGDLQ-1126">
+           <ns0:FixedWidth>1.0</ns0:FixedWidth>
+           <ns0:PadX>.02</ns0:PadX>
+           <ns0:PadY>.02</ns0:PadY>
+           <ns0:Insets>.02</ns0:Insets>
+           <ns0:WrapHNav>false</ns0:WrapHNav>
+           <ns0:WrapVNav>false</ns0:WrapVNav>
+           <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+           <ns0:Text Name="Clear Completed:" Sym="NGDLQ-1127">
+            <ns0:AnchorX>0.0</ns0:AnchorX>
+            <ns0:FixedWidth>0.7</ns0:FixedWidth>
+            <ns0:AutosizeText>false</ns0:AutosizeText>
+            <ns0:WrapText>true</ns0:WrapText>
+            <ns0:TextShadow>true</ns0:TextShadow>
+            <ns0:DisableFontScaling>false</ns0:DisableFontScaling>
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+           </ns0:Text>
+           <ns0:Item Name="ClearCompletedBtn" Sym="NGDLQ-1128">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
+            <ns0:Action Name="ClearCompletedRecordingCopyTransfers()" Sym="NGDLQ-1129">
+             <ns0:Action Name="Refresh()" Sym="NGDLQ-1130" />
+            </ns0:Action>
+            <ns0:Text Name="Clear Completed" Sym="NGDLQ-1131" />
+           </ns0:Item>
+           <ns0:Theme Ref="23248" Name="WideLeftRowPanelTheme2..." />
+          </ns0:Panel>
+          <ns0:Action Name="&quot;\n \n&quot;" Sym="NGDLQ-1132">
+           <ns0:Text Name="" Sym="NGDLQ-1133" />
+          </ns0:Action>
+          <ns0:Item Name="Close" Sym="NGDLQ-1134">
+           <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1135" />
+          </ns0:Item>
+          <ns0:Theme Ref="2131" Name="MutliSelectOptionsTheme" />
+         </ns0:OptionsMenu>
+        </ns0:Action>
+       </ns0:Item>
        <ns0:Item Name="System Information" Sym="OPUS4A-174739">
         <ns0:Attribute Name="ButtonText" Sym="OPUS4A-174740">
          <ns0:Value>"System Information"</ns0:Value>
@@ -2786,7 +3072,7 @@
       <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
       <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
       <ns0:MouseTransparency>false</ns0:MouseTransparency>
-      <ns0:Theme Ref="316" Name="SecondaryMenuContentAr..."/>
+      <ns0:Theme Ref="316" Name="SecondaryMenuContentAr..." />
       <ns0:Panel Name="Secondary Menu Items Area" Sym="OPUS4A-125869">
        <ns0:WrapHNav>false</ns0:WrapHNav>
        <ns0:WrapVNav>false</ns0:WrapVNav>
@@ -2796,7 +3082,7 @@
        <ns0:Attribute Name="SubMenuPanel" Sym="OPUS4A-126110">
         <ns0:Value>"xSubmenuExit"</ns0:Value>
        </ns0:Attribute>
-       <ns0:Theme Ref="323" Name="SecondaryMenuItemAreaT..."/>
+       <ns0:Theme Ref="323" Name="SecondaryMenuItemAreaT..." />
        <ns0:Item Name="Standby" Sym="OPUS4A-125870">
         <ns0:Attribute Name="ButtonText" Sym="OPUS4A-174788">
          <ns0:Value>"Standby"</ns0:Value>
@@ -2804,10 +3090,9 @@
         <ns0:Attribute Name="ThisItem" Sym="OPUS4A-125872">
          <ns0:Value>"xItemStandby"</ns0:Value>
         </ns0:Attribute>
-        <ns0:Attribute Ref="485" Name="SubItemDefaultFocus"/>
-        <ns0:Action Ref="993" Name="SageCommand(&quot;Power Off&quot;)"/>
+        <ns0:Attribute Ref="485" Name="SubItemDefaultFocus" />
+        <ns0:Action Ref="993" Name="SageCommand(&quot;Power Off&quot;)" />
        </ns0:Item>
-       
        <ns0:Action Name="&quot;REM Add Exit options depending on whether it is an embedded system or not.&quot;" Sym="OPUS4A-212030">
         <ns0:Conditional Name="IsEmbeddedSystem()" Sym="OPUS4A-212031">
          <ns0:Branch Name="true" Sym="OPUS4A-212032">
@@ -7284,7 +7569,7 @@
   </ns0:Listener>
   <ns0:Listener Name="" Sym="OPUS4A-174857">
    <ns0:ListenerEvent>Play</ns0:ListenerEvent>
-   <ns0:Conditional Name="GetCurrentMediaFile()" Sym="OPUS4A-174858">
+   <ns0:Conditional Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="OPUS4A-174858">
     <ns0:Branch Name="null" Sym="OPUS4A-174859">
      <ns0:Action Name="Filename = GetProperty( &quot;instant_play_file&quot;, null )" Sym="OPUS4A-174860">
       <ns0:Conditional Name="Size(Filename) &gt; 0" Sym="OPUS4A-174861">
@@ -8234,6 +8519,8 @@
    <ns0:Value>GetProperty("ui/focus_follows_mouse",true)</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Main_Menu">
+   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="16" Name="MediaPlayer OSD" Sym="BASE-44375">
@@ -8819,8 +9106,8 @@
           <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
           <ns0:MouseTransparency>false</ns0:MouseTransparency>
           <ns0:Action Ref="3037" Name="&quot;REM Display top OSD a..." />
-          <ns0:Action Name="mf = GetCurrentMediaFile()" Sym="OPUS4A-176840">
-           <ns0:Action Name="pl = GetCurrentPlaylist()" Sym="OPUS4A-176841">
+          <ns0:Action Name="mf = GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="OPUS4A-176840">
+           <ns0:Action Name="pl = GetLocal(&quot;_c_GetCurrentPlaylist&quot;)" Sym="OPUS4A-176841">
             <ns0:Conditional Name="IsTVFile(mf)" Sym="OPUS4A-176842">
              <ns0:Branch Name="true" Sym="OPUS4A-176843">
               <ns0:Panel Name="TV Details" Sym="OPUS4A-176845">
@@ -10198,7 +10485,7 @@
     </ns0:Conditional>
    </ns0:Action>
    <ns0:Action Name="OSDBottomIsOn = false" Sym="BASE-52432">
-    <ns0:Conditional Name="(DisplayTimebarStatus &amp;&amp; HasMediaFile() &amp;&amp; ( (!IsCurrentMediaFileDVD() &amp;&amp; !IsBluRay(GetCurrentMediaFile())) || (GetDVDCurrentDomain() == 4) || (GetDVDCurrentDomain() == 10)))" Sym="OPUS4A-176800">
+    <ns0:Conditional Name="(DisplayTimebarStatus &amp;&amp; HasMediaFile() &amp;&amp; ( (!IsCurrentMediaFileDVD() &amp;&amp; !IsBluRay(GetLocal(&quot;_c_GetCurrentMediaFile&quot;))) || (GetDVDCurrentDomain() == 4) || (GetDVDCurrentDomain() == 10)))" Sym="OPUS4A-176800">
      <ns0:Action Name="OSDBottomIsOn = true" Sym="OPUS4A-176801">
       <ns0:Panel Name="Bottom OSD Area" Sym="OPUS4A-176802">
        <ns0:AnchorX>0.5</ns0:AnchorX>
@@ -10304,7 +10591,7 @@
            <ns0:Attribute Name="mf" Sym="BASE-52543">
             <ns0:Value>null</ns0:Value>
            </ns0:Attribute>
-           <ns0:Action Name="mf = GetCurrentMediaFile()" Sym="BASE-52544">
+           <ns0:Action Name="mf = GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-52544">
             <ns0:Conditional Name="IsCurrentMediaFileDVD() || IsBluRay(mf)" Sym="BASE-52545">
              <ns0:Branch Name="true" Sym="BASE-52546">
               <ns0:Action Name="AiringDuration = GetMediaDuration()" Sym="BASE-52547">
@@ -17514,7 +17801,7 @@
   </ns0:Listener>
   <ns0:Listener Name="RecordListener" Sym="BASE-53627">
    <ns0:ListenerEvent>Record</ns0:ListenerEvent>
-   <ns0:Action Name="Airing = GetCurrentMediaFile()" Sym="BASE-53628">
+   <ns0:Action Name="Airing = GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-53628">
     <ns0:Conditional Name="Airing != null" Sym="BASE-53629">
      <ns0:Conditional Name="IsTVFile(Airing)" Sym="BASE-53630">
       <ns0:Branch Name="true" Sym="BASE-53631">
@@ -17913,7 +18200,7 @@
    <ns0:ListenerEvent>Favorite</ns0:ListenerEvent>
    <ns0:Action Name="&quot;REM Handle the Favorite command, if allowed.&quot;" Sym="OPUS4A-218171">
     <ns0:Conditional Name="HasPermission( &quot;RecordingSchedule&quot; )" Sym="OPUS4A-218172">
-     <ns0:Action Name="Airing = GetCurrentMediaFile()" Sym="BASE-53654">
+     <ns0:Action Name="Airing = GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-53654">
       <ns0:Conditional Name="Airing != null" Sym="BASE-53655">
        <ns0:Conditional Name="IsTVFile(Airing)" Sym="BASE-53656">
         <ns0:Action Name="WasFavoriteAlready = IsFavorite(Airing)" Sym="OPUS4A-214184">
@@ -17950,7 +18237,7 @@
   <ns0:Listener Name="Delete" Sym="BASE-53673">
    <ns0:ListenerEvent>Delete</ns0:ListenerEvent>
    <ns0:Conditional Name="HasPermission( &quot;Delete&quot; )" Sym="OPUS4A-218089">
-    <ns0:Action Name="MediaFile = GetCurrentMediaFile()" Sym="BASE-53674">
+    <ns0:Action Name="MediaFile = GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-53674">
      <ns0:Conditional Name="!IsCurrentMediaFileRecording() &amp;&amp; !IsCurrentMediaFileDVD() &amp;&amp; !IsBluRay(MediaFile) &amp;&amp; IsTVFile(MediaFile)" Sym="BASE-53675">
       <ns0:OptionsMenu Name="confirm" Sym="BASE-53676">
        <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
@@ -18175,7 +18462,7 @@
   </ns0:Listener>
   <ns0:Listener Name="" Sym="BASE-53741">
    <ns0:ListenerEvent>Stop</ns0:ListenerEvent>
-   <ns0:Action Name="MediaFile = GetCurrentMediaFile()" Sym="BASE-53742">
+   <ns0:Action Name="MediaFile = GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-53742">
     <ns0:Action ID="5648" Name="ShowVideoBGWidget = false" Sym="BASE-53361">
      <ns0:Action Name="CloseAndWaitUntilClosed()" Sym="OPUS4-95798">
       <ns0:Action Ref="5949" Name="&quot;REM If Stopping a dow..." />
@@ -18186,7 +18473,7 @@
   </ns0:Listener>
   <ns0:Listener Name="" Sym="BASE-53743">
    <ns0:ListenerEvent>Watched</ns0:ListenerEvent>
-   <ns0:Action Name="Airing = GetCurrentMediaFile()" Sym="BASE-53744">
+   <ns0:Action Name="Airing = GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-53744">
     <ns0:Conditional Name="Airing != null" Sym="BASE-53745">
      <ns0:Conditional Name="IsTVFile(Airing)" Sym="BASE-53746">
       <ns0:Branch Name="true" Sym="BASE-53747">
@@ -18210,7 +18497,7 @@
    <ns0:ListenerEvent>Don't Like</ns0:ListenerEvent>
    <ns0:Action Name="&quot;REM Handle the Don't Like command, if allowed.&quot;" Sym="OPUS4A-218213">
     <ns0:Conditional Name="HasPermission( &quot;RecordingSchedule&quot; )" Sym="OPUS4A-218214">
-     <ns0:Action Name="Airing = GetCurrentMediaFile()" Sym="BASE-53752">
+     <ns0:Action Name="Airing = GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-53752">
       <ns0:Conditional Name="Airing != null" Sym="BASE-53753">
        <ns0:Conditional Name="IsTVFile(Airing)" Sym="BASE-53754">
         <ns0:Action Name="DisplayInfo = true" Sym="BASE-53755">
@@ -18224,7 +18511,7 @@
   </ns0:Listener>
   <ns0:Listener Name="" Sym="BASE-53763">
    <ns0:ListenerEvent>Input</ns0:ListenerEvent>
-   <ns0:Conditional Name="IsLinuxOS() &amp;&amp; IsFileCurrentlyRecording(GetCurrentMediaFile())" Sym="BASE-53764">
+   <ns0:Conditional Name="IsLinuxOS() &amp;&amp; IsFileCurrentlyRecording(GetLocal(&quot;_c_GetCurrentMediaFile&quot;))" Sym="BASE-53764">
     <ns0:Action Name="cdi = GetCaptureDeviceInputBeingViewed()" Sym="BASE-53765">
      <ns0:Conditional Name="StringIndexOf(GetCaptureDeviceInputName(cdi), &quot;_&quot;) &gt;= 0" Sym="BASE-53766">
       <ns0:Action Name="AddStaticContext(&quot;InputType&quot;, GetPhysicalInputType(cdi))" Sym="BASE-53767">
@@ -18367,7 +18654,7 @@
    <ns0:Action Name="IsWatchingLive = IsCaptureDeviceInUseByALiveClient(GetCaptureDeviceForInput(GetCaptureDeviceInputRecordingMediaFile(MediaFile)))" Sym="BASE-53795" />
    <ns0:Action Ref="6118" Name="&quot;REM If this is a musi..." />
    <ns0:Action Name="&quot;REM If in a playlist, show OSD when track changes, if should do so.&quot;" Sym="BASE-53802">
-    <ns0:Conditional Name="GetCurrentPlaylist() != null" Sym="BASE-53803">
+    <ns0:Conditional Name="GetLocal(&quot;_c_GetCurrentPlaylist&quot;) != null" Sym="BASE-53803">
      <ns0:Conditional Name="(IsCurrentMediaFileMusic() &amp;&amp; GetProperty(&quot;ui/playlist_change_display_osd/music&quot;,true)) || (!IsCurrentMediaFileMusic() &amp;&amp; GetProperty(&quot;ui/playlist_change_display_osd/video&quot;,true))" Sym="OPUS4-107903">
       <ns0:Action Ref="6122" Name="&quot;REM Show OSD temporar..." />
      </ns0:Conditional>
@@ -18380,7 +18667,7 @@
     <ns0:Action ID="5961" Name="&quot;REM Return to menu where media may have come from&quot;" Sym="BASE-53365">
      <ns0:Conditional Name="true" Sym="BASE-53366">
       <ns0:Action Name="&quot;REM First, for a TV recording, see if the use should be asked about file deletion.&quot;" Sym="BASE-53367">
-       <ns0:Conditional Name="(GetCurrentPlaylist() == null) &amp;&amp; !( (GetAiringStartTime(MediaFile) &lt; Time()) &amp;&amp; (GetAiringEndTime(MediaFile) &gt; Time()) )" Sym="BASE-53368">
+       <ns0:Conditional Name="(GetLocal(&quot;_c_GetCurrentPlaylist&quot;) == null) &amp;&amp; !( (GetAiringStartTime(MediaFile) &lt; Time()) &amp;&amp; (GetAiringEndTime(MediaFile) &gt; Time()) )" Sym="BASE-53368">
         <ns0:Conditional Name="CheckToDelete &amp;&amp; (GetLocal(&quot;_c_GetProperty_ask_delete_at_EOF_Xmanual_only&quot;) != &quot;Xnever&quot;)" Sym="BASE-53369">
          <ns0:Action Name="AskToDelete = false" Sym="BASE-53370" />
          <ns0:Conditional Name="IsFavorite(MediaFile)" Sym="BASE-53371">
@@ -18597,7 +18884,7 @@
      <ns0:Action Ref="3722" Name="&quot;REM Update info that ..." />
     </ns0:Action>
    </ns0:Action>
-   <ns0:Conditional Name="GetCurrentMediaFile()" Sym="BASE-53825">
+   <ns0:Conditional Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-53825">
     <ns0:Branch Name="null" Sym="BASE-53826">
      <ns0:Action ID="6226" Name="IsMusicPlayback = false" Sym="BASE-53801" />
      <ns0:Conditional Name="Reloaded" Sym="BASE-53827">
@@ -18622,13 +18909,13 @@
     </ns0:Branch>
    </ns0:Conditional>
    <ns0:Conditional Name="ContinueMenuLoad" Sym="OPUS4-95794">
-    <ns0:Action Name="IsVideoDownload = (VideoDownloadMF == GetCurrentMediaFile())" Sym="BASE-53829">
+    <ns0:Action Name="IsVideoDownload = (VideoDownloadMF == GetLocal(&quot;_c_GetCurrentMediaFile&quot;))" Sym="BASE-53829">
      <ns0:Conditional Name="IsVideoDownload" Sym="BASE-53830">
       <ns0:Action Name="VideoDownloadType = OnlineVideoPlaybackType" Sym="BASE-53831" />
      </ns0:Conditional>
     </ns0:Action>
     <ns0:Action Name="OSDMenuIsActive = true" Sym="BASE-53832" />
-    <ns0:Action Name="IsWatchingLive = IsCaptureDeviceInUseByALiveClient(GetCaptureDeviceForInput(GetCaptureDeviceInputRecordingMediaFile(GetCurrentMediaFile())))" Sym="BASE-53833" />
+    <ns0:Action Name="IsWatchingLive = IsCaptureDeviceInUseByALiveClient(GetCaptureDeviceForInput(GetCaptureDeviceInputRecordingMediaFile(GetLocal(&quot;_c_GetCurrentMediaFile&quot;))))" Sym="BASE-53833" />
    </ns0:Conditional>
   </ns0:Hook>
   <ns0:Hook Name="BeforeMenuUnload" Sym="BASE-53834">
@@ -19012,7 +19299,7 @@
       <ns0:Conditional Name="DisplayInfo || DisplayVolStatus || DisplayChanStatus" Sym="BASE-53971">
        <ns0:Action Name="RefreshNeeded = true" Sym="BASE-53972" />
       </ns0:Conditional>
-      <ns0:Conditional Name="(DisplayTimebarStatus &amp;&amp; HasMediaFile() &amp;&amp; ( (!IsCurrentMediaFileDVD() &amp;&amp; !IsBluRay(GetCurrentMediaFile())) || (GetDVDCurrentDomain() == 4) || (GetDVDCurrentDomain() == 10)))" Sym="BASE-53973">
+      <ns0:Conditional Name="(DisplayTimebarStatus &amp;&amp; HasMediaFile() &amp;&amp; ( (!IsCurrentMediaFileDVD() &amp;&amp; !IsBluRay(GetLocal(&quot;_c_GetCurrentMediaFile&quot;))) || (GetDVDCurrentDomain() == 4) || (GetDVDCurrentDomain() == 10)))" Sym="BASE-53973">
        <ns0:Action Name="RefreshNeeded = true" Sym="BASE-53974" />
       </ns0:Conditional>
       <ns0:Conditional Name="IsMediaPlayerSignalLost()" Sym="BASE-53975">
@@ -19031,6 +19318,8 @@
   </ns0:Hook>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-MediaPlayer_OSD">
    <ns0:Action Name="SetLocal(&quot;_c_GetProperty_ask_delete_at_EOF_Xmanual_only&quot;, GetProperty(&quot;ask_delete_at_EOF&quot;,&quot;Xmanual_only&quot;))" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentPlaylist&quot;, GetCurrentPlaylist())" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="240" Name="SageRecordings SHORTCUTS" Sym="BASE-44353">
@@ -20479,10 +20768,11 @@
    <ns0:Value>"Options"</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Online_Services_Menu">
+   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_ui_GoogleVideo_AllowAccess_xOn&quot;, GetLocal(&quot;_c_GetProperty_ui_GoogleVideo_AllowAccess_xOn&quot;))" />
    <ns0:Action Name="SetLocal(&quot;_c_GetProperty_ui_GoogleVideo_AllowAccess_xOn&quot;, GetProperty(&quot;ui/GoogleVideo/AllowAccess&quot;,&quot;xOn&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Online_Services_Menu">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_ui_GoogleVideo_AllowAccess_xOn&quot;, GetProperty(&quot;ui/GoogleVideo/AllowAccess&quot;,&quot;xOn&quot;))" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_ui_GoogleVideo_AllowAccess_xOn&quot;, GetLocal(&quot;_c_GetProperty_ui_GoogleVideo_AllowAccess_xOn&quot;))" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu ID="299" Name="Embedded - SageTV Servers: Choose server" Sym="OPUS4A-210721">
@@ -31036,7 +31326,7 @@
  <ns0:Menu ID="606" Name="SageRecordings Video Conversions" Sym="BASE-50465">
   <ns0:Theme Ref="7168" Name="Free Menu Layout with ..." />
   <ns0:Action Name="&quot;REM Create Top DetailArea for item in focus&quot;" Sym="OPUS4B-527">
-   <ns0:Action Name="LeaveThumbnailSpace = GetProperty(&quot;ui/lists_display_show_art&quot;, true) || (!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))) || (&quot;XAlways&quot; == GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))))" Sym="OPUS4B-528">
+   <ns0:Action Name="LeaveThumbnailSpace = GetProperty(&quot;ui/lists_display_show_art&quot;, true) || (!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))) || (&quot;XAlways&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))))" Sym="OPUS4B-528">
     <ns0:Panel Name="Custom Detailed Info Panel" Sym="OPUS4A-181028">
      <ns0:AnchorX>=MenuInfoStartX</ns0:AnchorX>
      <ns0:AnchorY>=MenuInfoStartY + HeaderPanelHeight</ns0:AnchorY>
@@ -31936,6 +32226,7 @@
    <ns0:Value>InfoJobID</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-SageRecordings_Video">
+   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="618" Name="Browser - Music" Sym="BASE-51622">
@@ -37976,7 +38267,7 @@
             </ns0:Image>
            </ns0:Action>
           </ns0:Action>
-          <ns0:Action Name="CurrentMF = GetCurrentMediaFile()" Sym="BASE-87826">
+          <ns0:Action Name="CurrentMF = GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-87826">
            <ns0:Conditional Name="true" Sym="BASE-87827">
             <ns0:Branch Name="IsMusicFile(CurrentMF)" Sym="BASE-87828">
              <ns0:Action Name="LastMF = CurrentMF" Sym="OPUS4A-99">
@@ -38591,7 +38882,7 @@
        </ns0:Conditional>
        <ns0:Hook Name="LayoutStarted" Sym="BASE-87899">
         <ns0:Action Name="&quot;REM See if we should switch the playback mode on or off.&quot;" Sym="BASE-87900">
-         <ns0:Action Name="NewPlaybackIsActive = (GetCurrentMediaFile() != null)" Sym="BASE-87901">
+         <ns0:Action Name="NewPlaybackIsActive = (GetLocal(&quot;_c_GetCurrentMediaFile&quot;) != null)" Sym="BASE-87901">
           <ns0:Conditional Name="NewPlaybackIsActive != PlaybackIsActive" Sym="BASE-87902">
            <ns0:Action Name="PlaybackIsActive = NewPlaybackIsActive" Sym="BASE-87903">
             <ns0:Action Name="Fork()" Sym="BASE-87904">
@@ -41851,6 +42142,7 @@
   <ns0:Attribute Ref="10949" Name="NumberRows" />
   <ns0:Attribute Ref="10950" Name="NumberColumns" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Browser_-_Music">
+   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="677" Name="Browser - Photos" Sym="BASE-51625">
@@ -45896,10 +46188,11 @@
   <ns0:Attribute Ref="10949" Name="NumberRows" />
   <ns0:Attribute Ref="10950" Name="NumberColumns" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Browser_-_Photos">
+   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_photo_lib_folder_style_xCombined&quot;, GetLocal(&quot;_c_GetProperty_photo_lib_folder_style_xCombined&quot;))" />
    <ns0:Action Name="SetLocal(&quot;_c_GetProperty_photo_lib_folder_style_xCombined&quot;, GetProperty(&quot;photo_lib/folder_style&quot;,&quot;xCombined&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Browser_Photos">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_photo_lib_folder_style_xCombined&quot;, GetProperty(&quot;photo_lib/folder_style&quot;,&quot;xCombined&quot;))" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_photo_lib_folder_style_xCombined&quot;, GetLocal(&quot;_c_GetProperty_photo_lib_folder_style_xCombined&quot;))" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu ID="713" Name="Search - All Media Types" Sym="BASE-51587">
@@ -61324,10 +61617,11 @@
    </ns0:Action>
   </ns0:Listener>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Embedded_-_Network_C">
+   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_WirelessInterface_ra0&quot;, GetLocal(&quot;_c_GetProperty_WirelessInterface_ra0&quot;))" />
    <ns0:Action Name="SetLocal(&quot;_c_GetProperty_WirelessInterface_ra0&quot;, GetProperty(&quot;WirelessInterface&quot;, &quot;ra0&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Embedded_Network_Config">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_WirelessInterface_ra0&quot;, GetProperty(&quot;WirelessInterface&quot;, &quot;ra0&quot;))" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_WirelessInterface_ra0&quot;, GetLocal(&quot;_c_GetProperty_WirelessInterface_ra0&quot;))" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu ID="825" Name="Embedded - Video Output Config Step 1" Sym="NFLX1-1595813">
@@ -87147,7 +87441,7 @@
      <ns0:Value>false</ns0:Value>
     </ns0:Attribute>
     <ns0:Action Name="&quot;REM Update when focus changes.&quot; + &quot;Focused&quot;" Sym="OPUS4A-119862">
-     <ns0:Action Name="ShowVideoPreview = ((!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))) || (&quot;XAlways&quot; == GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)))))" Sym="OPUS4A-122405">
+     <ns0:Action Name="ShowVideoPreview = ((!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))) || (&quot;XAlways&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)))))" Sym="OPUS4A-122405">
       <ns0:Panel Name="Info Panel" Sym="OPUS4A-122406">
        <ns0:Layout>Vertical</ns0:Layout>
        <ns0:FixedWidth>=If(ShowVideoPreview, 0.74, 1.0)</ns0:FixedWidth>
@@ -87326,6 +87620,7 @@
    <ns0:Value>"System Messages"</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-System_Messages">
+   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="983" Name="Embedded - Firmware Update" Sym="NFLX1-1595816">
@@ -104821,10 +105116,11 @@
    <ns0:Value>"Favorites"</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Favorites_Manager">
+   <ns0:Action Name="SetLocal(&quot;_c_GetFavorites&quot;, GetLocal(&quot;_c_GetFavorites&quot;))" />
    <ns0:Action Name="SetLocal(&quot;_c_GetFavorites&quot;, GetFavorites())" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Favorites_Manager">
-   <ns0:Action Name="SetLocal(&quot;_c_GetFavorites&quot;, GetFavorites())" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetFavorites&quot;, GetLocal(&quot;_c_GetFavorites&quot;))" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu ID="1333" Name="Timed Recording Creation" Sym="BASE-51606">
@@ -105962,14 +106258,14 @@
                                   <ns0:Item Name="Download all now" Sym="NGDLQ-1219">
                                    <ns0:Action Name="SendDownloadCommandsToClient(MediaFiles, &quot;foreground&quot;)" Sym="NGDLQ-1220">
                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1221">
-                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1222"/>
+                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1222" />
                                     </ns0:Action>
                                    </ns0:Action>
                                   </ns0:Item>
                                   <ns0:Item Name="Queue all now" Sym="NGDLQ-1223">
                                    <ns0:Action Name="SendDownloadCommandsToClient(MediaFiles, &quot;background&quot;)" Sym="NGDLQ-1224">
                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1225">
-                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1226"/>
+                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1226" />
                                     </ns0:Action>
                                    </ns0:Action>
                                   </ns0:Item>
@@ -105978,21 +106274,21 @@
                                   <ns0:Item Name="Pause downloads" Sym="NGDLQ-1228">
                                    <ns0:Action Name="PauseRecordingCopyTransfersForMediaFiles(MediaFiles)" Sym="NGDLQ-1229">
                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1230">
-                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1231"/>
+                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1231" />
                                     </ns0:Action>
                                    </ns0:Action>
                                   </ns0:Item>
                                   <ns0:Item Name="Resume downloads" Sym="NGDLQ-1232">
                                    <ns0:Action Name="ResumeRecordingCopyTransfersForMediaFiles(MediaFiles)" Sym="NGDLQ-1233">
                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1234">
-                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1235"/>
+                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1235" />
                                     </ns0:Action>
                                    </ns0:Action>
                                   </ns0:Item>
                                   <ns0:Item Name="Remove downloads" Sym="NGDLQ-1236">
                                    <ns0:Action Name="CancelRecordingCopyTransfersForMediaFiles(MediaFiles)" Sym="NGDLQ-1237">
                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1238">
-                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1239"/>
+                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1239" />
                                     </ns0:Action>
                                    </ns0:Action>
                                   </ns0:Item>
@@ -106000,23 +106296,22 @@
                                    <ns0:OptionsMenu Name="Download Queue Snapshot" Sym="NGDLQ-1241">
                                     <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
                                     <ns0:Action Name="GetRecordingCopyTransferQueueSummaryText()" Sym="NGDLQ-1242">
-                                     <ns0:Text Name="" Sym="NGDLQ-1243"/>
+                                     <ns0:Text Name="" Sym="NGDLQ-1243" />
                                     </ns0:Action>
                                     <ns0:Item Name="Close" Sym="NGDLQ-1244">
-                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1245"/>
+                                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1245" />
                                     </ns0:Item>
-                                    <ns0:Theme Ref="954" Name="OptionsConfirmTheme"/>
+                                    <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
                                    </ns0:OptionsMenu>
                                   </ns0:Item>
                                  </ns0:Conditional>
                                  <ns0:Item Name="Close" Sym="NGDLQ-1246">
-                                  <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1247"/>
+                                  <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1247" />
                                  </ns0:Item>
-                                 <ns0:Theme Ref="954" Name="OptionsConfirmTheme"/>
+                                 <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
                                 </ns0:OptionsMenu>
                                </ns0:Item>
                               </ns0:Conditional>
-                              
                               <ns0:Conditional Name="(Size(SubDirMediaFiles) &gt; 0) &amp;&amp; (Size(SubDirMediaFiles) != Size(MediaFiles)) &amp;&amp; (Size(SubDirMediaFiles) &lt;= GetServerProperty(&quot;music/max_playlist_grouped_add&quot;,500))" Sym="BASE-58965">
                                <ns0:Item Name="Play all Videos in this folder" Sym="BASE-58966">
                                 <ns0:Conditional Name="FileListIsVideoGrouping" Sym="BASE-58967">
@@ -112836,11 +113131,11 @@
   <ns0:Hook Name="BeforeMenuLoad" Sym="OPUS4A-182174">
    <ns0:Action Name="ContinueProcessing = true" Sym="OPUS4A-182217" />
    <ns0:Action Name="&quot;REM Set initial plugin type to the last-viewed type.&quot;" Sym="OPUS4A-182177">
-    <ns0:Action Name="CurPluginType = GetProperty( &quot;plugin/last_type_browsed&quot;, GetElement(PluginTypesList,0) )" Sym="OPUS4A-182178">
+    <ns0:Action Name="CurPluginType = GetProperty( &quot;plugin/last_type_browsed&quot;, GetLocal(&quot;_c_GetElement_PluginTypesList_0&quot;) )" Sym="OPUS4A-182178">
      <ns0:Action Name="&quot;REM Make sure it is a valid plugin type.&quot;" Sym="OPUS4A-182179">
       <ns0:Action Name="index = FindElementIndex( PluginTypesList, CurPluginType )" Sym="OPUS4A-182180">
        <ns0:Conditional Name="index == -1" Sym="OPUS4A-182181">
-        <ns0:Action Name="CurPluginType = GetElement(PluginTypesList,0)" Sym="OPUS4A-182182" />
+        <ns0:Action Name="CurPluginType = GetLocal(&quot;_c_GetElement_PluginTypesList_0&quot;)" Sym="OPUS4A-182182" />
        </ns0:Conditional>
       </ns0:Action>
      </ns0:Action>
@@ -113988,6 +114283,7 @@
    <ns0:Value>"Plugins"</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Plugin_List">
+   <ns0:Action Name="SetLocal(&quot;_c_GetElement_PluginTypesList_0&quot;, GetElement(PluginTypesList,0))" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="2452" Name="Channel Setup" Sym="BASE-52025">
@@ -121804,7 +122100,7 @@
    <ns0:ListenerEvent>Play</ns0:ListenerEvent>
    <ns0:Action Name="CurSong = MediaFile" Sym="BASE-76598">
     <ns0:Action ID="11486" Name="&quot;REM Handle Play command for this song.&quot;" Sym="BASE-65678">
-     <ns0:Conditional Name="GetCurrentMediaFile()" Sym="BASE-65679">
+     <ns0:Conditional Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-65679">
       <ns0:Branch Name="null" Sym="BASE-65680">
        <ns0:Action Ref="16922" Name="&quot;REM Look into playing..." />
       </ns0:Branch>
@@ -121826,7 +122122,7 @@
    <ns0:ListenerEvent>Play/Pause</ns0:ListenerEvent>
    <ns0:Action Name="CurSong = MediaFile" Sym="BASE-76600">
     <ns0:Action ID="11488" Name="&quot;REM Handle Play/Pause command for this song.&quot;" Sym="BASE-65687">
-     <ns0:Conditional Name="GetCurrentMediaFile()" Sym="BASE-65688">
+     <ns0:Conditional Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-65688">
       <ns0:Branch Name="null" Sym="BASE-65689">
        <ns0:Action ID="16922" Name="&quot;REM Look into playing the song&quot;" Sym="BASE-64355">
         <ns0:Action Name="CanAddtoNowPlaying = false" Sym="BASE-64356">
@@ -121899,6 +122195,7 @@
   <ns0:Attribute Ref="44631" Name="InfoThumbSource" />
   <ns0:Attribute Ref="44632" Name="InfoThumbType" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Detailed_Info_-_Musi">
+   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="4118" Name="TV Library" Sym="BASE-51654">
@@ -124850,10 +125147,11 @@
   </ns0:Attribute>
   <ns0:Attribute Ref="7165" Name="CurMenuBG" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Placeshifter">
+   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_placeshifter_recent_servers&quot;, GetLocal(&quot;_c_GetProperty_placeshifter_recent_servers&quot;))" />
    <ns0:Action Name="SetLocal(&quot;_c_GetProperty_placeshifter_recent_servers&quot;, GetProperty(&quot;placeshifter/recent_servers&quot;, &quot;&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Placeshifter">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_placeshifter_recent_servers&quot;, GetProperty(&quot;placeshifter/recent_servers&quot;, &quot;&quot;))" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_placeshifter_recent_servers&quot;, GetLocal(&quot;_c_GetProperty_placeshifter_recent_servers&quot;))" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu ID="7326" Name="Embedded - SageTV Servers: Edit Server List" Sym="NFLX1-255635">
@@ -126641,11 +126939,11 @@
   <ns0:Listener Ref="7370" Name="Left-Back" />
   <ns0:Listener Name="Play - Start playing file" Sym="BASE-57913">
    <ns0:ListenerEvent>Play</ns0:ListenerEvent>
-   <ns0:Conditional Ref="46245" Name="GetCurrentMediaFile()" />
+   <ns0:Conditional Ref="46245" Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" />
   </ns0:Listener>
   <ns0:Listener Name="Play/Pause - Start playing file" Sym="BASE-57917">
    <ns0:ListenerEvent>Play/Pause</ns0:ListenerEvent>
-   <ns0:Conditional ID="46245" Name="GetCurrentMediaFile()" Sym="BASE-57914">
+   <ns0:Conditional ID="46245" Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-57914">
     <ns0:Branch Name="else" Sym="BASE-57915">
      <ns0:Action Name="AltPlayAttemptStyle = &quot;xWatchWithOSD&quot;" Sym="OPUS4-107804">
       <ns0:Conditional ID="33642" Name="GetCurrentMediaFile() == GetMediaFileForAiring(Airing)" Sym="BASE-51227">
@@ -126934,6 +127232,7 @@
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Detailed_Info_-_Vide">
    <ns0:Action Name="SetLocal(&quot;_c_GetShowEpisode_Airing&quot;, GetShowEpisode(Airing))" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="11196" Name="Detailed Info - Recording" Sym="BASE-57832">
@@ -130955,12 +131254,12 @@
                      </ns0:Action>
                     </ns0:Item>
                    </ns0:Conditional>
-                  <ns0:Conditional Name="IsCaptionExtractionEnabled() &amp;&amp; !HasCaptionSidecar(MediaFile)" Sym="CAP-100">
+                   <ns0:Conditional Name="IsCaptionExtractionEnabled() &amp;&amp; !HasCaptionSidecar(MediaFile)" Sym="CAP-100">
                     <ns0:Item Name="Extract Captions" Sym="CAP-101">
                      <ns0:FixedWidth>0.5</ns0:FixedWidth>
                      <ns0:Insets>10</ns0:Insets>
                      <ns0:Action Name="ExtractCaptions(MediaFile)" Sym="CAP-102">
-                      <ns0:Action Name="Refresh()" Sym="CAP-103"/>
+                      <ns0:Action Name="Refresh()" Sym="CAP-103" />
                      </ns0:Action>
                     </ns0:Item>
                    </ns0:Conditional>
@@ -130969,12 +131268,11 @@
                      <ns0:FixedWidth>0.5</ns0:FixedWidth>
                      <ns0:Insets>10</ns0:Insets>
                      <ns0:Action Name="ClearCaptionSidecar(MediaFile)" Sym="CAP-112">
-                      <ns0:Action Name="Refresh()" Sym="CAP-113"/>
+                      <ns0:Action Name="Refresh()" Sym="CAP-113" />
                      </ns0:Action>
                     </ns0:Item>
                    </ns0:Conditional>
-                   
-                  <ns0:Conditional Name="IsNgClientSession() &amp;&amp; HasClientCapability(&quot;DOWNLOAD&quot;)" Sym="NGDLQ-1000">
+                   <ns0:Conditional Name="IsNgClientSession() &amp;&amp; HasClientCapability(&quot;DOWNLOAD&quot;)" Sym="NGDLQ-1000">
                     <ns0:Item Name="Download Recording" Sym="NGDLQ-1001">
                      <ns0:FixedWidth>0.5</ns0:FixedWidth>
                      <ns0:Insets>10</ns0:Insets>
@@ -130985,15 +131283,15 @@
                         <ns0:Action Name="TransferCreateResult = CreateRecordingCopyTransferSession(MediaFile, &quot;foreground&quot;, &quot;balanced&quot;, 0, 1, false, true)" Sym="NGDLQ-1025">
                          <ns0:OptionsMenu Name="Download Request Result" Sym="NGDLQ-1603">
                           <ns0:Action Name="If(StringIndexOf(TransferCreateResult, &quot;TRANSFER_SESSION_ACK&quot;) &gt;= 0, &quot;Download started.&quot;, &quot;Could not start download.&quot;)" Sym="NGDLQ-1604">
-                           <ns0:Text Name="" Sym="NGDLQ-1605"/>
+                           <ns0:Text Name="" Sym="NGDLQ-1605" />
                           </ns0:Action>
                           <ns0:Action Name="GetMediaTitle(MediaFile)" Sym="NGDLQ-1620">
-                           <ns0:Text Name="" Sym="NGDLQ-1621"/>
+                           <ns0:Text Name="" Sym="NGDLQ-1621" />
                           </ns0:Action>
                           <ns0:Item Name="Close" Sym="NGDLQ-1606">
-                           <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1607"/>
+                           <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1607" />
                           </ns0:Item>
-                          <ns0:Theme Ref="954" Name="OptionsConfirmTheme"/>
+                          <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
                          </ns0:OptionsMenu>
                         </ns0:Action>
                        </ns0:Item>
@@ -131001,15 +131299,15 @@
                         <ns0:Action Name="TransferCreateResult = CreateRecordingCopyTransferSession(MediaFile, &quot;background&quot;, &quot;balanced&quot;, 0, 1, false, true)" Sym="NGDLQ-1029">
                          <ns0:OptionsMenu Name="Queue Request Result" Sym="NGDLQ-1613">
                           <ns0:Action Name="If(StringIndexOf(TransferCreateResult, &quot;TRANSFER_SESSION_ACK&quot;) &gt;= 0, &quot;Download queued.&quot;, &quot;Could not queue download.&quot;)" Sym="NGDLQ-1614">
-                           <ns0:Text Name="" Sym="NGDLQ-1615"/>
+                           <ns0:Text Name="" Sym="NGDLQ-1615" />
                           </ns0:Action>
                           <ns0:Action Name="GetMediaTitle(MediaFile)" Sym="NGDLQ-1622">
-                           <ns0:Text Name="" Sym="NGDLQ-1623"/>
+                           <ns0:Text Name="" Sym="NGDLQ-1623" />
                           </ns0:Action>
                           <ns0:Item Name="Close" Sym="NGDLQ-1616">
-                           <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1617"/>
+                           <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1617" />
                           </ns0:Item>
-                          <ns0:Theme Ref="954" Name="OptionsConfirmTheme"/>
+                          <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
                          </ns0:OptionsMenu>
                         </ns0:Action>
                        </ns0:Item>
@@ -131019,7 +131317,7 @@
                         <ns0:Item Name="Pause recording download" Sym="NGDLQ-1034">
                          <ns0:Action Name="PauseLatestRecordingCopyTransferForMediaFile(MediaFile)" Sym="NGDLQ-1035">
                           <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1036">
-                           <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1037"/>
+                           <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1037" />
                           </ns0:Action>
                          </ns0:Action>
                         </ns0:Item>
@@ -131028,7 +131326,7 @@
                         <ns0:Item Name="Resume recording download" Sym="NGDLQ-1039">
                          <ns0:Action Name="ResumeLatestRecordingCopyTransferForMediaFile(MediaFile)" Sym="NGDLQ-1040">
                           <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1041">
-                           <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1042"/>
+                           <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1042" />
                           </ns0:Action>
                          </ns0:Action>
                         </ns0:Item>
@@ -131036,7 +131334,7 @@
                        <ns0:Item Name="Remove recording download" Sym="NGDLQ-1043">
                         <ns0:Action Name="CancelLatestRecordingCopyTransferForMediaFile(MediaFile)" Sym="NGDLQ-1044">
                          <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1045">
-                          <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1046"/>
+                          <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1046" />
                          </ns0:Action>
                         </ns0:Action>
                        </ns0:Item>
@@ -131045,12 +131343,12 @@
                          <ns0:OptionsMenu Name="Transfer Status" Sym="NGDLQ-1701">
                           <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
                           <ns0:Action Name="GetLatestRecordingCopyTransferStatusForMediaFile(MediaFile)" Sym="NGDLQ-1702">
-                           <ns0:Text Name="" Sym="NGDLQ-1703"/>
+                           <ns0:Text Name="" Sym="NGDLQ-1703" />
                           </ns0:Action>
                           <ns0:Item Name="Close" Sym="NGDLQ-1704">
-                           <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1705"/>
+                           <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1705" />
                           </ns0:Item>
-                          <ns0:Theme Ref="954" Name="OptionsConfirmTheme"/>
+                          <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
                          </ns0:OptionsMenu>
                         </ns0:Item>
                        </ns0:Conditional>
@@ -131058,35 +131356,35 @@
                         <ns0:OptionsMenu Name="Download Queue Snapshot" Sym="NGDLQ-1048">
                          <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
                          <ns0:Action Name="GetRecordingCopyTransferQueueSummaryText()" Sym="NGDLQ-1049">
-                          <ns0:Text Name="" Sym="NGDLQ-1050"/>
+                          <ns0:Text Name="" Sym="NGDLQ-1050" />
                          </ns0:Action>
                          <ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 1" Sym="NGDLQ-1720">
                           <ns0:Action Name="&quot;\nItem 1:&quot;" Sym="NGDLQ-1721">
-                           <ns0:Text Name="" Sym="NGDLQ-1722"/>
+                           <ns0:Text Name="" Sym="NGDLQ-1722" />
                           </ns0:Action>
                           <ns0:Action Name="GetRecordingCopyTransferQueueItemDetailText(1)" Sym="NGDLQ-1723">
-                           <ns0:Text Name="" Sym="NGDLQ-1724"/>
+                           <ns0:Text Name="" Sym="NGDLQ-1724" />
                           </ns0:Action>
                          </ns0:Conditional>
                          <ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 2" Sym="NGDLQ-1725">
                           <ns0:Action Name="&quot;\nItem 2:&quot;" Sym="NGDLQ-1726">
-                           <ns0:Text Name="" Sym="NGDLQ-1727"/>
+                           <ns0:Text Name="" Sym="NGDLQ-1727" />
                           </ns0:Action>
                           <ns0:Action Name="GetRecordingCopyTransferQueueItemDetailText(2)" Sym="NGDLQ-1728">
-                           <ns0:Text Name="" Sym="NGDLQ-1729"/>
+                           <ns0:Text Name="" Sym="NGDLQ-1729" />
                           </ns0:Action>
                          </ns0:Conditional>
                          <ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 3" Sym="NGDLQ-1730">
                           <ns0:Action Name="&quot;\nItem 3:&quot;" Sym="NGDLQ-1731">
-                           <ns0:Text Name="" Sym="NGDLQ-1732"/>
+                           <ns0:Text Name="" Sym="NGDLQ-1732" />
                           </ns0:Action>
                           <ns0:Action Name="GetRecordingCopyTransferQueueItemDetailText(3)" Sym="NGDLQ-1733">
-                           <ns0:Text Name="" Sym="NGDLQ-1734"/>
+                           <ns0:Text Name="" Sym="NGDLQ-1734" />
                           </ns0:Action>
                          </ns0:Conditional>
                          <ns0:Conditional Name="GetRecordingCopyTransferQueueItemCount() &gt;= 4" Sym="NGDLQ-1740">
                           <ns0:Action Name="&quot;\n(&quot; + (GetRecordingCopyTransferQueueItemCount() - 3) + &quot; more queued)&quot;" Sym="NGDLQ-1741">
-                           <ns0:Text Name="" Sym="NGDLQ-1742"/>
+                           <ns0:Text Name="" Sym="NGDLQ-1742" />
                           </ns0:Action>
                          </ns0:Conditional>
                          <ns0:Conditional Name="GetProperty(&quot;developer/show_raw_transfer_json&quot;, false)" Sym="NGDLQ-1756">
@@ -131094,37 +131392,36 @@
                            <ns0:OptionsMenu Name="Raw Queue Snapshot" Sym="NGDLQ-1751">
                             <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
                             <ns0:Action Name="GetRecordingCopyTransferQueueSnapshot()" Sym="NGDLQ-1752">
-                             <ns0:Text Name="" Sym="NGDLQ-1753"/>
+                             <ns0:Text Name="" Sym="NGDLQ-1753" />
                             </ns0:Action>
                             <ns0:Action Name="&quot;\n--- Server caps ---&quot;" Sym="NGDLQ-1714">
-                             <ns0:Text Name="" Sym="NGDLQ-1715"/>
+                             <ns0:Text Name="" Sym="NGDLQ-1715" />
                             </ns0:Action>
                             <ns0:Action Name="GetRecordingCopyTransferCapsAck()" Sym="NGDLQ-1716">
-                             <ns0:Text Name="" Sym="NGDLQ-1717"/>
+                             <ns0:Text Name="" Sym="NGDLQ-1717" />
                             </ns0:Action>
                             <ns0:Item Name="Close" Sym="NGDLQ-1754">
-                             <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1755"/>
+                             <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1755" />
                             </ns0:Item>
-                            <ns0:Theme Ref="954" Name="OptionsConfirmTheme"/>
+                            <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
                            </ns0:OptionsMenu>
                           </ns0:Item>
                          </ns0:Conditional>
                          <ns0:Item Name="Close" Sym="NGDLQ-1051">
-                          <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1052"/>
+                          <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1052" />
                          </ns0:Item>
-                         <ns0:Theme Ref="954" Name="OptionsConfirmTheme"/>
+                         <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
                         </ns0:OptionsMenu>
                        </ns0:Item>
                       </ns0:Conditional>
                       <ns0:Item Name="Close" Sym="NGDLQ-1053">
-                       <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1054"/>
+                       <ns0:Action Name="CloseOptionsMenu()" Sym="NGDLQ-1054" />
                       </ns0:Item>
-                      <ns0:Theme Ref="954" Name="OptionsConfirmTheme"/>
+                      <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
                      </ns0:OptionsMenu>
                     </ns0:Item>
                    </ns0:Conditional>
                   </ns0:Branch>
-                  
                   <ns0:Branch Name="else" Sym="BASE-49834">
                    <ns0:Conditional Name="!GetProperty(&quot;video_lib_hide_delete&quot;, false)" Sym="BASE-49835">
                     <ns0:Conditional Name="IsDVD(MediaFile)" Sym="BASE-49836">
@@ -132583,11 +132880,11 @@
   <ns0:Listener Ref="7370" Name="Left-Back" />
   <ns0:Listener Name="Play - Start playing file" Sym="BASE-57825">
    <ns0:ListenerEvent>Play</ns0:ListenerEvent>
-   <ns0:Conditional Ref="48314" Name="GetCurrentMediaFile()" />
+   <ns0:Conditional Ref="48314" Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" />
   </ns0:Listener>
   <ns0:Listener Name="Play/Pause - Start playing file" Sym="BASE-57829">
    <ns0:ListenerEvent>Play/Pause</ns0:ListenerEvent>
-   <ns0:Conditional ID="48314" Name="GetCurrentMediaFile()" Sym="BASE-57826">
+   <ns0:Conditional ID="48314" Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-57826">
     <ns0:Branch Name="else" Sym="BASE-57827">
      <ns0:Action Name="AltPlayAttemptStyle = &quot;xWatchWithOSD&quot;" Sym="OPUS4-107814">
       <ns0:Conditional Ref="33642" Name="GetCurrentMediaFile() ..." />
@@ -132875,6 +133172,7 @@
   <ns0:Attribute Ref="46363" Name="PeopleWithPicsList" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Detailed_Info_-_Reco">
    <ns0:Action Name="SetLocal(&quot;_c_GetShowEpisode_Airing&quot;, GetShowEpisode(Airing))" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="11665" Name="Browser - Music, By Song Set" Sym="BASE-53337">
@@ -146262,7 +146560,7 @@
  </ns0:Menu>
  <ns0:Menu ID="22438" Name="Theme Header &amp; Footer only with Content BG" Sym="OPUS4A-176700">
   <ns0:Action ID="52445" Name="&quot;REM Draw the menu's background: either video or image.&quot;" Sym="OPUS4A-174870">
-   <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XBackground&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))) || (&quot;XAlways&quot; == GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)))" Sym="OPUS4A-174871">
+   <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XBackground&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))) || (&quot;XAlways&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)))" Sym="OPUS4A-174871">
     <ns0:Branch Name="true" Sym="OPUS4A-174872">
      <ns0:Conditional Name="(InDigitalChannelScan != true) &amp;&amp; (SkipBGVideoPreview != true) &amp;&amp; (IsDownloadingVideo != true)" Sym="OPUS4A-174874">
       <ns0:Branch Name="true" Sym="OPUS4A-174875">
@@ -147642,6 +147940,7 @@
   <ns0:Attribute Ref="33526" Name="TableUIComp" />
   <ns0:Attribute Ref="33527" Name="TableUIComp2" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Theme_Header_&amp;_Foote">
+   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Theme_Header_Footer_only">
   </ns0:Hook>
@@ -153562,6 +153861,11 @@
    <ns0:Action Name="SetFocusForVariable(&quot;OptionSetting&quot;, &quot;XContinue&quot;)" Sym="BASE-77063" />
   </ns0:Hook>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Configuration_Wizard">
+   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_ssid&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_ssid&quot;))" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_netmask_255_2&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_netmask_255_2&quot;))" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_gateway&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_gateway&quot;))" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_primary_dns&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_primary_dns&quot;))" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_secondary_dns&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_secondary_dns&quot;))" />
    <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_ssid&quot;, GetServerProperty(&quot;linux/network/ssid&quot;,&quot;&quot;))" />
    <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_netmask_255_2&quot;, GetServerProperty(&quot;linux/network/netmask&quot;,&quot;255.255.255.0&quot;))" />
    <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_gateway&quot;, GetServerProperty(&quot;linux/network/gateway&quot;,&quot;&quot;))" />
@@ -153569,11 +153873,11 @@
    <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_secondary_dns&quot;, GetServerProperty(&quot;linux/network/secondary_dns&quot;,&quot;&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Configuration_Wizard_Net">
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_ssid&quot;, GetServerProperty(&quot;linux/network/ssid&quot;,&quot;&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_netmask_255_2&quot;, GetServerProperty(&quot;linux/network/netmask&quot;,&quot;255.255.255.0&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_gateway&quot;, GetServerProperty(&quot;linux/network/gateway&quot;,&quot;&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_primary_dns&quot;, GetServerProperty(&quot;linux/network/primary_dns&quot;,&quot;&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_secondary_dns&quot;, GetServerProperty(&quot;linux/network/secondary_dns&quot;,&quot;&quot;))" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_ssid&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_ssid&quot;))" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_netmask_255_2&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_netmask_255_2&quot;))" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_gateway&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_gateway&quot;))" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_primary_dns&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_primary_dns&quot;))" />
+   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_secondary_dns&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_secondary_dns&quot;))" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu ID="29812" Name="Favorite Defaults" Sym="BASE-75716">
@@ -169264,11 +169568,11 @@
   <ns0:Listener Ref="7370" Name="Left-Back" />
   <ns0:Listener Name="Play - Start playing file" Sym="BASE-57757">
    <ns0:ListenerEvent>Play</ns0:ListenerEvent>
-   <ns0:Conditional Ref="59490" Name="GetCurrentMediaFile()" />
+   <ns0:Conditional Ref="59490" Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" />
   </ns0:Listener>
   <ns0:Listener Name="Play/Pause - Start playing file" Sym="BASE-57765">
    <ns0:ListenerEvent>Play/Pause</ns0:ListenerEvent>
-   <ns0:Conditional ID="59490" Name="GetCurrentMediaFile()" Sym="BASE-57758">
+   <ns0:Conditional ID="59490" Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-57758">
     <ns0:Branch Name="else" Sym="BASE-57759">
      <ns0:Action Name="AltPlayAttemptStyle = &quot;xWatchFromDetailedAiringInfo&quot;" Sym="OPUS4-107815">
       <ns0:Conditional Ref="33642" Name="GetCurrentMediaFile() ..." />
@@ -169320,6 +169624,7 @@
   <ns0:Attribute Ref="44632" Name="InfoThumbType" />
   <ns0:Attribute Ref="46363" Name="PeopleWithPicsList" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Detailed_Info_-_Airi">
+   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="51935" Name="Configuration Wizard - Parental Controls Usage" Sym="BASE-83238">
@@ -180299,7 +180604,7 @@
   <ns0:Theme Ref="22437" Name="ConfigurationWizardMen..." />
   <ns0:Conditional Name="LinksToJumpToNextConfigWizMenu" Sym="BASE-78197">
    <ns0:Action ID="63266" Name="JumpToTheNextConfigWizMenu" Sym="BASE-78176">
-    <ns0:Conditional Name="GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)" Sym="BASE-78177">
+    <ns0:Conditional Name="GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)" Sym="BASE-78177">
      <ns0:Branch Name="&quot;XNever&quot;" Sym="BASE-78178">
       <ns0:Menu Ref="63285" Name="Configuration Wizard -..." />
      </ns0:Branch>
@@ -180310,7 +180615,7 @@
    </ns0:Action>
   </ns0:Conditional>
   <ns0:Hook Name="MenuNeedsDefaultFocus" Sym="BASE-78198">
-   <ns0:Conditional Name="GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)" Sym="BASE-78199">
+   <ns0:Conditional Name="GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)" Sym="BASE-78199">
     <ns0:Branch Name="&quot;XNever&quot;" Sym="BASE-78200">
      <ns0:Action Name="SetFocusForVariable(&quot;OptionSetting&quot;, &quot;XNever&quot;)" Sym="BASE-78201" />
     </ns0:Branch>
@@ -180323,6 +180628,7 @@
    </ns0:Conditional>
   </ns0:Hook>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Configuration_Wizard">
+   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Configuration_Wizard_Ask">
   </ns0:Hook>
@@ -189211,7 +189517,7 @@
  </ns0:Menu>
  <ns0:Menu ID="65968" Name="VideoBG THEME" Sym="BASE-85872">
   <ns0:VideoBackground>false</ns0:VideoBackground>
-  <ns0:Conditional ID="33488" Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XBackground&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))) || (&quot;XAlways&quot; == GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)))" Sym="BASE-57990">
+  <ns0:Conditional ID="33488" Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XBackground&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))) || (&quot;XAlways&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)))" Sym="BASE-57990">
    <ns0:Conditional Name="(InDigitalChannelScan != true) &amp;&amp; (SkipBGVideoPreview != true) &amp;&amp; (IsDownloadingVideo != true)" Sym="BASE-57991">
     <ns0:Video ID="52450" Name="BackgroundVideo" Sym="BASE-57992">
      <ns0:FixedWidth>1.0</ns0:FixedWidth>
@@ -189228,6 +189534,7 @@
    </ns0:Action>
   </ns0:Hook>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-VideoBG_THEME">
+   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-VideoBG_THEME">
   </ns0:Hook>
@@ -195497,7 +195804,7 @@
      <ns0:WrapVNav>false</ns0:WrapVNav>
      <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
      <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
-     <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XBackground&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))) || (&quot;XAlways&quot; == GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)))" Sym="BASE-86341">
+     <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XBackground&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))) || (&quot;XAlways&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)))" Sym="BASE-86341">
       <ns0:Action Name="&quot;REM Draw light shaded full menu BG if video is menu BG.&quot;" Sym="OPUS4A-123730">
        <ns0:Action Name="gMenuBGFillImage" Sym="OPUS4A-123727">
         <ns0:Image Name="" Sym="OPUS4A-123728">
@@ -196858,6 +197165,7 @@
    </ns0:Panel>
   </ns0:Panel>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-THEME_ORGANIZER_3">
+   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-THEME_ORGANIZER_3">
   </ns0:Hook>
@@ -196900,7 +197208,7 @@
     <ns0:Action ID="35688" Name="&quot;REM Display thumb, preview, etc.&quot;" Sym="OPUS4A-126342">
      <ns0:Action Name="LocalAiring = InfoAiring" Sym="OPUS4A-175008">
       <ns0:Action Name="&quot;REM If playing non-music &amp; preview window is enabled, display playback in the preview window.&quot;" Sym="OPUS4A-214971">
-       <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))) || (&quot;XAlways&quot; == GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)))" Sym="OPUS4A-214969">
+       <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))) || (&quot;XAlways&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)))" Sym="OPUS4A-214969">
         <ns0:Branch Name="true" Sym="OPUS4A-214970">
          <ns0:Panel Ref="5" Name="Preview AutoSizeArea" />
         </ns0:Branch>
@@ -198540,6 +198848,7 @@
   <ns0:Attribute Ref="33526" Name="TableUIComp" />
   <ns0:Attribute Ref="33527" Name="TableUIComp2" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Theme_Preview_Top_Ri">
+   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Theme_Preview_Top_Right_">
   </ns0:Hook>
@@ -209414,7 +209723,7 @@
   <ns0:Action Ref="11031" Name="&quot;REM Determine whether..." />
   <ns0:Action Name="&quot;REM Create Side DetailArea for item in focus - music media item or playlist&quot;" Sym="OPUS4A-179316">
    <ns0:Action Name="&quot;REM Update side info area when focus changes&quot;" Sym="OPUS4A-179317">
-    <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))) || (&quot;XAlways&quot; == GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)))" Sym="OPUS4A-179368">
+    <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))) || (&quot;XAlways&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)))" Sym="OPUS4A-179368">
      <ns0:Branch Name="true" Sym="OPUS4A-179369">
       <ns0:Action Name="&quot;REM Preview window is in use; create smaller playlist details area.&quot;" Sym="OPUS4A-179370">
        <ns0:Panel Name="Detailed Info Panel Short" Sym="OPUS4A-179371">
@@ -212974,6 +213283,7 @@
   <ns0:Attribute Ref="33526" Name="TableUIComp" />
   <ns0:Attribute Ref="33527" Name="TableUIComp2" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Theme_Preview_Top_Ri">
+   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Theme_Preview_Top_Right_">
   </ns0:Hook>
@@ -213004,7 +213314,7 @@
     <ns0:Attribute Ref="35682" Name="AddReflection" />
     <ns0:Attribute Ref="68274" Name="ThumbBGSmoothTrackerKey" />
     <ns0:Action Name="&quot;REM Display preview, thumb, etc.&quot;" Sym="OPUS4A-176095">
-     <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))) || (&quot;XAlways&quot; == GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)))" Sym="OPUS4A-176100">
+     <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))) || (&quot;XAlways&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)))" Sym="OPUS4A-176100">
       <ns0:Branch Name="true" Sym="OPUS4A-176101">
        <ns0:Panel Ref="5" Name="Preview AutoSizeArea" />
       </ns0:Branch>
@@ -213194,6 +213504,7 @@
   <ns0:Attribute Ref="68754" Name="MenuInfoStartX" />
   <ns0:Attribute Ref="68755" Name="MenuInfoStartY" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Theme_Preview_Top_Ri">
+   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Theme_Preview_Top_Right_">
   </ns0:Hook>
