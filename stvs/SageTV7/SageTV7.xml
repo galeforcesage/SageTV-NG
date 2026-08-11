@@ -113131,11 +113131,11 @@
   <ns0:Hook Name="BeforeMenuLoad" Sym="OPUS4A-182174">
    <ns0:Action Name="ContinueProcessing = true" Sym="OPUS4A-182217" />
    <ns0:Action Name="&quot;REM Set initial plugin type to the last-viewed type.&quot;" Sym="OPUS4A-182177">
-    <ns0:Action Name="CurPluginType = GetProperty( &quot;plugin/last_type_browsed&quot;, GetLocal(&quot;_c_GetElement_PluginTypesList_0&quot;) )" Sym="OPUS4A-182178">
+    <ns0:Action Name="CurPluginType = GetProperty( &quot;plugin/last_type_browsed&quot;, GetElement(PluginTypesList,0) )" Sym="OPUS4A-182178">
      <ns0:Action Name="&quot;REM Make sure it is a valid plugin type.&quot;" Sym="OPUS4A-182179">
       <ns0:Action Name="index = FindElementIndex( PluginTypesList, CurPluginType )" Sym="OPUS4A-182180">
        <ns0:Conditional Name="index == -1" Sym="OPUS4A-182181">
-        <ns0:Action Name="CurPluginType = GetLocal(&quot;_c_GetElement_PluginTypesList_0&quot;)" Sym="OPUS4A-182182" />
+        <ns0:Action Name="CurPluginType = GetElement(PluginTypesList,0)" Sym="OPUS4A-182182" />
        </ns0:Conditional>
       </ns0:Action>
      </ns0:Action>
@@ -114282,9 +114282,6 @@
   <ns0:Attribute Name="PluginTextPlural" Sym="OPUS4A-182563">
    <ns0:Value>"Plugins"</ns0:Value>
   </ns0:Attribute>
-  <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Plugin_List">
-   <ns0:Action Name="SetLocal(&quot;_c_GetElement_PluginTypesList_0&quot;, GetElement(PluginTypesList,0))" />
-  </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="2452" Name="Channel Setup" Sym="BASE-52025">
   <ns0:Theme ID="30309" Name="SetupWizardMenuTheme 7" Sym="OPUS4A-181503">
