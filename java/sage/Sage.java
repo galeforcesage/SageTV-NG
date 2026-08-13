@@ -973,6 +973,19 @@ public final class Sage
   public static void main(String[] args) throws Throwable
   {
     System.out.println("Main is starting");
+    // Process any staged plugin file operations (deletes/renames) from a
+    // prior install that required a restart.  StageCleaner has zero Sage
+    // dependencies — it only touches stageddeletes.txt / stagedrenames.txt
+    // in the cwd.  Running it here guarantees it fires regardless of how
+    // the JVM was launched (container entrypoint, service wrapper, etc.).
+    try
+    {
+      sage.plugin.StageCleaner.main(args);
+    }
+    catch (Throwable t)
+    {
+      System.out.println("StageCleaner failed (non-fatal): " + t);
+    }
     startup(args);
   }
 
