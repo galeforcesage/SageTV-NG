@@ -1,7 +1,14 @@
 """
 stv_cache_patcher.py — Phase 2: Expression Caching
 Identifies expensive Catbert expressions called multiple times within the
-same screen subtree and generates SetLocal/GetLocal patches.
+same screen subtree and generates cached-variable patches using plain
+SageTV variable assignment (varname = expr / varname reference).
+
+NOTE: GetLocal() and SetLocal() are NOT valid SageTV API functions.
+They are internal Catbert.Context methods. Using them in STV expressions
+causes 'Parsing Error: Undefined Method'. The correct pattern is:
+  Seed:  _c_xxx = expr          (Action widget with assignment)
+  Read:  _c_xxx                 (plain variable reference)
 
 Two modes:
   --report  Print patch plan without modifying the STV (safe first step)
@@ -46,7 +53,7 @@ WIDGET_TAGS = {
 
 
 def var_name(expr: str) -> str:
-    """Convert an expression to a safe SetLocal variable name."""
+    """Convert an expression to a safe cache variable name."""
     # GetProperty("video_menu_style", "XWindow") -> _c_GetProperty_video_menu_style
     inner = re.sub(r'[^a-zA-Z0-9]', '_', expr)
     inner = re.sub(r'_+', '_', inner).strip('_')
@@ -119,8 +126,8 @@ def apply_patches(root: ET.Element, ns_prefix: str, dry_run: bool) -> list[dict]
 
         for expr, locs in sorted(hot.items(), key=lambda x: -len(x[1])):
             vname = var_name(expr)
-            set_call = f'SetLocal("{vname}", {expr})'
-            get_call = f'GetLocal("{vname}")'
+            set_call = f'{vname} = {expr}'
+            get_ref = vname
 
             patch["set_locals"].append(set_call)
             patch["replacements"].append({
@@ -139,14 +146,14 @@ def apply_patches(root: ET.Element, ns_prefix: str, dry_run: bool) -> list[dict]
                 set_action = ET.SubElement(bml, f"{ns_prefix}Action")
                 set_action.set("Name", set_call)
 
-                # 2. Replace inline expressions with GetLocal()
+                # 2. Replace inline expressions with cached variable reference
                 for elem, attr in locs:
                     if attr == "text":
                         if elem.text:
-                            elem.text = elem.text.replace(expr, get_call)
+                            elem.text = elem.text.replace(expr, get_ref)
                     else:
                         if attr in elem.attrib:
-                            elem.attrib[attr] = elem.attrib[attr].replace(expr, get_call)
+                            elem.attrib[attr] = elem.attrib[attr].replace(expr, get_ref)
 
         if patch["set_locals"]:
             all_patches.append(patch)
@@ -169,7 +176,7 @@ def print_report(patches: list[dict]) -> None:
             print(f"    {sl}")
         print(f"  Replace in subtree:")
         for r in p["replacements"]:
-            print(f"    {r['expr'][:60]}  ->  GetLocal(\"{r['var']}\")  "
+            print(f"    {r['expr'][:60]}  ->  {r['var']}  "
                   f"[{r['occurrences']} occurrences]")
         print()
 
