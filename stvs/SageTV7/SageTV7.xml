@@ -4,7 +4,7 @@
   <ns0:VideoBackground>false</ns0:VideoBackground>
   <ns0:Theme Ref="1" Name="MainMenuTheme 7" />
   <ns0:Action Name="&quot;REM Determine whether to display preview window.&quot;" Sym="OPUS4A-174931">
-   <ns0:Conditional Name="!IsMusicFile(GetLocal(&quot;_c_GetCurrentMediaFile&quot;)) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))) || (&quot;XAlways&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)))" Sym="OPUS4A-174933">
+   <ns0:Conditional Name="!IsMusicFile(_c_GetCurrentMediaFile) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == _c_GetProperty_display_video_on_menus_XIf_Active)) || (&quot;XAlways&quot; == _c_GetProperty_display_video_on_menus_XIf_Active))" Sym="OPUS4A-174933">
     <ns0:Panel Name="Video Preview Panel" Sym="OPUS4A-174934">
      <ns0:AnchorX>=MenuPreviewStartX</ns0:AnchorX>
      <ns0:AnchorY>=MenuPreviewStartY + HeaderPanelHeight</ns0:AnchorY>
@@ -89,7 +89,7 @@
          <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
          <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
          <ns0:MouseTransparency>false</ns0:MouseTransparency>
-         <ns0:Action Name="GetAiringChannelNumber(GetLocal(&quot;_c_GetCurrentMediaFile&quot;)) + &quot; &quot; + GetChannelName(GetLocal(&quot;_c_GetCurrentMediaFile&quot;))" Sym="OPUS4A-174944">
+         <ns0:Action Name="GetAiringChannelNumber(_c_GetCurrentMediaFile) + &quot; &quot; + GetChannelName(_c_GetCurrentMediaFile)" Sym="OPUS4A-174944">
           <ns0:Text Name="" Sym="OPUS4A-174945">
            <ns0:AnchorX>0.5</ns0:AnchorX>
            <ns0:AutosizeText>true</ns0:AutosizeText>
@@ -7569,7 +7569,7 @@
   </ns0:Listener>
   <ns0:Listener Name="" Sym="OPUS4A-174857">
    <ns0:ListenerEvent>Play</ns0:ListenerEvent>
-   <ns0:Conditional Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="OPUS4A-174858">
+   <ns0:Conditional Name="_c_GetCurrentMediaFile" Sym="OPUS4A-174858">
     <ns0:Branch Name="null" Sym="OPUS4A-174859">
      <ns0:Action Name="Filename = GetProperty( &quot;instant_play_file&quot;, null )" Sym="OPUS4A-174860">
       <ns0:Conditional Name="Size(Filename) &gt; 0" Sym="OPUS4A-174861">
@@ -8519,8 +8519,8 @@
    <ns0:Value>GetProperty("ui/focus_follows_mouse",true)</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Main_Menu">
-   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
+   <ns0:Action Name="_c_GetCurrentMediaFile = GetCurrentMediaFile()" />
+   <ns0:Action Name="_c_GetProperty_display_video_on_menus_XIf_Active = GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="16" Name="MediaPlayer OSD" Sym="BASE-44375">
@@ -20630,7 +20630,7 @@
       </ns0:Conditional>
      </ns0:Action>
      <ns0:Action Name="&quot;REM Add first 2 online video items&quot;" Sym="BASE-51976">
-      <ns0:Conditional Name="GetLocal(&quot;_c_GetProperty_ui_GoogleVideo_AllowAccess_xOn&quot;) != &quot;xOff&quot;" Sym="BASE-51977">
+      <ns0:Conditional Name="_c_GetProperty_ui_GoogleVideo_AllowAccess_xOn != &quot;xOff&quot;" Sym="BASE-51977">
        <ns0:Action Name="OnlineVideoListItems = DataUnion( null )" Sym="BASE-51978">
         <ns0:Action Name="OnlineVideoListItemsCustom = DataUnion( null )" Sym="BASE-51979" />
        </ns0:Action>
@@ -20714,7 +20714,7 @@
       </ns0:Conditional>
      </ns0:Action>
      <ns0:Action Name="&quot;REM Add any remaining online video items&quot;" Sym="BASE-51991">
-      <ns0:Conditional Name="GetLocal(&quot;_c_GetProperty_ui_GoogleVideo_AllowAccess_xOn&quot;) != &quot;xOff&quot;" Sym="OPUS4-90823">
+      <ns0:Conditional Name="_c_GetProperty_ui_GoogleVideo_AllowAccess_xOn != &quot;xOff&quot;" Sym="OPUS4-90823">
        <ns0:Conditional ID="7148" Name="OnlineVideoCount &lt; Size(OnlineVideoListItems)" Sym="BASE-51992">
         <ns0:Branch Name="true" Sym="BASE-51993">
          <ns0:Action ID="7112" Name="MenuItemList = DataUnion(MenuItemList, GetElement(OnlineVideoListItems,OnlineVideoCount) )" Sym="BASE-51982">
@@ -20768,11 +20768,11 @@
    <ns0:Value>"Options"</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Online_Services_Menu">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_ui_GoogleVideo_AllowAccess_xOn&quot;, GetLocal(&quot;_c_GetProperty_ui_GoogleVideo_AllowAccess_xOn&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_ui_GoogleVideo_AllowAccess_xOn&quot;, GetProperty(&quot;ui/GoogleVideo/AllowAccess&quot;,&quot;xOn&quot;))" />
+   <ns0:Action Name="_c_GetProperty_ui_GoogleVideo_AllowAccess_xOn = _c_GetProperty_ui_GoogleVideo_AllowAccess_xOn" />
+   <ns0:Action Name="_c_GetProperty_ui_GoogleVideo_AllowAccess_xOn = GetProperty(&quot;ui/GoogleVideo/AllowAccess&quot;,&quot;xOn&quot;)" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Online_Services_Menu">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_ui_GoogleVideo_AllowAccess_xOn&quot;, GetLocal(&quot;_c_GetProperty_ui_GoogleVideo_AllowAccess_xOn&quot;))" />
+   <ns0:Action Name="_c_GetProperty_ui_GoogleVideo_AllowAccess_xOn = _c_GetProperty_ui_GoogleVideo_AllowAccess_xOn" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu ID="299" Name="Embedded - SageTV Servers: Choose server" Sym="OPUS4A-210721">
@@ -31326,7 +31326,7 @@
  <ns0:Menu ID="606" Name="SageRecordings Video Conversions" Sym="BASE-50465">
   <ns0:Theme Ref="7168" Name="Free Menu Layout with ..." />
   <ns0:Action Name="&quot;REM Create Top DetailArea for item in focus&quot;" Sym="OPUS4B-527">
-   <ns0:Action Name="LeaveThumbnailSpace = GetProperty(&quot;ui/lists_display_show_art&quot;, true) || (!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))) || (&quot;XAlways&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))))" Sym="OPUS4B-528">
+   <ns0:Action Name="LeaveThumbnailSpace = GetProperty(&quot;ui/lists_display_show_art&quot;, true) || (!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == _c_GetProperty_display_video_on_menus_XIf_Active)) || (&quot;XAlways&quot; == _c_GetProperty_display_video_on_menus_XIf_Active)))" Sym="OPUS4B-528">
     <ns0:Panel Name="Custom Detailed Info Panel" Sym="OPUS4A-181028">
      <ns0:AnchorX>=MenuInfoStartX</ns0:AnchorX>
      <ns0:AnchorY>=MenuInfoStartY + HeaderPanelHeight</ns0:AnchorY>
@@ -32226,7 +32226,7 @@
    <ns0:Value>InfoJobID</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-SageRecordings_Video">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
+   <ns0:Action Name="_c_GetProperty_display_video_on_menus_XIf_Active = GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="618" Name="Browser - Music" Sym="BASE-51622">
@@ -38267,7 +38267,7 @@
             </ns0:Image>
            </ns0:Action>
           </ns0:Action>
-          <ns0:Action Name="CurrentMF = GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-87826">
+          <ns0:Action Name="CurrentMF = _c_GetCurrentMediaFile" Sym="BASE-87826">
            <ns0:Conditional Name="true" Sym="BASE-87827">
             <ns0:Branch Name="IsMusicFile(CurrentMF)" Sym="BASE-87828">
              <ns0:Action Name="LastMF = CurrentMF" Sym="OPUS4A-99">
@@ -38882,7 +38882,7 @@
        </ns0:Conditional>
        <ns0:Hook Name="LayoutStarted" Sym="BASE-87899">
         <ns0:Action Name="&quot;REM See if we should switch the playback mode on or off.&quot;" Sym="BASE-87900">
-         <ns0:Action Name="NewPlaybackIsActive = (GetLocal(&quot;_c_GetCurrentMediaFile&quot;) != null)" Sym="BASE-87901">
+         <ns0:Action Name="NewPlaybackIsActive = (_c_GetCurrentMediaFile != null)" Sym="BASE-87901">
           <ns0:Conditional Name="NewPlaybackIsActive != PlaybackIsActive" Sym="BASE-87902">
            <ns0:Action Name="PlaybackIsActive = NewPlaybackIsActive" Sym="BASE-87903">
             <ns0:Action Name="Fork()" Sym="BASE-87904">
@@ -42142,7 +42142,7 @@
   <ns0:Attribute Ref="10949" Name="NumberRows" />
   <ns0:Attribute Ref="10950" Name="NumberColumns" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Browser_-_Music">
-   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
+   <ns0:Action Name="_c_GetCurrentMediaFile = GetCurrentMediaFile()" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="677" Name="Browser - Photos" Sym="BASE-51625">
@@ -42325,7 +42325,7 @@
     <ns0:Attribute ID="8706" Name="CombineAllFolders" Sym="OPUS4A-187422">
      <ns0:Value>CombineAllFolders</ns0:Value>
     </ns0:Attribute>
-    <ns0:Action Name="CombineAllFolders = If(GetLocal(&quot;_c_GetProperty_photo_lib_folder_style_xCombined&quot;) == &quot;xCombined&quot;, true, false)" Sym="BASE-68090">
+    <ns0:Action Name="CombineAllFolders = If(_c_GetProperty_photo_lib_folder_style_xCombined == &quot;xCombined&quot;, true, false)" Sym="BASE-68090">
      <ns0:Conditional Name="CombineAllFolders || IsEmbeddedSystem()" Sym="BASE-68091">
       <ns0:Branch Name="else" Sym="BASE-68092">
        <ns0:Action Name="&quot;REM For separate folders, only the root folder is treated differently, so if CurFolder is not null, then treat the data as a combined folder.&quot;" Sym="BASE-68093" />
@@ -44260,7 +44260,7 @@
    </ns0:Conditional>
   </ns0:Panel>
   <ns0:Hook Name="BeforeMenuLoad" Sym="BASE-68746">
-   <ns0:Action Name="CombineAllFolders = If(GetLocal(&quot;_c_GetProperty_photo_lib_folder_style_xCombined&quot;) == &quot;xCombined&quot;, true, false)" Sym="BASE-68747">
+   <ns0:Action Name="CombineAllFolders = If(_c_GetProperty_photo_lib_folder_style_xCombined == &quot;xCombined&quot;, true, false)" Sym="BASE-68747">
     <ns0:Conditional Name="CombineAllFolders || IsEmbeddedSystem()" Sym="BASE-68748">
      <ns0:Branch Name="else" Sym="BASE-68749">
       <ns0:Action Name="CurFolder = If( CurrentPhotoBrowserFolder != null, CreateFilePath(CurrentPhotoBrowserFolder,&quot;&quot;), null )" Sym="BASE-68750" />
@@ -44311,7 +44311,7 @@
        <ns0:Action Name="AllPhotoFiles = GetMediaFiles(&quot;P&quot;)" Sym="OPUS4-106718">
         <ns0:Action ID="15594" Name="&quot;REM Sort entire photo list&quot;" Sym="BASE-67935">
          <ns0:Action Name="&quot;REM Always sort by filename, depending on combined vs separate style.&quot;" Sym="OPUS4A-186721">
-          <ns0:Action Name="CombineAllFolders = If(GetLocal(&quot;_c_GetProperty_photo_lib_folder_style_xCombined&quot;) == &quot;xCombined&quot;, true, false)" Sym="OPUS4A-186722">
+          <ns0:Action Name="CombineAllFolders = If(_c_GetProperty_photo_lib_folder_style_xCombined == &quot;xCombined&quot;, true, false)" Sym="OPUS4A-186722">
            <ns0:Conditional Name="CombineAllFolders || IsEmbeddedSystem()" Sym="OPUS4A-186723">
             <ns0:Branch Name="else" Sym="OPUS4A-186724">
              <ns0:Action Name="AllPhotoFiles = SortLexical(AllPhotoFiles, !GetProperty(&quot;photo_lib/sort_ascending&quot;, true), &quot;GetFileForSegment&quot;, 0)" Sym="BASE-67938">
@@ -44378,7 +44378,7 @@
         </ns0:Action>
        </ns0:Action>
       </ns0:Conditional>
-      <ns0:Action Name="CombineAllFolders = If(GetLocal(&quot;_c_GetProperty_photo_lib_folder_style_xCombined&quot;) == &quot;xCombined&quot;, true, false)" Sym="BASE-67949">
+      <ns0:Action Name="CombineAllFolders = If(_c_GetProperty_photo_lib_folder_style_xCombined == &quot;xCombined&quot;, true, false)" Sym="BASE-67949">
        <ns0:Action Name="DebugLog( &quot; ++++++++ Photo browser:  LastCurFolder = &quot; + LastCurFolder + &quot;; CurFolder = &quot; + CurFolder + &quot;; LastPhotoBrowserFolder = &quot; + LastPhotoBrowserFolder)" Sym="BASE-67950" />
        <ns0:Conditional Name="CombineAllFolders || IsEmbeddedSystem()" Sym="BASE-67951">
         <ns0:Branch Name="else" Sym="BASE-67952">
@@ -46188,11 +46188,11 @@
   <ns0:Attribute Ref="10949" Name="NumberRows" />
   <ns0:Attribute Ref="10950" Name="NumberColumns" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Browser_-_Photos">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_photo_lib_folder_style_xCombined&quot;, GetLocal(&quot;_c_GetProperty_photo_lib_folder_style_xCombined&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_photo_lib_folder_style_xCombined&quot;, GetProperty(&quot;photo_lib/folder_style&quot;,&quot;xCombined&quot;))" />
+   <ns0:Action Name="_c_GetProperty_photo_lib_folder_style_xCombined = _c_GetProperty_photo_lib_folder_style_xCombined" />
+   <ns0:Action Name="_c_GetProperty_photo_lib_folder_style_xCombined = GetProperty(&quot;photo_lib/folder_style&quot;,&quot;xCombined&quot;)" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Browser_Photos">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_photo_lib_folder_style_xCombined&quot;, GetLocal(&quot;_c_GetProperty_photo_lib_folder_style_xCombined&quot;))" />
+   <ns0:Action Name="_c_GetProperty_photo_lib_folder_style_xCombined = _c_GetProperty_photo_lib_folder_style_xCombined" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu ID="713" Name="Search - All Media Types" Sym="BASE-51587">
@@ -60419,9 +60419,9 @@
      <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
      <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
      <ns0:MouseTransparency>false</ns0:MouseTransparency>
-     <ns0:Action Name="WifiDirPath = &quot;/sys/class/net/&quot; + GetLocal(&quot;_c_GetProperty_WirelessInterface_ra0&quot;)" Sym="NFLX1-1596074">
+     <ns0:Action Name="WifiDirPath = &quot;/sys/class/net/&quot; + _c_GetProperty_WirelessInterface_ra0" Sym="NFLX1-1596074">
       <ns0:Conditional Name="IsDirectoryPath(WifiDirPath) || GetProperty(&quot;cheetah_pc_test_mode&quot;, null ) || GetProperty(&quot;UseWireless&quot;, false)" Sym="NFLX1-1596075">
-       <ns0:Action Name="ButtonText =If(IsDirectoryPath(&quot;/sys/class/net/&quot; + GetLocal(&quot;_c_GetProperty_WirelessInterface_ra0&quot;)) || GetProperty(&quot;cheetah_pc_test_mode&quot;, null ), &quot;Wireless&quot;, &quot;Wireless (not found)&quot;)" Sym="NFLX1-1597068">
+       <ns0:Action Name="ButtonText =If(IsDirectoryPath(&quot;/sys/class/net/&quot; + _c_GetProperty_WirelessInterface_ra0) || GetProperty(&quot;cheetah_pc_test_mode&quot;, null ), &quot;Wireless&quot;, &quot;Wireless (not found)&quot;)" Sym="NFLX1-1597068">
         <ns0:Item Name="Wireless" Sym="NFLX1-1596076">
          <ns0:Layout>Horizontal</ns0:Layout>
          <ns0:FixedWidth>1.0</ns0:FixedWidth>
@@ -60459,7 +60459,7 @@
      <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
      <ns0:MouseTransparency>false</ns0:MouseTransparency>
      <ns0:Conditional Name="GetProperty(&quot;UseWireless&quot;, false)" Sym="NFLX1-1596088">
-      <ns0:Conditional Name="java_lang_String_trim(GetFileAsString(&quot;/sys/class/net/&quot; + GetLocal(&quot;_c_GetProperty_WirelessInterface_ra0&quot;) + &quot;/operstate&quot;))" Sym="NFLX1-1596089">
+      <ns0:Conditional Name="java_lang_String_trim(GetFileAsString(&quot;/sys/class/net/&quot; + _c_GetProperty_WirelessInterface_ra0 + &quot;/operstate&quot;))" Sym="NFLX1-1596089">
        <ns0:Branch Name="&quot;up&quot;" Sym="NFLX1-1596090">
         <ns0:Action Name="&quot;SSID: &quot; + GetProperty(&quot;WirelessSSID&quot;, &quot;None&quot;) + &quot; (Connected)&quot;" Sym="NFLX1-1596091">
          <ns0:Text ID="21959" Name="SSID: narflex (Not associated)" Sym="NFLX1-1596094">
@@ -60505,7 +60505,7 @@
      <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
      <ns0:MouseTransparency>false</ns0:MouseTransparency>
      <ns0:Conditional Name="GetProperty(&quot;UseWireless&quot;, false)" Sym="NFLX1-1596097">
-      <ns0:Action Name="WifiDirPath = &quot;/sys/class/net/&quot; + GetLocal(&quot;_c_GetProperty_WirelessInterface_ra0&quot;)" Sym="NFLX1-1596098">
+      <ns0:Action Name="WifiDirPath = &quot;/sys/class/net/&quot; + _c_GetProperty_WirelessInterface_ra0" Sym="NFLX1-1596098">
        <ns0:Conditional Name="IsDirectoryPath(WifiDirPath) || GetProperty(&quot;cheetah_pc_test_mode&quot;, null )" Sym="NFLX1-1596099">
         <ns0:Item Name="Wifi Config" Sym="NFLX1-1596100">
          <ns0:Layout>Horizontal</ns0:Layout>
@@ -60535,7 +60535,7 @@
       <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
       <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
       <ns0:MouseTransparency>false</ns0:MouseTransparency>
-      <ns0:Conditional Name="java_lang_String_trim(GetFileAsString(&quot;/sys/class/net/&quot; + GetLocal(&quot;_c_GetProperty_WirelessInterface_ra0&quot;) + &quot;/operstate&quot;))" Sym="NFLX1-1596103">
+      <ns0:Conditional Name="java_lang_String_trim(GetFileAsString(&quot;/sys/class/net/&quot; + _c_GetProperty_WirelessInterface_ra0 + &quot;/operstate&quot;))" Sym="NFLX1-1596103">
        <ns0:Branch Name="&quot;up&quot;" Sym="NFLX1-1596104">
         <ns0:Action Name="SignalStrength = java_lang_String_trim(GetFileAsString(&quot;/sys/class/net/&quot; + GetProperty(&quot;WirelessInterface&quot;, &quot;ra0&quot;) + &quot;/wireless/link&quot;))" Sym="NFLX1-1596105">
          <ns0:Conditional Name="Size(SignalStrength) &gt; 0" Sym="NFLX1-1596106">
@@ -61617,11 +61617,11 @@
    </ns0:Action>
   </ns0:Listener>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Embedded_-_Network_C">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_WirelessInterface_ra0&quot;, GetLocal(&quot;_c_GetProperty_WirelessInterface_ra0&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_WirelessInterface_ra0&quot;, GetProperty(&quot;WirelessInterface&quot;, &quot;ra0&quot;))" />
+   <ns0:Action Name="_c_GetProperty_WirelessInterface_ra0 = _c_GetProperty_WirelessInterface_ra0" />
+   <ns0:Action Name="_c_GetProperty_WirelessInterface_ra0 = GetProperty(&quot;WirelessInterface&quot;, &quot;ra0&quot;)" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Embedded_Network_Config">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_WirelessInterface_ra0&quot;, GetLocal(&quot;_c_GetProperty_WirelessInterface_ra0&quot;))" />
+   <ns0:Action Name="_c_GetProperty_WirelessInterface_ra0 = _c_GetProperty_WirelessInterface_ra0" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu ID="825" Name="Embedded - Video Output Config Step 1" Sym="NFLX1-1595813">
@@ -87441,7 +87441,7 @@
      <ns0:Value>false</ns0:Value>
     </ns0:Attribute>
     <ns0:Action Name="&quot;REM Update when focus changes.&quot; + &quot;Focused&quot;" Sym="OPUS4A-119862">
-     <ns0:Action Name="ShowVideoPreview = ((!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))) || (&quot;XAlways&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)))))" Sym="OPUS4A-122405">
+     <ns0:Action Name="ShowVideoPreview = ((!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == _c_GetProperty_display_video_on_menus_XIf_Active)) || (&quot;XAlways&quot; == _c_GetProperty_display_video_on_menus_XIf_Active))))" Sym="OPUS4A-122405">
       <ns0:Panel Name="Info Panel" Sym="OPUS4A-122406">
        <ns0:Layout>Vertical</ns0:Layout>
        <ns0:FixedWidth>=If(ShowVideoPreview, 0.74, 1.0)</ns0:FixedWidth>
@@ -87620,7 +87620,7 @@
    <ns0:Value>"System Messages"</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-System_Messages">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
+   <ns0:Action Name="_c_GetProperty_display_video_on_menus_XIf_Active = GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="983" Name="Embedded - Firmware Update" Sym="NFLX1-1595816">
@@ -104508,7 +104508,7 @@
      </ns0:Action>
     </ns0:Item>
     <ns0:Action Name="&quot;REM Add options available only if there are Favorites.&quot;" Sym="OPUS4A-192849">
-     <ns0:Action Name="FavoriteList = GetLocal(&quot;_c_GetFavorites&quot;)" Sym="OPUS4A-192852">
+     <ns0:Action Name="FavoriteList = _c_GetFavorites" Sym="OPUS4A-192852">
       <ns0:Conditional Name="Size(FavoriteList) &gt; 1" Sym="OPUS4A-192853">
        <ns0:Item Name="Sort Method" Sym="OPUS4-89407">
         <ns0:Action Name="&quot;REM Display the sorting style&quot;" Sym="OPUS4-89415">
@@ -104753,7 +104753,7 @@
      <ns0:Value>null</ns0:Value>
     </ns0:Attribute>
     <ns0:Action Name="&quot;REM Check to see if there are Favorites to be displayed.&quot;" Sym="OPUS4-89428">
-     <ns0:Conditional Name="Size(GetLocal(&quot;_c_GetFavorites&quot;)) &gt; 0" Sym="BASE-64880">
+     <ns0:Conditional Name="Size(_c_GetFavorites) &gt; 0" Sym="BASE-64880">
       <ns0:Branch Name="else" Sym="BASE-64881">
        <ns0:Action Name="&quot;No Favorites have been created.&quot;" Sym="BASE-64882">
         <ns0:Text Name="" Sym="BASE-64883">
@@ -105116,11 +105116,11 @@
    <ns0:Value>"Favorites"</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Favorites_Manager">
-   <ns0:Action Name="SetLocal(&quot;_c_GetFavorites&quot;, GetLocal(&quot;_c_GetFavorites&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetFavorites&quot;, GetFavorites())" />
+   <ns0:Action Name="_c_GetFavorites = _c_GetFavorites" />
+   <ns0:Action Name="_c_GetFavorites = GetFavorites()" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Favorites_Manager">
-   <ns0:Action Name="SetLocal(&quot;_c_GetFavorites&quot;, GetLocal(&quot;_c_GetFavorites&quot;))" />
+   <ns0:Action Name="_c_GetFavorites = _c_GetFavorites" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu ID="1333" Name="Timed Recording Creation" Sym="BASE-51606">
@@ -119178,14 +119178,14 @@
      <ns0:Conditional Name="true" Sym="NFLX1-1595187">
       <ns0:Action Name="&quot;REM Check for autoconnect to SageTV server, if not a client.&quot;" Sym="NFLX1-1595188">
        <ns0:Conditional Name="!IsClient()" Sym="OPUS4A-213206">
-        <ns0:Conditional Name="GetProperty(&quot;AutoConnectToServer&quot;, false) &amp;&amp; (Size(GetLocal(&quot;_c_GetProperty_MyServer&quot;)) &gt; 0)" Sym="NFLX1-1595189">
+        <ns0:Conditional Name="GetProperty(&quot;AutoConnectToServer&quot;, false) &amp;&amp; (Size(_c_GetProperty_MyServer) &gt; 0)" Sym="NFLX1-1595189">
          <ns0:Action Name="PercentDone = 20.0" Sym="NFLX1-1595190">
           <ns0:Action Ref="43247" Name="&quot;REM Update Progress b..." />
          </ns0:Action>
          <ns0:Action ID="43596" Name="&quot;REM Go through the server list to make sure our server is up&quot;" Sym="NFLX1-1595191">
           <ns0:Action Name="i = 0" Sym="NFLX1-1595192">
            <ns0:Conditional ID="43598" Name="i &lt; Size(Servers)" Sym="NFLX1-1595193">
-            <ns0:Conditional Name="StringStartsWith(GetElement(Servers, i), GetLocal(&quot;_c_GetProperty_MyServer&quot;) + &quot;;&quot;)" Sym="NFLX1-1595194">
+            <ns0:Conditional Name="StringStartsWith(GetElement(Servers, i), _c_GetProperty_MyServer + &quot;;&quot;)" Sym="NFLX1-1595194">
              <ns0:Branch Name="true" Sym="NFLX1-1595195">
               <ns0:Action Name="&quot;REM Show dialog giving user chance to cancel auto-connect.&quot;" Sym="NFLX1-1595196">
                <ns0:OptionsMenu Name="AutoConnectTimeout" Sym="NFLX1-1595197">
@@ -120004,7 +120004,7 @@
    <ns0:Value>"SageTV HD Media Center"</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Embedded_Startup">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_MyServer&quot;, GetProperty(&quot;MyServer&quot;, &quot;&quot;))" />
+   <ns0:Action Name="_c_GetProperty_MyServer = GetProperty(&quot;MyServer&quot;, &quot;&quot;)" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="2506" Name="Configuration Wizard - RAID Intro" Sym="BASE-45437">
@@ -122097,7 +122097,7 @@
    <ns0:ListenerEvent>Play</ns0:ListenerEvent>
    <ns0:Action Name="CurSong = MediaFile" Sym="BASE-76598">
     <ns0:Action ID="11486" Name="&quot;REM Handle Play command for this song.&quot;" Sym="BASE-65678">
-     <ns0:Conditional Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-65679">
+     <ns0:Conditional Name="_c_GetCurrentMediaFile" Sym="BASE-65679">
       <ns0:Branch Name="null" Sym="BASE-65680">
        <ns0:Action Ref="16922" Name="&quot;REM Look into playing..." />
       </ns0:Branch>
@@ -122119,7 +122119,7 @@
    <ns0:ListenerEvent>Play/Pause</ns0:ListenerEvent>
    <ns0:Action Name="CurSong = MediaFile" Sym="BASE-76600">
     <ns0:Action ID="11488" Name="&quot;REM Handle Play/Pause command for this song.&quot;" Sym="BASE-65687">
-     <ns0:Conditional Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-65688">
+     <ns0:Conditional Name="_c_GetCurrentMediaFile" Sym="BASE-65688">
       <ns0:Branch Name="null" Sym="BASE-65689">
        <ns0:Action ID="16922" Name="&quot;REM Look into playing the song&quot;" Sym="BASE-64355">
         <ns0:Action Name="CanAddtoNowPlaying = false" Sym="BASE-64356">
@@ -122192,7 +122192,7 @@
   <ns0:Attribute Ref="44631" Name="InfoThumbSource" />
   <ns0:Attribute Ref="44632" Name="InfoThumbType" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Detailed_Info_-_Musi">
-   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
+   <ns0:Action Name="_c_GetCurrentMediaFile = GetCurrentMediaFile()" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="4118" Name="TV Library" Sym="BASE-51654">
@@ -124838,9 +124838,9 @@
    <ns0:Attribute Name="PSServers" Sym="BASE-71734">
     <ns0:Value>DataUnion()</ns0:Value>
    </ns0:Attribute>
-   <ns0:Action Name="RecentServers = java_lang_String_split(GetLocal(&quot;_c_GetProperty_placeshifter_recent_servers&quot;), &quot;;&quot;)" Sym="BASE-71735">
+   <ns0:Action Name="RecentServers = java_lang_String_split(_c_GetProperty_placeshifter_recent_servers, &quot;;&quot;)" Sym="BASE-71735">
     <ns0:Action Name="PSServers = DataUnion(RecentServers)" Sym="BASE-71736">
-     <ns0:Conditional Name="Size(RecentServers) &gt; 0 &amp;&amp; Size(GetLocal(&quot;_c_GetProperty_placeshifter_recent_servers&quot;)) &gt; 0" Sym="BASE-71737">
+     <ns0:Conditional Name="Size(RecentServers) &gt; 0 &amp;&amp; Size(_c_GetProperty_placeshifter_recent_servers) &gt; 0" Sym="BASE-71737">
       <ns0:Branch Name="true" Sym="BASE-71738">
        <ns0:Action Name="PSOptions = DataUnion(&quot;xConnectLocID&quot;, &quot;xConnectHostname&quot;, RecentServers, &quot;xBack&quot;)" Sym="BASE-71739">
         <ns0:Table Ref="45539" Name="Server List Table" />
@@ -125144,11 +125144,11 @@
   </ns0:Attribute>
   <ns0:Attribute Ref="7165" Name="CurMenuBG" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Placeshifter">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_placeshifter_recent_servers&quot;, GetLocal(&quot;_c_GetProperty_placeshifter_recent_servers&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_placeshifter_recent_servers&quot;, GetProperty(&quot;placeshifter/recent_servers&quot;, &quot;&quot;))" />
+   <ns0:Action Name="_c_GetProperty_placeshifter_recent_servers = _c_GetProperty_placeshifter_recent_servers" />
+   <ns0:Action Name="_c_GetProperty_placeshifter_recent_servers = GetProperty(&quot;placeshifter/recent_servers&quot;, &quot;&quot;)" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Placeshifter">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_placeshifter_recent_servers&quot;, GetLocal(&quot;_c_GetProperty_placeshifter_recent_servers&quot;))" />
+   <ns0:Action Name="_c_GetProperty_placeshifter_recent_servers = _c_GetProperty_placeshifter_recent_servers" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu ID="7326" Name="Embedded - SageTV Servers: Edit Server List" Sym="NFLX1-255635">
@@ -126644,7 +126644,7 @@
       </ns0:Action>
      </ns0:Action>
      <ns0:Action Name="&quot;REM Display Description&quot;" Sym="OPUS4A-183604">
-      <ns0:Conditional Name="(Size(GetShowDescription(Airing)) &gt; 0) || ((Size(GetLocal(&quot;_c_GetShowEpisode_Airing&quot;)) &gt; 0) &amp;&amp; (GetShowTitle(Airing) != GetLocal(&quot;_c_GetShowEpisode_Airing&quot;)))" Sym="OPUS4A-183605">
+      <ns0:Conditional Name="(Size(GetShowDescription(Airing)) &gt; 0) || ((Size(_c_GetShowEpisode_Airing) &gt; 0) &amp;&amp; (GetShowTitle(Airing) != _c_GetShowEpisode_Airing))" Sym="OPUS4A-183605">
        <ns0:Panel Name="Padded display area" Sym="OPUS4A-183606">
         <ns0:Insets>0.01,0.0,0.02,0</ns0:Insets>
         <ns0:WrapHNav>false</ns0:WrapHNav>
@@ -126654,7 +126654,7 @@
         <ns0:MouseTransparency>false</ns0:MouseTransparency>
         <ns0:Action Name="Desc = GetShowDescription(Airing)" Sym="OPUS4A-183610">
          <ns0:Action Name="MediaTitle = GetShowTitle(Airing)" Sym="OPUS4A-217303">
-          <ns0:Action Name="MediaEpisode = GetLocal(&quot;_c_GetShowEpisode_Airing&quot;)" Sym="OPUS4A-217304">
+          <ns0:Action Name="MediaEpisode = _c_GetShowEpisode_Airing" Sym="OPUS4A-217304">
            <ns0:Action Name="EpisodeText = If( (Size(MediaEpisode) &gt; 0) &amp;&amp; (MediaTitle != MediaEpisode), MediaEpisode, &quot;&quot; )" Sym="OPUS4A-217305">
             <ns0:Action Name="ConnectorText = If( (Size(EpisodeText) &gt; 0) &amp;&amp; (Size(Desc) &gt; 0), &quot; - &quot;, &quot;&quot; )" Sym="OPUS4A-217306">
              <ns0:Action Name="If( Size(EpisodeText) &gt; 0, &quot;\&quot;&quot; + EpisodeText + &quot;\&quot;&quot;, &quot;&quot; ) + ConnectorText + Desc" Sym="OPUS4A-217307">
@@ -126936,11 +126936,11 @@
   <ns0:Listener Ref="7370" Name="Left-Back" />
   <ns0:Listener Name="Play - Start playing file" Sym="BASE-57913">
    <ns0:ListenerEvent>Play</ns0:ListenerEvent>
-   <ns0:Conditional Ref="46245" Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" />
+   <ns0:Conditional Ref="46245" Name="_c_GetCurrentMediaFile" />
   </ns0:Listener>
   <ns0:Listener Name="Play/Pause - Start playing file" Sym="BASE-57917">
    <ns0:ListenerEvent>Play/Pause</ns0:ListenerEvent>
-   <ns0:Conditional ID="46245" Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-57914">
+   <ns0:Conditional ID="46245" Name="_c_GetCurrentMediaFile" Sym="BASE-57914">
     <ns0:Branch Name="else" Sym="BASE-57915">
      <ns0:Action Name="AltPlayAttemptStyle = &quot;xWatchWithOSD&quot;" Sym="OPUS4-107804">
       <ns0:Conditional ID="33642" Name="GetCurrentMediaFile() == GetMediaFileForAiring(Airing)" Sym="BASE-51227">
@@ -127228,8 +127228,8 @@
    <ns0:Value>PeopleWithPicsList</ns0:Value>
   </ns0:Attribute>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Detailed_Info_-_Vide">
-   <ns0:Action Name="SetLocal(&quot;_c_GetShowEpisode_Airing&quot;, GetShowEpisode(Airing))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
+   <ns0:Action Name="_c_GetShowEpisode_Airing = GetShowEpisode(Airing)" />
+   <ns0:Action Name="_c_GetCurrentMediaFile = GetCurrentMediaFile()" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="11196" Name="Detailed Info - Recording" Sym="BASE-57832">
@@ -127339,7 +127339,7 @@
       </ns0:Panel>
      </ns0:Action>
      <ns0:Action ID="46400" Name="&quot;REM Display Episode Title + Description&quot;" Sym="OPUS4A-183597">
-      <ns0:Conditional Name="(Size(GetShowDescription(Airing)) &gt; 0) || (Size(GetLocal(&quot;_c_GetShowEpisode_Airing&quot;)) &gt; 0)" Sym="OPUS4A-176037">
+      <ns0:Conditional Name="(Size(GetShowDescription(Airing)) &gt; 0) || (Size(_c_GetShowEpisode_Airing) &gt; 0)" Sym="OPUS4A-176037">
        <ns0:Panel Name="Padded display area" Sym="OPUS4A-176292">
         <ns0:Insets>0.01,0.0,0.02,0</ns0:Insets>
         <ns0:WrapHNav>false</ns0:WrapHNav>
@@ -127348,7 +127348,7 @@
         <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
         <ns0:MouseTransparency>false</ns0:MouseTransparency>
         <ns0:Action Name="Desc = GetShowDescription(Airing)" Sym="OPUS4A-176039">
-         <ns0:Action Name="EpisodeText = GetLocal(&quot;_c_GetShowEpisode_Airing&quot;)" Sym="OPUS4A-176276">
+         <ns0:Action Name="EpisodeText = _c_GetShowEpisode_Airing" Sym="OPUS4A-176276">
           <ns0:Action Name="ConnectorText = If( (Size(EpisodeText) &gt; 0) &amp;&amp; (Size(Desc) &gt; 0), &quot; - &quot;, &quot;&quot; )" Sym="OPUS4A-183601">
            <ns0:Action Name="If( Size(EpisodeText) &gt; 0, &quot;\&quot;&quot; + EpisodeText + &quot;\&quot;&quot;, &quot;&quot; ) + ConnectorText + Desc" Sym="OPUS4A-176277">
             <ns0:Text Name="" Sym="OPUS4A-176040">
@@ -132877,11 +132877,11 @@
   <ns0:Listener Ref="7370" Name="Left-Back" />
   <ns0:Listener Name="Play - Start playing file" Sym="BASE-57825">
    <ns0:ListenerEvent>Play</ns0:ListenerEvent>
-   <ns0:Conditional Ref="48314" Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" />
+   <ns0:Conditional Ref="48314" Name="_c_GetCurrentMediaFile" />
   </ns0:Listener>
   <ns0:Listener Name="Play/Pause - Start playing file" Sym="BASE-57829">
    <ns0:ListenerEvent>Play/Pause</ns0:ListenerEvent>
-   <ns0:Conditional ID="48314" Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-57826">
+   <ns0:Conditional ID="48314" Name="_c_GetCurrentMediaFile" Sym="BASE-57826">
     <ns0:Branch Name="else" Sym="BASE-57827">
      <ns0:Action Name="AltPlayAttemptStyle = &quot;xWatchWithOSD&quot;" Sym="OPUS4-107814">
       <ns0:Conditional Ref="33642" Name="GetCurrentMediaFile() ..." />
@@ -133168,8 +133168,8 @@
   </ns0:Attribute>
   <ns0:Attribute Ref="46363" Name="PeopleWithPicsList" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Detailed_Info_-_Reco">
-   <ns0:Action Name="SetLocal(&quot;_c_GetShowEpisode_Airing&quot;, GetShowEpisode(Airing))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
+   <ns0:Action Name="_c_GetShowEpisode_Airing = GetShowEpisode(Airing)" />
+   <ns0:Action Name="_c_GetCurrentMediaFile = GetCurrentMediaFile()" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="11665" Name="Browser - Music, By Song Set" Sym="BASE-53337">
@@ -134671,7 +134671,7 @@
   </ns0:Listener>
   <ns0:Listener ID="14843" Name="" Sym="BASE-67656">
    <ns0:ListenerEvent>Custom5</ns0:ListenerEvent>
-   <ns0:Conditional Name="GetLocal(&quot;_c_GetProperty_music_custom4_5_function_xTrack&quot;)" Sym="BASE-67659">
+   <ns0:Conditional Name="_c_GetProperty_music_custom4_5_function_xTrack" Sym="BASE-67659">
     <ns0:Branch Ref="48879" Name="&quot;xTrack&quot;" />
     <ns0:Branch Name="&quot;xStyle&quot;" Sym="BASE-67662">
      <ns0:Action Ref="48881" Name="StyleShiftDifference =..." />
@@ -134680,7 +134680,7 @@
   </ns0:Listener>
   <ns0:Listener ID="14842" Name="" Sym="BASE-67647">
    <ns0:ListenerEvent>Custom4</ns0:ListenerEvent>
-   <ns0:Conditional Name="GetLocal(&quot;_c_GetProperty_music_custom4_5_function_xTrack&quot;)" Sym="BASE-67650">
+   <ns0:Conditional Name="_c_GetProperty_music_custom4_5_function_xTrack" Sym="BASE-67650">
     <ns0:Branch Ref="48883" Name="&quot;xTrack&quot;" />
     <ns0:Branch Name="&quot;xStyle&quot;" Sym="BASE-67653">
      <ns0:Action Ref="48885" Name="StyleShiftDifference = 1" />
@@ -134847,7 +134847,7 @@
   <ns0:Attribute Ref="10949" Name="NumberRows" />
   <ns0:Attribute Ref="10950" Name="NumberColumns" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Browser_-_Music,_By_">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_music_custom4_5_function_xTrack&quot;, GetProperty(&quot;music/custom4_5_function&quot;, &quot;xTrack&quot;))" />
+   <ns0:Action Name="_c_GetProperty_music_custom4_5_function_xTrack = GetProperty(&quot;music/custom4_5_function&quot;, &quot;xTrack&quot;)" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="12449" Name="Browser - Music, Playlist Details" Sym="BASE-63998">
@@ -136554,7 +136554,7 @@
   </ns0:Listener>
   <ns0:Listener Name="" Sym="BASE-80932">
    <ns0:ListenerEvent>Custom4</ns0:ListenerEvent>
-   <ns0:Conditional Name="GetLocal(&quot;_c_GetProperty_music_custom4_5_function_xTrack&quot;)" Sym="BASE-80935">
+   <ns0:Conditional Name="_c_GetProperty_music_custom4_5_function_xTrack" Sym="BASE-80935">
     <ns0:Branch ID="48883" Name="&quot;xTrack&quot;" Sym="BASE-67651">
      <ns0:Action Name="ChannelDown()" Sym="BASE-67652" />
     </ns0:Branch>
@@ -136562,7 +136562,7 @@
   </ns0:Listener>
   <ns0:Listener Name="" Sym="BASE-80938">
    <ns0:ListenerEvent>Custom5</ns0:ListenerEvent>
-   <ns0:Conditional Name="GetLocal(&quot;_c_GetProperty_music_custom4_5_function_xTrack&quot;)" Sym="BASE-80941">
+   <ns0:Conditional Name="_c_GetProperty_music_custom4_5_function_xTrack" Sym="BASE-80941">
     <ns0:Branch ID="48879" Name="&quot;xTrack&quot;" Sym="BASE-67660">
      <ns0:Action Name="ChannelUp()" Sym="BASE-67661" />
     </ns0:Branch>
@@ -136570,7 +136570,7 @@
   </ns0:Listener>
   <ns0:Attribute Ref="2927" Name="MenuIsActive" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Browser_-_Music,_Pla">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_music_custom4_5_function_xTrack&quot;, GetProperty(&quot;music/custom4_5_function&quot;, &quot;xTrack&quot;))" />
+   <ns0:Action Name="_c_GetProperty_music_custom4_5_function_xTrack = GetProperty(&quot;music/custom4_5_function&quot;, &quot;xTrack&quot;)" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="16572" Name="SearchResults" Sym="BASE-60566">
@@ -140585,7 +140585,7 @@
            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
            <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
            <ns0:Panel Name="Prev" Sym="BASE-81207">
-            <ns0:BackgroundAlpha>=If((GetLocal("_c_GetProperty_slideshow_when_finished_do_xGoToL") == "xRestart") || (ImageNumber &gt; 0), 255, 255/3)</ns0:BackgroundAlpha>
+            <ns0:BackgroundAlpha>=If((GetProperty("slideshow_when_finished_do", "xGoToLib") == "xRestart") || (ImageNumber &gt; 0), 255, 255/3)</ns0:BackgroundAlpha>
             <ns0:Layout>Horizontal</ns0:Layout>
             <ns0:PadX>0.006</ns0:PadX>
             <ns0:WrapHNav>false</ns0:WrapHNav>
@@ -140627,7 +140627,7 @@
             </ns0:Conditional>
            </ns0:Panel>
            <ns0:Panel Name="Next" Sym="BASE-81219">
-            <ns0:BackgroundAlpha>=If((GetLocal("_c_GetProperty_slideshow_when_finished_do_xGoToL") == "xRestart") || (ImageNumber &lt; Size(SlideshowImages)-1), 255, 255/3)</ns0:BackgroundAlpha>
+            <ns0:BackgroundAlpha>=If((GetProperty("slideshow_when_finished_do", "xGoToLib") == "xRestart") || (ImageNumber &lt; Size(SlideshowImages)-1), 255, 255/3)</ns0:BackgroundAlpha>
             <ns0:Layout>Horizontal</ns0:Layout>
             <ns0:PadX>0.006</ns0:PadX>
             <ns0:WrapHNav>false</ns0:WrapHNav>
@@ -146557,7 +146557,7 @@
  </ns0:Menu>
  <ns0:Menu ID="22438" Name="Theme Header &amp; Footer only with Content BG" Sym="OPUS4A-176700">
   <ns0:Action ID="52445" Name="&quot;REM Draw the menu's background: either video or image.&quot;" Sym="OPUS4A-174870">
-   <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XBackground&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))) || (&quot;XAlways&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)))" Sym="OPUS4A-174871">
+   <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XBackground&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == _c_GetProperty_display_video_on_menus_XIf_Active)) || (&quot;XAlways&quot; == _c_GetProperty_display_video_on_menus_XIf_Active))" Sym="OPUS4A-174871">
     <ns0:Branch Name="true" Sym="OPUS4A-174872">
      <ns0:Conditional Name="(InDigitalChannelScan != true) &amp;&amp; (SkipBGVideoPreview != true) &amp;&amp; (IsDownloadingVideo != true)" Sym="OPUS4A-174874">
       <ns0:Branch Name="true" Sym="OPUS4A-174875">
@@ -147937,7 +147937,7 @@
   <ns0:Attribute Ref="33526" Name="TableUIComp" />
   <ns0:Attribute Ref="33527" Name="TableUIComp2" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Theme_Header_&amp;_Foote">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
+   <ns0:Action Name="_c_GetProperty_display_video_on_menus_XIf_Active = GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Theme_Header_Footer_only">
   </ns0:Hook>
@@ -153347,7 +153347,7 @@
       <ns0:WrapHNav>false</ns0:WrapHNav>
       <ns0:WrapVNav>false</ns0:WrapVNav>
       <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
-      <ns0:Action Name="&quot;Wireless SSID: &quot; + If(GetLocal(&quot;_c_GetServerProperty_linux_network_ssid&quot;)==&quot;&quot;,&quot;Not Set&quot;,GetLocal(&quot;_c_GetServerProperty_linux_network_ssid&quot;)) " Sym="BASE-76909">
+      <ns0:Action Name="&quot;Wireless SSID: &quot; + If(_c_GetServerProperty_linux_network_ssid==&quot;&quot;,&quot;Not Set&quot;,_c_GetServerProperty_linux_network_ssid) " Sym="BASE-76909">
        <ns0:Text Ref="54300" Name="left text" />
       </ns0:Action>
       <ns0:Action Name="&quot;Encryption: &quot; + GetServerProperty(&quot;linux/network/encryption&quot;, &quot;WPA&quot;)" Sym="BASE-76910">
@@ -153361,10 +153361,10 @@
       <ns0:WrapHNav>false</ns0:WrapHNav>
       <ns0:WrapVNav>false</ns0:WrapVNav>
       <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
-      <ns0:Action Name="&quot;Netmask: &quot; + If(GetLocal(&quot;_c_GetServerProperty_linux_network_netmask_255_2&quot;)==&quot;&quot;,&quot;None&quot;,GetLocal(&quot;_c_GetServerProperty_linux_network_netmask_255_2&quot;))" Sym="BASE-76913">
+      <ns0:Action Name="&quot;Netmask: &quot; + If(_c_GetServerProperty_linux_network_netmask_255_2==&quot;&quot;,&quot;None&quot;,_c_GetServerProperty_linux_network_netmask_255_2)" Sym="BASE-76913">
        <ns0:Text Ref="54300" Name="left text" />
       </ns0:Action>
-      <ns0:Action Name="&quot;Gateway address: &quot; + If(GetLocal(&quot;_c_GetServerProperty_linux_network_gateway&quot;)==&quot;&quot;,&quot;Not Set&quot;,GetLocal(&quot;_c_GetServerProperty_linux_network_gateway&quot;)) " Sym="BASE-76914">
+      <ns0:Action Name="&quot;Gateway address: &quot; + If(_c_GetServerProperty_linux_network_gateway==&quot;&quot;,&quot;Not Set&quot;,_c_GetServerProperty_linux_network_gateway) " Sym="BASE-76914">
        <ns0:Text Ref="54302" Name="right text" />
       </ns0:Action>
      </ns0:Panel>
@@ -153373,7 +153373,7 @@
       <ns0:WrapHNav>false</ns0:WrapHNav>
       <ns0:WrapVNav>false</ns0:WrapVNav>
       <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
-      <ns0:Action Name="&quot;Primary DNS: &quot; + If(GetLocal(&quot;_c_GetServerProperty_linux_network_primary_dns&quot;)==&quot;&quot;,&quot;Not Set&quot;,GetLocal(&quot;_c_GetServerProperty_linux_network_primary_dns&quot;)) " Sym="BASE-76916">
+      <ns0:Action Name="&quot;Primary DNS: &quot; + If(_c_GetServerProperty_linux_network_primary_dns==&quot;&quot;,&quot;Not Set&quot;,_c_GetServerProperty_linux_network_primary_dns) " Sym="BASE-76916">
        <ns0:Text ID="54300" Name="left text" Sym="BASE-76901">
         <ns0:AnchorX>0.0</ns0:AnchorX>
         <ns0:FixedWidth>0.5</ns0:FixedWidth>
@@ -153385,7 +153385,7 @@
         <ns0:IgnoreThemeProps>true</ns0:IgnoreThemeProps>
        </ns0:Text>
       </ns0:Action>
-      <ns0:Action Name="&quot;Secondary DNS: &quot; + If(GetLocal(&quot;_c_GetServerProperty_linux_network_secondary_dns&quot;)==&quot;&quot;,&quot;Not Set&quot;,GetLocal(&quot;_c_GetServerProperty_linux_network_secondary_dns&quot;)) " Sym="BASE-76917">
+      <ns0:Action Name="&quot;Secondary DNS: &quot; + If(_c_GetServerProperty_linux_network_secondary_dns==&quot;&quot;,&quot;Not Set&quot;,_c_GetServerProperty_linux_network_secondary_dns) " Sym="BASE-76917">
        <ns0:Text ID="54302" Name="right text" Sym="BASE-76903">
         <ns0:AnchorX>0.5</ns0:AnchorX>
         <ns0:AnchorPointX>0</ns0:AnchorPointX>
@@ -153858,23 +153858,23 @@
    <ns0:Action Name="SetFocusForVariable(&quot;OptionSetting&quot;, &quot;XContinue&quot;)" Sym="BASE-77063" />
   </ns0:Hook>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Configuration_Wizard">
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_ssid&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_ssid&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_netmask_255_2&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_netmask_255_2&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_gateway&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_gateway&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_primary_dns&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_primary_dns&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_secondary_dns&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_secondary_dns&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_ssid&quot;, GetServerProperty(&quot;linux/network/ssid&quot;,&quot;&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_netmask_255_2&quot;, GetServerProperty(&quot;linux/network/netmask&quot;,&quot;255.255.255.0&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_gateway&quot;, GetServerProperty(&quot;linux/network/gateway&quot;,&quot;&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_primary_dns&quot;, GetServerProperty(&quot;linux/network/primary_dns&quot;,&quot;&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_secondary_dns&quot;, GetServerProperty(&quot;linux/network/secondary_dns&quot;,&quot;&quot;))" />
+   <ns0:Action Name="_c_GetServerProperty_linux_network_ssid = _c_GetServerProperty_linux_network_ssid" />
+   <ns0:Action Name="_c_GetServerProperty_linux_network_netmask_255_2 = _c_GetServerProperty_linux_network_netmask_255_2" />
+   <ns0:Action Name="_c_GetServerProperty_linux_network_gateway = _c_GetServerProperty_linux_network_gateway" />
+   <ns0:Action Name="_c_GetServerProperty_linux_network_primary_dns = _c_GetServerProperty_linux_network_primary_dns" />
+   <ns0:Action Name="_c_GetServerProperty_linux_network_secondary_dns = _c_GetServerProperty_linux_network_secondary_dns" />
+   <ns0:Action Name="_c_GetServerProperty_linux_network_ssid = GetServerProperty(&quot;linux/network/ssid&quot;,&quot;&quot;)" />
+   <ns0:Action Name="_c_GetServerProperty_linux_network_netmask_255_2 = GetServerProperty(&quot;linux/network/netmask&quot;,&quot;255.255.255.0&quot;)" />
+   <ns0:Action Name="_c_GetServerProperty_linux_network_gateway = GetServerProperty(&quot;linux/network/gateway&quot;,&quot;&quot;)" />
+   <ns0:Action Name="_c_GetServerProperty_linux_network_primary_dns = GetServerProperty(&quot;linux/network/primary_dns&quot;,&quot;&quot;)" />
+   <ns0:Action Name="_c_GetServerProperty_linux_network_secondary_dns = GetServerProperty(&quot;linux/network/secondary_dns&quot;,&quot;&quot;)" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Configuration_Wizard_Net">
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_ssid&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_ssid&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_netmask_255_2&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_netmask_255_2&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_gateway&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_gateway&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_primary_dns&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_primary_dns&quot;))" />
-   <ns0:Action Name="SetLocal(&quot;_c_GetServerProperty_linux_network_secondary_dns&quot;, GetLocal(&quot;_c_GetServerProperty_linux_network_secondary_dns&quot;))" />
+   <ns0:Action Name="_c_GetServerProperty_linux_network_ssid = _c_GetServerProperty_linux_network_ssid" />
+   <ns0:Action Name="_c_GetServerProperty_linux_network_netmask_255_2 = _c_GetServerProperty_linux_network_netmask_255_2" />
+   <ns0:Action Name="_c_GetServerProperty_linux_network_gateway = _c_GetServerProperty_linux_network_gateway" />
+   <ns0:Action Name="_c_GetServerProperty_linux_network_primary_dns = _c_GetServerProperty_linux_network_primary_dns" />
+   <ns0:Action Name="_c_GetServerProperty_linux_network_secondary_dns = _c_GetServerProperty_linux_network_secondary_dns" />
   </ns0:Hook>
  </ns0:Menu>
  <ns0:Menu ID="29812" Name="Favorite Defaults" Sym="BASE-75716">
@@ -169565,11 +169565,11 @@
   <ns0:Listener Ref="7370" Name="Left-Back" />
   <ns0:Listener Name="Play - Start playing file" Sym="BASE-57757">
    <ns0:ListenerEvent>Play</ns0:ListenerEvent>
-   <ns0:Conditional Ref="59490" Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" />
+   <ns0:Conditional Ref="59490" Name="_c_GetCurrentMediaFile" />
   </ns0:Listener>
   <ns0:Listener Name="Play/Pause - Start playing file" Sym="BASE-57765">
    <ns0:ListenerEvent>Play/Pause</ns0:ListenerEvent>
-   <ns0:Conditional ID="59490" Name="GetLocal(&quot;_c_GetCurrentMediaFile&quot;)" Sym="BASE-57758">
+   <ns0:Conditional ID="59490" Name="_c_GetCurrentMediaFile" Sym="BASE-57758">
     <ns0:Branch Name="else" Sym="BASE-57759">
      <ns0:Action Name="AltPlayAttemptStyle = &quot;xWatchFromDetailedAiringInfo&quot;" Sym="OPUS4-107815">
       <ns0:Conditional Ref="33642" Name="GetCurrentMediaFile() ..." />
@@ -169621,7 +169621,7 @@
   <ns0:Attribute Ref="44632" Name="InfoThumbType" />
   <ns0:Attribute Ref="46363" Name="PeopleWithPicsList" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Detailed_Info_-_Airi">
-   <ns0:Action Name="SetLocal(&quot;_c_GetCurrentMediaFile&quot;, GetCurrentMediaFile())" />
+   <ns0:Action Name="_c_GetCurrentMediaFile = GetCurrentMediaFile()" />
   </ns0:Action>
  </ns0:Menu>
  <ns0:Menu ID="51935" Name="Configuration Wizard - Parental Controls Usage" Sym="BASE-83238">
@@ -180601,7 +180601,7 @@
   <ns0:Theme Ref="22437" Name="ConfigurationWizardMen..." />
   <ns0:Conditional Name="LinksToJumpToNextConfigWizMenu" Sym="BASE-78197">
    <ns0:Action ID="63266" Name="JumpToTheNextConfigWizMenu" Sym="BASE-78176">
-    <ns0:Conditional Name="GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)" Sym="BASE-78177">
+    <ns0:Conditional Name="_c_GetProperty_display_video_on_menus_XIf_Active" Sym="BASE-78177">
      <ns0:Branch Name="&quot;XNever&quot;" Sym="BASE-78178">
       <ns0:Menu Ref="63285" Name="Configuration Wizard -..." />
      </ns0:Branch>
@@ -180612,7 +180612,7 @@
    </ns0:Action>
   </ns0:Conditional>
   <ns0:Hook Name="MenuNeedsDefaultFocus" Sym="BASE-78198">
-   <ns0:Conditional Name="GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)" Sym="BASE-78199">
+   <ns0:Conditional Name="_c_GetProperty_display_video_on_menus_XIf_Active" Sym="BASE-78199">
     <ns0:Branch Name="&quot;XNever&quot;" Sym="BASE-78200">
      <ns0:Action Name="SetFocusForVariable(&quot;OptionSetting&quot;, &quot;XNever&quot;)" Sym="BASE-78201" />
     </ns0:Branch>
@@ -180625,7 +180625,7 @@
    </ns0:Conditional>
   </ns0:Hook>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Configuration_Wizard">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
+   <ns0:Action Name="_c_GetProperty_display_video_on_menus_XIf_Active = GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Configuration_Wizard_Ask">
   </ns0:Hook>
@@ -189514,7 +189514,7 @@
  </ns0:Menu>
  <ns0:Menu ID="65968" Name="VideoBG THEME" Sym="BASE-85872">
   <ns0:VideoBackground>false</ns0:VideoBackground>
-  <ns0:Conditional ID="33488" Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XBackground&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))) || (&quot;XAlways&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)))" Sym="BASE-57990">
+  <ns0:Conditional ID="33488" Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XBackground&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == _c_GetProperty_display_video_on_menus_XIf_Active)) || (&quot;XAlways&quot; == _c_GetProperty_display_video_on_menus_XIf_Active))" Sym="BASE-57990">
    <ns0:Conditional Name="(InDigitalChannelScan != true) &amp;&amp; (SkipBGVideoPreview != true) &amp;&amp; (IsDownloadingVideo != true)" Sym="BASE-57991">
     <ns0:Video ID="52450" Name="BackgroundVideo" Sym="BASE-57992">
      <ns0:FixedWidth>1.0</ns0:FixedWidth>
@@ -189531,7 +189531,7 @@
    </ns0:Action>
   </ns0:Hook>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-VideoBG_THEME">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
+   <ns0:Action Name="_c_GetProperty_display_video_on_menus_XIf_Active = GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-VideoBG_THEME">
   </ns0:Hook>
@@ -195801,7 +195801,7 @@
      <ns0:WrapVNav>false</ns0:WrapVNav>
      <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
      <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
-     <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XBackground&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))) || (&quot;XAlways&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)))" Sym="BASE-86341">
+     <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XBackground&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == _c_GetProperty_display_video_on_menus_XIf_Active)) || (&quot;XAlways&quot; == _c_GetProperty_display_video_on_menus_XIf_Active))" Sym="BASE-86341">
       <ns0:Action Name="&quot;REM Draw light shaded full menu BG if video is menu BG.&quot;" Sym="OPUS4A-123730">
        <ns0:Action Name="gMenuBGFillImage" Sym="OPUS4A-123727">
         <ns0:Image Name="" Sym="OPUS4A-123728">
@@ -197162,7 +197162,7 @@
    </ns0:Panel>
   </ns0:Panel>
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-THEME_ORGANIZER_3">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
+   <ns0:Action Name="_c_GetProperty_display_video_on_menus_XIf_Active = GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-THEME_ORGANIZER_3">
   </ns0:Hook>
@@ -197205,7 +197205,7 @@
     <ns0:Action ID="35688" Name="&quot;REM Display thumb, preview, etc.&quot;" Sym="OPUS4A-126342">
      <ns0:Action Name="LocalAiring = InfoAiring" Sym="OPUS4A-175008">
       <ns0:Action Name="&quot;REM If playing non-music &amp; preview window is enabled, display playback in the preview window.&quot;" Sym="OPUS4A-214971">
-       <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))) || (&quot;XAlways&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)))" Sym="OPUS4A-214969">
+       <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == _c_GetProperty_display_video_on_menus_XIf_Active)) || (&quot;XAlways&quot; == _c_GetProperty_display_video_on_menus_XIf_Active))" Sym="OPUS4A-214969">
         <ns0:Branch Name="true" Sym="OPUS4A-214970">
          <ns0:Panel Ref="5" Name="Preview AutoSizeArea" />
         </ns0:Branch>
@@ -198845,7 +198845,7 @@
   <ns0:Attribute Ref="33526" Name="TableUIComp" />
   <ns0:Attribute Ref="33527" Name="TableUIComp2" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Theme_Preview_Top_Ri">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
+   <ns0:Action Name="_c_GetProperty_display_video_on_menus_XIf_Active = GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Theme_Preview_Top_Right_">
   </ns0:Hook>
@@ -209720,7 +209720,7 @@
   <ns0:Action Ref="11031" Name="&quot;REM Determine whether..." />
   <ns0:Action Name="&quot;REM Create Side DetailArea for item in focus - music media item or playlist&quot;" Sym="OPUS4A-179316">
    <ns0:Action Name="&quot;REM Update side info area when focus changes&quot;" Sym="OPUS4A-179317">
-    <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))) || (&quot;XAlways&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)))" Sym="OPUS4A-179368">
+    <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == _c_GetProperty_display_video_on_menus_XIf_Active)) || (&quot;XAlways&quot; == _c_GetProperty_display_video_on_menus_XIf_Active))" Sym="OPUS4A-179368">
      <ns0:Branch Name="true" Sym="OPUS4A-179369">
       <ns0:Action Name="&quot;REM Preview window is in use; create smaller playlist details area.&quot;" Sym="OPUS4A-179370">
        <ns0:Panel Name="Detailed Info Panel Short" Sym="OPUS4A-179371">
@@ -213280,7 +213280,7 @@
   <ns0:Attribute Ref="33526" Name="TableUIComp" />
   <ns0:Attribute Ref="33527" Name="TableUIComp2" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Theme_Preview_Top_Ri">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
+   <ns0:Action Name="_c_GetProperty_display_video_on_menus_XIf_Active = GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Theme_Preview_Top_Right_">
   </ns0:Hook>
@@ -213311,7 +213311,7 @@
     <ns0:Attribute Ref="35682" Name="AddReflection" />
     <ns0:Attribute Ref="68274" Name="ThumbBGSmoothTrackerKey" />
     <ns0:Action Name="&quot;REM Display preview, thumb, etc.&quot;" Sym="OPUS4A-176095">
-     <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;))) || (&quot;XAlways&quot; == GetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;)))" Sym="OPUS4A-176100">
+     <ns0:Conditional Name="!IsMusicFile(GetCurrentMediaFile()) &amp;&amp; (GetProperty(&quot;video_menu_style&quot;, &quot;XWindow&quot;) == &quot;XWindow&quot;) &amp;&amp; ((HasMediaFile() &amp;&amp; (&quot;XIf Active&quot; == _c_GetProperty_display_video_on_menus_XIf_Active)) || (&quot;XAlways&quot; == _c_GetProperty_display_video_on_menus_XIf_Active))" Sym="OPUS4A-176100">
       <ns0:Branch Name="true" Sym="OPUS4A-176101">
        <ns0:Panel Ref="5" Name="Preview AutoSizeArea" />
       </ns0:Branch>
@@ -213501,7 +213501,7 @@
   <ns0:Attribute Ref="68754" Name="MenuInfoStartX" />
   <ns0:Attribute Ref="68755" Name="MenuInfoStartY" />
   <ns0:Action Name="BeforeMenuLoad" Sym="CACHE-BML-Theme_Preview_Top_Ri">
-   <ns0:Action Name="SetLocal(&quot;_c_GetProperty_display_video_on_menus_XIf_Active&quot;, GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;))" />
+   <ns0:Action Name="_c_GetProperty_display_video_on_menus_XIf_Active = GetProperty(&quot;display_video_on_menus&quot;, &quot;XIf Active&quot;)" />
   </ns0:Action>
   <ns0:Hook Name="FocusGained" Sym="REFRESH-FG-TGT-Theme_Preview_Top_Right_">
   </ns0:Hook>

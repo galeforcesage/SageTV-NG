@@ -1758,16 +1758,14 @@ public class MiniPlayer implements DVDMediaPlayer
           }
           if (profileDecision == null)
           {
-            String fcContainer = Sage.get("miniplayer/ng_failclosed_container", "FMP4");
-            String fcVideo = Sage.get("miniplayer/ng_failclosed_video", "H264");
-            String fcAudio = Sage.get("miniplayer/ng_failclosed_audio", "AAC");
-            profileDecision = sage.client.PlaybackDecisionEngine.safeBaselineTranscodeDecision(
-                fcContainer, fcVideo, fcAudio);
-            // chosenSurfaceId stays null so the effective-surface plumbing is
-            // skipped; the profile-authoritative TRANSCODE override forces a
-            // server-side transcode of this safe baseline.
-            System.out.println("NG session missing surfaces -- fail-closed to safe transcode ("
-                + fcVideo + "/" + fcAudio + " in " + fcContainer + ")");
+            // Non-PWA NG clients (e.g. Android exoplayer) typically don't
+            // implement PLAYBACK_SURFACES at all. Instead of fail-closing
+            // to a TRANSCODE that may not work (e.g. stv:// protocol
+            // missing from ffmpeg), fall through to the legacy V1/V2
+            // codec-based negotiation, which correctly picks DIRECT_PLAY
+            // when the client can decode the source.
+            if (Sage.DBG) System.out.println("NG session has no surfaces -- "
+                + "falling through to legacy codec-based negotiation");
           }
         }
 
