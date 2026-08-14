@@ -1,6 +1,7 @@
 /*
- *	SageTV Streaming protocol for ffmpeg client
- *	Copyright (C) Jeffrey Kardatzke - 07/2006
+ * SageTV Streaming protocol for FFmpeg
+ * Copyright (C) Jeffrey Kardatzke - 07/2006
+ * Ported to modern FFmpeg 7.x API - 08/2026
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -18,745 +19,433 @@
  */
 
 /*
- * This allows you to stream files directly from a SageTV server
+ * Stream files from a SageTV MediaServer over its TCP protocol (port 7818).
+ * Protocol: OPEN path\r\n -> OK\r\n -> READ offset count\r\n -> data
+ *           SIZE\r\n -> "avail total\r\n"   QUIT\r\n
+ *
+ * Handles live/circular-buffer files (active files) where the size
+ * grows while ffmpeg is reading.
  */
 
-#include "avformat.h"
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include "libavutil/avstring.h"
+#include "config_components.h"
 
+#include "url.h"
+#include "libavutil/avstring.h"
+#include "libavutil/mem.h"
+#include "libavutil/opt.h"
+
+#include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <inttypes.h>
-#include <errno.h>
-#ifndef __MINGW32__
+#include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
-#else
-#include <windows.h>
-#endif
+#include <unistd.h>
+#include <fcntl.h>
 
-//#define DEBUG_STV
+/* No extern dependency on fftools — the -activefile flag is mapped
+ * to the "follow" protocol option by ffmpeg_demux.c, or can be
+ * set explicitly via -follow 1 on the command line.              */
 
-#define ASKAHEAD 65536
+#define STV_READAHEAD  65536
+#define STV_FLUSH_BUF  4096
 
-// OSX doesn't have MSG_NOSIGNAL defined, neither does cygwin
-#if (defined(__APPLE__) || defined(__MINGW32__))
+#ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
 #endif
 
-typedef struct {
-  char host[256];
-  int port;
-  char url[1024];
-  int64_t actualSize;
-  int64_t pos;
-  int fd;
-  int readahead;
-  unsigned int readaheadfactor; // Set to 0 when go out of the read ahead buffer
-  unsigned long long aheaddiscarded;
-  unsigned char flushBuf[4096];
+typedef struct STVContext {
+    const AVClass *class;
+    char  host[256];
+    int   port;
+    char  url[1024];
+    int64_t actual_size;
+    int64_t pos;
+    int   fd;
+    int   readahead;
+    unsigned int readahead_factor;
+    unsigned long long ahead_discarded;
+    unsigned char flush_buf[STV_FLUSH_BUF];
+    int   active_file;        /* 1 when input is a live/growing file */
+    int   follow;             /* set via -follow 1 or format_opts */
 } STVContext;
 
-#ifdef DEBUG_STV
-static long long get_timebase()
-{
-  struct timeval tm;
-  gettimeofday(&tm, 0);
-  return tm.tv_sec * 1000000LL + (tm.tv_usec);
-}
-#endif
+/* ------------------------------------------------------------------ */
+/* Helpers                                                            */
+/* ------------------------------------------------------------------ */
 
-static int flushReadAhead(STVContext *p)
+static int flush_readahead(STVContext *p)
 {
-    p->aheaddiscarded+=p->readahead;
-    while(p->readahead)
-    {
-        int count = recv(p->fd, p->flushBuf, (p->readahead > 4096 ) ? 4096 : p->readahead, 0);
-        if(count<=0)
-        {
-            av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-            return -1;
+    p->ahead_discarded += p->readahead;
+    while (p->readahead > 0) {
+        int n = recv(p->fd, p->flush_buf,
+                     FFMIN(p->readahead, STV_FLUSH_BUF), 0);
+        if (n <= 0) {
+            av_log(NULL, AV_LOG_ERROR, "stv: flush_readahead failed\n");
+            return AVERROR(EIO);
         }
-        p->readahead -= count;
+        p->readahead -= n;
     }
-    p->readaheadfactor=0;
+    p->readahead_factor = 0;
     return 0;
 }
 
-#define SOCKET_ERROR -1
-#define INVALID_SOCKET -1
-#define RED_TIMEOUT 30000
-
-// Reads data from a socket into the array until the "\r\n" character
-// sequence is encountered. The returned value is the
-// number of bytes read or SOCKET_ERROR if an error occurs, 0
-// if the socket has been closed. The number of bytes will be
-// 2 more than the actual string length because the \r\n chars
-// are removed before this function returns.
-static int sockReadLine(int sd, char* buffer, int bufLen)
+/* Read a \r\n-terminated line from the socket.  Returns bytes consumed
+ * (including the terminator) or < 0 on error / EOF. The terminator is
+ * stripped and a NUL placed after the last payload byte.                */
+static int sock_readline(int fd, char *buf, int buf_len)
 {
-	int currRecv;
-	int newlineIndex = 0;
-	int endFound = 0;
-	int offset = 0;
-	int i = 0;
-	while (!endFound)
-	{
-		currRecv = recv(sd, buffer + offset, bufLen, MSG_PEEK);
-		if (currRecv == SOCKET_ERROR)
-		{
-			return SOCKET_ERROR;
-		}
+    int offset = 0;
+    for (;;) {
+        int n = recv(fd, buf + offset, buf_len - offset, MSG_PEEK);
+        if (n <= 0)
+            return AVERROR(EIO);
 
-		if (currRecv == 0)
-		{
-			return endFound ? 0 : SOCKET_ERROR;
-		}
-
-		// Scan the buffer for "\r\n" termination
-		for (i = 0; i < (currRecv + offset); i++)
-		{
-			if (buffer[i] == '\r')
-			{
-				if (buffer[i + 1] == '\n')
-				{
-					newlineIndex = i + 1;
-					endFound = 1;
-					break;
-				}
-			}
-		}
-		if (!endFound)
-		{
-			currRecv = recv(sd, buffer + offset, currRecv, 0);
-			if (currRecv == SOCKET_ERROR)
-			{
-				return SOCKET_ERROR;
-			}
-			if (currRecv == 0)
-			{
-				return endFound ? 0 : SOCKET_ERROR;
-			}
-			offset += currRecv;
-		}
-	}
-
-	currRecv = recv(sd, buffer + offset, (newlineIndex + 1) - offset, 0);
-	buffer[newlineIndex - 1] = '\0';
-	return currRecv;
+        for (int i = 0; i < offset + n - 1; i++) {
+            if (buf[i] == '\r' && buf[i + 1] == '\n') {
+                /* consume up to and including \r\n */
+                int total = i + 2;
+                int consumed = recv(fd, buf, total - offset, 0);
+                if (consumed <= 0)
+                    return AVERROR(EIO);
+                /* strip terminator */
+                buf[i] = '\0';
+                return total;
+            }
+        }
+        /* haven't found \r\n yet — consume what we peeked and continue */
+        n = recv(fd, buf + offset, n, 0);
+        if (n <= 0)
+            return AVERROR(EIO);
+        offset += n;
+        if (offset >= buf_len - 2)
+            return AVERROR(ENOSPC);
+    }
 }
 
-static int OpenConnection(STVContext* p)
+static int open_connection(STVContext *p)
 {
-	int newfd=-1;
-	struct timeval tv;
-	struct sockaddr address;
-	struct sockaddr_in* inetAddress;
-	struct hostent* hostptr;
-	char data[512];
-#ifdef __MINGW32__
-	int strl;
-	wchar_t* wfilename;
-	int wstrlen;
-	int dataIdx;
-#endif
-	int dataSize;
-	int res;
-	int window_size = 256 * 1024;
-	int wlen = 4;
+    int fd = -1;
+    struct sockaddr_in addr;
+    struct hostent *hp;
+    char data[512];
+    int data_len, res;
+    int window = 256 * 1024;
 
-    #ifdef DEBUG_STV
-    av_log(NULL, AV_LOG_ERROR, "Opening conn to SageTV server\n");
-    #endif
-	newfd = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (newfd == INVALID_SOCKET)
-	{
-        #ifdef DEBUG_STV
-        av_log(NULL, AV_LOG_ERROR,"FAILURE %d\n", __LINE__);
-        #endif
-		return 0;
-	}
+    fd = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (fd < 0)
+        return AVERROR(errno);
 
-    setsockopt(newfd, SOL_SOCKET, SO_RCVBUF, &window_size, sizeof(window_size));
-    getsockopt(newfd, SOL_SOCKET, SO_RCVBUF,
-                         (char*) &window_size, &wlen );
-    av_log(NULL, AV_LOG_ERROR,"STV:// socket recv tcp window size %d\n",window_size);
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &window, sizeof(window));
 
-	// Set the socket timeout option. If a timeout occurs, then it'll be just
-	// like the server closed the socket.
-/*	tv.tv_sec = 30;
-	tv.tv_usec = 0;
-	setsockopt(newfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-	setsockopt(newfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));*/
-	// Set the socket linger option, this makes sure the QUIT message gets received
-	// by the server before the TCP reset message does.
-//	LINGER lingonberry;
-//	lingonberry.l_onoff = TRUE;
-//	lingonberry.l_linger = 1;
-//	if (setsockopt(stream->fd, SOL_SOCKET, SO_LINGER, (char*)&lingonberry, sizeof(LINGER)) == SOCKET_ERROR)
-//	{
-//		return STREAM_ERROR;
-//	}
-	inetAddress = (struct sockaddr_in*) ( (void *) &address); // cast it to IPV4 addressing
-	inetAddress->sin_family = PF_INET;
-	inetAddress->sin_port = htons(7818);
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port   = htons(p->port);
 
-	hostptr = gethostbyname(p->host);
-	if (!hostptr)
-	{
-		close(newfd);
-        #ifdef DEBUG_STV
-        av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-        #endif
-		return 0;
-	}
-	
-#if !defined(MINGW32) // defined(__APPLE__)
-// Darwin/BSD doesn't have h_addr field, it has an array of addresses instead
-// Apparently neither does whatever lib is installed with Ubuntu 8.10 beta...
-#define h_addr h_addr_list[0]
-#endif
-    memcpy(&inetAddress->sin_addr.s_addr, hostptr->h_addr, hostptr->h_length );
- 
-    if (connect(newfd, (struct sockaddr *) ((void *)&address), sizeof(address)) < 0)
-	{
-		close(newfd);
-        #ifdef DEBUG_STV
-        av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-        #endif
-		return 0;
-	}
+    hp = gethostbyname(p->host);
+    if (!hp) {
+        close(fd);
+        return AVERROR(ENOENT);
+    }
+    memcpy(&addr.sin_addr.s_addr, hp->h_addr_list[0], hp->h_length);
 
-#ifdef __MINGW32__
-	// Check for UTF-8 unicode pathname
-	strl = strlen(p->url);
-	wfilename = av_malloc(sizeof(wchar_t) * (1 + strl));
-	int wpos = 0;
-	int i = 0;
-	for (i = 0; i < strl; i++)
-	{
-		wfilename[wpos] = 0;
-		if ((p->url[i] & 0x80) == 0)
-		{
-			// ASCII character
-			wfilename[wpos++] = p->url[i];
-		}
-		else if (i + 1 < strl && ((p->url[i] & 0xE0) == 0xC0) && ((p->url[i + 1] & 0xC0) == 0x80))
-		{
-			// two octets for this character
-			wfilename[wpos++] = ((p->url[i] & 0x1F) << 6) + (p->url[i + 1] & 0x3F);
-			i++;
-		}
-		else if (i + 2 < strl && ((p->url[i] & 0xF0) == 0xE0) && ((p->url[i + 1] & 0xC0) == 0x80) && 
-			((p->url[i + 2] & 0xC0) == 0x80))
-		{
-			// three octets for this character
-			wfilename[wpos++] = ((p->url[i] & 0x0F) << 12) + ((p->url[i + 1] & 0x3F) << 6) + (p->url[i + 2] & 0x3F);
-			i+=2;
-		}
-		else
-			wfilename[wpos++] = p->url[i];
-	}
-	wfilename[wpos] = 0;
-	strcpy(data, "OPENW ");
-	wstrlen = wcslen(wfilename);
-	dataIdx = strlen(data);
-	for (i = 0; i < wstrlen; i++, dataIdx+=2)
-	{
-		data[dataIdx] = ((wfilename[i] & 0xFF00) >> 8);
-		data[dataIdx + 1] = (wfilename[i] & 0xFF);
-	}
-	data[dataIdx++] = '\r';
-	data[dataIdx++] = '\n';
-	av_free(wfilename);
-	dataSize = dataIdx;
-#else
-	strcpy(data, "OPEN ");
-	av_strlcat(data, p->url, 512);
-	av_strlcat(data, "\r\n", 512);
-	dataSize = strlen(data);
-#endif
-	if (send(newfd, data, dataSize, MSG_NOSIGNAL) < dataSize)
-	{
-		close(newfd);
-        #ifdef DEBUG_STV
-        av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-        #endif
-		return 0;
-	}
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        close(fd);
+        return AVERROR(errno);
+    }
 
-	if ((res = sockReadLine(newfd, data, sizeof(data))) <= 0 || strcmp(data, "OK"))
-	{
-		close(newfd);
-        #ifdef DEBUG_STV
-        av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-        #endif
-		return 0;
-	}
-	p->fd = newfd;
-	p->readahead=0;
-	p->readaheadfactor=0;
-	return 1;
+    snprintf(data, sizeof(data), "OPEN %s\r\n", p->url);
+    data_len = strlen(data);
+    if (send(fd, data, data_len, MSG_NOSIGNAL) < data_len) {
+        close(fd);
+        return AVERROR(EIO);
+    }
+
+    res = sock_readline(fd, data, sizeof(data));
+    if (res < 0 || strcmp(data, "OK") != 0) {
+        close(fd);
+        return AVERROR(EIO);
+    }
+
+    p->fd = fd;
+    p->readahead = 0;
+    p->readahead_factor = 0;
+    return 0;
 }
 
-int ReOpenConnection(STVContext* p)
+static int reopen_connection(STVContext *p)
+{
+    int readahead_val = p->readahead;
+    char data[512];
+    int data_len, ret;
+
+    if (p->fd >= 0)
+        close(p->fd);
+    p->fd = -1;
+
+    ret = open_connection(p);
+    if (ret < 0)
+        return ret;
+
+    /* re-request the same read-ahead window so the server is in sync */
+    if (readahead_val > 0) {
+        snprintf(data, sizeof(data), "READ %" PRId64 " %d\r\n",
+                 p->pos, readahead_val);
+        data_len = strlen(data);
+        if (send(p->fd, data, data_len, MSG_NOSIGNAL) < data_len)
+            return AVERROR(EIO);
+        p->readahead = readahead_val;
+    }
+    return 0;
+}
+
+/* Query the server for the current file size.
+ * Returns total size, writes available bytes to *avail. */
+static int64_t query_size(STVContext *p, int64_t *avail)
 {
     char data[512];
-	int dataSize;
-	int readaheadval=p->readahead;
-    #ifdef DEBUG_STV
-    av_log(NULL, AV_LOG_ERROR, "Reopening connection\n");
-    #endif
-    if (!p->url) return 0;
-	close(p->fd);
-	p->fd = 0;
-	if (OpenConnection(p))
-	{
-		// We must ask for same data in readahead
-        snprintf(data, 512, "READ %"PRId64" %d\r\n", p->pos, readaheadval);
-        dataSize = strlen(data);
-        #ifdef DEBUG_STV
-        av_log(NULL, AV_LOG_ERROR, "Sending cmd to SageTV Server:%s\n", data);
-        #endif
-        if (send(p->fd, data, dataSize, MSG_NOSIGNAL) < dataSize)
-        {
+    int data_len, n;
+    char *sp;
+    int64_t total, a;
+
+    snprintf(data, sizeof(data), "SIZE\r\n");
+    data_len = strlen(data);
+
+    if (send(p->fd, data, data_len, MSG_NOSIGNAL) < data_len) {
+        if (reopen_connection(p) < 0)
             return 0;
+        if (send(p->fd, data, data_len, MSG_NOSIGNAL) < data_len)
+            return 0;
+    }
+
+    flush_readahead(p);
+
+    n = sock_readline(p->fd, data, sizeof(data));
+    if (n <= 0) {
+        if (reopen_connection(p) < 0)
+            return 0;
+        snprintf(data, sizeof(data), "SIZE\r\n");
+        if (send(p->fd, data, data_len, MSG_NOSIGNAL) < data_len)
+            return 0;
+        flush_readahead(p);
+        n = sock_readline(p->fd, data, sizeof(data));
+        if (n <= 0)
+            return 0;
+    }
+
+    sp = strchr(data, ' ');
+    if (!sp)
+        return 0;
+    *sp = '\0';
+
+    a = strtoll(data, NULL, 10);
+    total = strtoll(sp + 1, NULL, 10);
+
+    if (avail)
+        *avail = a;
+
+    /* if total != available, file is still being written (active) */
+    if (total != a)
+        p->active_file = 1;
+
+    return total;
+}
+
+/* ------------------------------------------------------------------ */
+/* URLProtocol callbacks                                              */
+/* ------------------------------------------------------------------ */
+
+static int stv_open(URLContext *h, const char *filename, int flags)
+{
+    STVContext *p = h->priv_data;
+    const char *rest;
+    const char *slash;
+    int ret;
+
+    if (flags & AVIO_FLAG_WRITE)
+        return AVERROR(ENOSYS);
+
+    if (!av_strstart(filename, "stv://", &rest))
+        return AVERROR(EINVAL);
+
+    slash = strchr(rest, '/');
+    if (!slash)
+        return AVERROR(EINVAL);
+
+    av_strlcpy(p->host, rest, FFMIN((int)(slash - rest) + 1, (int)sizeof(p->host)));
+
+    /* check for optional :port */
+    p->port = 7818;
+    {
+        char *colon = strchr(p->host, ':');
+        if (colon) {
+            *colon = '\0';
+            p->port = atoi(colon + 1);
+            if (p->port <= 0)
+                p->port = 7818;
         }
-        p->readahead=readaheadval; // We must know how much ahead we were
-		return 1;
-	}
-	return 0;
+    }
+
+    av_strlcpy(p->url, slash + 1, sizeof(p->url));
+
+    ret = open_connection(p);
+    if (ret < 0)
+        return ret;
+
+    /* pick up the follow option (set by -activefile → follow=1 in ffmpeg_demux) */
+    p->active_file = p->follow;
+
+    if (p->active_file) {
+        p->actual_size = 0;
+        h->is_streamed = 0;   /* we support seeking in active files */
+    } else {
+        query_size(p, &p->actual_size);
+    }
+
+    return 0;
+}
+
+static int stv_read(URLContext *h, unsigned char *buf, int size)
+{
+    STVContext *p = h->priv_data;
+    char data[512];
+    int data_len;
+    int bytes_read = 0;
+    int request_len = size;
+
+    /* For active files, refresh the size if we'd read past what we know */
+    if (p->active_file && (size + p->pos) > p->actual_size) {
+        int64_t total = query_size(p, &p->actual_size);
+        if (total == p->actual_size)
+            p->active_file = 0;  /* file is complete */
+    }
+
+    /* For non-active files, enable read-ahead after 2 sequential reads */
+    if (!p->active_file && p->actual_size > 0) {
+        p->readahead_factor++;
+        if (p->readahead_factor > 2)
+            request_len += STV_READAHEAD - p->readahead;
+
+        if (request_len + p->pos > p->actual_size) {
+            request_len = p->actual_size - p->pos;
+            if (request_len <= 0)
+                return AVERROR_EOF;
+        }
+        p->readahead += request_len;
+    } else {
+        p->readahead = request_len;
+    }
+
+    if (request_len <= 0)
+        return 0;
+
+    if (size > request_len)
+        size = request_len;
+
+    snprintf(data, sizeof(data), "READ %" PRId64 " %d\r\n",
+             p->pos + p->readahead - request_len, request_len);
+    data_len = strlen(data);
+
+    if (send(p->fd, data, data_len, MSG_NOSIGNAL) < data_len) {
+        if (reopen_connection(p) < 0)
+            return AVERROR(EIO);
+    }
+
+    while (bytes_read < size) {
+        int n = recv(p->fd, buf + bytes_read, size - bytes_read, 0);
+        if (n <= 0) {
+            if (reopen_connection(p) < 0)
+                return bytes_read > 0 ? bytes_read : AVERROR(EIO);
+            n = recv(p->fd, buf + bytes_read, size - bytes_read, 0);
+            if (n <= 0)
+                return bytes_read > 0 ? bytes_read : AVERROR(EIO);
+        }
+        bytes_read += n;
+        p->pos += n;
+        p->readahead -= n;
+    }
+
+    return bytes_read;
 }
 
 static int64_t stv_seek(URLContext *h, int64_t pos, int whence)
 {
-	int64_t availSize;
-	char data[512];
-	int dataSize;
-	int nbytes;
-	char* spacePtr;
-	STVContext* p = h->priv_data;
-    flushReadAhead(p);
-    #ifdef DEBUG_STV
-    av_log(NULL, AV_LOG_ERROR, "stv_seek %"PRId64" %d active=%d\n", pos, whence, ((h->flags & URL_ACTIVEFILE) == URL_ACTIVEFILE));
-    #endif
-	if (pos >= 0 && ((h->flags & URL_ACTIVEFILE) == URL_ACTIVEFILE) && whence != SEEK_END && 
-		whence != AVSEEK_SIZE)
-	{
-		if (whence == SEEK_CUR)
-			p->pos += pos;
-		else if (whence == SEEK_SET)
-			p->pos = pos;
-		return p->pos;
-	}
-	
-	if ((h->flags & URL_ACTIVEFILE) == URL_ACTIVEFILE)
-	{
-        strcpy(data, "SIZE\r\n");
-        dataSize = strlen(data);
-        #ifdef DEBUG_STV
-        av_log(NULL, AV_LOG_ERROR, "Sending cmd to SageTV Server:%s", data);
-        #endif
-        if (send(p->fd, data, dataSize, MSG_NOSIGNAL) < dataSize)
-        {
-            #ifdef DEBUG_STV
-            av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-            #endif
-            if (!ReOpenConnection(p))
-            {
-                #ifdef DEBUG_STV
-                av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-                #endif
-                return 0;
-            }
-            if (send(p->fd, data, dataSize, MSG_NOSIGNAL) < dataSize)
-            {
-                #ifdef DEBUG_STV
-                av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-                #endif
-                return 0;
-            }
-        }
-        flushReadAhead(p);
-        nbytes = sockReadLine(p->fd, data, sizeof(data));
-        if (nbytes <= 0)
-        {
-            #ifdef DEBUG_STV
-            av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-            #endif
-            if (!ReOpenConnection(p))
-            {
-                #ifdef DEBUG_STV
-                av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-                #endif
-                return 0;
-            }
-            strcpy(data, "SIZE\r\n");
-            if (send(p->fd, data, dataSize, MSG_NOSIGNAL) < dataSize)
-            {
-                #ifdef DEBUG_STV
-                av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-                #endif
-                return 0;
-            }
-            flushReadAhead(p);
-            nbytes = sockReadLine(p->fd, data, sizeof(data));
-            if (nbytes <= 0)
-            {
-                #ifdef DEBUG_STV
-                av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-                #endif
-                return 0;
-            }
-        }
-        #ifdef DEBUG_STV
-        av_log(NULL, AV_LOG_ERROR, "Read back %s\n", data);
-        #endif
-        spacePtr = strchr(data, ' ');
-        if (!spacePtr)
-        {
-            #ifdef DEBUG_STV
-            av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-            #endif
-            return p->pos;
-        }
-        *spacePtr = '\0';
-        
-        availSize =  strtoll(data, NULL, 10);
+    STVContext *p = h->priv_data;
+    int64_t avail_size;
+
+    flush_readahead(p);
+
+    /* Active file: short-circuit forward seeks (data will come as we read) */
+    if (pos >= 0 && p->active_file &&
+        whence != SEEK_END && whence != AVSEEK_SIZE) {
+        if (whence == SEEK_CUR)
+            p->pos += pos;
+        else if (whence == SEEK_SET)
+            p->pos = pos;
+        return p->pos;
     }
-    else
-    {
-        availSize = p->actualSize;
+
+    if (p->active_file) {
+        /* must ask the server for the current size */
+        query_size(p, &avail_size);
+    } else {
+        avail_size = p->actual_size;
     }
-	if (whence == AVSEEK_SIZE)
-		return availSize;
-	if (whence == SEEK_CUR)
-		pos += p->pos;
-	else if (whence == SEEK_END)
-		pos += availSize;
-    #ifdef DEBUG_STV
-    av_log(NULL, AV_LOG_ERROR, "seek new pos %lld avail %lld\n", pos, availSize);
-    #endif
-	if (pos >= 0 && (pos <= availSize || ((h->flags & URL_ACTIVEFILE) == URL_ACTIVEFILE)))
-	{
-        #ifdef DEBUG_STV
-        av_log(NULL, AV_LOG_ERROR, "Setting stream pos to %lld\n", pos);
-        #endif
-		p->pos = pos;
-		return pos;
-	}
-	else
-	{
-        #ifdef DEBUG_STV
-        av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-        #endif
-		return p->pos;
-	}
-}
 
-static int64_t size(URLContext* h, STVContext* p, int64_t *availSize)
-{
-	char data[512];
-	int64_t otherAvail;
-	int dataSize;
-	int nbytes;
-	char* spacePtr;
-	int64_t totalSize;
-	if (!availSize)
-		availSize = &otherAvail;
-	strcpy(data, "SIZE\r\n");
-	dataSize = strlen(data);
-    #ifdef DEBUG_STV
-    av_log(NULL, AV_LOG_ERROR, "Sending2 cmd to SageTV Server:%s\n", data);
-    #endif
-	if (send(p->fd, data, dataSize, MSG_NOSIGNAL) < dataSize)
-	{
-        #ifdef DEBUG_STV
-        av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-        av_log(NULL, AV_LOG_ERROR, "socket write failed, reopening...\n");
-        #endif
-		if (!ReOpenConnection(p))
-		{
-            #ifdef DEBUG_STV
-            av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-            #endif
-			return 0;
-		}
-		if (send(p->fd, data, dataSize, MSG_NOSIGNAL) < dataSize)
-		{
-            #ifdef DEBUG_STV
-            av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-            #endif
-			return 0;
-		}
-	}
+    if (whence == AVSEEK_SIZE)
+        return avail_size;
 
-    flushReadAhead(p);
-	nbytes = sockReadLine(p->fd, data, sizeof(data));
-	if (nbytes <= 0)
-	{
-        #ifdef DEBUG_STV
-        av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-        #endif
-		if (!ReOpenConnection(p))
-		{
-            #ifdef DEBUG_STV
-            av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-            #endif
-			return 0;
-		}
-		strcpy(data, "SIZE\r\n");
-		if (send(p->fd, data, dataSize, MSG_NOSIGNAL) < dataSize)
-		{
-            #ifdef DEBUG_STV
-            av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-            #endif
-			return 0;
-		}
-        flushReadAhead(p);
-		nbytes = sockReadLine(p->fd, data, sizeof(data));
-		if (nbytes <= 0)
-		{
-            #ifdef DEBUG_STV
-            av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-            #endif
-			return 0;
-		}
-	}
-    #ifdef DEBUG_STV
-    av_log(NULL, AV_LOG_ERROR, "Read back %s\n", data);
-    #endif
-	spacePtr = strchr(data, ' ');
-	if (!spacePtr)
-	{
-        #ifdef DEBUG_STV
-        av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-        #endif
-		return 0;
-	}
-	*spacePtr = '\0';
-	if (availSize)
-		*availSize = strtoll(data, NULL, 10);
-	totalSize = strtoll(spacePtr + 1, NULL, 10);
-	if (totalSize != *availSize)
-	{
-		h->flags = h->flags | URL_ACTIVEFILE;
-	}
-    #ifdef DEBUG_STV
-    av_log(NULL, AV_LOG_ERROR, "avail=%lld total=%lld\n", *availSize, totalSize);
-    #endif
-	return totalSize;
-}
+    if (whence == SEEK_CUR)
+        pos += p->pos;
+    else if (whence == SEEK_END)
+        pos += avail_size;
 
+    if (pos >= 0 && (pos <= avail_size || p->active_file)) {
+        p->pos = pos;
+        return pos;
+    }
 
-static int stv_read(URLContext *h, unsigned char* pbBuffer, int max_len)
-{
-	STVContext *p = h->priv_data;
-	char data[512];
-	int dataSize;
-	int nbytes;
-	char* pOriginalBuffer;
-	int originaldwBytesToRead;
-	int bytesRead;
-	int stv_read_len = max_len;
-
-	// Check on EOS condition
-	if ((h->flags & URL_ACTIVEFILE) == URL_ACTIVEFILE && ((max_len + p->pos) > p->actualSize))
-	{
-		int64_t totalSize;
-		totalSize = size(h, p, &p->actualSize);
-		if(totalSize==p->actualSize) h->flags&=~URL_ACTIVEFILE;
-		#ifdef DEBUG_STV
-		av_log(NULL, AV_LOG_ERROR, "Active file is :%d %lld %lld\n", 
-			h->flags & URL_ACTIVEFILE,totalSize,p->actualSize);
-		#endif
-	}
-	if (!p->actualSize && (h->flags & URL_ACTIVEFILE) != URL_ACTIVEFILE)
-	{
-		// Get the actual size and store it
-		size(h, p, &p->actualSize);
-	}
-	if (p->actualSize && (h->flags & URL_ACTIVEFILE) != URL_ACTIVEFILE)
-	{
-		p->readaheadfactor+=1;
-		if(p->readaheadfactor > 2)
-		{
-			max_len += ASKAHEAD - p->readahead;
-		}
-		if (max_len + p->pos > p->actualSize)
-		{
-			max_len = p->actualSize - p->pos;
-			if (max_len < 0)
-			{
-				max_len = 0;
-				return -1; // Signal EOF
-			}
-		}
-		p->readahead+=max_len;
-	}
-	else
-	{
-		p->readahead=max_len;
-	}
-	if (max_len <= 0) return 0;
-	if (stv_read_len > max_len ) stv_read_len = max_len;
-// Test JFT
-    #ifdef DEBUG_STV
-    av_log(NULL, AV_LOG_ERROR, "Read ahead values %d %d %d at %lld\n", 
-        p->readahead, p->readaheadfactor, max_len, get_timebase());
-    #endif
-
-	snprintf(data, 512, "READ %"PRId64" %d\r\n", p->pos+p->readahead-max_len, max_len);
-	dataSize = strlen(data);
-    #ifdef DEBUG_STV
-    av_log(NULL, AV_LOG_ERROR, "Sending cmd to SageTV Server:%s\n", data);
-    #endif
-	if (send(p->fd, data, dataSize, MSG_NOSIGNAL) < dataSize)
-	{
-        #ifdef DEBUG_STV
-        av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-        #endif
-		// Try to do it again...
-		if (!ReOpenConnection(p))
-		{
-            #ifdef DEBUG_STV
-            av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-            #endif
-			return 0;
-		}
-	}
-
-    #ifdef DEBUG_STV
-    av_log(NULL, AV_LOG_ERROR, "Before receiving reply");
-    #endif
-
-	pOriginalBuffer = pbBuffer;
-	originaldwBytesToRead = stv_read_len;
-	bytesRead = 0;
-	nbytes = recv(p->fd, (char*)pbBuffer, stv_read_len, 0);
-	while (nbytes > 0 && stv_read_len > 0)
-	{
-		stv_read_len -= nbytes;
-		pbBuffer += nbytes;
-		bytesRead += nbytes;
-		p->pos += nbytes;
-		p->readahead-= nbytes;
-		if (stv_read_len > 0)
-			nbytes = recv(p->fd, (char*)pbBuffer, stv_read_len, 0);
-	}
-	if (nbytes <= 0)
-	{
-        #ifdef DEBUG_STV
-        av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-        #endif
-		if (!ReOpenConnection(p))
-		{
-            #ifdef DEBUG_STV
-            av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-            #endif
-			return 0;
-		}
-        nbytes = recv(p->fd, (char*)pbBuffer, stv_read_len, 0);
-        while (nbytes > 0 && stv_read_len > 0)
-        {
-            stv_read_len -= nbytes;
-            pbBuffer += nbytes;
-            bytesRead += nbytes;
-            p->pos += nbytes;
-            p->readahead-= nbytes;
-            if (stv_read_len > 0)
-                nbytes = recv(p->fd, (char*)pbBuffer, stv_read_len, 0);
-        }
-		if (nbytes <= 0)
-		{
-            #ifdef DEBUG_STV
-            av_log(NULL, AV_LOG_ERROR, "FAILURE %d\n", __LINE__);
-            #endif
-			return 0;
-		}
-	}
-    #ifdef DEBUG_STV
-    av_log(NULL, AV_LOG_ERROR, "Read %d bytes from network (%lld %d)\n", 
-        bytesRead, p->actualSize, h->flags & URL_ACTIVEFILE);
-    #endif
-	return bytesRead;
+    return p->pos;
 }
 
 static int stv_close(URLContext *h)
 {
-	STVContext *p = h->priv_data;
-	if (p->fd)
-	{
-		char* data = "QUIT\r\n";
-		int dataSize = strlen(data);
-        flushReadAhead(p);
-		send(p->fd, data, dataSize, MSG_NOSIGNAL);
-		close(p->fd);
-		p->fd = 0;
-	}
-#ifdef __MINGW32__
-	WSACleanup();
-#endif
-	av_free(p);
-	return 0;
+    STVContext *p = h->priv_data;
+    if (p->fd >= 0) {
+        flush_readahead(p);
+        send(p->fd, "QUIT\r\n", 6, MSG_NOSIGNAL);
+        close(p->fd);
+        p->fd = -1;
+    }
+    return 0;
 }
 
-static int stv_open(URLContext *h, const char *filename, int flags)
-{
-	STVContext *p;
-	char* fullURL;
-	char* pathSlash;
-    if (flags & URL_RDWR) {
-        return -ENOENT;
-    } else if (flags & URL_WRONLY) {
-        return -ENOENT;
-    } 
+static const AVOption stv_options[] = {
+    { "follow", "Follow a file as it is being written (active/live file)",
+      offsetof(STVContext, follow), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1,
+      AV_OPT_FLAG_DECODING_PARAM },
+    { NULL }
+};
 
-	p = av_mallocz(sizeof(STVContext));
-	if (!p)
-		return -ENOMEM;
-#ifdef __MINGW32__
-	WSADATA wsaData;
-	if (WSAStartup(0x202,&wsaData) == SOCKET_ERROR) {
-		return AVERROR_IO;
-	}
-#endif
-	h->priv_data = p;
-	if (!av_strstart(filename, "stv://", (const char **)&fullURL))
-		goto fail;
-	pathSlash = strchr(fullURL, '/');
-	if (!pathSlash)
-		goto fail;
-	strncpy(p->host, fullURL, pathSlash - fullURL);
-	strcpy(p->url, pathSlash + 1);
+static const AVClass stv_class = {
+    .class_name = "stv",
+    .item_name  = av_default_item_name,
+    .option     = stv_options,
+    .version    = LIBAVUTIL_VERSION_INT,
+};
 
-	if (!OpenConnection(p))
-		goto fail;
-
-	if ((h->flags & URL_ACTIVEFILE) == URL_ACTIVEFILE)
-		p->actualSize = 0;
-	else
-		size(h, p, &p->actualSize);
-
-	return 0;
-
-fail:
-	stv_close(h);
-    return AVERROR_IO;
-}
-
-URLProtocol stv_protocol = {
-	"stv",
-	stv_open,
-	stv_read,
-	NULL, /* write */
-	stv_seek,
-	stv_close,
+const URLProtocol ff_stv_protocol = {
+    .name            = "stv",
+    .url_open        = stv_open,
+    .url_read        = stv_read,
+    .url_seek        = stv_seek,
+    .url_close       = stv_close,
+    .priv_data_size  = sizeof(STVContext),
+    .priv_data_class = &stv_class,
+    .flags           = URL_PROTOCOL_FLAG_NETWORK,
 };
