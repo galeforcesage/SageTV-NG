@@ -2323,6 +2323,24 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
       encState.currRecordFile = wiz.addMediaFile(encState.currRecord, currTime, bestStore.videoDir.toString(),
           fileQualityName, mmcConn.getProviderID(),
           ((DBObject.MEDIA_MASK_VIDEO | DBObject.MEDIA_MASK_TV) & DBObject.MEDIA_MASK_ALL), cf);
+      // fd25753b: addMediaFile may fork the airing (e.g., no-data placeholder
+      // gets a unique Show+Airing). If so, the ManualRecord's infoAiringID
+      // must be updated to point to the forked airing — otherwise
+      // getFileForAiring(FA) resolves the old contentAiring and the
+      // MediaFile lookup fails (requestWatch returns -7).
+      // We do NOT change currRecord itself — it must stay as the FakeAiring
+      // so getManualRecord(currRecord) continues to find the ManualRecord.
+      if (encState.currRecordFile != null && encState.currRecord instanceof ManualRecord.FakeAiring)
+      {
+        Airing mfAiring = encState.currRecordFile.getContentAiring();
+        ManualRecord mr = ((ManualRecord.FakeAiring) encState.currRecord).getManualRecord();
+        if (mfAiring != null && mr != null && mfAiring.id != mr.infoAiringID)
+        {
+          if (Sage.DBG) System.out.println("startRecord: addMediaFile forked airing " +
+              mr.infoAiringID + " -> " + mfAiring.id + "; updating ManualRecord.infoAiringID");
+          mr.infoAiringID = mfAiring.id;
+        }
+      }
       if (wiz.getManualRecord(encState.currRecord) != null)
         encState.currRecordFile.setAcquisitionTech(MediaFile.ACQUISITION_MANUAL);
       else if (encState.currRecord.isMustSee())

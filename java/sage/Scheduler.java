@@ -2091,7 +2091,7 @@ public class Scheduler implements SchedulerInterface
       for (int i = 0; i < es.schedule.size(); i++)
       {
         Airing sair = es.schedule.get(i);
-        if (god.getWP(sair) == 0 && !es.mustSee.contains(sair))
+        if (god.getWP(sair) == 0 && !es.mustSee.contains(sair) && sair != es.currRecord)
         {
           if (Sage.DBG) System.out.println("Scheduler cleanup - Removing " + sair + " from schedule because " +
               "it has no WP.");
