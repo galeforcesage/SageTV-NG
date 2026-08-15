@@ -44,7 +44,15 @@ cp ../install/config/*.frq ./serverrelease/
 mkdir ./serverrelease/JARs
 cp ../third_party/Oracle/*.jar ./serverrelease/JARs/
 cp ../third_party/Apache/*.jar ./serverrelease/JARs/
-cp ../third_party/Lucene/*.jar ./serverrelease/JARs/
+# Copy ONLY the Lucene 4.10.4 jars that are on the compile/runtime classpath
+# (see build.gradle's implementation files(...) list). Do NOT use a wildcard:
+# third_party/Lucene/ also ships the legacy lucene-core-3.6.0.jar, which would
+# land on the JARs/* classpath and — because the shell expands JARs/* in sorted
+# order — shadow lucene-core-4.10.4.jar. That makes the server die at boot with
+# "NoSuchFieldError: ... org.apache.lucene.util.Version LUCENE_4_10_4"
+# (sage.Wizard$LuceneIndex), so it starts but never binds its ports.
+cp ../third_party/Lucene/lucene-core-4.10.4.jar ./serverrelease/JARs/
+cp ../third_party/Lucene/lucene-analyzers-common-4.10.4.jar ./serverrelease/JARs/
 # Maven-resolved runtime classpath (org.jupnp, slf4j-api, logback-*, etc.)
 # staged here by the Gradle copyRuntimeJars task. Note: Gradle's buildDir
 # is overridden in build.gradle to 'buildoutput' (so `gradle clean` won't
