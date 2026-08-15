@@ -44,7 +44,8 @@ cp ../install/config/*.frq ./serverrelease/
 mkdir ./serverrelease/JARs
 cp ../third_party/Oracle/*.jar ./serverrelease/JARs/
 cp ../third_party/Apache/*.jar ./serverrelease/JARs/
-cp ../third_party/Lucene/*.jar ./serverrelease/JARs/
+cp ../third_party/Lucene/lucene-core-4.10.4.jar ./serverrelease/JARs/
+cp ../third_party/Lucene/lucene-analyzers-common-4.10.4.jar ./serverrelease/JARs/
 # Maven-resolved runtime classpath (org.jupnp, slf4j-api, logback-*, etc.)
 # staged here by the Gradle copyRuntimeJars task. Note: Gradle's buildDir
 # is overridden in build.gradle to 'buildoutput' (so `gradle clean` won't
