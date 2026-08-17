@@ -142,6 +142,21 @@ public interface MediaPlayer extends java.awt.Transparency
    */
   long getMediaTimeMillis();
   /**
+   * Returns the media time (playback position, in milliseconds) that should be used
+   * as the BASE for a RELATIVE seek such as skip-forward / skip-backward.
+   * <p>
+   * {@link #getMediaTimeMillis()} may be smoothed or extrapolated forward by
+   * wall-clock time to keep the on-screen clock ticking between position updates.
+   * That forward guess is fine for display, but it is wrong as the base for a
+   * relative skip: computing {@code base + delta} from a position ahead of the
+   * frame the viewer is actually watching makes a backward skip land forward of
+   * that frame (the NG push-mode "REW goes forward" bug). This accessor must
+   * therefore return the viewer's actual, non-extrapolated playback position.
+   * Players that draw no such distinction return {@link #getMediaTimeMillis()}.
+   * @return the authoritative current playback position for relative-seek math
+   */
+  default long getSeekBaseMediaTimeMillis() { return getMediaTimeMillis(); }
+  /**
    * Returns the current playback rate of the MediaPlayer
    * @return the current playback rate of the MediaPlayer, if paused return the rate if it were playing
    */

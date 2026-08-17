@@ -1896,13 +1896,13 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
           if (getMediaTimeMillis() <= Sage.time() - Math.max(getEncodeToPlaybackDelay()+ 2000, uiMgr.getLong(prefs + TIME_BEHIND_LIVE_TO_DISABLE_SKIP_FORWARD,4000))
               || !currFile.isRecording()) {
             lastVideoOpTime = Sage.eventTime();
-            timeSelected(getMediaTimeMillis() + daJob.time, true);
+            timeSelected(getSeekBaseMediaTimeMillis() + daJob.time, true);
           }
         }
         else
         {
           lastVideoOpTime = Sage.eventTime();
-          long rewTarget = getMediaTimeMillis() + daJob.time;
+          long rewTarget = getSeekBaseMediaTimeMillis() + daJob.time;
           // Comskip-aware rewind. When auto-skip is enabled and the user rewinds
           // INTO a detected commercial segment, the auto-skip monitor would
           // normally bounce them forward again — making it impossible to re-watch
@@ -3760,6 +3760,36 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       return theFile.getEnd(segment);
     else
       return offsetTime + theFile.getStart(segment);
+  }
+
+  // File-timeline playback position to use as the BASE for a relative skip
+  // (skip forward/back). Mirrors getMediaTimeMillis() exactly, but sources the raw
+  // player position from MediaPlayer.getSeekBaseMediaTimeMillis() so that in
+  // push-mode server-side transcoding it reflects the viewer's last actually-
+  // reported position instead of a wall-clock-extrapolated guess. Using the
+  // extrapolated value here makes a backward skip (base + negative delta) land
+  // ahead of the frame the viewer sees. For every player that does not override
+  // getSeekBaseMediaTimeMillis() this returns exactly what getMediaTimeMillis()
+  // would, so non-push playback is unaffected.
+  public long getSeekBaseMediaTimeMillis()
+  {
+    MediaFile theFile = currFile;
+    if (theFile == null) return 0;
+    if (theFile.isLiveStream()) return Sage.time();
+    MediaPlayer mp = player;
+    if (theFile.isDVD() || theFile.isBluRay())
+      return getMediaTimeMillis();
+    if (mp != null && isMediaPlayerLoaded())
+    {
+      long offsetTime = matchTimeScale(mp.getSeekBaseMediaTimeMillis(), false);
+      // Protect against erroneously large current time values
+      if (((mp.getPlaybackCaps() & MediaPlayer.LIVE_CAP) == 0) && (offsetTime > theFile.getRecordDuration() * 1.5))
+        offsetTime = theFile.getDuration(segment);
+      if (offsetTime + theFile.getStart(segment) > theFile.getEnd(segment) + 12*Sage.MILLIS_PER_HR)
+        return theFile.getEnd(segment);
+      return offsetTime + theFile.getStart(segment);
+    }
+    return getMediaTimeMillis();
   }
 
   private boolean hasValidRealDur()

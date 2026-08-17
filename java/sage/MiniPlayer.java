@@ -572,6 +572,7 @@ public class MiniPlayer implements DVDMediaPlayer
     timeGuessMillis = 0;
     guessTimestamp = 0;
     timestampOffset = 0;
+    timestampOffsetWallTime = Sage.eventTime();
     serverSideTranscoding = false;
     pushMode = false;
     currMute = false;
@@ -685,6 +686,84 @@ public class MiniPlayer implements DVDMediaPlayer
     if (!pushMode) ngContextWiring.onPullModeTick(rv, finalLength, timeshifted);
     // --- end NG Context wiring ---
     return rv;
+  }
+
+  // Base position for RELATIVE skips (FF/REW/skip-fwd/skip-back) in push-mode
+  // server-side-transcode playback. This must be the position the viewer currently
+  // SEES, so that base+delta lands delta away from the on-screen frame.
+  //
+  // The two obvious candidates are both wrong here:
+  //  * getMediaTimeMillis() (== clientReportedMediaTime + timestampOffset, extrapolated
+  //    by wall clock) is poisoned by the client clock. The Android push miniclient
+  //    FREEZES clientReportedMediaTime at a stale value (observed stuck at 90033ms, and
+  //    at 306316ms in a later session) across an entire seek-heavy session, so the base
+  //    runs that stale amount AHEAD of the real frame and every relative skip -- even a
+  //    backward REW -- lands forward.
+  //  * max(timestampOffset, lastParserTimestamp) removes the client-clock bias but uses
+  //    lastParserTimestamp, which is the timestamp of data the server has already SENT to
+  //    the client -- it leads the displayed frame by the whole client-side buffer/read-
+  //    ahead (measured 11-31s). So a single FF+10s jumps +20..40s and a REW-10s still
+  //    nets forward when the read-ahead exceeds 10s.
+  //
+  // Server-authoritative display estimate that trusts neither the client clock nor the
+  // read-ahead: after a (re)prime the client displays from timestampOffset and advances
+  // at 1x, so displayPos ~= timestampOffset + (now - timestampOffsetWallTime) while
+  // playing, capped above by lastParserTimestamp (can't show data not yet transcoded/
+  // sent) and floored at timestampOffset. During a pause the parser stalls, so the
+  // lastParserTimestamp cap also freezes the estimate and prevents pause-time overshoot.
+  // Every other mode defers to getMediaTimeMillis(), so behavior is unchanged outside the
+  // push-mode server-side-transcode path.
+  public synchronized long getSeekBaseMediaTimeMillis()
+  {
+    // IMPORTANT: this display-model estimate is valid ONLY on the push server-side-
+    // transcode path, where timestampOffset / timestampOffsetWallTime / lastParserTimestamp
+    // are maintained by the transcode pump. On the direct-MPEG push path
+    // (serverSideTranscoding == false -- e.g. an Android client decoding H.264/AC3 natively)
+    // those fields stay 0, so the estimate would collapse to 0 and every relative skip would
+    // be computed from the START of the file (FF from 30s lands back at 10s, REW always -> 0,
+    // Jump -> 2.5min-from-start). That is a real regression observed in the field, so the
+    // non-transcode push path MUST fall through to getMediaTimeMillis() (the proven native
+    // position calc). Hence the serverSideTranscoding guard below.
+    if (serverSideTranscoding && detailedPushBufferStats && pushMode && rpSrc == null)
+    {
+      long base = timestampOffset;
+      if (currState == PLAY_STATE && timestampOffsetWallTime > 0)
+      {
+        long adv = Sage.eventTime() - timestampOffsetWallTime;
+        if (adv > 0)
+          base += adv;
+      }
+      if (lastParserTimestamp > timestampOffset && base > lastParserTimestamp)
+        base = lastParserTimestamp;
+      if (base < timestampOffset)
+        base = timestampOffset;
+      return base;
+    }
+    return getMediaTimeMillis();
+  }
+
+  // Increment 1b -- seek-epoch trust guard. Returns true when the client's reported
+  // position (clientReportedMediaTime, client-local) can be trusted as a real on-screen
+  // position for the CURRENT epoch: server-side push transcode, the stream is flowing
+  // (lastParserTimestamp is ahead of the prime point), the client has reported a non-zero
+  // position since the last reprime (crmt is reset to 0 at every reprime, so 0 means "not
+  // caught up to this epoch yet"), and that position maps into the plausible window
+  // [timestampOffset, lastParserTimestamp] (+ a small jitter tolerance). Until then the
+  // client clock is treated as stale and callers fall back to the inferred display model
+  // (getSeekBaseMediaTimeMillis), which is what structurally prevents a pre-reposition
+  // reading from being applied after it (the session-poisoning class). Consumed by the
+  // Phase 2 in-place fast path; currently also surfaced in NG-POSDIAG for discovery.
+  // NOTE: the client does not yet epoch-tag its reports (that is the SEEK_EPOCH_V1 client
+  // contract), so this is a conservative server-side inference, not a guarantee. The exact
+  // window/tolerance is a Phase 0 tuning target.
+  protected boolean isClientPositionTrustedForEpoch()
+  {
+    if (!(detailedPushBufferStats && pushMode && rpSrc == null && serverSideTranscoding))
+      return false;
+    if (clientReportedMediaTime <= 0) return false;
+    if (lastParserTimestamp <= timestampOffset) return false;
+    long crmtSrc = clientReportedMediaTime + timestampOffset;
+    return crmtSrc >= timestampOffset && crmtSrc <= lastParserTimestamp + 2000;
   }
 
   private long getNativeMediaTimeNoSync()
@@ -3898,6 +3977,8 @@ public class MiniPlayer implements DVDMediaPlayer
                 if (serverSideTranscoding)
                 {
                   timestampOffset = seekTimeMillis;
+                  timestampOffsetWallTime = Sage.eventTime();
+                  seekEpoch++;
                   lastMediaTime = 0;
                   clientReportedMediaTime = 0;
                 }
@@ -4453,6 +4534,39 @@ public class MiniPlayer implements DVDMediaPlayer
   {
     if (currState == PLAY_STATE || currState == PAUSE_STATE || currState == LOADED_STATE)
     {
+      // Increment 1c -- DVR / live-edge clamp (default OFF: miniplayer/push_seek_dvr_clamp).
+      // Clamp the seek target to [0, availableDuration]. For an in-progress recording,
+      // getDuration(currSegment) returns the currently-available end (the live edge), so a
+      // forward skip saturates at live instead of overshooting into not-yet-recorded
+      // content (the "REW_2 overshot to 42:37" class), and a backward skip clamps at 0.
+      // Completed recordings clamp to their full duration. Staged behind a flag so the
+      // default deploy is behavior-identical and it can be validated at runtime without a
+      // rebuild. Wrapped defensively so a clamp failure can never break a seek.
+      if (pushMode && serverSideTranscoding &&
+          Sage.getBoolean("miniplayer/push_seek_dvr_clamp", false))
+      {
+        try
+        {
+          MediaFile clampMF = VideoFrame.getMediaFileForPlayer(MiniPlayer.this);
+          VideoFrame clampVf = VideoFrame.getVideoFrameForPlayer(MiniPlayer.this);
+          long availEnd = (clampVf != null && clampMF != null)
+              ? clampMF.getDuration(clampVf.getCurrSegment()) : 0;
+          if (availEnd > 0)
+          {
+            long clamped = Math.max(0, Math.min(seekTimeMillis, availEnd));
+            if (clamped != seekTimeMillis)
+            {
+              if (Sage.DBG) System.out.println("NG-SEEKDIAG dvr-clamp target=" + seekTimeMillis +
+                  " -> " + clamped + " availEnd=" + availEnd + " epoch=" + seekEpoch);
+              seekTimeMillis = clamped;
+            }
+          }
+        }
+        catch (Throwable clampT)
+        {
+          if (Sage.DBG) System.out.println("NG-SEEKDIAG dvr-clamp skipped: " + clampT);
+        }
+      }
       maybeCheckpointSessionBandwidthOnSeek(seekTimeMillis);
       synchronized (this)
       {
@@ -4468,13 +4582,75 @@ public class MiniPlayer implements DVDMediaPlayer
             if (pushMode)
             {
               if (Sage.DBG) System.out.println("seeking numpushbuffers=" + numPushedBuffers + " seekTime=" + seekTimeMillis);
-
-              if (serverSideTranscoding && detailedPushBufferStats && seekTimeMillis > clientReportedMediaTime + timestampOffset &&
-                  seekTimeMillis < lastParserTimestamp)
+              // Estimated on-screen (displayed) position -- see getSeekBaseMediaTimeMillis().
+              // Computed inline here (rather than calling that synchronized method from inside
+              // the decoderLock block) and reused for both the diagnostics and the in-place
+              // fast-path gate below.
+              long pushDisplayBase = timestampOffset;
+              if (currState == PLAY_STATE && timestampOffsetWallTime > 0)
+              {
+                long adv = Sage.eventTime() - timestampOffsetWallTime;
+                if (adv > 0) pushDisplayBase += adv;
+              }
+              if (lastParserTimestamp > timestampOffset && pushDisplayBase > lastParserTimestamp)
+                pushDisplayBase = lastParserTimestamp;
+              if (pushDisplayBase < timestampOffset) pushDisplayBase = timestampOffset;
+              // A forward skip whose target is still inside the data already transcoded and
+              // pushed to the client (display .. lastParserTimestamp) can be satisfied by an
+              // in-place client-side seek (seekPull0 -> MEDIACMD_SEEK) with NO ffmpeg restart,
+              // which is near-instant. Anything else (backward, or forward past the buffered
+              // head) needs a full reprime. NOTE: the legacy gate used
+              // clientReportedMediaTime+timestampOffset as the lower bound; the Android push
+              // client freezes clientReportedMediaTime, pinning that bound minutes ahead so the
+              // fast path never fired and every skip paid the 2-5s reprime cost. Use the
+              // server display estimate instead.
+              // NOTE: default OFF. Enabling this in-place path desynced the position model
+              // in testing (it advances the client while leaving timestampOffset fixed, so
+              // subsequent relative-skip bases drifted and skips became erratic). Kept behind
+              // a property so it can be re-enabled for experimentation once a robust display-
+              // position signal is available. Default path is a full reprime (consistent).
+              boolean pushInPlaceSeek = serverSideTranscoding && detailedPushBufferStats &&
+                  Sage.getBoolean("miniplayer/push_inplace_seek", false) &&
+                  seekTimeMillis > pushDisplayBase && seekTimeMillis < lastParserTimestamp;
+              // NG push-mode seek diagnostics: capture the full reposition decision so a
+              // backward-skip-goes-forward / flush-to-0 repro can be triaged from the log
+              // alone -- base vs target direction, which reposition branch fires, and the
+              // position-model fields it reads. Greppable via "NG-SEEKDIAG".
+              if (Sage.DBG)
+              {
+                long ngStaleClientBase = clientReportedMediaTime + timestampOffset;
+                long ngParserBase = Math.max(timestampOffset, lastParserTimestamp);
+                long ngWallAdv = (currState == PLAY_STATE && timestampOffsetWallTime > 0)
+                    ? Sage.eventTime() - timestampOffsetWallTime : 0;
+                String ngBranch = pushInPlaceSeek ? "in-place(seekPull0)"
+                    : (rpSrc != null ? "rpSrc.sendSeek"
+                    : (byteBasedSeeking ? "byte-reprime" : (transcoded ? "tcSrc.seek-reprime" : "mpegSrc.seek-reprime")));
+                long ngRawSeekBase = getSeekBaseMediaTimeMillis();
+                long ngMediaTime = getMediaTimeMillis();
+                System.out.println("NG-SEEKDIAG push seek target=" + seekTimeMillis + " displayBase=" + pushDisplayBase +
+                    " impliedDelta=" + (seekTimeMillis - pushDisplayBase) +
+                    " rawSeekBase=" + ngRawSeekBase + " mediaTime=" + ngMediaTime +
+                    " dir=" + (seekTimeMillis >= pushDisplayBase ? "FWD" : "BACK") +
+                    " epoch=" + seekEpoch +
+                    " parserBase=" + ngParserBase + " staleClientBase=" + ngStaleClientBase +
+                    " crmt=" + clientReportedMediaTime + " tsOff=" + timestampOffset +
+                    " wallAdv=" + ngWallAdv + " lastParserTs=" + lastParserTimestamp +
+                    " state=" + currState + " sst=" + serverSideTranscoding +
+                    " dpbs=" + detailedPushBufferStats + " xcoded=" + transcoded +
+                    " byteSeek=" + byteBasedSeeking + " rpSrc=" + (rpSrc != null) +
+                    " -> branch=" + ngBranch);
+              }
+              if (pushInPlaceSeek)
               {
                 if (Sage.DBG) System.out.println("Seeking within the push buffer limit crmt=" + clientReportedMediaTime + " to=" + timestampOffset + " lpt=" + lastParserTimestamp + " seek=" + seekTimeMillis);
                 seekPull0(seekTimeMillis - timestampOffset);
                 lastMediaTime = seekTimeMillis - timestampOffset;
+                // The stream was NOT reprimed (timestampOffset is unchanged), but the client
+                // is now displaying seekTimeMillis. Re-anchor the wall clock so the display
+                // model (timestampOffset + elapsed) reports the new position for the next
+                // relative skip, instead of the pre-jump position.
+                timestampOffsetWallTime = Sage.eventTime() - (seekTimeMillis - timestampOffset);
+                seekEpoch++;
               }
               else if (rpSrc != null)
               {
@@ -4518,8 +4694,18 @@ public class MiniPlayer implements DVDMediaPlayer
                 if (serverSideTranscoding)
                 {
                   timestampOffset = seekTimeMillis;
+                  timestampOffsetWallTime = Sage.eventTime();
+                  seekEpoch++;
                   lastMediaTime = 0;
                   clientReportedMediaTime = 0;
+                  // NG diag: the position model now ASSUMES the transcode re-primed exactly at
+                  // seekTimeMillis. If the underlying transcoder actually restarted at 0 (a
+                  // backward seek before the current transcode head), tsOff is now a lie and
+                  // every later target overshoots -> subsequent re-primes land at 0 (Bug B
+                  // cascade). Compare this asserted offset against the transcoder's real restart
+                  // time in the log ("Restarting transcode.../Xcode seeking...").
+                  if (Sage.DBG) System.out.println("NG-SEEKDIAG push reprime committed tsOff:=" + seekTimeMillis +
+                      " (asserted restart point; verify vs transcoder actual restart time)");
                 }
                 else
                   lastMediaTime = seekTimeMillis;
@@ -5742,6 +5928,7 @@ public class MiniPlayer implements DVDMediaPlayer
     if (Sage.DBG) System.out.println("flushPush0()");
     lastParserTimestamp = 0;
     lastParserTimestampBytePos = 0;
+    seekEpoch++;
     if (numPushedBuffers > 0 || mediaExtender)
     {
       try
@@ -5922,6 +6109,40 @@ public class MiniPlayer implements DVDMediaPlayer
         {
           clientReportedMediaTime = clientInStream.readInt();
           clientReportedPlayState = clientInStream.readByte();
+          // Phase 0 discovery (NG-POSDIAG): continuously compare what the client REPORTS as
+          // its position (clientReportedMediaTime, client-local) against the server's
+          // inferred on-screen estimate (timestampOffset + wall-elapsed, clamped by the
+          // parser) so we can measure, per client and recording type, how far the reported
+          // value leads/lags the true displayed frame -- the root-cause signal for the
+          // relative-skip base. Throttled to ~2s. Log-only; no behavior change.
+          if (Sage.DBG && serverSideTranscoding && pushMode && rpSrc == null)
+          {
+            long nowPd = Sage.eventTime();
+            if (nowPd - lastPosDiagTime >= 2000)
+            {
+              lastPosDiagTime = nowPd;
+              long inferredBase = timestampOffset;
+              if (currState == PLAY_STATE && timestampOffsetWallTime > 0)
+              {
+                long adv = nowPd - timestampOffsetWallTime;
+                if (adv > 0) inferredBase += adv;
+              }
+              if (lastParserTimestamp > timestampOffset && inferredBase > lastParserTimestamp)
+                inferredBase = lastParserTimestamp;
+              if (inferredBase < timestampOffset) inferredBase = timestampOffset;
+              long crmtSrc = clientReportedMediaTime + timestampOffset;
+              System.out.println("NG-POSDIAG epoch=" + seekEpoch +
+                  " enc=" + currHintEncoding +
+                  " file=" + (currFile != null ? currFile.getName() : "?") +
+                  " crmtSrc=" + crmtSrc + " inferredBase=" + inferredBase +
+                  " lead=" + (crmtSrc - inferredBase) +
+                  " crmt=" + clientReportedMediaTime + " tsOff=" + timestampOffset +
+                  " lastParserTs=" + lastParserTimestamp +
+                  " parserLead=" + (lastParserTimestamp - inferredBase) +
+                  " trusted=" + isClientPositionTrustedForEpoch() +
+                  " playState=" + clientReportedPlayState + " state=" + currState);
+            }
+          }
         }
         if (debugPush) System.out.println("Read the reply from the push call size=" + size + " freeSpace=" + freeSpace);
       }
@@ -6623,6 +6844,22 @@ public class MiniPlayer implements DVDMediaPlayer
   protected long timeGuessMillis;
   protected long guessTimestamp;
   protected long timestampOffset;
+  // Wall-clock instant (Sage.eventTime()) at which timestampOffset was last set, i.e.
+  // when the current push transcode session (re)primed. Used to estimate the on-screen
+  // playback position for relative-skip bases: after a reprime the client displays from
+  // timestampOffset and advances at 1x, so displayPos ~= timestampOffset + (now - this),
+  // capped by lastParserTimestamp (can't display data not yet transcoded/sent). This is
+  // independent of the unreliable client-reported clock. See getSeekBaseMediaTimeMillis().
+  protected long timestampOffsetWallTime;
+  // Phase 0 discovery / seek-epoch: a monotonically increasing id for each contiguous run
+  // of pushed content. Incremented on every server-initiated reposition (each reprime,
+  // each flushPush0, and each in-place jump). For now it is LOG-ONLY (Phase 0 discovery,
+  // NG-POSDIAG/NG-SEEKDIAG) so we can observe epoch boundaries vs client-reported position
+  // on live streams. Increment 1b will additionally consume it to reject stale-epoch
+  // position reports. Purely server-side; no wire change.
+  protected int seekEpoch;
+  // Throttle wall time for the continuous NG-POSDIAG position-truth log.
+  protected long lastPosDiagTime;
   protected boolean byteBasedSeeking;
   protected boolean serverSideTranscoding;
 
