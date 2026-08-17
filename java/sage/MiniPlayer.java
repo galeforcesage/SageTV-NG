@@ -4625,11 +4625,12 @@ public class MiniPlayer implements DVDMediaPlayer
                 String ngBranch = pushInPlaceSeek ? "in-place(seekPull0)"
                     : (rpSrc != null ? "rpSrc.sendSeek"
                     : (byteBasedSeeking ? "byte-reprime" : (transcoded ? "tcSrc.seek-reprime" : "mpegSrc.seek-reprime")));
+                // Single native position read (reused as the seek base). Avoids adding a
+                // second per-seek client round-trip on the hot skip path under DBG.
                 long ngRawSeekBase = getSeekBaseMediaTimeMillis();
-                long ngMediaTime = getMediaTimeMillis();
                 System.out.println("NG-SEEKDIAG push seek target=" + seekTimeMillis + " displayBase=" + pushDisplayBase +
                     " impliedDelta=" + (seekTimeMillis - pushDisplayBase) +
-                    " rawSeekBase=" + ngRawSeekBase + " mediaTime=" + ngMediaTime +
+                    " rawSeekBase=" + ngRawSeekBase +
                     " dir=" + (seekTimeMillis >= pushDisplayBase ? "FWD" : "BACK") +
                     " epoch=" + seekEpoch +
                     " parserBase=" + ngParserBase + " staleClientBase=" + ngStaleClientBase +
