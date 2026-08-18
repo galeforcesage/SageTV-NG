@@ -1896,7 +1896,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
           if (getMediaTimeMillis() <= Sage.time() - Math.max(getEncodeToPlaybackDelay()+ 2000, uiMgr.getLong(prefs + TIME_BEHIND_LIVE_TO_DISABLE_SKIP_FORWARD,4000))
               || !currFile.isRecording()) {
             lastVideoOpTime = Sage.eventTime();
-            long ffBase = getSeekBaseMediaTimeMillis();
+            long ffBase = getSkipBaseMillis();
             long ffRaw = ffBase + daJob.time;
             long ffTarget = Sage.getBoolean("videoframe/live_skip_edge_clamp", false)
                 ? clampLiveSkipTarget(ffRaw) : ffRaw;
@@ -1909,12 +1909,13 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
                 " target=" + ffTarget + " start=" + currFile.getStart(segment) +
                 " end=" + currFile.getEnd(segment) + " rec=" + currFile.isRecording());
             timeSelected(ffTarget, true);
+            notePendingSkipTarget(ffTarget);
           }
         }
         else
         {
           lastVideoOpTime = Sage.eventTime();
-          long rewBase = getSeekBaseMediaTimeMillis();
+          long rewBase = getSkipBaseMillis();
           long rewTarget = rewBase + daJob.time;
           // Comskip-aware rewind. When auto-skip is enabled and the user rewinds
           // INTO a detected commercial segment, the auto-skip monitor would
@@ -1967,6 +1968,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
               " target=" + rewTarget + " start=" + currFile.getStart(segment) +
               " end=" + currFile.getEnd(segment) + " rec=" + currFile.isRecording());
           timeSelected(rewTarget, false);
+          notePendingSkipTarget(rewTarget);
         }
         notifyPlaybackSeek();
         Catbert.processUISpecificHook("MediaPlayerSeekCompleted", null, uiMgr, true, SEEK_COMPLETE_HOOK_DELAY);
@@ -1996,6 +1998,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
             || !currFile.isRecording()) {
           lastVideoOpTime = Sage.eventTime();
           timeSelected(daJob.time, daJob.time > getMediaTimeMillis());
+          notePendingSkipTarget(daJob.time);
         }
         notifyPlaybackSeek();
         Catbert.processUISpecificHook("MediaPlayerSeekCompleted", null, uiMgr, true, SEEK_COMPLETE_HOOK_DELAY);
@@ -3780,6 +3783,93 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       return theFile.getEnd(segment);
     else
       return offsetTime + theFile.getStart(segment);
+  }
+
+  // NG seek-target coalescing state (default OFF: videoframe/seek_target_coalesce).
+  // When enabled, a just-issued relative/absolute skip target is remembered so that a
+  // rapid follow-up skip that arrives before playback settles to that target accumulates
+  // from the INTENDED position instead of the still-climbing reported position. See
+  // getSkipBaseMillis() for the full rationale. All zero/false by default so that with the
+  // flag off these fields are never written and behavior is identical to legacy.
+  private long pendingSkipTargetMillis = 0;   // file-epoch ms of the last issued skip target
+  private long pendingSkipTargetSetTime = 0;  // Sage.eventTime() when it was issued
+  private boolean pendingSkipTargetValid = false;
+
+  // Base position (file-epoch ms) for a relative skip (FF/REW). Default behavior returns
+  // getSeekBaseMediaTimeMillis() unchanged. When videoframe/seek_target_coalesce is ON and a
+  // previously-issued skip target has NOT yet been reached by the reported playback position
+  // (i.e. a pull-xcode transcode restart is still settling, which takes several seconds), this
+  // returns that pending target so a burst of skips walks from where the user intended to be
+  // rather than from the lagging still-settling position. This is the root cause of the
+  // "rapid FFs barely move / first REW only goes -3s" behavior on in-progress recordings:
+  // each +/-10s was applied to a base that had not yet caught up to the last seek. The pending
+  // target self-clears once playback reaches it (within tol), once the settle window expires,
+  // or if it falls outside the current file's seekable window (stale from a prior file). Purely
+  // server-side; needs no client capability negotiation.
+  private long getSkipBaseMillis()
+  {
+    long reported = getSeekBaseMediaTimeMillis();
+    if (!Sage.getBoolean("videoframe/seek_target_coalesce", false))
+      return reported;
+    try
+    {
+      if (!pendingSkipTargetValid)
+        return reported;
+      MediaFile theFile = currFile;
+      if (theFile == null || theFile.isLiveStream())
+      {
+        pendingSkipTargetValid = false;
+        return reported;
+      }
+      long now = Sage.eventTime();
+      long window = uiMgr.getLong(prefs + "seek_target_coalesce_window_ms",
+          Math.max(getEncodeToPlaybackDelay() + 3000, 8000));
+      long tol = uiMgr.getLong(prefs + "seek_target_coalesce_tol_ms", 2500);
+      // Expire once the transcode settle window has elapsed -- after that the reported
+      // position is trustworthy again.
+      if (now - pendingSkipTargetSetTime > window)
+      {
+        pendingSkipTargetValid = false;
+        return reported;
+      }
+      // Reject a target that isn't inside this file's seekable window (e.g. left over from a
+      // previous file/segment); prevents a stale huge epoch from hijacking the base.
+      long floor = theFile.getStart(segment);
+      long edge = theFile.getEnd(segment);
+      if (edge > floor && (pendingSkipTargetMillis < floor - tol || pendingSkipTargetMillis > edge + tol))
+      {
+        pendingSkipTargetValid = false;
+        return reported;
+      }
+      // Playback has caught up to (within tol of) the intended target: trust reported again.
+      if (Math.abs(reported - pendingSkipTargetMillis) <= tol)
+      {
+        pendingSkipTargetValid = false;
+        return reported;
+      }
+      if (Sage.DBG) System.out.println("NG-TRICKDIAG coalesce base reported=" + reported +
+          " -> pendingTarget=" + pendingSkipTargetMillis + " ageMs=" + (now - pendingSkipTargetSetTime) +
+          " window=" + window + " tol=" + tol);
+      return pendingSkipTargetMillis;
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("NG-TRICKDIAG coalesce base skipped (exception): " + t);
+      pendingSkipTargetValid = false;
+      return reported;
+    }
+  }
+
+  // Record the file-epoch target we just handed to timeSelected() for a skip/scrub, so a rapid
+  // follow-up skip can accumulate from it while the transcode is still settling. No-op (and no
+  // field writes) unless videoframe/seek_target_coalesce is ON, keeping the default path legacy.
+  private void notePendingSkipTarget(long fileEpochTarget)
+  {
+    if (!Sage.getBoolean("videoframe/seek_target_coalesce", false))
+      return;
+    pendingSkipTargetMillis = fileEpochTarget;
+    pendingSkipTargetSetTime = Sage.eventTime();
+    pendingSkipTargetValid = true;
   }
 
   // File-timeline playback position to use as the BASE for a relative skip
