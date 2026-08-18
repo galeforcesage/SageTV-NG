@@ -211,7 +211,9 @@ The command vocabulary is the **existing** `MEDIACMD_*` set — nothing is renum
   **intent only**; the **server owns positioning** and computes the target from the
   canonical on-screen base (Section 2). Clients **MUST NOT** self-compute relative targets
   in push mode — client-side relative math against a mis-based clock is what produced the
-  original direction bugs. (In pull mode the client already owns seeking; unchanged.)
+  original direction bugs. (In **pull-xcode** mode the server still owns the relative-skip base
+  and sends the resolved absolute target via `MEDIACMD_SEEK`; the client's obligation is to
+  **re-open the transcode at that target** — see Section 6.2.)
 - **Absolute seeks** (scrubber / seek-bar / jump-to-time): carry an explicit target time;
   handled as an absolute reposition, clamped to the DVR window (Section 5).
 
@@ -226,6 +228,88 @@ by the client, the server can satisfy it with an **in-place** client seek
 Otherwise the server performs a full reprime (correct, but ~2–5 s). Meeting this contract
 is what moves an NG client from "always reprime" to "in-place when possible." The precise
 trust threshold is finalized after Phase 0.
+
+### 6.2 Pull-xcode (server-transcoded pull) seeking — client MUST re-open with `ss=` (NORMATIVE)
+
+This section applies to every `pull-xcode:<mode>` delivery (`browserhd`, `browserhd_remux`,
+`browserhd_copyv`, `mpeg2tsremux`, …) — i.e. whenever the **server transcodes** and the
+client **pulls** the result. This is the primary PWA/browser (MSE) path.
+
+**Transport reality.** The transcoded result is served over the MediaServer pull protocol
+(`/msproxy`) as a **forward-growing byte stream**: the client polls `SIZE` (available/total
+bytes) and issues `READ <byteOffset> <len>` against the transcoder's virtual output. **There
+is no in-stream time-seek in this transport.** The server can reposition the transcode *only*
+by tearing down the running ffmpeg and starting a new one at a new `-ss`, and that is
+triggered **exclusively** by a fresh control line:
+
+```
+XCODE_SETUP <mode>;ss=<targetMs>
+```
+
+i.e. by the client **re-opening the transcode stream** at the new position. Repositioning the
+transcoder underneath an existing pull is *not* possible without corrupting the byte/READ
+contract (a restart resets the virtual output size to ~0, so the client's next `READ` at its
+current high offset would fall past EOF and desync). The re-open is the mechanism, by design.
+
+**Client requirement (MUST).** On **every** seek — relative (FF / REW / Jump) or absolute
+(scrubber / jump-to-time) — the server delivers the resolved **absolute** target time to the
+client as `MEDIACMD_SEEK <targetMs>` (source-timeline ms; the server has already computed the
+relative-skip base per Sections 2 and 6). In a `pull-xcode` session the client MUST react by
+**re-opening the transcode stream at that target**:
+
+1. Open a new `/msproxy` request whose `XCODE_SETUP` carries `;ss=<targetMs>`.
+2. Treat the response as a **fresh stream**: reset the MSE `SourceBuffer` / demuxer and append
+   the new init exactly as at initial open (new fragmented-MP4 `empty_moov`, or for MP2T a
+   clean PAT/PMT + PCR-before-payload + RAP at the head — same discipline as an epoch change,
+   Section 7.2).
+
+The client MUST NOT try to satisfy the seek by continuing to read the *current* byte stream,
+and MUST NOT compute byte offsets itself — the byte↔time map of a live in-progress transcode
+is not known to the client, and reading forward produces **no reposition** (the transcoder
+keeps emitting from its original start).
+
+**Observed failure this codifies.** In a server-transcode (`browserhd`) live session the
+client issued no re-open on seek: the server logged the correct `MEDIACMD_SEEK` target for
+each FF/REW/Jump, but **zero** `XCODE_SETUP;ss=` re-opens followed, so the single transcoder
+streamed straight ahead and **nothing moved on screen**. The initial resume-seek worked only
+because the *first* open already carried `ss=`. FF/REW/Jump/scrub must each behave like that
+first open.
+
+**Server side is already complete (informative).** `MediaServer` parses `;ss=` and, on each
+such `XCODE_SETUP`, stops the previous transcoder and starts a new `FFMPEGTranscoder` with
+`setTranscodeStartSeekTime(ss)` (emitting `-ss` ahead of `-i`). No server or framing change is
+required for correct pull-xcode trick-play — only that the client re-opens with `ss=`. The
+trigger may be either a brand-new `/msproxy` request **or** a fresh `XCODE_SETUP <mode>;ss=`
+line sent on the **existing** MediaServer connection (the command loop handles repeated
+`XCODE_SETUP`, tearing down and restarting the transcoder each time); in the same-connection
+case the client resets its `READ` offset to 0 for the new stream and re-inits MSE as above.
+
+**Reconciliation with the "server never restarts on seek" diagnostic (IMPORTANT).** A bridge
+report may observe that `seekPull0()` / `MEDIACMD_SEEK` is logged N times yet the transcoder
+never restarts (`virtXcodedBytes` climbs monotonically, one continuous `/msproxy` body). That
+is expected and is **not** a server regression, because the client uses **two independent
+server connections**:
+
+- **control** (`/media`, the MiniClient socket): carries `OPENURL`, `MEDIACMD_SEEK`, etc. This
+  is where `seekPull0(targetMs)` is delivered — to `MiniPlayer`, *not* to the transcoder.
+- **media** (`/msproxy`, the MediaServer socket): carries `XCODE_SETUP` / `SIZE` / `READ` and
+  owns the `FFMPEGTranscoder`.
+
+`MediaServer.Connection` is per-socket and holds **no client identity** (only a file path), so
+there is deliberately **no server-side path** from a control-channel `MEDIACMD_SEEK` to the
+`/msproxy` transcoder — the server cannot know which pull connection (if any, and there may be
+several for the same file) a given control seek belongs to. Therefore the transcode restart
+**must** be initiated on the `/msproxy` connection by the client sending `XCODE_SETUP;ss=`. The
+proof that the server-side restart works is the initial open: it carried `ss=` and positioned
+correctly. Every subsequent FF/REW/Jump/scrub must do the same thing the first open did.
+
+**Related server aid (position regression).** The same report may note relative skips walking
+backward during a rapid burst (e.g. four FFs to 70s, then the next FF lands at 53s) because the
+server based the skip on the client's still-catching-up reported position. The server already
+mitigates this with seek-target *coalescing* (it accumulates from the last **issued** target
+instead of the lagging reported position while the transcode settles). This is server-side and
+needs no client change; it becomes fully effective once the reposition above actually happens,
+since today the correct targets are computed but never acted on.
 
 ---
 
@@ -249,6 +333,10 @@ trust threshold is finalized after Phase 0.
   init segment. For MSE **MP2T** the epoch boundary MUST provide a clean init: PAT/PMT
   present, PCR before payload, valid PTS, and a RAP/keyframe at the start — otherwise MSE
   will stall. (This is the same discipline the remux path already follows for TS.)
+- **Pull-xcode seek (server transcodes):** on `MEDIACMD_SEEK <targetMs>`, re-open the
+  transcode stream with `;ss=<targetMs>` and reset the `SourceBuffer` as on epoch change —
+  do **not** keep reading the current stream. This is mandatory for FF/REW/Jump/scrub to move
+  the picture; see Section 6.2 for the full contract and the failure it prevents.
 
 ### 7.3 Both
 - Always honor `MEDIACMD_FLUSH` before emitting the next position report.
