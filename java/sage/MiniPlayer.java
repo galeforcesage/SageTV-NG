@@ -4542,7 +4542,14 @@ public class MiniPlayer implements DVDMediaPlayer
       // Completed recordings clamp to their full duration. Staged behind a flag so the
       // default deploy is behavior-identical and it can be validated at runtime without a
       // rebuild. Wrapped defensively so a clamp failure can never break a seek.
-      if (pushMode && serverSideTranscoding &&
+      //
+      // NOTE: gated on pushMode only (NOT serverSideTranscoding). Field evidence shows the
+      // real push clients never take the sst=true path -- Android/ijkplayer DIRECT_PLAYs
+      // MPEG2-Video over push (sst=false) and the PWA uses pull-xcode. The clamp target
+      // (file-timeline seekTimeMillis vs getDuration(currSegment)) is independent of whether
+      // the server transcodes, so gating it on sst=true confined it to a path that never
+      // runs. Applying it to any push seek lets it actually protect the live edge.
+      if (pushMode &&
           Sage.getBoolean("miniplayer/push_seek_dvr_clamp", false))
       {
         try
