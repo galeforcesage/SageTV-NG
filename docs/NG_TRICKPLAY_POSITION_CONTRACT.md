@@ -311,6 +311,27 @@ instead of the lagging reported position while the transcode settles). This is s
 needs no client change; it becomes fully effective once the reposition above actually happens,
 since today the correct targets are computed but never acted on.
 
+**How the other server-transcode clients already do this (precedent).** Every existing client
+that plays a *server-transcoded* stream reaches the transcoder on seek in one of two ways, and
+in **both** the party that **owns the transcode connection drives the seek** — the server never
+reprimes a transcoder it cannot reach from the control channel:
+
+| Client / delivery | Who owns the transcode source | What happens on seek |
+| --- | --- | --- |
+| **Push + server transcode** — native MiniClient (HD200/HD300), Placeshifter, Android push | **`MiniPlayer`** (creates `mpegSrc = FastMpeg2Reader` / `Mpeg2Transcoder` on its *own* MediaServer connection) | `MiniPlayer.seek()` → `mpegSrc.seek()` → `inxs.seekToTime()` reprimes the `FFMPEGTranscoder` **server-side** (`FastMpeg2Reader.java`). Client is simply pushed the new bytes. |
+| **HLS pull** — iOS / `httpls` | **The HLS server** (per session) | Client **re-requests** a new playlist/segment; the server calls `xcode.transcoder.seekToTime(...)` per request (`HTTPLSServer.java`). Re-request → reprime. |
+| **PWA `pull-xcode:browserhd`** — bridge/MSE | **The bridge** (its own `/msproxy` connection + `XCODE_SETUP`) | `MiniPlayer` owns *nothing* to reprime (`pushMode=false`, no `mpegSrc`/`tcSrc`); it can only emit `MEDIACMD_SEEK` on the control channel. The bridge holds a **single continuous** pull and **never re-requests** → nothing reprimes. |
+
+So the PWA pull path is a **third model that matches neither precedent**. The behavior the
+bridge is asking for ("server restarts the transcode on the control seek") is exactly what the
+**push** clients get — but only because there the server *owns* the transcode source. A pull
+client that privately owns the `/msproxy` transcode cannot get push semantics; its correct
+analog is the **HLS pattern it is not yet following**: on `MEDIACMD_SEEK`, **re-issue the
+request** with `XCODE_SETUP;ss=<targetMs>` (a fresh `/msproxy` open, or a new `XCODE_SETUP` on
+the existing connection). That is the identical "client re-requests → server seeks its
+transcoder" contract iOS already satisfies — **not a new server capability**, just the pull
+client adopting the same discipline every other server-transcode client uses.
+
 ---
 
 ## 7. Per-Client Implementation Notes
