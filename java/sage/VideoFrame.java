@@ -1896,13 +1896,26 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
           if (getMediaTimeMillis() <= Sage.time() - Math.max(getEncodeToPlaybackDelay()+ 2000, uiMgr.getLong(prefs + TIME_BEHIND_LIVE_TO_DISABLE_SKIP_FORWARD,4000))
               || !currFile.isRecording()) {
             lastVideoOpTime = Sage.eventTime();
-            timeSelected(getSeekBaseMediaTimeMillis() + daJob.time, true);
+            long ffBase = getSeekBaseMediaTimeMillis();
+            long ffRaw = ffBase + daJob.time;
+            long ffTarget = Sage.getBoolean("videoframe/live_skip_edge_clamp", false)
+                ? clampLiveSkipTarget(ffRaw) : ffRaw;
+            // NG-TRICKDIAG: log-only trick-play base/target self-check. Covers ALL paths
+            // (push + pull-xcode) so a live in-progress FF/REW can be validated against the
+            // actual seekable window without a rebuild. base=seek base (epoch ms for recorded
+            // files), rawTarget=base+delta, target=after optional live-edge clamp.
+            if (Sage.DBG) System.out.println("NG-TRICKDIAG FF delta=" + daJob.time +
+                " base=" + ffBase + " mediaTime=" + getMediaTimeMillis() + " rawTarget=" + ffRaw +
+                " target=" + ffTarget + " start=" + currFile.getStart(segment) +
+                " end=" + currFile.getEnd(segment) + " rec=" + currFile.isRecording());
+            timeSelected(ffTarget, true);
           }
         }
         else
         {
           lastVideoOpTime = Sage.eventTime();
-          long rewTarget = getSeekBaseMediaTimeMillis() + daJob.time;
+          long rewBase = getSeekBaseMediaTimeMillis();
+          long rewTarget = rewBase + daJob.time;
           // Comskip-aware rewind. When auto-skip is enabled and the user rewinds
           // INTO a detected commercial segment, the auto-skip monitor would
           // normally bounce them forward again — making it impossible to re-watch
@@ -1946,6 +1959,13 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
               }
             }
           }
+          long rewRaw = rewTarget;
+          if (Sage.getBoolean("videoframe/live_skip_edge_clamp", false))
+            rewTarget = clampLiveSkipTarget(rewTarget);
+          if (Sage.DBG) System.out.println("NG-TRICKDIAG REW delta=" + daJob.time +
+              " base=" + rewBase + " mediaTime=" + getMediaTimeMillis() + " rawTarget=" + rewRaw +
+              " target=" + rewTarget + " start=" + currFile.getStart(segment) +
+              " end=" + currFile.getEnd(segment) + " rec=" + currFile.isRecording());
           timeSelected(rewTarget, false);
         }
         notifyPlaybackSeek();
@@ -3790,6 +3810,43 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       return offsetTime + theFile.getStart(segment);
     }
     return getMediaTimeMillis();
+  }
+
+  // Increment 1c (pull path) -- live-edge / DVR-window clamp for relative skips
+  // (skip forward/back). Default OFF: videoframe/live_skip_edge_clamp. For an in-progress
+  // recording the seekable window in file-epoch ms is [getStart(segment), getEnd(segment)]
+  // where getEnd() returns Sage.time() (the live edge) while still recording -- valid even
+  // though the player reports realDur=0. A relative skip that would land before the start
+  // or past the live edge is clamped into the window (leaving a small guard behind live so
+  // the transcoder has data to serve), instead of producing a before-start target that the
+  // downstream seek collapses to offset 0 (the "REW-to-2:42 -> restart from 0:00" case) or a
+  // past-edge target. Completed recordings clamp to their true [start,end]. Returns the input
+  // unchanged when the flag is off, the file is not a recording, or anything is out of range,
+  // so the default deploy is behavior-identical and it can be validated by flipping the flag.
+  private long clampLiveSkipTarget(long fileEpochTarget)
+  {
+    try
+    {
+      MediaFile theFile = currFile;
+      if (theFile == null || theFile.isLiveStream() || !theFile.isRecording())
+        return fileEpochTarget;
+      long floor = theFile.getStart(segment);
+      long edge = theFile.getEnd(segment); // == Sage.time() while still recording
+      if (edge <= floor)
+        return fileEpochTarget;
+      long guard = uiMgr.getLong(prefs + TIME_BEHIND_LIVE_TO_DISABLE_SKIP_FORWARD, 4000);
+      long hi = Math.max(floor, edge - guard);
+      long clamped = Math.min(Math.max(fileEpochTarget, floor), hi);
+      if (Sage.DBG && clamped != fileEpochTarget)
+        System.out.println("NG-TRICKDIAG clamp target=" + fileEpochTarget + " -> " + clamped +
+            " floor=" + floor + " edge=" + edge + " guard=" + guard);
+      return clamped;
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("NG-TRICKDIAG clamp skipped (exception): " + t);
+      return fileEpochTarget;
+    }
   }
 
   private boolean hasValidRealDur()
