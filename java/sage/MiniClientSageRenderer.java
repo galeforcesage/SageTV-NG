@@ -494,6 +494,10 @@ public class MiniClientSageRenderer extends SageRenderer
       long timeout = Sage.getInt("ui/remote_ui_connection_timeout", 15000);
       sake.socket().setKeepAlive(true);
       sake.socket().setTcpNoDelay(true);
+      // Keep long-lived UI/player connections warm so an idle client (e.g. sitting on a
+      // static menu) isn't silently dropped by a NAT/router/proxy idle timeout, and so a
+      // genuinely dead peer is detected in ~100s instead of the ~2h OS keep-alive default.
+      IOUtils.tuneKeepAlive(sake.socket());
       java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocate(2048);
       bb.clear().limit(8);
       TimeoutHandler.registerTimeout(timeout, sake);

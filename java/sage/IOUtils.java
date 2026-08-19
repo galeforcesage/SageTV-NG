@@ -34,6 +34,52 @@ public class IOUtils
   }
 
   /**
+   * Tunes TCP keep-alive on a long-lived control/UI socket so that a silently
+   * dropped idle connection (e.g. a NAT/router/Docker-proxy idle timeout while a
+   * client sits on a static menu) is both prevented and, if the peer is truly
+   * gone, detected within a couple of minutes instead of the ~2 hour OS default.
+   * <p>
+   * The frequent keep-alive probes double as NAT keep-warm traffic, so idle UI
+   * connections stop getting reaped in the first place. This is a pure
+   * transport-layer change (no protocol/wire change) and is therefore safe for
+   * legacy clients: keep-alive is handled entirely by the peer kernels.
+   * <p>
+   * The per-probe options require {@code jdk.net.ExtendedSocketOptions} (Linux
+   * and macOS). Any option that is unsupported on the running platform/JDK is
+   * silently skipped; plain {@code SO_KEEPALIVE} still applies as a fallback.
+   *
+   * @param sock the socket to tune; ignored if {@code null}
+   */
+  public static void tuneKeepAlive(java.net.Socket sock)
+  {
+    tuneKeepAlive(sock,
+        Sage.getInt("ui/keepalive_idle_secs", 45),
+        Sage.getInt("ui/keepalive_interval_secs", 10),
+        Sage.getInt("ui/keepalive_probe_count", 6));
+  }
+
+  /**
+   * @see #tuneKeepAlive(java.net.Socket)
+   * @param sock the socket to tune; ignored if {@code null}
+   * @param idleSecs seconds a connection may be idle before probing starts;
+   *        {@code <= 0} disables tuning entirely (plain OS default behavior)
+   * @param intervalSecs seconds between individual keep-alive probes
+   * @param probeCount unanswered probes before the connection is declared dead
+   */
+  public static void tuneKeepAlive(java.net.Socket sock, int idleSecs, int intervalSecs, int probeCount)
+  {
+    if (sock == null || idleSecs <= 0)
+      return;
+    try { sock.setKeepAlive(true); } catch (Throwable t) {}
+    // Set each option independently so a platform that supports only a subset
+    // still gets what it can. jdk.net.ExtendedSocketOptions is referenced
+    // reflectively-safe via direct import guarded by catch of Throwable.
+    try { sock.setOption(jdk.net.ExtendedSocketOptions.TCP_KEEPIDLE, Integer.valueOf(idleSecs)); } catch (Throwable t) {}
+    try { sock.setOption(jdk.net.ExtendedSocketOptions.TCP_KEEPINTERVAL, Integer.valueOf(intervalSecs)); } catch (Throwable t) {}
+    try { sock.setOption(jdk.net.ExtendedSocketOptions.TCP_KEEPCOUNT, Integer.valueOf(probeCount)); } catch (Throwable t) {}
+  }
+
+  /**
    * Used to read a URL contents into String.  This operation blocks and the content is a string, so it should
    * not be used on large files, and should not be used on binary files.
    *

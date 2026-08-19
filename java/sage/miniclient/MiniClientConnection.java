@@ -201,6 +201,23 @@ public class MiniClientConnection implements sage.SageTVInputCallback
     usesAdvancedImageCaching = false;
   }
 
+  // Self-contained (no sage.* dependency) TCP keep-alive tuner so an idle connection that
+  // gets silently dropped by a NAT/router/proxy is detected quickly instead of leaving the
+  // client blocked forever on a dead socket. Per-probe options need Java 11+ ExtendedSocketOptions
+  // (Linux/macOS); anything unsupported on this platform is skipped, plain SO_KEEPALIVE remains.
+  private static void tuneKeepAlive(java.net.Socket sock)
+  {
+    if (sock == null) return;
+    int idleSecs = Integer.getInteger("sagetv.miniclient.keepalive_idle_secs", 45).intValue();
+    int intervalSecs = Integer.getInteger("sagetv.miniclient.keepalive_interval_secs", 10).intValue();
+    int probeCount = Integer.getInteger("sagetv.miniclient.keepalive_probe_count", 6).intValue();
+    if (idleSecs <= 0) return;
+    try { sock.setKeepAlive(true); } catch (Throwable t) {}
+    try { sock.setOption(jdk.net.ExtendedSocketOptions.TCP_KEEPIDLE, Integer.valueOf(idleSecs)); } catch (Throwable t) {}
+    try { sock.setOption(jdk.net.ExtendedSocketOptions.TCP_KEEPINTERVAL, Integer.valueOf(intervalSecs)); } catch (Throwable t) {}
+    try { sock.setOption(jdk.net.ExtendedSocketOptions.TCP_KEEPCOUNT, Integer.valueOf(probeCount)); } catch (Throwable t) {}
+  }
+
   private java.net.Socket EstablishServerConnection(int connType) throws java.io.IOException
   {
     int flag=1;
@@ -215,6 +232,10 @@ public class MiniClientConnection implements sage.SageTVInputCallback
       sake.setSoTimeout(30000);
       sake.setTcpNoDelay(true);
       sake.setKeepAlive(true);
+      // Keep this long-lived connection warm and detect a silently-dropped idle link
+      // (NAT/router/proxy reaping an idle menu) quickly, so we can trigger our reconnect
+      // path instead of blocking forever on a dead socket (black-screen-on-wake).
+      tuneKeepAlive(sake);
       outStream = sake.getOutputStream();
       inStream = sake.getInputStream();
       byte[] msg = new byte[7];
