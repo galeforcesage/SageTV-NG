@@ -202,6 +202,11 @@ public class FormatParser
               myFormat = null;
               if (sage.Sage.DBG) System.out.println("Using external format detector because we only detected audio on the internal format...");
             } else {
+              // The native parser resolves the codec/PID but only knows the
+              // sequence headers of the codecs it was taught; HEVC arrives with
+              // no width/height at all. Backfill from ffmpeg before returning,
+              // since this is the point of no return for the format.
+              fillMissingVideoGeometry(f, myFormat);
               return myFormat;
             }
           }
@@ -357,6 +362,107 @@ public class FormatParser
       t.printStackTrace(System.out);
       return null;
     }
+  }
+
+  /**
+   * Fill in video geometry the internal MPEG parser could not determine, using
+   * the external ffmpeg probe.
+   *
+   * The native parser resolves the codec and PID from the PMT but only derives
+   * width/height/frame rate for the codecs whose sequence headers it knows. For
+   * HEVC (ATSC 3.0) it yields a stream like {@code Video[HEVC progressive
+   * id=0100]} with no resolution and no bitrate, because it never parses the
+   * HEVC SPS. Since {@link #getFileFormat} returns the internal result as soon
+   * as it contains any stream, ffmpeg was never consulted and a 3840x2160
+   * recording was permanently recorded as having no resolution at all.
+   *
+   * Resolution is load-bearing well beyond display: it drives placeshifting and
+   * transcode decisions, client capability matching, and the enhancement
+   * admission path, all of which treat 0x0 as "unknown" and fall back to
+   * conservative behavior.
+   *
+   * This enriches rather than replaces, because the internal format is better in
+   * every other respect -- it carries the PIDs and per-program stream layout
+   * that the ffmpeg text parse does not reconstruct. Only fields that are still
+   * unset are filled, so a value the native parser did determine always wins.
+   *
+   * @return true if anything was filled in.
+   */
+  private static boolean fillMissingVideoGeometry(java.io.File f, ContainerFormat format)
+  {
+    if (format == null || !sage.Sage.getBoolean("format_detect_ffmpeg_geometry_fallback", true))
+      return false;
+    VideoFormat[] vids = format.getVideoFormats();
+    if (vids == null || vids.length == 0)
+      return false;
+
+    // Only pay for the extra probe when something is actually missing.
+    boolean needed = false;
+    for (int i = 0; i < vids.length; i++)
+      if (vids[i] != null && (vids[i].getWidth() <= 0 || vids[i].getHeight() <= 0))
+      {
+        needed = true;
+        break;
+      }
+    if (!needed) return false;
+
+    boolean changed = false;
+    try
+    {
+      String ffmpegInfo = getFFMPEGFormatInfo(f.toString());
+      if (ffmpegInfo == null || ffmpegInfo.length() == 0) return false;
+      BitstreamFormat[] ffStreams = extractStreamFormatsFromFFMPEGInfo(ffmpegInfo);
+      changed = mergeVideoGeometry(vids, ffStreams);
+
+      if (format.getBitrate() <= 0)
+      {
+        int cbr = extractContainerBitrateFromFFMPEGInfo(ffmpegInfo);
+        if (cbr > 0) { format.setBitrate(cbr); changed = true; }
+      }
+    }
+    catch (Throwable t)
+    {
+      if (sage.Sage.DBG) System.out.println("Error filling video geometry from ffmpeg for " + f + ": " + t);
+      return false;
+    }
+
+    if (changed && sage.Sage.DBG)
+      System.out.println("Filled missing video geometry from ffmpeg for " + f + " -> " + format);
+    return changed;
+  }
+
+  /**
+   * Copy geometry from ffmpeg-derived video streams onto the internally parsed
+   * ones, pairing them in order and filling only fields that are still unset.
+   *
+   * Package-private so the merge rules can be tested without an ffmpeg binary
+   * or a media file.
+   *
+   * @return true if any field was filled.
+   */
+  static boolean mergeVideoGeometry(VideoFormat[] dstVids, BitstreamFormat[] ffStreams)
+  {
+    if (dstVids == null || ffStreams == null) return false;
+
+    java.util.ArrayList ffVids = new java.util.ArrayList();
+    for (int i = 0; i < ffStreams.length; i++)
+      if (ffStreams[i] instanceof VideoFormat) ffVids.add(ffStreams[i]);
+
+    boolean changed = false;
+    for (int i = 0; i < dstVids.length && i < ffVids.size(); i++)
+    {
+      VideoFormat dst = dstVids[i];
+      VideoFormat src = (VideoFormat) ffVids.get(i);
+      if (dst == null || src == null) continue;
+      if (dst.getWidth() <= 0 && src.getWidth() > 0) { dst.setWidth(src.getWidth()); changed = true; }
+      if (dst.getHeight() <= 0 && src.getHeight() > 0) { dst.setHeight(src.getHeight()); changed = true; }
+      if (dst.getFps() <= 0 && src.getFps() > 0) { dst.setFps(src.getFps()); changed = true; }
+      if (dst.getArNum() <= 0 && src.getArNum() > 0) { dst.setArNum(src.getArNum()); changed = true; }
+      if (dst.getArDen() <= 0 && src.getArDen() > 0) { dst.setArDen(src.getArDen()); changed = true; }
+      if (dst.getBitrate() <= 0 && src.getBitrate() > 0) { dst.setBitrate(src.getBitrate()); changed = true; }
+      if (dst.getColorspace() == null && src.getColorspace() != null) { dst.setColorspace(src.getColorspace()); changed = true; }
+    }
+    return changed;
   }
 
   private static boolean addAdditionalMetadata(java.io.File f, ContainerFormat format)
@@ -1017,6 +1123,19 @@ public class FormatParser
         while ((nextStr.indexOf(" fps") == -1 && nextStr.indexOf(" tbr") == -1))
         {
           nextStr = nextStr.trim();
+          // Modern ffmpeg folds the aspect ratio into the resolution field as
+          // "1920x1080 [SAR 1:1 DAR 16:9]". Peel it off so the resolution below
+          // is a bare WxH again, and keep the DAR for the AR handling.
+          String inlineDar = null;
+          if (nextStr.endsWith("]") && nextStr.indexOf('[') > 0)
+          {
+            String[] split = splitInlineAspect(nextStr);
+            if (split[0] != null && parseSeparatedInts(split[0], 'x') != null)
+            {
+              nextStr = split[0];
+              inlineDar = split[1];
+            }
+          }
           if ("interlaced".equals(nextStr))
           {
             pastPixFmt = true;
@@ -1084,6 +1203,16 @@ public class FormatParser
             pastPixFmt = true;
             newFormat.setWidth(myDims[0]);
             newFormat.setHeight(myDims[1]);
+            if (inlineDar != null && !foundAR)
+            {
+              int[] ar = parseSeparatedInts(inlineDar, ':');
+              if (ar != null && ar[1] != 0)
+              {
+                newFormat.setArNum(ar[0]);
+                newFormat.setArDen(ar[1]);
+                newFormat.setAspectRatio(((float) ar[0]) / ar[1]);
+              }
+            }
           }
           else if ((myDims = parseSeparatedInts(nextStr, '/')) != null)
           {
@@ -1268,6 +1397,43 @@ public class FormatParser
       }
     }
     return 0;
+  }
+
+  /**
+   * Split a video resolution token that may carry an inline aspect ratio.
+   *
+   * Modern ffmpeg emits the sample/display aspect ratio inside the same
+   * comma-separated field as the resolution:
+   * <pre>  1920x1080 [SAR 1:1 DAR 16:9]</pre>
+   * whereas the format this parser was written against kept them in separate
+   * fields ("1920x1080", "PAR 1:1 DAR 16:9"). With the combined form,
+   * {@link #parseSeparatedInts} is handed "1080 [SAR 1:1 DAR 16:9]" and throws,
+   * so the token matched no branch at all and the width, height and aspect
+   * ratio were all dropped without a word.
+   *
+   * @return two elements: the bare "WxH" portion, and the "N:M" display aspect
+   *         ratio or null when the token had no bracketed suffix.
+   */
+  static String[] splitInlineAspect(String token)
+  {
+    if (token == null) return new String[] { null, null };
+    token = token.trim();
+    int brIdx = token.indexOf('[');
+    if (brIdx < 0 || !token.endsWith("]"))
+      return new String[] { token, null };
+
+    String head = token.substring(0, brIdx).trim();
+    String bracket = token.substring(brIdx + 1, token.length() - 1).trim();
+    String dar = null;
+    int darIdx = bracket.indexOf("DAR ");
+    if (darIdx >= 0)
+    {
+      dar = bracket.substring(darIdx + 4).trim();
+      // Guard against a trailing token after the ratio.
+      int sp = dar.indexOf(' ');
+      if (sp > 0) dar = dar.substring(0, sp);
+    }
+    return new String[] { head, dar };
   }
 
   public static int[] parseSeparatedInts(String s, char separator)
