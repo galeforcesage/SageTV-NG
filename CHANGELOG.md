@@ -1,6 +1,21 @@
 # Change Log
 
 ## Next
+* The client's `SUPPORTS_4K` setting now overrides the server's own inference
+  about what a device can display. Everything the enhancement gate previously
+  relied on — EDID sink sensing, panel geometry, per-codec decoder tables — is
+  auto-detection, and all three are wrong for a phone in dock mode driving a
+  television: the sensed sink is the handset's panel, and the decoder tables
+  describe the wrong screen. That is also the case that benefits most from a
+  4K upscale, and it was being refused. So `SUPPORTS_4K=yes` now raises the
+  assumed sink to 2160p, exempts the device from any admin form-factor
+  restriction, and satisfies the decode gate on its own; the decision is logged
+  as `uhd=forced` so a wrong override has an obvious cause and a one-setting
+  fix. `no` caps the target at 1440p rather than refusing outright, since a user
+  whose 4K path is broken usually still wants the upscale that works. An
+  explicit `yes` overrules only screen-shaped inferences — it cannot exceed the
+  server's maximum-height ceiling and has no bearing on the recording veto, GPU
+  admission, or the 720-line source floor.
 * Enhancement can now be restricted by device form factor. A GPU session spent
   upscaling for a 14.6" tablet held at arm's length buys far less than the same
   session spent on a 65" panel across the room, and both draw on the same

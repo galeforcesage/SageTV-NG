@@ -101,21 +101,21 @@ public final class EnhancementDryRun
       String localPref, String localStatus, boolean gpuSupported)
   {
     return evaluateAndLog(clientId, mediaDesc, sourceWidth, sourceHeight, interlaced,
-        sourceFps, sinkWidth, sinkHeight, surface, null, null, localPref, localStatus,
-        gpuSupported);
+        sourceFps, sinkWidth, sinkHeight, surface, null, null, null, localPref,
+        localStatus, gpuSupported);
   }
 
   public static EnhancementTier evaluateAndLog(String clientId, String mediaDesc,
       int sourceWidth, int sourceHeight, boolean interlaced, int sourceFps,
       int sinkWidth, int sinkHeight, PlaybackSurface surface,
-      ClientConstraints constraints, String formFactor,
+      ClientConstraints constraints, String formFactor, Boolean supports4k,
       String localPref, String localStatus, boolean gpuSupported)
   {
     if (!EnhancementAdvisor.isEnabled()) return EnhancementTier.NONE;
 
     EnhancementAdvisor.Advice advice = EnhancementAdvisor.advise(sourceWidth, sourceHeight,
         interlaced, sourceFps, sinkWidth, sinkHeight, surface, constraints, formFactor,
-        localPref, localStatus, gpuSupported);
+        supports4k, localPref, localStatus, gpuSupported);
 
     boolean dry = isDryRun();
     if (Sage.DBG)
@@ -131,6 +131,8 @@ public final class EnhancementDryRun
           + "@" + sourceFps
           + " sink=" + sinkWidth + "x" + sinkHeight
           + " form=" + safe(formFactor)
+          + " uhd=" + (supports4k == null ? "auto"
+              : (supports4k.booleanValue() ? "forced" : "off"))
           + " surface=" + (surface == null ? "none" : surface.getId())
           + " surfaceMax=" + (surface == null ? "n/a"
               : (surface.getMaxOutputWidth() + "x" + surface.getMaxOutputHeight()

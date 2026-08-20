@@ -209,6 +209,52 @@ only spend power downscaling.
 
 ---
 
+### 2.9 `SUPPORTS_4K` — the user's override, and it wins
+
+Everything above is inference: EDID sensing, panel geometry, decoder capability
+tables. All three are wrong often enough that clients now expose a user-facing
+**4K support** setting. Report it verbatim.
+
+| Value | Meaning |
+|---|---|
+| `auto` (or the field omitted) | Use the server's inference — §2.1 sink, §2.6/§2.7 ceilings, form factor |
+| `yes` | This device can play 4K. Serve it. |
+| `no` | Do not send 4K here. |
+
+Accepted spellings for `yes`: `yes`, `true`, `1`, `on`, `supported`. For `no`:
+`no`, `false`, `0`, `off`, `unsupported`. Anything else, including `auto`, reads
+as "not answered" and falls back to inference. A client that never implements the
+field is byte-for-byte a client answering `auto`.
+
+**`yes` is authoritative, deliberately.** It:
+
+- raises the effective sink to at least `3840x2160`, so a mis-sensed HDMI
+  connection can't cap the target at the handset's own panel size;
+- bypasses the form-factor restriction of §4 rule 3 entirely — **a phone that
+  reports 4K support is served 4K**, even when an admin has narrowed upscaling to
+  televisions;
+- satisfies the §2.6/§2.7 decode gate on its own.
+
+That last one is the sharp edge and it is intentional. The declared codec ceilings
+come from the same auto-detection the user is overriding, so honouring them here
+would make the override useless in precisely the situation it was built for — a
+phone in desktop mode driving a television, where the handset's panel and the
+decoder tables both describe the wrong screen. The decision is logged as
+`uhd=forced` so that if the override is wrong, the unplayable stream has an
+obvious cause and a one-setting fix.
+
+**`no` is a ceiling, not a refusal.** It caps the target at 1440p rather than
+disabling enhancement, because a user who knows 4K doesn't work on their setup
+usually still wants the deinterlace and the upscale that does.
+
+**What `yes` does *not* override.** It is a statement about the screen, so it only
+overrules screen-shaped inferences. It cannot exceed the server's
+`playback/gpu_enhance/max_height` ceiling, and it has no effect on the recording
+veto, GPU admission, or the §A.1 source floor — none of which are about what the
+client can display.
+
+---
+
 ## 3. What the server sends back
 
 No new channel and no new message type. The existing effective-delivery token
@@ -273,16 +319,22 @@ Worth knowing, because they explain why enhancement sometimes doesn't happen:
    `DEVICE_FORM_FACTOR` values and is **empty by default**, meaning every device
    is eligible. An admin who decides a handheld is not worth an encoder session
    can set it to `tv`. Excluded devices still receive `tier=deint`, and a client
-   that never reported a form factor is never excluded by it.
-6. **The GPU is shared.** The server budgets against *currently free* VRAM, so
+   that never reported a form factor is never excluded by it. A device reporting
+   `SUPPORTS_4K=yes`, or sensed to be driving an external display, is exempt —
+   see §2.9.
+6. **The user's `SUPPORTS_4K` answer outranks the server's inference.** `yes`
+   raises the sink to 4K, bypasses rule 5, and satisfies the decode gate; `no`
+   caps the target at 1440p. Neither affects rules 1, 2 or 7 — those are not
+   questions about the screen. See §2.9.
+7. **The GPU is shared.** The server budgets against *currently free* VRAM, so
    another application on the same GPU simply results in fewer or lower tiers. No
    enhancement resources are held while nothing is playing.
-7. **Tier is fixed for the life of a stream.** Mid-stream adaptation changes
+8. **Tier is fixed for the life of a stream.** Mid-stream adaptation changes
    bitrate only, using the existing rate-adjustment path, so there is no
    re-buffer. A new tier is chosen at the next channel or stream change. The one
    exception is recording distress, where enhancement may be torn down mid-stream
    to protect the capture.
-8. **Outcomes feed back.** Sustained rebuffering reported through
+9. **Outcomes feed back.** Sustained rebuffering reported through
    `BANDWIDTH_FEEDBACK_V1` causes the *next* stream for that client to start a
    tier lower. Keeping that feedback accurate is the most useful thing a client
    can do after §2.1.
@@ -299,7 +351,7 @@ Every decision is logged with a verdict. These are the ones a client controls:
 | `client's own upscaler is active and preferred` | `LOCAL_ENHANCEMENT` reported `status=active` |
 | `client explicitly prefers local enhancement` | `LOCAL_ENHANCEMENT` reported `pref=local` |
 | `sink is not meaningfully larger than the source` | sink height below ~1.5× source height — expected on a 1080p panel |
-| `device form factor is not in the upscale-eligible set` | this server's admin restricted upscaling to certain `DEVICE_FORM_FACTOR` values; not a client fault, and deinterlace is still offered |
+| `device form factor is not in the upscale-eligible set` | this server's admin restricted upscaling to certain `DEVICE_FORM_FACTOR` values, and the client neither reported `SUPPORTS_4K=yes` nor a sink large enough to be an external display; not a client fault, and deinterlace is still offered |
 | `source below the 720-line floor and not interlaced` | source material, not a client fault |
 | `source geometry unknown` | server could not determine source size |
 | `feature disabled` / `ffmpeg/GPU cannot run the pipeline` | server-side, nothing the client can change |
@@ -322,8 +374,11 @@ If a client team implements only part of this, do it in this order:
    whichever one your platform already exposes; you do not need both.
 3. **`LOCAL_ENHANCEMENT`** — stops the server from duplicating work a Shield is
    already doing better.
-4. **`DISPLAY_REFRESH_RATES`**, **`QUALITY_HINT`** — refinement.
-5. **`DISPLAY_HDR_TYPES`** — forward-looking only.
+4. **`SUPPORTS_4K`** — cheap to implement (you already have the setting) and the
+   only way a user can rescue a device the server mis-senses. Worth doing early
+   on any platform with an HDMI-out or dock mode.
+5. **`DISPLAY_REFRESH_RATES`**, **`QUALITY_HINT`** — refinement.
+6. **`DISPLAY_HDR_TYPES`** — forward-looking only.
 
 Steps 1 and 2 alone are enough for the feature to work correctly end to end.
 

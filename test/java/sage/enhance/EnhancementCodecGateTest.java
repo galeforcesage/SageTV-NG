@@ -266,7 +266,17 @@ public class EnhancementCodecGateTest
 
   private EnhancementAdvisor.Advice adviseForm(String formFactor, boolean interlaced)
   {
-    return EnhancementAdvisor.advise(1920, 1080, interlaced, 30, 3840, 2160,
+    return adviseForm(formFactor, interlaced, 3840, 2160);
+  }
+
+  /**
+   * Handheld cases must pass a handheld-sized sink: a device reporting a 4K sink
+   * is read as driving an external display and is deliberately not excluded.
+   */
+  private EnhancementAdvisor.Advice adviseForm(String formFactor, boolean interlaced,
+      int sinkW, int sinkH)
+  {
+    return EnhancementAdvisor.advise(1920, 1080, interlaced, 30, sinkW, sinkH,
         surface(3840, 2160, 60), null, formFactor, "auto", "none", true);
   }
 
@@ -282,7 +292,7 @@ public class EnhancementCodecGateTest
   public void testNarrowedListExcludesOtherFormFactors()
   {
     Sage.put(EnhancementAdvisor.PROP_FORM_FACTORS, "tv");
-    EnhancementAdvisor.Advice a = adviseForm("TABLET", false);
+    EnhancementAdvisor.Advice a = adviseForm("TABLET", false, 2960, 1848);
     assertEquals(a.getTier(), EnhancementTier.NONE, "tablet excluded when the list is tv-only");
     assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.FORM_FACTOR_EXCLUDED, "verdict");
   }
@@ -305,7 +315,7 @@ public class EnhancementCodecGateTest
   public void testExcludedFormFactorStillGetsDeinterlace()
   {
     Sage.put(EnhancementAdvisor.PROP_FORM_FACTORS, "tv");
-    assertEquals(adviseForm("PHONE", true).getTier(), EnhancementTier.DEINTERLACE_ONLY,
+    assertEquals(adviseForm("PHONE", true, 2400, 1080).getTier(), EnhancementTier.DEINTERLACE_ONLY,
         "deinterlace is cheap and still worth it on a handheld");
   }
 
@@ -316,6 +326,119 @@ public class EnhancementCodecGateTest
     Sage.put(EnhancementAdvisor.PROP_FORM_FACTORS, "tv");
     assertEquals(adviseForm(null, false).getTier(), EnhancementTier.ENHANCE_2160P,
         "an undeclared form factor is not grounds for exclusion");
-    assertTrue(EnhancementAdvisor.isFormFactorEligible("  "), "blank counts as undeclared");
+    assertTrue(EnhancementAdvisor.isFormFactorEligible("  ", 1920, 1080, null),
+        "blank counts as undeclared");
+  }
+
+  // ---------- SUPPORTS_4K: the user's answer beats every inference ----------
+
+  private EnhancementAdvisor.Advice adviseUhd(String formFactor, int sinkW, int sinkH,
+      PlaybackSurface s, ClientConstraints c, Boolean supports4k)
+  {
+    return EnhancementAdvisor.advise(1920, 1080, false, 60, sinkW, sinkH, s, c,
+        formFactor, supports4k, "auto", "none", true);
+  }
+
+  /**
+   * The headline case: a phone in desktop mode driving a television. Form
+   * factor still reads PHONE and the admin has restricted upscaling to TVs, but
+   * the user turned 4K on, so it gets served.
+   */
+  @Test
+  public void testPhoneWith4kOnIsServed4kDespiteTvOnlyPolicy()
+  {
+    Sage.put(EnhancementAdvisor.PROP_FORM_FACTORS, "tv");
+    EnhancementAdvisor.Advice a = adviseUhd("PHONE", 3840, 2160,
+        surface(3840, 2160, 60), null, Boolean.TRUE);
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P,
+        "a phone that reports 4K support must be served 4K");
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.OFFERED, "verdict");
+  }
+
+  /**
+   * Same phone, but HDMI sensing reported the handset's own panel. The user's
+   * override is the only correct signal in the room, so it raises the sink too
+   * -- otherwise the clamp would quietly cap a 4K television at phone size.
+   */
+  @Test
+  public void testForced4kRaisesAMisSensedSink()
+  {
+    Sage.put(EnhancementAdvisor.PROP_FORM_FACTORS, "tv");
+    EnhancementAdvisor.Advice a = adviseUhd("PHONE", 1080, 2340,
+        surface(3840, 2160, 60), null, Boolean.TRUE);
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P,
+        "a mis-sensed sink must not cap a user who says 4K works");
+  }
+
+  /**
+   * And it satisfies the decode gate. The declared ceilings come from the same
+   * auto-detection the user is overriding, so refusing here would make the
+   * override useless in exactly the case it was built for.
+   */
+  @Test
+  public void testForced4kSatisfiesTheDecodeGate()
+  {
+    EnhancementAdvisor.Advice a = adviseUhd("PHONE", 3840, 2160,
+        undeclaredSurface(), null, Boolean.TRUE);
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P,
+        "an explicit yes stands in for the declaration the client never made");
+  }
+
+  /** Without the override, that same phone is excluded by a tv-only policy. */
+  @Test
+  public void testPhoneOnAutoIsStillExcludedByTvOnlyPolicy()
+  {
+    Sage.put(EnhancementAdvisor.PROP_FORM_FACTORS, "tv");
+    EnhancementAdvisor.Advice a = adviseUhd("PHONE", 2400, 1080,
+        surface(3840, 2160, 60), null, null);
+    assertEquals(a.getTier(), EnhancementTier.NONE,
+        "auto plus a handset-sized sink stays excluded");
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.FORM_FACTOR_EXCLUDED, "verdict");
+  }
+
+  /**
+   * A phone on auto whose sink is too big to be its own panel is inferred to be
+   * driving something external, so clients that never implement SUPPORTS_4K
+   * still work.
+   */
+  @Test
+  public void testPhoneOnAutoWithA4kSinkIsInferredExternal()
+  {
+    Sage.put(EnhancementAdvisor.PROP_FORM_FACTORS, "tv");
+    EnhancementAdvisor.Advice a = adviseUhd("PHONE", 3840, 2160,
+        surface(3840, 2160, 60), null, null);
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P,
+        "a 3840x2160 sink is not a phone panel");
+  }
+
+  /** The tablet's own 2960x1848 panel must NOT be inferred external. */
+  @Test
+  public void testTabletOwnPanelIsNotInferredExternal()
+  {
+    assertFalse(EnhancementAdvisor.isSinkExternal(2960, 1848, null),
+        "the largest shipping tablet panel is still a built-in panel");
+    assertTrue(EnhancementAdvisor.isSinkExternal(3840, 2160, null),
+        "4K is beyond any built-in handheld panel");
+  }
+
+  /** An explicit no caps below 4K but still allows a useful upscale. */
+  @Test
+  public void testSupports4kNoCapsAt1440p()
+  {
+    EnhancementAdvisor.Advice a = adviseUhd("TV", 3840, 2160,
+        surface(3840, 2160, 60), null, Boolean.FALSE);
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_1440P,
+        "an explicit no is a ceiling, not a refusal");
+  }
+
+  /** The override is about capability, not about overruling safety limits. */
+  @Test
+  public void testForced4kStillRespectsTheAdminCeiling()
+  {
+    Sage.put(EnhancementAdvisor.PROP_MAX_HEIGHT, "1440");
+    EnhancementAdvisor.Advice a = adviseUhd("PHONE", 3840, 2160,
+        surface(3840, 2160, 60), null, Boolean.TRUE);
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_1440P,
+        "a client override cannot exceed what the server admin allows");
   }
 }
