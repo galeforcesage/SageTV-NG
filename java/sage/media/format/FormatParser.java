@@ -388,6 +388,23 @@ public class FormatParser
    *
    * @return true if anything was filled in.
    */
+  /**
+   * Repair an already-stored format whose video geometry was never populated.
+   *
+   * Formats detected before the geometry backfill existed are persisted in the
+   * database with a video stream but no width/height, and nothing in the normal
+   * detection path revisits them: the "deficient format" checks only fire when a
+   * stream is entirely missing. This is the entry point that lets those older
+   * entries heal themselves, filling only fields that are still unset so every
+   * other piece of the stored format is preserved.
+   *
+   * @return true if any field was filled, meaning the caller should persist.
+   */
+  public static boolean repairMissingVideoGeometry(java.io.File f, ContainerFormat format)
+  {
+    return fillMissingVideoGeometry(f, format);
+  }
+
   private static boolean fillMissingVideoGeometry(java.io.File f, ContainerFormat format)
   {
     if (format == null || !sage.Sage.getBoolean("format_detect_ffmpeg_geometry_fallback", true))

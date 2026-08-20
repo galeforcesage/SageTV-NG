@@ -5965,7 +5965,54 @@ public class MediaFile extends DBObject implements SegmentedFile
         }
       }
     }
+    else if (shouldRepairVideoGeometry())
+    {
+      // A format detected before the geometry backfill existed is stored with a
+      // video stream but no resolution, and none of the checks above will ever
+      // revisit it because the stream itself is present. Repair it once, in
+      // place, so existing recordings pick up the fix without a rescan.
+      geometryRepairAttempted = true;
+      synchronized (formatLock)
+      {
+        try
+        {
+          if (FormatParser.repairMissingVideoGeometry(files.firstElement(), fileFormat))
+          {
+            if (Sage.DBG) System.out.println("Recovered missing video geometry for:" + this + " -> " + fileFormat);
+            if (generalType != MEDIAFILE_LOCAL_PLAYBACK)
+              Wizard.getInstance().logUpdate(this, Wizard.MEDIAFILE_CODE);
+          }
+        }
+        catch (Throwable t)
+        {
+          if (Sage.DBG) System.out.println("ERROR recovering video geometry for:" + this + " of:" + t);
+        }
+      }
+    }
     return fileFormat;
+  }
+
+  /**
+   * True when this file's stored format has a video stream whose resolution was
+   * never filled in and it is safe to spend a probe recovering it.
+   *
+   * Deliberately conservative: it runs at most once per object, never against an
+   * in-progress recording or live stream (a probe there competes with capture for
+   * disk), and only on the server, since clients take the format from the server's
+   * database.
+   */
+  private boolean shouldRepairVideoGeometry()
+  {
+    if (geometryRepairAttempted || Sage.client || fileFormat == null) return false;
+    if (!Sage.getBoolean("format_detect_repair_stored_geometry", true)) return false;
+    if (isRecording() || isDVD() || isAnyLiveStream() || files.isEmpty()) return false;
+    if (FileDownloader.isDownloading(files.get(0)) || shouldIWaitForData()) return false;
+    sage.media.format.VideoFormat[] vids = fileFormat.getVideoFormats();
+    if (vids == null) return false;
+    for (int i = 0; i < vids.length; i++)
+      if (vids[i] != null && (vids[i].getWidth() <= 0 || vids[i].getHeight() <= 0))
+        return true;
+    return false;
   }
 
   public String getPrimaryVideoFormat()
@@ -6192,6 +6239,9 @@ public class MediaFile extends DBObject implements SegmentedFile
 
   private Object formatLock = new Object();
   private boolean formatDetectFailed = false;
+  // Transient, deliberately not persisted: one repair attempt per server lifetime
+  // is enough, and a restart is a reasonable trigger to try again.
+  private boolean geometryRepairAttempted = false;
 
   private static Map<MediaFile, Long> streamBufferSizeMap = new WeakHashMap<MediaFile, Long>();
 
