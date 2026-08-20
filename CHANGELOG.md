@@ -1,6 +1,22 @@
 # Change Log
 
 ## Next
+* HEVC recordings no longer lose their resolution. A 4K ATSC 3.0 recording was
+  stored as `Video[HEVC progressive id=0100] 0 kbps` — codec and PID but no
+  resolution, frame rate, aspect ratio or bitrate — while `ffprobe` on the same
+  file reported `hevc Main 3840x2160`. Two defects had to line up. The internal
+  MPEG parser reads the PMT for codec and PID but only derives geometry from
+  sequence headers it knows, and it does not walk the HEVC SPS; since
+  `getFileFormat()` returns the internal result as soon as it has any stream,
+  ffmpeg was never consulted. It now backfills missing video geometry from the
+  external probe, filling only fields still unset so the native parse wins where
+  it spoke (`format_detect_ffmpeg_geometry_fallback`, default on). That alone
+  fixed nothing, though: modern ffmpeg folds the aspect ratio into the
+  resolution field as `1920x1080 [SAR 1:1 DAR 16:9]`, where this parser expected
+  them separate, so `parseSeparatedInts` threw and width, height *and* display
+  aspect ratio were dropped without a word — for every codec, not just HEVC.
+  Note that already-imported files keep their stored format until re-detected;
+  new recordings pick this up automatically.
 * Server Video Enhancement, phase 0 (foundations only — no playback behavior
   change): `sage.enhance` package with the tier vocabulary and 720-line source
   floor, a `nvidia-smi`-backed `GpuMonitor`, the `GpuGovernor` admission
