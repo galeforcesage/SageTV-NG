@@ -15,8 +15,12 @@
   resolution field as `1920x1080 [SAR 1:1 DAR 16:9]`, where this parser expected
   them separate, so `parseSeparatedInts` threw and width, height *and* display
   aspect ratio were dropped without a word — for every codec, not just HEVC.
-  Note that already-imported files keep their stored format until re-detected;
-  new recordings pick this up automatically.
+  Existing recordings heal themselves too: a stored format carrying a video
+  stream with no resolution is repaired in place on first access, filling only
+  the unset fields so PIDs and audio tracks are preserved. That repair runs at
+  most once per file per server lifetime and never against an in-progress
+  recording, live stream or downloading file, so it cannot compete with capture
+  for disk (`format_detect_repair_stored_geometry`, default on).
 * Server Video Enhancement, phase 0 (foundations only — no playback behavior
   change): `sage.enhance` package with the tier vocabulary and 720-line source
   floor, a `nvidia-smi`-backed `GpuMonitor`, the `GpuGovernor` admission
