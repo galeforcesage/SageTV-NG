@@ -32,11 +32,21 @@ every property below to be answerable.
 
 | GetProperty | Source | Notes |
 |---|---|---|
-| `DISPLAY_RESOLUTION` | `Display.getMode().getPhysicalWidth/Height` | actual sink, not surface size |
+| `DISPLAY_RESOLUTION` | `Display.getMode().getPhysicalWidth/Height` | the UI/render surface. On Android this reports the framebuffer, so a Shield rendering 1080p on a 4K TV answers `1920x1080` here — do **not** treat it as the panel |
+| `DISPLAY_SINK_RESOLUTION` | `Display.getMode().getPhysicalWidth/Height` (Android), `webapis.productinfo.getRealResolution()` (Tizen) | the **physical panel**, e.g. `3840x2160`. Required for server video enhancement; see [NGServerVideoEnhancement.md](NGServerVideoEnhancement.md) §2.1 |
 | `DISPLAY_REFRESH_RATES` | `Display.getSupportedModes()` | csv of supported refresh rates (24, 25, 30, 50, 60) |
 | `DISPLAY_HDR_TYPES` | `Display.getHdrCapabilities()` | csv: `HDR10,HDR10+,DOLBY_VISION,HLG` |
 | `DISPLAY_MAX_LUMINANCE` | same | nits — for tone mapping |
 | `DISPLAY_WIDE_COLOR` | `Configuration.isScreenWideColorGamut()` | `true` for BT.2020-capable sinks |
+| `LOCAL_ENHANCEMENT` | client's own upscaler state | `pref=auto\|local\|server;status=active\|available\|none`. Report `status=active` when the device is already upscaling, so the server doesn't duplicate it |
+
+> **Server video enhancement (GPU upscale to 4K)** additionally requires the
+> per-surface output limits `PLAYBACK_SURFACE_<id>_MAX_OUTPUT_WIDTH`,
+> `_MAX_OUTPUT_HEIGHT` and `_MAX_FPS`. Every one of these fields fails closed: a
+> client that omits them parses fine and simply never receives an enhanced stream,
+> with no error. The full contract, including the accepted value ranges and a table
+> for diagnosing refusals, is in
+> [NGServerVideoEnhancement.md](NGServerVideoEnhancement.md).
 
 ## 3. Video decode matrix (one‑shot)
 
@@ -284,6 +294,11 @@ on NOTIFY NET_STATS with throughput drop > 30% sustained 10 s:
 - [ ] Bump `SAGETV_NG_VERSION` to `2.0.0`
 - [ ] 6 device-identity `GetProperty` handlers
 - [ ] 5 display `GetProperty` handlers
+- [ ] `DISPLAY_SINK_RESOLUTION` — the **physical panel**, distinct from
+      `DISPLAY_RESOLUTION`; without it the server can never offer 4K enhancement
+- [ ] `LOCAL_ENHANCEMENT` (`pref=…;status=…`)
+- [ ] Per-surface `MAX_OUTPUT_WIDTH` / `MAX_OUTPUT_HEIGHT` (both, or neither
+      counts) and optional `MAX_FPS`
 - [ ] `VIDEO_DECODER_MATRIX` JSON builder
 - [ ] `AUDIO_ROUTE_MATRIX` JSON builder (API 33+ path + fallback)
 - [ ] `AudioDeviceCallback` listener → `NOTIFY AUDIO_ROUTE_CHANGED`
