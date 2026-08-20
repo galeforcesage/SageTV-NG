@@ -19,6 +19,31 @@
   encoder open ("Driver does not support the required nvenc API version"),
   which would have admitted enhanced sessions on a host where every one of them
   dies at stream start (`multimedia/hwaccel/enhance_runtime_probe`, default on).
+* That functional probe originally synthesized its source with `-f lavfi -i
+  color=...`, which turned out to be unusable on the hosts it matters most for:
+  SageTV's bundled ffmpeg is built `--disable-devices`, so it has no
+  libavdevice, `ffmpeg -devices` prints an empty list, and `-f lavfi` fails with
+  "Unknown input format: 'lavfi'". Because the probe is deliberately
+  fail-closed, that meant enhancement would have been silently disabled forever
+  on a working host, explained only by a debug line. Measured on the dev server
+  (RTX 5080, driver 595.84): the old probe exited 234 while the real pipeline
+  ran a recording through `yadif_cuda` + `scale_npp` + `hevc_nvenc` and produced
+  genuine 3840x2160 HEVC at 59.94fps. The probe now feeds raw yuv420p frames on
+  ffmpeg's stdin, which needs no input device and behaves identically on every
+  build and platform; both the `scale_npp` and `scale_cuda` variants now pass on
+  that host.
+* Live transcode teardown now escalates to SIGKILL. `stopTranscode()` sent a
+  single `destroy()` (SIGTERM), never waited for the child to die, and — worse —
+  unregistered it from the shutdown reaper *before* signalling, then dropped the
+  JVM's last handle to it. A child that ignores SIGTERM therefore survived as an
+  orphan that was both invisible to the shutdown hook and unkillable from Java.
+  This was not theoretical: the dev server had two such processes, one alive
+  2d16h holding 421 MiB of VRAM and a file handle to a deleted recording. One
+  exited on a manual SIGTERM (nothing had ever signalled it again); the other
+  required SIGKILL. Reaping both returned 879 MiB of VRAM. Teardown now sends
+  SIGTERM to the child and its descendants, waits
+  `media_server/transcode_kill_grace_ms` (default 1500), escalates to
+  `destroyForcibly()`, confirms death, and unregisters only once confirmed.
 * Windows transcoder priority parity: `xcode_reduce_process_priority` has always
   defaulted to true, but the `nice`/`ionice` wrap that implements it is
   POSIX-only, so Windows hosts were silently running transcodes at normal
