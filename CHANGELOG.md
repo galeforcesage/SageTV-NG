@@ -1,6 +1,27 @@
 # Change Log
 
 ## Next
+* Server Video Enhancement now accepts a client's **per-codec** decode ceilings
+  as proof it can play an enhanced stream, not just the per-surface
+  `MAX_OUTPUT_*` fields. Android `MediaCodec` and the browser's
+  `MediaCapabilities` both report decoder limits per codec rather than per
+  "surface", so the per-surface form asked client teams for a shape their
+  platform does not have. `maxW`/`maxH`/`maxFps`/`maxBitrate` are now parsed
+  from the `EXO_`/`IJK_VIDEO_CONSTRAINTS` rows, and from `*_VIDEO_CODECS` too
+  when that property carries attributes, so whichever channel a client
+  populates is read. A codec qualifies only when it declares `decoder=hw` and a
+  geometry ceiling at or above the target: software decode cannot sustain 4K in
+  real time, and an unstated decoder type is refused rather than assumed. The
+  two sources are OR'd, since they describe the same decoder, and the gate
+  consults the player that will actually decode this stream rather than the
+  client's default. Fixed while adding this: the same gate treated an
+  unidentifiable playback surface as permission to proceed, so a client that
+  had declared nothing at all could be handed 4K; with no surface and no codec
+  ceilings the answer is now no. Enhancement targets are also clamped to the
+  reported panel in **both** dimensions, so a 2960x1848 tablet is offered a
+  1440p upscale that fits rather than a 2160p stream it would only spend power
+  downscaling. Deinterlacing remains exempt from the decode gate — it emits the
+  geometry the client was already decoding.
 * HEVC recordings no longer lose their resolution. A 4K ATSC 3.0 recording was
   stored as `Video[HEVC progressive id=0100] 0 kbps` — codec and PID but no
   resolution, frame rate, aspect ratio or bitrate — while `ffprobe` on the same

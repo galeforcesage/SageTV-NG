@@ -155,4 +155,31 @@ public enum EnhancementTier
       t = t.downgrade();
     return t;
   }
+
+  /**
+   * Highest tier that fits inside {@code maxWidth} x {@code maxHeight} in BOTH
+   * dimensions.
+   *
+   * <p>Height alone is not sufficient. A panel is not guaranteed to be 16:9, and
+   * clamping only by height can select a tier wider than the display: a
+   * 2960x1848 tablet passes a 2160-height clamp all the way down to 1440p
+   * (2560x1440) correctly, but a narrow or rotated panel such as 1920x2160 would
+   * accept 2160p and hand it a 3840-wide picture it can only downscale again.
+   * Building pixels the sink cannot show is pure cost -- GPU, bitrate and
+   * decoder headroom spent to be thrown away.
+   *
+   * <p>A non-positive limit in either dimension means "unknown", and an unknown
+   * ceiling clamps nothing; callers gate on the sink being known before they get
+   * here.
+   */
+  public static EnhancementTier clampToSink(EnhancementTier tier, int maxWidth, int maxHeight)
+  {
+    if (tier == null) return NONE;
+    EnhancementTier t = tier;
+    if (maxHeight > 0) t = clampToHeight(t, maxHeight);
+    if (maxWidth > 0)
+      while (t.isUpscaling() && t.getTargetWidth() > maxWidth)
+        t = t.downgrade();
+    return t;
+  }
 }

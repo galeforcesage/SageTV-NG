@@ -2017,6 +2017,18 @@ public class MiniPlayer implements DVDMediaPlayer
                 int srcFps = 0;
                 if (cf != null && cf.getVideoFormat() != null)
                   srcFps = Math.round(cf.getVideoFormat().getFps());
+                // Consult the per-codec decode ceilings of the player that will
+                // ACTUALLY decode -- which is the locked chosenPlayer, not the
+                // client's default -- so a player switch above can't leave us
+                // gating against the wrong decoder's limits.
+                sage.client.ClientConstraints enhanceConstraints = constraints;
+                if (chosenPlayer != null && chosenPlayer.length() > 0)
+                {
+                  if (chosenPlayer.toLowerCase().indexOf("exo") >= 0 && exoConstraints != null)
+                    enhanceConstraints = exoConstraints;
+                  else if (chosenPlayer.toLowerCase().indexOf("ijk") >= 0 && ijkConstraints != null)
+                    enhanceConstraints = ijkConstraints;
+                }
                 enhanceTier = sage.enhance.EnhancementDryRun.evaluateAndLog(
                     (mcsr != null ? mcsr.getNgClientId() : null),
                     (chosenSurfaceXcodeMode == null ? chosenSurfaceDelivery : chosenSurfaceXcodeMode),
@@ -2024,6 +2036,8 @@ public class MiniPlayer implements DVDMediaPlayer
                     (mcsr != null ? mcsr.getSinkWidth() : 0),
                     (mcsr != null ? mcsr.getSinkHeight() : 0),
                     chosenSurface,
+                    enhanceConstraints,
+                    (mcsr != null ? mcsr.getDeviceFormFactor() : null),
                     (mcsr != null ? mcsr.getLocalEnhancementPref() : "auto"),
                     (mcsr != null ? mcsr.getLocalEnhancementStatus() : "none"),
                     sage.HwEncoder.gpuEnhanceSupported());

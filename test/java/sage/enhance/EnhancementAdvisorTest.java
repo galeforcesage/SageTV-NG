@@ -298,13 +298,17 @@ public class EnhancementAdvisorTest
   }
 
   @Test
-  public void testNullSurfaceIsTreatedAsUnconstrained()
+  public void testNullSurfaceIsRefusedNotTrusted()
   {
-    // Caller couldn't identify a surface; the surface gate can't judge, so it
-    // defers rather than inventing a limit.
+    // This used to return ENHANCE_2160P on the theory that an unidentifiable
+    // surface should "defer" rather than invent a limit. That was backwards:
+    // deferring here means shipping 4K to a client that has proved nothing,
+    // which is the one outcome the gate exists to prevent. With no surface AND
+    // no per-codec ceilings there is no evidence, and no evidence means no.
     EnhancementAdvisor.Advice a =
         advise(1920, 1080, false, 30, 3840, 2160, null, "auto", "none");
-    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P);
+    assertEquals(a.getTier(), EnhancementTier.NONE,
+        "an unidentifiable surface is not permission to upscale");
   }
 
   // ---------- admin ceiling ----------

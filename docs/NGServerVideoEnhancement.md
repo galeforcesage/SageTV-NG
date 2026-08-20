@@ -151,6 +151,62 @@ Exact gate semantics, because "partly declared" is the case client teams get wro
   after the 2.1.0006 track-access fields. A client that stops at index 8 still
   parses cleanly; it just never gets enhancement.
 
+### 2.7 Per-codec decode ceilings — the portable alternative to §2.6
+
+**You do not have to implement §2.6.** Android `MediaCodec` and the browser's
+`MediaCapabilities.decodingInfo()` both report decoder limits **per codec**, not
+per "surface", so the per-codec channel is the one that exists on every platform.
+The server treats it as fully equivalent evidence.
+
+Put the ceilings on the video constraint rows for the player that will decode —
+`EXO_VIDEO_CODECS` / `EXO_VIDEO_CONSTRAINTS` for the ExoPlayer path,
+`IJK_VIDEO_CODECS` / `IJK_VIDEO_CONSTRAINTS` for IJKPlayer:
+
+```
+HEVC;scan=progressive;decoder=hw;maxW=3840;maxH=2160;maxFps=60;profiles=main:5.1,
+H264;scan=progressive;decoder=hw;maxW=1920;maxH=1080;maxFps=60
+```
+
+The server reads whichever of the two properties you populate: a `*_VIDEO_CODECS`
+value containing `;` is parsed as constraint rows, and a bare comma-separated codec
+list is still treated as a plain codec list exactly as before. If a codec appears in
+both properties, the `*_VIDEO_CONSTRAINTS` row wins.
+
+Gate semantics, mirroring §2.6:
+
+- A codec is eligible iff `maxW >= target_w`, `maxH >= target_h`, **and
+  `decoder=hw`**. Enhancement is permitted when **at least one** codec is eligible,
+  and the server picks the output codec from that eligible set (HEVC preferred).
+- **`decoder=sw` is a hard block**, whatever geometry it claims. Software decode
+  cannot sustain 4K in real time. `decoder` values other than `hw` — including an
+  absent one — are refused for the same reason: an ambiguous answer about whose CPU
+  is about to be spent is not a yes.
+- Missing, empty or unparseable `maxW`/`maxH` counts as undeclared, and undeclared
+  is never enhanced. `maxFps` is optional and enforced only when declared.
+- **Attribute keys are case-insensitive** (`maxW`, `maxw` and `MAXW` are the same
+  key), so you do not have to match the casing used above.
+
+**§2.6 and §2.7 are OR'd, not AND'd.** Either one proving the geometry is enough;
+they are two reports of the same underlying decoder. But if *neither* is declared,
+the upscale is refused — listing a codec says nothing about the resolution its
+decoder was built for.
+
+### 2.8 The target is capped by your panel
+
+The server never builds a picture larger than the sink you reported in §2.1, in
+**either** dimension. It picks the largest tier that fits and stops there.
+
+| Reported sink | Tier offered for a 1080p source | Why |
+|---|---|---|
+| `3840x2160` | 2160p | fits exactly |
+| `2960x1848` (e.g. a 14.6" tablet) | **1440p** | 2160 lines don't fit in 1848 |
+| `1920x2160` | 1080p | tall enough for 1440p, but only 1920 columns wide |
+| `1920x1080` | none (deinterlace only, if interlaced) | no size gain to be had |
+
+So a client that honestly reports a non-4K panel is not refused — it is served the
+largest enhancement that panel can actually show, rather than a 4K stream it would
+only spend power downscaling.
+
 ---
 
 ## 3. What the server sends back
@@ -231,7 +287,7 @@ Every decision is logged with a verdict. These are the ones a client controls:
 |---|---|
 | `offered` | enhancement was granted |
 | `client did not report a sink resolution` | `DISPLAY_SINK_RESOLUTION` empty, unparseable, or outside 640×480–7680×4320 |
-| `client surface cannot decode the enhanced output` | surface declared no `MAX_OUTPUT_WIDTH`+`MAX_OUTPUT_HEIGHT`, or the target exceeds them / `MAX_FPS` |
+| `client cannot decode the enhanced output (no surface or codec proved it)` | neither §2.6 surface limits nor §2.7 codec ceilings permitted the target — declared nothing, target exceeds the declared ceiling, or every eligible codec was `decoder=sw` |
 | `client's own upscaler is active and preferred` | `LOCAL_ENHANCEMENT` reported `status=active` |
 | `client explicitly prefers local enhancement` | `LOCAL_ENHANCEMENT` reported `pref=local` |
 | `sink is not meaningfully larger than the source` | sink height below ~1.5× source height — expected on a 1080p panel |
@@ -251,8 +307,10 @@ If a client team implements only part of this, do it in this order:
 
 1. **`DISPLAY_SINK_RESOLUTION`** — without it, nothing else matters; the server
    cannot justify enhancement for any client.
-2. **Per-surface `MAX_OUTPUT_*` / `MAX_FPS`** — prevents sending a 4K stream to a
-   decoder that will fail on it.
+2. **A decode ceiling — either §2.7 per-codec `maxW`/`maxH`/`decoder` (preferred,
+   and portable across Android and the web) or §2.6 per-surface `MAX_OUTPUT_*`** —
+   prevents sending a 4K stream to a decoder that will fail on it. Implement
+   whichever one your platform already exposes; you do not need both.
 3. **`LOCAL_ENHANCEMENT`** — stops the server from duplicating work a Shield is
    already doing better.
 4. **`DISPLAY_REFRESH_RATES`**, **`QUALITY_HINT`** — refinement.

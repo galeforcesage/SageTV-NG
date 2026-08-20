@@ -4825,9 +4825,11 @@ public class MiniClientSageRenderer extends SageRenderer
           // PlaybackDecisionEngine consults both to decide whether a per-stream
           // player switch (CAP_EFFECTIVE_PLAYER) can avoid a transcode.
           sage.client.ClientConstraints exoParsed = sage.client.ClientConstraints.parse(
-              "exoplayer", exoVideoConstraintsProp, exoAudioConstraintsProp, exoContainerConstraintsProp);
+              "exoplayer", mergeConstraintRows(exoVideoConstraintsProp, exoVideoCodecsProp),
+              exoAudioConstraintsProp, exoContainerConstraintsProp);
           sage.client.ClientConstraints ijkParsed = sage.client.ClientConstraints.parse(
-              "ijkplayer", ijkVideoConstraintsProp, ijkAudioConstraintsProp, ijkContainerConstraintsProp);
+              "ijkplayer", mergeConstraintRows(ijkVideoConstraintsProp, ijkVideoCodecsProp),
+              ijkAudioConstraintsProp, ijkContainerConstraintsProp);
           if (!exoParsed.isEmpty()) clientConstraintsExo = exoParsed;
           if (!ijkParsed.isEmpty()) clientConstraintsIjk = ijkParsed;
 
@@ -4851,7 +4853,6 @@ public class MiniClientSageRenderer extends SageRenderer
             if (clientConstraintsIjk != null) System.out.println("MiniClient ijk " + clientConstraintsIjk);
           }
         }
-
         // Pick the candidate sets that match the declared default player. Fall back
         // to the existing union (VIDEO_CODECS / AUDIO_CODECS / PUSH_AV_CONTAINERS /
         // PULL_AV_CONTAINERS) for any category where the per-player set is missing
@@ -8308,8 +8309,7 @@ public class MiniClientSageRenderer extends SageRenderer
   }
 
   /** Physical sink width in pixels, or 0 when the client didn't declare it. */
-  public int getSinkWidth() { return sinkWidth; }
-  /** Physical sink height in pixels, or 0 when the client didn't declare it. */
+  public int getSinkWidth() { return sinkWidth; }  /** Physical sink height in pixels, or 0 when the client didn't declare it. */
   public int getSinkHeight() { return sinkHeight; }
   /** CSV of sink refresh rates, or empty. */
   public String getDisplayRefreshRates() { return displayRefreshRates; }
@@ -8321,6 +8321,32 @@ public class MiniClientSageRenderer extends SageRenderer
   public String getLocalEnhancementStatus() { return localEnhancementStatus; }
   /** {@code auto} | {@code quality} | {@code savings}. */
   public String getClientQualityHint() { return clientQualityHint; }
+  /** {@code TV} | {@code TABLET} | {@code PHONE} | {@code DESKTOP}, or empty. */
+  public String getDeviceFormFactor() { return clientDeviceFormFactor; }
+
+  /**
+   * Fold the {@code *_VIDEO_CODECS} channel into the constraint rows when it
+   * carries attributes rather than a bare codec list.
+   *
+   * <p>Client teams report decoder ceilings ({@code maxW}/{@code maxH}/
+   * {@code maxFps}) per codec, and different clients put those rows in
+   * different properties -- some in {@code *_VIDEO_CONSTRAINTS}, some in
+   * {@code *_VIDEO_CODECS}. Both use the same {@code <CODEC>;key=value} row
+   * format, so rather than force one spelling on every client team, read
+   * whichever one they populated.
+   *
+   * <p>A {@code *_VIDEO_CODECS} value with no {@code ';'} is the legacy bare
+   * codec list and is ignored here, so stock clients parse exactly as before.
+   * Constraint rows are appended second, letting an explicit
+   * {@code *_VIDEO_CONSTRAINTS} row win for a codec declared in both.
+   */
+  static String mergeConstraintRows(String constraintsProp, String codecsProp)
+  {
+    boolean codecsCarryAttributes = codecsProp != null && codecsProp.indexOf(';') >= 0;
+    if (!codecsCarryAttributes) return constraintsProp;
+    if (constraintsProp == null || constraintsProp.trim().length() == 0) return codecsProp;
+    return codecsProp + "," + constraintsProp;
+  }
 
   public boolean hasClientCapability(String capability)
   {

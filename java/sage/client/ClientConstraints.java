@@ -31,6 +31,9 @@ import java.util.Map;
  *   video:     scan = progressive | interlaced+progressive | any | unknown
  *              interlaced = true | false | unknown
  *              decoder = hw | sw_or_hw | unknown
+ *              maxW / maxH = decoder geometry ceiling, integer px (0 = undeclared)
+ *              maxFps = decoder frame-rate ceiling, float (0 = undeclared)
+ *              maxBitrate = decoder bitrate ceiling, integer bps (0 = undeclared)
  *   audio:     decode = true | false | unknown
  *              passthrough = true | false | unknown
  *   container: push = true | false | unknown
@@ -100,14 +103,66 @@ public final class ClientConstraints
     public final Scan scan;
     public final Tri interlaced;
     public final Decoder decoder;
+    /** Decoder width ceiling from {@code maxW}, or 0 when undeclared. */
+    public final int maxWidth;
+    /** Decoder height ceiling from {@code maxH}, or 0 when undeclared. */
+    public final int maxHeight;
+    /** Decoder frame-rate ceiling from {@code maxFps}, or 0 when undeclared. */
+    public final double maxFps;
+    /** Decoder bitrate ceiling from {@code maxBitrate}, or 0 when undeclared. */
+    public final long maxBitrate;
+
     VideoConstraint(String codec, Scan scan, Tri interlaced, Decoder decoder)
+    {
+      this(codec, scan, interlaced, decoder, 0, 0, 0d, 0L);
+    }
+
+    VideoConstraint(String codec, Scan scan, Tri interlaced, Decoder decoder,
+        int maxWidth, int maxHeight, double maxFps, long maxBitrate)
     {
       this.codec = codec; this.scan = scan;
       this.interlaced = interlaced; this.decoder = decoder;
+      this.maxWidth  = Math.max(0, maxWidth);
+      this.maxHeight = Math.max(0, maxHeight);
+      this.maxFps    = maxFps > 0d ? maxFps : 0d;
+      this.maxBitrate = Math.max(0L, maxBitrate);
     }
+
+    /** True when this row declared a usable geometry ceiling. */
+    public boolean hasDeclaredOutputLimits()
+    {
+      return maxWidth > 0 && maxHeight > 0;
+    }
+
+    /**
+     * Whether this codec may be used to DECODE server-enhanced output of the
+     * given geometry. Fail-closed on every axis.
+     *
+     * <p>Requires {@code decoder=hw} explicitly. Software decode cannot sustain
+     * 4K in real time, and {@code SW_OR_HW} is ambiguous about which one the
+     * device would actually pick -- so both it and {@code UNKNOWN} are refused.
+     * This is a decision to spend someone else's CPU, and the only safe default
+     * for an ambiguous answer is "no".
+     *
+     * @param fps proposed output frame rate; pass 0 to skip the frame-rate check.
+     */
+    public boolean canDecode(int width, int height, int fps)
+    {
+      if (width <= 0 || height <= 0) return false;
+      if (decoder != Decoder.HW) return false;
+      if (!hasDeclaredOutputLimits()) return false;
+      if (width > maxWidth || height > maxHeight) return false;
+      // An undeclared frame-rate ceiling is tolerated; geometry is the limit
+      // that actually breaks decoders. Declared, it is enforced.
+      if (fps > 0 && maxFps > 0d && (double) fps > maxFps + 0.5d) return false;
+      return true;
+    }
+
     @Override public String toString()
     {
-      return codec + "[scan=" + scan + ",interlaced=" + interlaced + ",decoder=" + decoder + "]";
+      return codec + "[scan=" + scan + ",interlaced=" + interlaced + ",decoder=" + decoder
+          + ",max=" + maxWidth + "x" + maxHeight + "@" + maxFps
+          + (maxBitrate > 0 ? (",maxBitrate=" + maxBitrate) : "") + "]";
     }
   }
 
@@ -197,6 +252,57 @@ public final class ClientConstraints
   public boolean hasAnyAudio() { return !audio.isEmpty(); }
   public boolean hasAnyContainer() { return !container.isEmpty(); }
 
+  /**
+   * Pick a codec that can decode server-enhanced output at the given geometry,
+   * preferring the most efficient one the client proved it can handle.
+   *
+   * <p>This is the per-codec form of the playback-surface output gate: clients
+   * report decoder ceilings per codec (Android {@code MediaCodec}, browser
+   * {@code MediaCapabilities}), not per "surface", so keying the gate by codec
+   * is the channel that actually exists on every platform.
+   *
+   * <p>Preference order is HEVC then H.264: at 4K, HEVC is the only one of the
+   * two that fits a sane bitrate, and a client that proved it can decode 4K HEVC
+   * should not be sent 4K H.264 instead.
+   *
+   * @param fps proposed output frame rate; pass 0 to skip the frame-rate check.
+   * @return the client's own spelling of an eligible codec, or null when no
+   *         declared codec can decode this geometry.
+   */
+  public String pickDecodableCodec(int width, int height, int fps)
+  {
+    String[] preferred = { "HEVC", "H264", "AV1", "VP9" };
+    for (int i = 0; i < preferred.length; i++)
+    {
+      VideoConstraint vc = getVideo(preferred[i]);
+      if (vc != null && vc.canDecode(width, height, fps)) return vc.codec;
+    }
+    // Anything else the client declared, in its declared order.
+    for (VideoConstraint vc : video.values())
+      if (vc != null && vc.canDecode(width, height, fps)) return vc.codec;
+    return null;
+  }
+
+  /** True when any declared codec can decode output of this geometry. */
+  public boolean canDecodeAny(int width, int height, int fps)
+  {
+    return pickDecodableCodec(width, height, fps) != null;
+  }
+
+  /** True when at least one video row declared a usable geometry ceiling. */
+  public boolean hasAnyDeclaredOutputLimits()
+  {
+    for (VideoConstraint vc : video.values())
+      if (vc != null && vc.hasDeclaredOutputLimits()) return true;
+    return false;
+  }
+
+  /** The declared video rows, in declared order. Never null. */
+  public java.util.Collection<VideoConstraint> getVideoConstraints()
+  {
+    return video.values();
+  }
+
   @Override public String toString()
   {
     return "ClientConstraints{player=" + player
@@ -241,9 +347,54 @@ public final class ClientConstraints
           codec,
           Scan.parse(row.get("scan")),
           Tri.parse(row.get("interlaced")),
-          Decoder.parse(row.get("decoder"))));
+          Decoder.parse(row.get("decoder")),
+          // splitRows() lowercases attribute keys, so these must be looked up
+          // lowercased -- a camelCase lookup here silently reads null and
+          // fails closed, which looks exactly like a client that declared
+          // nothing.
+          parseNonNegativeInt(row.get("maxw")),
+          parseNonNegativeInt(row.get("maxh")),
+          parseNonNegativeDouble(row.get("maxfps")),
+          parseNonNegativeLong(row.get("maxbitrate"))));
     }
     return out;
+  }
+
+  /**
+   * Optional numeric attribute. Anything missing, empty, unparseable or negative
+   * becomes 0, which every consumer reads as "undeclared" and therefore refuses
+   * to enhance. Garbage must never be able to look like a capability.
+   */
+  private static int parseNonNegativeInt(String v)
+  {
+    if (v == null) return 0;
+    String s = v.trim();
+    if (s.length() == 0) return 0;
+    try { int n = Integer.parseInt(s); return n < 0 ? 0 : n; }
+    catch (NumberFormatException e) { return 0; }
+  }
+
+  private static long parseNonNegativeLong(String v)
+  {
+    if (v == null) return 0L;
+    String s = v.trim();
+    if (s.length() == 0) return 0L;
+    try { long n = Long.parseLong(s); return n < 0L ? 0L : n; }
+    catch (NumberFormatException e) { return 0L; }
+  }
+
+  private static double parseNonNegativeDouble(String v)
+  {
+    if (v == null) return 0d;
+    String s = v.trim();
+    if (s.length() == 0) return 0d;
+    try
+    {
+      double n = Double.parseDouble(s);
+      if (!(n > 0d) || Double.isInfinite(n) || Double.isNaN(n)) return 0d;
+      return n;
+    }
+    catch (NumberFormatException e) { return 0d; }
   }
 
   private static Map<String, AudioConstraint> parseAudioRows(String src)

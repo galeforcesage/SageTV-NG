@@ -10,6 +10,7 @@
 package sage.enhance;
 
 import sage.Sage;
+import sage.client.ClientConstraints;
 import sage.client.PlaybackSurface;
 
 /**
@@ -99,25 +100,42 @@ public final class EnhancementDryRun
       int sinkWidth, int sinkHeight, PlaybackSurface surface,
       String localPref, String localStatus, boolean gpuSupported)
   {
+    return evaluateAndLog(clientId, mediaDesc, sourceWidth, sourceHeight, interlaced,
+        sourceFps, sinkWidth, sinkHeight, surface, null, null, localPref, localStatus,
+        gpuSupported);
+  }
+
+  public static EnhancementTier evaluateAndLog(String clientId, String mediaDesc,
+      int sourceWidth, int sourceHeight, boolean interlaced, int sourceFps,
+      int sinkWidth, int sinkHeight, PlaybackSurface surface,
+      ClientConstraints constraints, String formFactor,
+      String localPref, String localStatus, boolean gpuSupported)
+  {
     if (!EnhancementAdvisor.isEnabled()) return EnhancementTier.NONE;
 
     EnhancementAdvisor.Advice advice = EnhancementAdvisor.advise(sourceWidth, sourceHeight,
-        interlaced, sourceFps, sinkWidth, sinkHeight, surface, localPref, localStatus,
-        gpuSupported);
+        interlaced, sourceFps, sinkWidth, sinkHeight, surface, constraints, localPref,
+        localStatus, gpuSupported);
 
     boolean dry = isDryRun();
     if (Sage.DBG)
     {
+      // formFactor and the physical sink are logged even though neither gates
+      // anything today: whether a tablet-class panel is WORTH a GPU session is
+      // a judgement call, and this is the evidence needed to settle it from
+      // real traffic instead of by assertion.
       System.out.println("GPU_ENHANCE " + (dry ? "DRYRUN" : "LIVE")
           + " client=" + safe(clientId)
           + " media=" + safe(mediaDesc)
           + " src=" + sourceWidth + "x" + sourceHeight + (interlaced ? "i" : "p")
           + "@" + sourceFps
           + " sink=" + sinkWidth + "x" + sinkHeight
+          + " form=" + safe(formFactor)
           + " surface=" + (surface == null ? "none" : surface.getId())
           + " surfaceMax=" + (surface == null ? "n/a"
               : (surface.getMaxOutputWidth() + "x" + surface.getMaxOutputHeight()
                  + "@" + surface.getMaxFps()))
+          + " codecMax=" + describeCodecCeiling(constraints)
           + " local=" + safe(localPref) + "/" + safe(localStatus)
           + " -> tier=" + advice.getTier().token()
           + " verdict=" + advice.getVerdict()
@@ -125,6 +143,27 @@ public final class EnhancementDryRun
     }
 
     return dry ? EnhancementTier.NONE : advice.getTier();
+  }
+
+  /**
+   * Summarise the per-codec decode ceilings for the log line. "none" here is
+   * the difference between "the client refused" and "the client never told us",
+   * which are very different bugs to chase.
+   */
+  private static String describeCodecCeiling(ClientConstraints constraints)
+  {
+    if (constraints == null) return "n/a";
+    if (!constraints.hasAnyDeclaredOutputLimits()) return "undeclared";
+    StringBuilder sb = new StringBuilder();
+    for (ClientConstraints.VideoConstraint vc : constraints.getVideoConstraints())
+    {
+      if (!vc.hasDeclaredOutputLimits()) continue;
+      if (sb.length() > 0) sb.append(',');
+      sb.append(vc.codec).append('=').append(vc.maxWidth).append('x')
+        .append(vc.maxHeight);
+      if (vc.decoder != ClientConstraints.Decoder.HW) sb.append("(sw)");
+    }
+    return sb.length() == 0 ? "undeclared" : sb.toString();
   }
 
   private static String safe(String s)

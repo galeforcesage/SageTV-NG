@@ -10,6 +10,7 @@
 package sage.enhance;
 
 import sage.Sage;
+import sage.client.ClientConstraints;
 import sage.client.PlaybackSurface;
 
 /**
@@ -54,7 +55,7 @@ public final class EnhancementAdvisor
     UNKNOWN_SINK("client did not report a sink resolution"),
     SOURCE_BELOW_FLOOR("source below the 720-line floor and not interlaced"),
     NO_VISIBLE_GAIN("sink is not meaningfully larger than the source"),
-    SURFACE_CANNOT_DECODE("client surface cannot decode the enhanced output"),
+    SURFACE_CANNOT_DECODE("client cannot decode the enhanced output (no surface or codec proved it)"),
     CLIENT_UPSCALES_LOCALLY("client's own upscaler is active and preferred"),
     CLIENT_PREFERS_LOCAL("client explicitly prefers local enhancement");
 
@@ -116,6 +117,22 @@ public final class EnhancementAdvisor
       int sourceFps, int sinkWidth, int sinkHeight, PlaybackSurface surface,
       String localPref, String localStatus, boolean gpuSupported)
   {
+    return advise(sourceWidth, sourceHeight, sourceInterlaced, sourceFps,
+        sinkWidth, sinkHeight, surface, null, localPref, localStatus, gpuSupported);
+  }
+
+  /**
+   * As above, with the active player's per-codec decode ceilings.
+   *
+   * @param constraints the {@code EXO_/IJK_VIDEO_*} rows for the player that
+   *                    will actually decode, or null when unknown. Supplies the
+   *                    per-codec form of the output gate.
+   */
+  public static Advice advise(int sourceWidth, int sourceHeight, boolean sourceInterlaced,
+      int sourceFps, int sinkWidth, int sinkHeight, PlaybackSurface surface,
+      ClientConstraints constraints,
+      String localPref, String localStatus, boolean gpuSupported)
+  {
     if (!isEnabled()) return NONE_DISABLED;
     if (!gpuSupported) return new Advice(EnhancementTier.NONE, Verdict.NO_GPU_SUPPORT);
     if (sourceHeight <= 0) return new Advice(EnhancementTier.NONE, Verdict.UNKNOWN_SOURCE);
@@ -136,43 +153,54 @@ public final class EnhancementAdvisor
         ? EnhancementTier.DEINTERLACE_ONLY : EnhancementTier.NONE;
 
     if (sinkHeight <= 0 || sinkWidth <= 0)
-      return finish(deintFloor, Verdict.UNKNOWN_SINK, surface, deintFloor, sourceFps);
+      return finish(deintFloor, Verdict.UNKNOWN_SINK, surface, constraints, deintFloor, sourceFps);
 
     if (sourceHeight < EnhancementTier.SOURCE_HEIGHT_FLOOR)
-      return finish(deintFloor, Verdict.SOURCE_BELOW_FLOOR, surface, deintFloor, sourceFps);
+      return finish(deintFloor, Verdict.SOURCE_BELOW_FLOOR, surface, constraints, deintFloor, sourceFps);
 
     // Require a real size gain before re-encoding anything. A 1080i source on a
     // 1080p panel gets deinterlaced, not "upscaled" to the size it already is.
     int minGainTenths = Sage.getInt(PROP_MIN_GAIN_TENTHS, DEFAULT_MIN_GAIN_TENTHS);
     if (minGainTenths < 10) minGainTenths = 10;
     if ((long) sinkHeight * 10L < (long) sourceHeight * (long) minGainTenths)
-      return finish(deintFloor, Verdict.NO_VISIBLE_GAIN, surface, deintFloor, sourceFps);
+      return finish(deintFloor, Verdict.NO_VISIBLE_GAIN, surface, constraints, deintFloor, sourceFps);
 
-    // Never build a picture larger than the panel can show, then apply the
-    // admin ceiling on top.
-    EnhancementTier tier = EnhancementTier.clampToHeight(EnhancementTier.ENHANCE_2160P, sinkHeight);
+    // Never build a picture larger than the panel can show -- in EITHER
+    // dimension -- then apply the admin ceiling on top.
+    EnhancementTier tier = EnhancementTier.clampToSink(
+        EnhancementTier.ENHANCE_2160P, sinkWidth, sinkHeight);
     int adminMax = Sage.getInt(PROP_MAX_HEIGHT, 2160);
     if (adminMax > 0) tier = EnhancementTier.clampToHeight(tier, adminMax);
 
     // Clamping can land below the source; at that point there is nothing to
     // gain by scaling, so fall back to the deinterlace question.
     if (tier.isUpscaling() && tier.getTargetHeight() <= sourceHeight)
-      return finish(deintFloor, Verdict.NO_VISIBLE_GAIN, surface, deintFloor, sourceFps);
+      return finish(deintFloor, Verdict.NO_VISIBLE_GAIN, surface, constraints, deintFloor, sourceFps);
 
     if (!tier.isLegalForSourceHeight(sourceHeight))
-      return finish(deintFloor, Verdict.SOURCE_BELOW_FLOOR, surface, deintFloor, sourceFps);
+      return finish(deintFloor, Verdict.SOURCE_BELOW_FLOOR, surface, constraints, deintFloor, sourceFps);
 
-    return finish(tier, Verdict.OFFERED, surface, deintFloor, sourceFps);
+    return finish(tier, Verdict.OFFERED, surface, constraints, deintFloor, sourceFps);
   }
 
   /**
-   * Apply the surface decode gate and settle the final verdict. Kept in one
-   * place so every exit path is forced through the same "can the client
-   * actually play this?" question -- the check most likely to be forgotten on
-   * one branch and produce an unplayable stream.
+   * Apply the decode gate and settle the final verdict. Kept in one place so
+   * every exit path is forced through the same "can the client actually play
+   * this?" question -- the check most likely to be forgotten on one branch and
+   * produce an unplayable stream.
+   *
+   * <p>Two independent sources can answer it, and either one suffices:
+   * the winning playback surface's declared output limits, or the active
+   * player's per-codec decoder ceilings. Clients report decoder limits per codec
+   * on both Android and the web, so requiring the surface form would exclude
+   * clients that have already told us everything we need.
+   *
+   * <p>If NEITHER source declared a limit, the answer is no. Silence is not
+   * consent: the whole point of this gate is that listing a codec says nothing
+   * about the resolution its decoder was built for.
    */
   private static Advice finish(EnhancementTier tier, Verdict verdict, PlaybackSurface surface,
-      EnhancementTier fallback, int sourceFps)
+      ClientConstraints constraints, EnhancementTier fallback, int sourceFps)
   {
     if (!tier.isActive()) return new Advice(EnhancementTier.NONE, verdict);
 
@@ -186,7 +214,7 @@ public final class EnhancementAdvisor
     EnhancementTier t = tier;
     while (t.isUpscaling())
     {
-      if (surface == null || surface.canOutput(t.getTargetWidth(), t.getTargetHeight(), sourceFps))
+      if (canDecode(surface, constraints, t.getTargetWidth(), t.getTargetHeight(), sourceFps))
         return new Advice(t, verdict);
       t = t.downgrade();
     }
@@ -195,6 +223,18 @@ public final class EnhancementAdvisor
     // otherwise deinterlace progressive content, which is both wrong and costly.
     if (fallback.isActive()) return new Advice(fallback, verdict);
     return new Advice(EnhancementTier.NONE, Verdict.SURFACE_CANNOT_DECODE);
+  }
+
+  /**
+   * True when either declared capability source proves this geometry is
+   * decodable. Fail-closed when neither declared anything.
+   */
+  static boolean canDecode(PlaybackSurface surface, ClientConstraints constraints,
+      int width, int height, int fps)
+  {
+    if (surface != null && surface.canOutput(width, height, fps)) return true;
+    if (constraints != null && constraints.canDecodeAny(width, height, fps)) return true;
+    return false;
   }
 
   /**
