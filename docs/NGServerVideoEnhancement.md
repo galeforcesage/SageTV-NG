@@ -278,3 +278,40 @@ Not yet wired: the enhancement pipeline is not attached to the push and
 pull-xcode transcode branches, so the server currently logs its decisions and
 sends today's stream. Client work in §2 is safe to start now — it is read by the
 server immediately and simply improves the quality of what gets logged.
+
+**A phase interlock enforces that.** Because the tier travels to the client in the
+§3 token, going live before the pipeline can apply it would make the server
+advertise an enhancement it never performed. So until the pipeline is wired,
+clearing `playback/gpu_enhance/dry_run` is *not* sufficient: dry-run stays on, and
+the server logs
+
+```
+GPU_ENHANCE INTERLOCK playback/gpu_enhance/dry_run is false, but the enhancement
+pipeline is not wired to the transcode branches yet, so dry-run stays on.
+```
+
+once, so the setting is never silently ignored. `enhance;tier=` therefore cannot
+appear on the wire yet, and any client seeing it is talking to a newer server.
+
+### What a client team can test today
+
+Everything in §2, which is the part that is easy to get wrong:
+
+1. Set `playback/gpu_enhance/enabled=true` on the server (leave dry-run alone).
+2. Tune from the client.
+3. Read the decision:
+
+```
+GPU_ENHANCE DRYRUN client=<id> media=<mode> src=1920x1080i@30 sink=3840x2160
+  surface=<id> surfaceMax=3840x2160@60 local=auto/none
+  -> tier=enhance_2160p verdict=OFFERED (offered)
+```
+
+That single line confirms the whole client contract: `sink=` proves
+`DISPLAY_SINK_RESOLUTION` arrived and parsed, `surfaceMax=` proves the per-surface
+limits arrived, `local=` proves `LOCAL_ENHANCEMENT` arrived, and `verdict=` says
+whether the server would have accepted. `sink=0x0` or `surfaceMax=0x0@0` means the
+field never made it — see the §4.1 table.
+
+What cannot be tested yet is the picture itself: no stream is re-encoded until the
+pipeline is wired.

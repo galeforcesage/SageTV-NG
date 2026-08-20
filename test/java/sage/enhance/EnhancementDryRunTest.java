@@ -73,8 +73,38 @@ public class EnhancementDryRunTest
   {
     Sage.put(EnhancementAdvisor.PROP_ENABLED, "true");
     Sage.put(EnhancementDryRun.PROP_DRY_RUN, "false");
-    assertTrue(EnhancementDryRun.isLive());
-    assertEquals(eval(), EnhancementTier.ENHANCE_2160P);
+    if (EnhancementDryRun.PIPELINE_WIRED)
+    {
+      assertTrue(EnhancementDryRun.isLive());
+      assertEquals(eval(), EnhancementTier.ENHANCE_2160P);
+    }
+    else
+    {
+      // Written to survive the flip: once the pipeline is wired this branch
+      // stops running and the assertions above take over.
+      assertFalse(EnhancementDryRun.isLive(),
+          "The phase interlock must outrank both switches until the pipeline is wired");
+      assertEquals(eval(), EnhancementTier.NONE);
+    }
+  }
+
+  /**
+   * The tier is advertised to the client in CAP_EFFECTIVE_DELIVERY, so going
+   * live before the pipeline can actually apply it would make the server
+   * announce an enhancement it never performed.
+   */
+  @Test
+  public void testInterlockOutranksBothSwitchesUntilPipelineIsWired()
+  {
+    if (EnhancementDryRun.PIPELINE_WIRED) return; // nothing left to guard
+
+    Sage.put(EnhancementAdvisor.PROP_ENABLED, "true");
+    Sage.put(EnhancementDryRun.PROP_DRY_RUN, "false");
+    assertTrue(EnhancementDryRun.isDryRun(),
+        "Clearing the property must not defeat the interlock");
+    assertFalse(EnhancementDryRun.isLive());
+    assertEquals(eval(), EnhancementTier.NONE,
+        "No tier may reach the delivery token while the pipeline is unwired");
   }
 
   @Test

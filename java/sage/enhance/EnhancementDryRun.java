@@ -34,12 +34,47 @@ public final class EnhancementDryRun
   /** When true (the default), decisions are logged but never acted upon. */
   public static final String PROP_DRY_RUN = "playback/gpu_enhance/dry_run";
 
+  /**
+   * Phase interlock. The enhancement pipeline is not yet attached to the push
+   * and pull-xcode transcode branches, so a tier can be decided but cannot
+   * actually be applied to a stream.
+   *
+   * <p>Until that lands, clearing {@link #PROP_DRY_RUN} must not be enough to
+   * leave dry-run, because the tier travels to the client in the
+   * {@code CAP_EFFECTIVE_DELIVERY} token: the server would advertise
+   * {@code enhance;tier=2160p} and then send an untouched stream. A protocol
+   * that lies is worse than one that declines, and it would send anyone
+   * debugging a client implementation chasing a difference that was never
+   * produced.
+   *
+   * <p>Flip this to true in the same change that wires the pipeline.
+   */
+  static final boolean PIPELINE_WIRED = false;
+
+  private static volatile boolean interlockLogged = false;
+
   private EnhancementDryRun() {}
 
   /** True when the decision must be observed only, never applied. */
   public static boolean isDryRun()
   {
-    return Sage.getBoolean(PROP_DRY_RUN, true);
+    boolean propDry = Sage.getBoolean(PROP_DRY_RUN, true);
+    if (!PIPELINE_WIRED)
+    {
+      // Say so rather than silently ignoring the admin's setting -- an override
+      // that explains itself once is the difference between "this feature is
+      // staged" and an afternoon lost to "I turned it on and nothing happened".
+      if (!propDry && !interlockLogged)
+      {
+        interlockLogged = true;
+        System.out.println("GPU_ENHANCE INTERLOCK " + PROP_DRY_RUN
+            + " is false, but the enhancement pipeline is not wired to the"
+            + " transcode branches yet, so dry-run stays on. Decisions are"
+            + " logged and no stream is modified or advertised as enhanced.");
+      }
+      return true;
+    }
+    return propDry;
   }
 
   /**
