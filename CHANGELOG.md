@@ -1,6 +1,24 @@
 # Change Log
 
 ## Next
+* `build/deploy_jar_ng.sh` no longer destroys the server it deploys to. It ran
+  `rm -f JARs/*.jar` before copying the staged set, which is only safe if
+  staging is a superset of the live directory — and it isn't: the live server
+  carries ~88 jars (Jetty, sagex-api, phoenix, plugins) where a clean gradle
+  build emits ~26, so the script silently removed the web UI and every plugin.
+  It now overlays by default and enumerates the difference first; pruning is
+  still available behind `PRUNE_JARS=1`, and refuses to run when staging
+  doesn't cover the live set. It also SIGTERMed the server without asking what
+  was running, so a routine deploy could kill an in-progress recording or drop
+  every viewer mid-stream; there is now a hard idle gate (no ffmpeg processes,
+  no recording-shaped writes in the last two minutes) with an explicit
+  `ALLOW_BUSY=1` override. Two checks were reporting the opposite of the truth:
+  the `jdeps --missing-deps` preflight swallowed its own failure and printed a
+  confident all-clear on a classpath it had never managed to read, and the
+  post-deploy port check used `ss`, which returns an empty table inside this
+  container and so warned "ports not listening" on every healthy deploy. Both
+  now report unverified-vs-clean honestly, with the port check on `/dev/tcp`.
+  The default container name was `sagetv-ng`; the actual one is `sagetv-mine`.
 * The client's `SUPPORTS_4K` setting now overrides the server's own inference
   about what a device can display. Everything the enhancement gate previously
   relied on — EDID sink sensing, panel geometry, per-codec decoder tables — is
