@@ -102,6 +102,13 @@ public final class HwEncoder
   private static final Map<String, Boolean> runtimeCache = new ConcurrentHashMap<String, Boolean>();
 
   /**
+   * Binaries we have already explained the "enhancement unavailable" verdict
+   * for, so the reason is stated once rather than on every admission check.
+   */
+  private static final Set<String> unsupportedReasonLogged =
+      java.util.Collections.newSetFromMap(new ConcurrentHashMap<String, Boolean>());
+
+  /**
    * Filter names the GPU enhancement pipeline cares about. Probing is limited
    * to this list so the cache stays small and the intent stays obvious.
    *
@@ -402,6 +409,9 @@ public final class HwEncoder
       String hevc = encoderName(Kind.NVENC, "hevc");
       if (scaler == null || hevc == null)
       {
+        if (Sage.DBG)
+          System.out.println("HwEncoder: GPU enhance runtime probe skipped for " + key
+              + " -- " + (scaler == null ? "no CUDA scaler" : "no NVENC HEVC encoder"));
         runtimeCache.put(key, Boolean.FALSE);
         return false;
       }
@@ -477,11 +487,27 @@ public final class HwEncoder
    */
   public static boolean gpuEnhanceSupported()
   {
-    if (cudaScaler() == null) return false;
-    if (cudaDeinterlacer(false) == null) return false;
-    if (!detect(Sage.get(PROP_PROBE_FFMPEG, DEFAULT_PROBE_FF)).contains(Kind.NVENC)) return false;
-    if (encoderName(Kind.NVENC, "hevc") == null) return false;
-    return gpuEnhanceRuntimeOk(Sage.get(PROP_PROBE_FFMPEG, DEFAULT_PROBE_FF));
+    String bin = Sage.get(PROP_PROBE_FFMPEG, DEFAULT_PROBE_FF);
+    String missing = null;
+    if (cudaScaler() == null)
+      missing = "no CUDA scaler (need scale_npp or scale_cuda)";
+    else if (cudaDeinterlacer(false) == null)
+      missing = "no CUDA deinterlacer (need yadif_cuda or bwdif_cuda)";
+    else if (!detect(bin).contains(Kind.NVENC))
+      missing = "ffmpeg reports no NVENC support";
+    else if (encoderName(Kind.NVENC, "hevc") == null)
+      missing = "no NVENC HEVC encoder";
+
+    if (missing != null)
+    {
+      // Say why, once per binary. A silent false here is indistinguishable
+      // from "enhancement was never asked for", which is how a broken probe
+      // can disable the whole feature indefinitely without anyone noticing.
+      if (unsupportedReasonLogged.add(bin))
+        System.out.println("HwEncoder: GPU enhancement unavailable for " + bin + " -- " + missing);
+      return false;
+    }
+    return gpuEnhanceRuntimeOk(bin);
   }
 
   /** Test hook: forget cached probe results so a probe can be re-run. */
@@ -490,6 +516,7 @@ public final class HwEncoder
     probeCache.clear();
     filterCache.clear();
     runtimeCache.clear();
+    unsupportedReasonLogged.clear();
   }
 
   /**
