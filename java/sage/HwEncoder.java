@@ -86,6 +86,11 @@ public final class HwEncoder
       "multimedia/hwaccel/enhance_runtime_probe";
   /** Cap on the functional probe so a wedged ffmpeg can't stall the caller. */
   private static final int PROBE_TIMEOUT_SECS = 20;
+  // Synthetic probe source geometry. Small enough to be instant, large enough
+  // that the scaler and NVENC both do real work.
+  private static final int PROBE_W = 320;
+  private static final int PROBE_H = 180;
+  private static final int PROBE_FRAMES = 6;
 
   /** Cache: ffmpeg binary path -> Set of available encoder kinds (excluding NONE). */
   private static final Map<String, Set<Kind>> probeCache = new ConcurrentHashMap<String, Set<Kind>>();
@@ -344,9 +349,45 @@ public final class HwEncoder
    * Set {@code multimedia/hwaccel/enhance_runtime_probe=false} to skip it and
    * trust the listing probes instead (not recommended).
    */
-  public static boolean gpuEnhanceRuntimeOk(String ffmpegBin)
+  /**
+   * Build the functional GPU-enhancement probe command.
+   *
+   * The synthetic source is raw frames on stdin rather than the lavfi input
+   * device. SageTV ships a custom ffmpeg built without libavdevice: its
+   * `-devices` list is empty and `-f lavfi` fails with "Unknown input format:
+   * 'lavfi'". A lavfi-based probe therefore reports "no GPU support" on
+   * exactly the hosts where the pipeline actually works, silently disabling
+   * enhancement. rawvideo over a pipe requires no input device and behaves
+   * identically across builds and platforms.
+   *
+   * Package-private so the shape of the command can be asserted in tests
+   * without needing a real ffmpeg or a GPU.
+   */
+  static List<String> buildRuntimeProbeCommand(String bin, String scaler, String hevc)
   {
-    String key = (ffmpegBin == null || ffmpegBin.length() == 0)
+    List<String> cmd = new ArrayList<String>();
+    cmd.add(bin);
+    cmd.add("-hide_banner");
+    cmd.add("-loglevel"); cmd.add("error");
+    cmd.add("-init_hw_device"); cmd.add("cuda=cu:0");
+    cmd.add("-filter_hw_device"); cmd.add("cu");
+    cmd.add("-f"); cmd.add("rawvideo");
+    cmd.add("-pix_fmt"); cmd.add("yuv420p");
+    cmd.add("-s"); cmd.add(PROBE_W + "x" + PROBE_H);
+    cmd.add("-r"); cmd.add("30");
+    cmd.add("-i"); cmd.add("-");
+    cmd.add("-vf"); cmd.add("hwupload_cuda," + scaler + "=" + (PROBE_W * 2) + ":" + (PROBE_H * 2));
+    cmd.add("-c:v"); cmd.add(hevc);
+    cmd.add("-f"); cmd.add("null");
+    cmd.add("-");
+    return cmd;
+  }
+
+  /** Bytes of yuv420p payload the probe feeder writes per frame. */
+  static int probeFrameBytes() { return PROBE_W * PROBE_H * 3 / 2; }
+
+  public static boolean gpuEnhanceRuntimeOk(String ffmpegBin)
+  {    String key = (ffmpegBin == null || ffmpegBin.length() == 0)
         ? Sage.get(PROP_PROBE_FFMPEG, DEFAULT_PROBE_FF) : ffmpegBin;
     if (!Sage.getBoolean(PROP_ENHANCE_RUNTIME_PROBE, true)) return true;
     Boolean cached = runtimeCache.get(key);
@@ -367,19 +408,29 @@ public final class HwEncoder
       Process p = null;
       try
       {
-        List<String> cmd = new ArrayList<String>();
-        cmd.add(key);
-        cmd.add("-hide_banner");
-        cmd.add("-loglevel"); cmd.add("error");
-        cmd.add("-init_hw_device"); cmd.add("cuda=cu:0");
-        cmd.add("-filter_hw_device"); cmd.add("cu");
-        cmd.add("-f"); cmd.add("lavfi");
-        cmd.add("-i"); cmd.add("color=c=black:s=640x360:r=30:d=0.2");
-        cmd.add("-vf"); cmd.add("hwupload_cuda," + scaler + "=1280:720");
-        cmd.add("-c:v"); cmd.add(hevc);
-        cmd.add("-f"); cmd.add("null");
-        cmd.add("-");
+        List<String> cmd = buildRuntimeProbeCommand(key, scaler, hevc);
         p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+
+        // Feed the frames on a separate thread: writing inline would deadlock
+        // against our own draining of the merged stdout/stderr stream.
+        final Process fp = p;
+        Thread feeder = new Thread(new Runnable()
+        {
+          public void run()
+          {
+            java.io.OutputStream os = fp.getOutputStream();
+            try
+            {
+              byte[] frame = new byte[PROBE_W * PROBE_H * 3 / 2];
+              for (int i = 0; i < PROBE_FRAMES; i++) os.write(frame);
+              os.flush();
+            }
+            catch (IOException ioe) { /* ffmpeg exited early; exit code tells us */ }
+            finally { try { os.close(); } catch (IOException ioe) {} }
+          }
+        }, "HwEncoderProbeFeeder");
+        feeder.setDaemon(true);
+        feeder.start();
 
         StringBuilder err = new StringBuilder();
         BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));

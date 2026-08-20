@@ -73,7 +73,7 @@ public class HwEncoderRuntimeProbeTest
 
   /**
    * The result must be cached: a second call on the same binary must not shell
-   * out again. Measured indirectly — the second call is dramatically faster than
+   * out again. Measured indirectly â€” the second call is dramatically faster than
    * a process spawn, and must agree with the first.
    */
   @Test
@@ -122,5 +122,53 @@ public class HwEncoderRuntimeProbeTest
     if (supported)
       assertTrue(HwEncoder.gpuEnhanceRuntimeOk("ffmpeg"),
           "gpuEnhanceSupported must imply the functional probe passed");
+  }
+
+  /**
+   * The probe must never depend on the lavfi input device.
+   *
+   * SageTV ships a custom ffmpeg built without libavdevice, so `-f lavfi`
+   * fails with "Unknown input format: 'lavfi'". A lavfi-based probe reported
+   * "GPU enhancement unsupported" on a host whose GPU pipeline was verified
+   * working (real 1080i -> 3840x2160 HEVC at 59.94fps on an RTX 5080),
+   * silently disabling the feature. Confirmed on that host: `ffmpeg -devices`
+   * printed an empty list.
+   */
+  @Test
+  public void testProbeDoesNotUseLavfi()
+  {
+    java.util.List<String> cmd = HwEncoder.buildRuntimeProbeCommand("/opt/sagetv/server/ffmpeg", "scale_npp", "hevc_nvenc");
+    for (String a : cmd)
+      assertFalse(a.contains("lavfi"), "probe must not use the lavfi input device, found: " + a);
+    assertTrue(cmd.contains("rawvideo"), "probe should synthesize input via rawvideo, got: " + cmd);
+    assertTrue(cmd.contains("-"), "rawvideo input should be read from stdin");
+  }
+
+  /** The probe must exercise a real scale and a real NVENC open. */
+  @Test
+  public void testProbeExercisesScalerAndEncoder()
+  {
+    java.util.List<String> cmd = HwEncoder.buildRuntimeProbeCommand("ffmpeg", "scale_cuda", "hevc_nvenc");
+    String joined = String.join(" ", cmd);
+    assertTrue(joined.contains("hwupload_cuda,scale_cuda="), "probe must upload then scale on the GPU: " + joined);
+    assertTrue(joined.contains("-c:v hevc_nvenc"), "probe must actually open the NVENC encoder: " + joined);
+    assertTrue(joined.contains("-init_hw_device cuda=cu:0"), "probe must initialize a CUDA device: " + joined);
+
+    // The scale target must differ from the source, or the scaler is a no-op
+    // and the probe would pass on a host whose scaler is broken.
+    assertFalse(joined.contains("scale_cuda=320:180"), "probe must scale to a different size than the source");
+  }
+
+  /** Frame payload must match the declared geometry, or ffmpeg desyncs. */
+  @Test
+  public void testProbeFrameSizeMatchesGeometry()
+  {
+    java.util.List<String> cmd = HwEncoder.buildRuntimeProbeCommand("ffmpeg", "scale_npp", "hevc_nvenc");
+    int i = cmd.indexOf("-s");
+    assertTrue(i >= 0 && i + 1 < cmd.size(), "probe should declare a frame size");
+    String[] wh = cmd.get(i + 1).split("x");
+    int expected = Integer.parseInt(wh[0]) * Integer.parseInt(wh[1]) * 3 / 2;
+    assertEquals(HwEncoder.probeFrameBytes(), expected,
+        "yuv420p frame payload must match the -s geometry the probe declares");
   }
 }
