@@ -131,13 +131,37 @@ public class MiniPlayer implements DVDMediaPlayer
    */
   static String buildEffDeliveryToken(String chosenSurfaceDelivery, String chosenSurfaceXcodeMode)
   {
+    return buildEffDeliveryToken(chosenSurfaceDelivery, chosenSurfaceXcodeMode, null);
+  }
+
+  /**
+   * As {@link #buildEffDeliveryToken(String, String)}, but appends the server
+   * video enhancement suffix when a tier is active, e.g.
+   * {@code pull-xcode:enhance;tier=2160p}.
+   *
+   * <p>Purely additive: when {@code enhanceTier} is null or
+   * {@link sage.enhance.EnhancementTier#NONE} the token is byte-identical to
+   * what this method produced before enhancement existed, so no client can
+   * observe a difference until enhancement actually runs. Clients are only
+   * required to tolerate unrecognized {@code ;k=v} pairs, which the token
+   * format already demands for audio.
+   */
+  static String buildEffDeliveryToken(String chosenSurfaceDelivery,
+      String chosenSurfaceXcodeMode, sage.enhance.EnhancementTier enhanceTier)
+  {
     if (chosenSurfaceDelivery == null || chosenSurfaceDelivery.length() == 0)
       return null;
+    String base;
     if (chosenSurfaceXcodeMode != null && chosenSurfaceXcodeMode.length() > 0)
-      return chosenSurfaceDelivery + ":" + chosenSurfaceXcodeMode;
-    if ("pull".equals(chosenSurfaceDelivery))
-      return "pull:direct";
-    return chosenSurfaceDelivery; // push, hls unchanged
+      base = chosenSurfaceDelivery + ":" + chosenSurfaceXcodeMode;
+    else if ("pull".equals(chosenSurfaceDelivery))
+      base = "pull:direct";
+    else
+      base = chosenSurfaceDelivery; // push, hls unchanged
+    if (enhanceTier == null || !enhanceTier.isActive()) return base;
+    String wire = enhanceTier.wireToken();
+    if (wire == null) return base;
+    return base + ":enhance;tier=" + wire;
   }
 
   /**
@@ -1656,6 +1680,7 @@ public class MiniPlayer implements DVDMediaPlayer
         // a servable decision, we fall through to the legacy path unchanged.
         // See ROADMAP.md "Playback Surface capability model (Protocol 2.1)".
         String chosenSurfaceId = null;
+        sage.client.PlaybackSurface chosenSurface = null;
         String chosenSurfaceDelivery = null;
         String chosenSurfaceXcodeMode = null;
         int chosenSurfaceAudioStreamIndex = -1;
@@ -1726,6 +1751,7 @@ public class MiniPlayer implements DVDMediaPlayer
             }
             profileDecision = winner.decision;
             chosenSurfaceId = winner.surface.getId();
+            chosenSurface = winner.surface;
             chosenSurfaceDelivery = winner.chosenDeliveryMode;
             chosenSurfaceXcodeMode = winner.chosenXcodeMode;
             // 2.1.0003: extract the chosen audio stream's orderIndex so the
@@ -1814,6 +1840,7 @@ public class MiniPlayer implements DVDMediaPlayer
                         ranked2, ranked2.get(0), isServerAudioEqRequested());
                 profileDecision = winner2.decision;
                 chosenSurfaceId = winner2.surface.getId();
+                chosenSurface = winner2.surface;
                 chosenSurfaceDelivery = winner2.chosenDeliveryMode;
                 chosenSurfaceXcodeMode = winner2.chosenXcodeMode;
                 if (winner2.audioStreamChoice != null && winner2.audioStreamChoice.audioFormat != null)
@@ -1977,7 +2004,40 @@ public class MiniPlayer implements DVDMediaPlayer
           // checks below) is left untouched. push/hls are unchanged.
           if (chosenSurfaceDelivery != null && chosenSurfaceDelivery.length() > 0)
           {
-            String effDelivery = buildEffDeliveryToken(chosenSurfaceDelivery, chosenSurfaceXcodeMode);
+            // --- Server video enhancement (post-rank treatment) ---
+            // Runs AFTER the winner is chosen, exactly like the server-EQ
+            // promotion above, so the four-tier ranking semantics are untouched.
+            // In dry-run (the default) this only logs, and evaluateAndLog
+            // returns NONE, so the token below is byte-identical to today.
+            sage.enhance.EnhancementTier enhanceTier = sage.enhance.EnhancementTier.NONE;
+            try
+            {
+              if (sage.enhance.EnhancementAdvisor.isEnabled())
+              {
+                int srcFps = 0;
+                if (cf != null && cf.getVideoFormat() != null)
+                  srcFps = Math.round(cf.getVideoFormat().getFps());
+                enhanceTier = sage.enhance.EnhancementDryRun.evaluateAndLog(
+                    (mcsr != null ? mcsr.getNgClientId() : null),
+                    (chosenSurfaceXcodeMode == null ? chosenSurfaceDelivery : chosenSurfaceXcodeMode),
+                    mediaW, mediaH, srcInterlaced, srcFps,
+                    (mcsr != null ? mcsr.getSinkWidth() : 0),
+                    (mcsr != null ? mcsr.getSinkHeight() : 0),
+                    chosenSurface,
+                    (mcsr != null ? mcsr.getLocalEnhancementPref() : "auto"),
+                    (mcsr != null ? mcsr.getLocalEnhancementStatus() : "none"),
+                    sage.HwEncoder.gpuEnhanceSupported());
+              }
+            }
+            catch (Throwable t)
+            {
+              // Enhancement is an optimization and must never be able to break
+              // a tune. Any failure here degrades to "no enhancement".
+              enhanceTier = sage.enhance.EnhancementTier.NONE;
+              if (Sage.DBG) System.out.println("GPU_ENHANCE evaluation failed (ignored): " + t);
+            }
+            String effDelivery = buildEffDeliveryToken(chosenSurfaceDelivery,
+                chosenSurfaceXcodeMode, enhanceTier);
             // Protocol 2.1 option B: for the fMP4 modes that TRANSCODE audio
             // (browserhd, browserhd_copyv) carry the decision's best target
             // audio codec + source channel count as ";acodec=<v>;ac=<n>" so the

@@ -17,11 +17,13 @@ import java.util.Collections;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Hardware video encoder abstraction. Lets the rest of the code request
@@ -38,6 +40,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *   multimedia/hwaccel/preferred       comma list (default above)
  *   multimedia/hwaccel/vaapi_device    /dev/dri/renderD128
  *   multimedia/hwaccel/probe_ffmpeg    /usr/local/bin/ffmpeg-ac4
+ *   multimedia/hwaccel/enhance_runtime_probe  true (functionally verify NVENC)
  *
  * NOTE: This class does NOT shell out at class-load time — the probe runs
  * lazily on first call to {@link #detect(String)} or {@link #pick(String)}.
@@ -79,9 +82,32 @@ public final class HwEncoder
   private static final String DEFAULT_VAAPI_DEV   = "/dev/dri/renderD128";
   private static final String PROP_PROBE_FFMPEG   = "multimedia/hwaccel/probe_ffmpeg";
   private static final String DEFAULT_PROBE_FF    = "/opt/sagetv/server/ffmpeg";
+  private static final String PROP_ENHANCE_RUNTIME_PROBE =
+      "multimedia/hwaccel/enhance_runtime_probe";
+  /** Cap on the functional probe so a wedged ffmpeg can't stall the caller. */
+  private static final int PROBE_TIMEOUT_SECS = 20;
 
   /** Cache: ffmpeg binary path -> Set of available encoder kinds (excluding NONE). */
   private static final Map<String, Set<Kind>> probeCache = new ConcurrentHashMap<String, Set<Kind>>();
+
+  /** Cache: ffmpeg binary path -> Set of available filter names. */
+  private static final Map<String, Set<String>> filterCache = new ConcurrentHashMap<String, Set<String>>();
+
+  /** Cache for the functional (actually-run-it) enhancement probe, per binary. */
+  private static final Map<String, Boolean> runtimeCache = new ConcurrentHashMap<String, Boolean>();
+
+  /**
+   * Filter names the GPU enhancement pipeline cares about. Probing is limited
+   * to this list so the cache stays small and the intent stays obvious.
+   *
+   * <p>{@code scale_npp} is NOT guaranteed present: it requires an ffmpeg built
+   * with {@code --enable-libnpp}, and NVIDIA advises against libnpp on CUDA
+   * releases after 12.8. {@code scale_cuda} is the fallback. Callers must treat
+   * the scaler as an abstraction and never assume a specific one exists.
+   */
+  private static final String[] INTERESTING_FILTERS = {
+    "yadif_cuda", "bwdif_cuda", "scale_npp", "scale_cuda", "yadif", "bwdif",
+  };
 
   /** Encoder name table: Kind -> (codec -> ffmpeg encoder name). */
   private static final Map<Kind, Map<String, String>> ENC_NAMES = buildEncNames();
@@ -186,6 +212,233 @@ public final class HwEncoder
         System.out.println("HwEncoder: probe " + key + " -> " + immut);
       return immut;
     }
+  }
+
+  /**
+   * Probe a specific {@code ffmpeg} binary for the availability of the filters
+   * in {@link #INTERESTING_FILTERS}. Result is cached per binary path, exactly
+   * like {@link #detect(String)}. Returns an empty set if the probe fails,
+   * which reads as "no GPU filters" and disables enhancement — fail closed.
+   */
+  public static Set<String> detectFilters(String ffmpegBin)
+  {
+    String key = (ffmpegBin == null || ffmpegBin.length() == 0)
+        ? Sage.get(PROP_PROBE_FFMPEG, DEFAULT_PROBE_FF) : ffmpegBin;
+    Set<String> cached = filterCache.get(key);
+    if (cached != null) return cached;
+    synchronized (HwEncoder.class)
+    {
+      cached = filterCache.get(key);
+      if (cached != null) return cached;
+      Set<String> found = new HashSet<String>();
+      try
+      {
+        Process p = new ProcessBuilder(key, "-hide_banner", "-filters")
+            .redirectErrorStream(true).start();
+        BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+        try
+        {
+          String line;
+          while ((line = r.readLine()) != null)
+          {
+            // Lines look like " ... yadif_cuda        V->V       Deinterlace CUDA frames"
+            // Match on a whitespace-delimited token so "yadif" never matches
+            // inside "yadif_cuda".
+            for (String f : INTERESTING_FILTERS)
+            {
+              if (found.contains(f)) continue;
+              if (containsToken(line, f)) found.add(f);
+            }
+          }
+        }
+        finally { try { r.close(); } catch (IOException ie) {} }
+        try { while (p.getInputStream().read() >= 0); } catch (IOException ie) {}
+        try { p.waitFor(); } catch (InterruptedException ie) { p.destroy(); }
+      }
+      catch (Throwable t)
+      {
+        if (Sage.DBG) System.out.println("HwEncoder: filter probe of " + key + " failed: " + t);
+      }
+      Set<String> immut = Collections.unmodifiableSet(found);
+      filterCache.put(key, immut);
+      if (Sage.DBG)
+        System.out.println("HwEncoder: filter probe " + key + " -> " + immut);
+      return immut;
+    }
+  }
+
+  /** True if {@code line} contains {@code tok} as a whitespace-delimited token. */
+  private static boolean containsToken(String line, String tok)
+  {
+    int from = 0;
+    while (true)
+    {
+      int i = line.indexOf(tok, from);
+      if (i < 0) return false;
+      int end = i + tok.length();
+      boolean leftOk  = (i == 0) || Character.isWhitespace(line.charAt(i - 1));
+      boolean rightOk = (end >= line.length()) || Character.isWhitespace(line.charAt(end));
+      if (leftOk && rightOk) return true;
+      from = i + 1;
+    }
+  }
+
+  /** Convenience: probe the default ffmpeg binary for filter availability. */
+  public static Set<String> detectFilters()
+  {
+    return detectFilters(Sage.get(PROP_PROBE_FFMPEG, DEFAULT_PROBE_FF));
+  }
+
+  /** True if the default ffmpeg binary exposes the named filter. */
+  public static boolean hasFilter(String name)
+  {
+    return name != null && detectFilters().contains(name);
+  }
+
+  /**
+   * Pick the CUDA scaler filter name, preferring {@code scale_npp} (Lanczos
+   * capable, matching the existing offline {@code upscale_2160} preset) and
+   * falling back to {@code scale_cuda}. Returns null when neither exists, which
+   * removes every upscale tier from the ladder.
+   */
+  public static String cudaScaler()
+  {
+    Set<String> f = detectFilters();
+    if (f.contains("scale_npp")) return "scale_npp";
+    if (f.contains("scale_cuda")) return "scale_cuda";
+    return null;
+  }
+
+  /**
+   * Pick the CUDA deinterlacer. {@code bwdif_cuda} is higher quality and is
+   * used only when explicitly requested via {@code preferBwdif}; otherwise
+   * {@code yadif_cuda} is the default. Returns null when neither exists.
+   */
+  public static String cudaDeinterlacer(boolean preferBwdif)
+  {
+    Set<String> f = detectFilters();
+    if (preferBwdif && f.contains("bwdif_cuda")) return "bwdif_cuda";
+    if (f.contains("yadif_cuda")) return "yadif_cuda";
+    if (f.contains("bwdif_cuda")) return "bwdif_cuda";
+    return null;
+  }
+
+  /**
+   * Functionally verify the full-GPU enhancement pipeline by actually running a
+   * tiny encode, rather than trusting what {@code -encoders} advertises.
+   *
+   * This exists because the listing probes lie. An ffmpeg build compiled against
+   * a newer NVENC SDK than the installed driver supports will happily list
+   * {@code hevc_nvenc} in {@code -encoders} and then fail at
+   * {@code avcodec_open2} with "Driver does not support the required nvenc API
+   * version" — observed with ffmpeg 8.1.2 (NVENC API 13.1) on driver 577.13
+   * (API 13.0). Without this check, enhancement would be admitted on such a host
+   * and then every enhanced session would die at stream start, which is exactly
+   * the runtime surprise the design forbids.
+   *
+   * The probe encodes a fraction of a second of synthetic color through a real
+   * CUDA device and the real scaler, so it also catches a missing CUDA device,
+   * a broken driver/library install, and a scaler that lists but can't
+   * initialize. Result is cached per binary; a failure fails closed.
+   *
+   * Set {@code multimedia/hwaccel/enhance_runtime_probe=false} to skip it and
+   * trust the listing probes instead (not recommended).
+   */
+  public static boolean gpuEnhanceRuntimeOk(String ffmpegBin)
+  {
+    String key = (ffmpegBin == null || ffmpegBin.length() == 0)
+        ? Sage.get(PROP_PROBE_FFMPEG, DEFAULT_PROBE_FF) : ffmpegBin;
+    if (!Sage.getBoolean(PROP_ENHANCE_RUNTIME_PROBE, true)) return true;
+    Boolean cached = runtimeCache.get(key);
+    if (cached != null) return cached.booleanValue();
+    synchronized (HwEncoder.class)
+    {
+      cached = runtimeCache.get(key);
+      if (cached != null) return cached.booleanValue();
+
+      boolean ok = false;
+      String scaler = cudaScaler();
+      String hevc = encoderName(Kind.NVENC, "hevc");
+      if (scaler == null || hevc == null)
+      {
+        runtimeCache.put(key, Boolean.FALSE);
+        return false;
+      }
+      Process p = null;
+      try
+      {
+        List<String> cmd = new ArrayList<String>();
+        cmd.add(key);
+        cmd.add("-hide_banner");
+        cmd.add("-loglevel"); cmd.add("error");
+        cmd.add("-init_hw_device"); cmd.add("cuda=cu:0");
+        cmd.add("-filter_hw_device"); cmd.add("cu");
+        cmd.add("-f"); cmd.add("lavfi");
+        cmd.add("-i"); cmd.add("color=c=black:s=640x360:r=30:d=0.2");
+        cmd.add("-vf"); cmd.add("hwupload_cuda," + scaler + "=1280:720");
+        cmd.add("-c:v"); cmd.add(hevc);
+        cmd.add("-f"); cmd.add("null");
+        cmd.add("-");
+        p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+
+        StringBuilder err = new StringBuilder();
+        BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+        try
+        {
+          String line;
+          while ((line = r.readLine()) != null)
+            if (err.length() < 2000) err.append(line).append('\n');
+        }
+        finally { try { r.close(); } catch (IOException ie) {} }
+
+        if (p.waitFor(PROBE_TIMEOUT_SECS, TimeUnit.SECONDS))
+          ok = (p.exitValue() == 0);
+        else
+          p.destroyForcibly();
+
+        if (!ok && Sage.DBG)
+          System.out.println("HwEncoder: GPU enhance runtime probe FAILED for " + key
+              + " -- enhancement disabled on this host. ffmpeg said:\n" + err);
+      }
+      catch (Throwable t)
+      {
+        if (Sage.DBG)
+          System.out.println("HwEncoder: GPU enhance runtime probe of " + key + " errored: " + t);
+      }
+      finally
+      {
+        if (p != null && p.isAlive()) p.destroyForcibly();
+      }
+
+      runtimeCache.put(key, Boolean.valueOf(ok));
+      if (Sage.DBG && ok)
+        System.out.println("HwEncoder: GPU enhance runtime probe OK for " + key
+            + " (scaler=" + scaler + ", encoder=" + hevc + ")");
+      return ok;
+    }
+  }
+
+  /**
+   * True if this ffmpeg binary can run the full-GPU enhancement pipeline:
+   * a CUDA deinterlacer, a CUDA scaler, and an NVENC HEVC encoder that actually
+   * opens. Any missing element disables enhancement entirely rather than
+   * producing a broken ffmpeg invocation at stream time.
+   */
+  public static boolean gpuEnhanceSupported()
+  {
+    if (cudaScaler() == null) return false;
+    if (cudaDeinterlacer(false) == null) return false;
+    if (!detect(Sage.get(PROP_PROBE_FFMPEG, DEFAULT_PROBE_FF)).contains(Kind.NVENC)) return false;
+    if (encoderName(Kind.NVENC, "hevc") == null) return false;
+    return gpuEnhanceRuntimeOk(Sage.get(PROP_PROBE_FFMPEG, DEFAULT_PROBE_FF));
+  }
+
+  /** Test hook: forget cached probe results so a probe can be re-run. */
+  static void clearProbeCaches()
+  {
+    probeCache.clear();
+    filterCache.clear();
+    runtimeCache.clear();
   }
 
   /**

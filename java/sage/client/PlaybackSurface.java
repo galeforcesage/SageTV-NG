@@ -64,6 +64,14 @@ public final class PlaybackSurface
   // audioContainerRules: canonical-container -> list of rule tokens
   //   (e.g. MPEG2-PS -> [first_substream_only, order_sensitive]).
   private final Map<String, List<String>> audioContainerRules;
+  // --- Server video enhancement: output-limit dimension ---
+  // What this surface can actually DECODE at, which is not the same question as
+  // which codecs it lists. Plenty of decoders advertise HEVC and top out at
+  // 1080p. Zero means "the client didn't say", which reads as unknown and
+  // therefore blocks enhancement -- never as unlimited.
+  private final int maxOutputWidth;
+  private final int maxOutputHeight;
+  private final int maxFps;
 
   /**
    * Backward-compatible constructor (pre-2.1.0006). Applies the conservative
@@ -91,6 +99,25 @@ public final class PlaybackSurface
       String audioTrackAccess, String audioTrackSelectionMode,
       Map<String, List<String>> audioContainerRules)
   {
+    this(id, route, priority, deliveryModes, videoCodecs, audioCodecs, containers,
+        audioTrackAccess, audioTrackSelectionMode, audioContainerRules, 0, 0, 0);
+  }
+
+  /**
+   * Full constructor including the output-limit dimension used by server video
+   * enhancement.
+   *
+   * @param maxOutputWidth  decoder width limit, 0 when the client didn't declare it.
+   * @param maxOutputHeight decoder height limit, 0 when the client didn't declare it.
+   * @param maxFps          decoder frame-rate limit, 0 when the client didn't declare it.
+   */
+  public PlaybackSurface(String id, String route, int priority,
+      List<String> deliveryModes, List<String> videoCodecs,
+      List<String> audioCodecs, List<String> containers,
+      String audioTrackAccess, String audioTrackSelectionMode,
+      Map<String, List<String>> audioContainerRules,
+      int maxOutputWidth, int maxOutputHeight, int maxFps)
+  {
     if (id == null || id.length() == 0)
       throw new IllegalArgumentException("PlaybackSurface id must be non-empty");
     this.id = id;
@@ -116,6 +143,10 @@ public final class PlaybackSurface
     this.audioContainerRules = audioContainerRules == null
         ? Collections.<String, List<String>>emptyMap()
         : Collections.unmodifiableMap(audioContainerRules);
+    // Negative values are nonsense on the wire; normalize them to "unknown".
+    this.maxOutputWidth  = Math.max(0, maxOutputWidth);
+    this.maxOutputHeight = Math.max(0, maxOutputHeight);
+    this.maxFps          = Math.max(0, maxFps);
   }
 
   public String getId() { return id; }
@@ -128,6 +159,44 @@ public final class PlaybackSurface
   public String getAudioTrackAccess() { return audioTrackAccess; }
   public String getAudioTrackSelectionMode() { return audioTrackSelectionMode; }
   public Map<String, List<String>> getAudioContainerRules() { return audioContainerRules; }
+
+  /** Declared decoder width limit, or 0 when the client didn't say. */
+  public int getMaxOutputWidth() { return maxOutputWidth; }
+  /** Declared decoder height limit, or 0 when the client didn't say. */
+  public int getMaxOutputHeight() { return maxOutputHeight; }
+  /** Declared decoder frame-rate limit, or 0 when the client didn't say. */
+  public int getMaxFps() { return maxFps; }
+
+  /** True when this surface declared any output limit at all. */
+  public boolean hasDeclaredOutputLimits()
+  {
+    return maxOutputWidth > 0 && maxOutputHeight > 0;
+  }
+
+  /**
+   * The hard OUTPUT gate for server video enhancement. Returns true only when
+   * this surface has PROVEN it can decode the proposed output geometry.
+   *
+   * <p>Deliberately fail-closed: a surface that never declared its limits
+   * returns false. Enhancement is an optimization, so "the client didn't tell
+   * us" must mean "don't", not "probably fine". The alternative -- assuming a
+   * surface that lists HEVC can handle 4K -- is the exact bug this dimension
+   * exists to prevent, because listing a codec says nothing about the level
+   * and resolution ceiling the decoder was actually built for.
+   *
+   * @param fps proposed output frame rate; pass 0 to skip the frame-rate check.
+   */
+  public boolean canOutput(int width, int height, int fps)
+  {
+    if (width <= 0 || height <= 0) return false;
+    if (!hasDeclaredOutputLimits()) return false;
+    if (width > maxOutputWidth || height > maxOutputHeight) return false;
+    // An undeclared frame-rate limit is tolerated -- geometry is the limit that
+    // actually breaks decoders in practice, and requiring both would exclude
+    // otherwise-capable clients for no gain.
+    if (fps > 0 && maxFps > 0 && fps > maxFps) return false;
+    return true;
+  }
 
   /** Container rules for a specific container (canonicalized), or empty list. */
   public List<String> getContainerRules(String container)
@@ -234,6 +303,8 @@ public final class PlaybackSurface
         + " containers=" + containers
         + " audioTrackAccess=" + audioTrackAccess
         + " audioTrackSelectionMode=" + audioTrackSelectionMode
-        + " audioContainerRules=" + audioContainerRules + "]";
+        + " audioContainerRules=" + audioContainerRules
+        + " maxOutput=" + maxOutputWidth + "x" + maxOutputHeight
+        + " maxFps=" + maxFps + "]";
   }
 }

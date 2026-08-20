@@ -4672,6 +4672,14 @@ public class MiniClientSageRenderer extends SageRenderer
           // 3-letter). Client/session property, NOT per-surface. Falls back to
           // the server locale when absent. Legacy clients never send it.
           sendGetPropertyAsync("CLIENT_AUDIO_LANGUAGE");
+          // Server video enhancement: the PHYSICAL sink, which DISPLAY_RESOLUTION
+          // cannot answer -- on Android it returns the UI framebuffer, so a
+          // Shield on a 4K TV reports 1920x1080 there.
+          sendGetPropertyAsync("DISPLAY_SINK_RESOLUTION");
+          sendGetPropertyAsync("DISPLAY_REFRESH_RATES");
+          sendGetPropertyAsync("DISPLAY_HDR_TYPES");
+          sendGetPropertyAsync("LOCAL_ENHANCEMENT");
+          sendGetPropertyAsync("QUALITY_HINT");
           sendBufferNow();
 
           clientPlatformProp = recvr.getStringReply();
@@ -4680,7 +4688,14 @@ public class MiniClientSageRenderer extends SageRenderer
           displayResolutionProp = recvr.getStringReply();
           playbackSurfacesProp = recvr.getStringReply();
           String clientAudioLanguageProp = recvr.getStringReply();
+          String sinkResolutionProp = recvr.getStringReply();
+          String refreshRatesProp = recvr.getStringReply();
+          String hdrTypesProp = recvr.getStringReply();
+          String localEnhancementProp = recvr.getStringReply();
+          String qualityHintProp = recvr.getStringReply();
           clientAudioLanguage = (clientAudioLanguageProp == null) ? "" : clientAudioLanguageProp.trim();
+          applyEnhancementCapabilities(sinkResolutionProp, refreshRatesProp,
+              hdrTypesProp, localEnhancementProp, qualityHintProp);
 
           clientPlatform = (clientPlatformProp == null) ? "" : clientPlatformProp.trim();
           clientDeviceFormFactor = (deviceFormFactorProp == null) ? "" : deviceFormFactorProp.trim();
@@ -4729,13 +4744,18 @@ public class MiniClientSageRenderer extends SageRenderer
                 sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_TRACK_ACCESS");
                 sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_TRACK_SELECTION_MODE");
                 sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_CONTAINER_RULES");
+                // Output limits: what this surface can actually decode, which
+                // is a different question from which codecs it lists.
+                sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_MAX_OUTPUT_WIDTH");
+                sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_MAX_OUTPUT_HEIGHT");
+                sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_MAX_FPS");
               }
               sendBufferNow();
               final java.util.Map<String, String[]> rawSurfaceProps =
                   new java.util.LinkedHashMap<String, String[]>();
               for (String sid : surfaceIds)
               {
-                String[] props = new String[9];
+                String[] props = new String[12];
                 props[0] = recvr.getStringReply();
                 props[1] = recvr.getStringReply();
                 props[2] = recvr.getStringReply();
@@ -4745,6 +4765,9 @@ public class MiniClientSageRenderer extends SageRenderer
                 props[6] = recvr.getStringReply();
                 props[7] = recvr.getStringReply();
                 props[8] = recvr.getStringReply();
+                props[9] = recvr.getStringReply();
+                props[10] = recvr.getStringReply();
+                props[11] = recvr.getStringReply();
                 rawSurfaceProps.put(sid, props);
               }
               playbackSurfaces = sage.client.PlaybackSurfaceSet.build(
@@ -8029,14 +8052,17 @@ public class MiniClientSageRenderer extends SageRenderer
         sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_TRACK_ACCESS");
         sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_TRACK_SELECTION_MODE");
         sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_CONTAINER_RULES");
+        sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_MAX_OUTPUT_WIDTH");
+        sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_MAX_OUTPUT_HEIGHT");
+        sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_MAX_FPS");
       }
       sendBufferNow();
       final java.util.Map<String, String[]> rawSurfaceProps =
           new java.util.LinkedHashMap<String, String[]>();
       for (String sid : surfaceIds)
       {
-        String[] props = new String[9];
-        for (int i = 0; i < 9; i++)
+        String[] props = new String[12];
+        for (int i = 0; i < 12; i++)
           props[i] = recvr.getStringReply();
         rawSurfaceProps.put(sid, props);
       }
@@ -8208,6 +8234,93 @@ public class MiniClientSageRenderer extends SageRenderer
     return (ngVersion != null && ngVersion.length() > 0) ||
         (ngCapabilities != null && !ngCapabilities.isEmpty());
   }
+
+  /**
+   * Parse the server-video-enhancement capability round. Every field is
+   * optional and every unparseable value stays at its "unknown" default, which
+   * every consumer reads as "do not enhance". This is the whole reason the
+   * fields can ship before any client implements them.
+   */
+  private void applyEnhancementCapabilities(String sinkRes, String refreshRates,
+      String hdrTypes, String localEnhancement, String qualityHint)
+  {
+    sinkWidth = 0;
+    sinkHeight = 0;
+    displayRefreshRates = "";
+    displayHdrTypes = "";
+    localEnhancementPref = "auto";
+    localEnhancementStatus = "none";
+    clientQualityHint = "auto";
+
+    if (sinkRes != null)
+    {
+      String s = sinkRes.trim();
+      int x = s.indexOf('x');
+      if (x < 0) x = s.indexOf('X');
+      if (x > 0 && x < s.length() - 1)
+      {
+        try
+        {
+          int w = Integer.parseInt(s.substring(0, x).trim());
+          int h = Integer.parseInt(s.substring(x + 1).trim());
+          // Reject absurd geometry outright rather than storing it -- a bogus
+          // sink size is the one input that could talk the server into building
+          // a stream nothing can play.
+          if (w >= 640 && w <= 7680 && h >= 480 && h <= 4320)
+          {
+            sinkWidth = w;
+            sinkHeight = h;
+          }
+        }
+        catch (NumberFormatException e) { /* leave unknown */ }
+      }
+    }
+    if (refreshRates != null) displayRefreshRates = refreshRates.trim();
+    if (hdrTypes != null) displayHdrTypes = hdrTypes.trim();
+    if (qualityHint != null && qualityHint.trim().length() > 0)
+    {
+      String q = qualityHint.trim().toLowerCase(java.util.Locale.ROOT);
+      if ("quality".equals(q) || "savings".equals(q) || "auto".equals(q))
+        clientQualityHint = q;
+    }
+    if (localEnhancement != null && localEnhancement.trim().length() > 0)
+    {
+      // "pref=auto;status=active"
+      String[] parts = localEnhancement.trim().split(";");
+      for (String part : parts)
+      {
+        int eq = part.indexOf('=');
+        if (eq <= 0) continue;
+        String k = part.substring(0, eq).trim().toLowerCase(java.util.Locale.ROOT);
+        String v = part.substring(eq + 1).trim().toLowerCase(java.util.Locale.ROOT);
+        if ("pref".equals(k) && ("auto".equals(v) || "local".equals(v) || "server".equals(v)))
+          localEnhancementPref = v;
+        else if ("status".equals(k)
+            && ("active".equals(v) || "available".equals(v) || "none".equals(v)))
+          localEnhancementStatus = v;
+      }
+    }
+    if (Sage.DBG)
+      System.out.println("MiniClient enhancement caps: sink=" + sinkWidth + "x" + sinkHeight
+          + " refresh=" + displayRefreshRates + " hdr=" + displayHdrTypes
+          + " localPref=" + localEnhancementPref + " localStatus=" + localEnhancementStatus
+          + " qualityHint=" + clientQualityHint);
+  }
+
+  /** Physical sink width in pixels, or 0 when the client didn't declare it. */
+  public int getSinkWidth() { return sinkWidth; }
+  /** Physical sink height in pixels, or 0 when the client didn't declare it. */
+  public int getSinkHeight() { return sinkHeight; }
+  /** CSV of sink refresh rates, or empty. */
+  public String getDisplayRefreshRates() { return displayRefreshRates; }
+  /** CSV of sink HDR types, or empty. */
+  public String getDisplayHdrTypes() { return displayHdrTypes; }
+  /** {@code auto} | {@code local} | {@code server}. */
+  public String getLocalEnhancementPref() { return localEnhancementPref; }
+  /** {@code active} | {@code available} | {@code none}. */
+  public String getLocalEnhancementStatus() { return localEnhancementStatus; }
+  /** {@code auto} | {@code quality} | {@code savings}. */
+  public String getClientQualityHint() { return clientQualityHint; }
 
   public boolean hasClientCapability(String capability)
   {
@@ -9949,6 +10062,14 @@ public class MiniClientSageRenderer extends SageRenderer
 
   private java.awt.Dimension maxClientResolution;
   private sage.media.format.VideoFormat displayResolution;
+  // --- server video enhancement capability state (0/"" == undeclared) ---
+  private int sinkWidth;
+  private int sinkHeight;
+  private String displayRefreshRates = "";
+  private String displayHdrTypes = "";
+  private String localEnhancementPref = "auto";
+  private String localEnhancementStatus = "none";
+  private String clientQualityHint = "auto";
   private Boolean fullScreenChange;
   private String remoteResolutionChange;
   private final Object remoteResolutionChangeLock = new Object();

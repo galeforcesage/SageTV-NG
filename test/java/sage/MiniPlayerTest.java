@@ -170,6 +170,43 @@ public class MiniPlayerTest
         "Empty chosen surface delivery must yield null -- caller skips emission");
   }
 
+  // -------- server video enhancement suffix (additive) --------
+
+  @Test
+  public void testNoEnhancementTierLeavesTokenByteIdentical()
+  {
+    // The whole backward-compatibility claim rests on this: until enhancement
+    // actually runs, no client can observe any change to the token.
+    assertEquals(MiniPlayer.buildEffDeliveryToken("pull-xcode", "dynamich264", null),
+        MiniPlayer.buildEffDeliveryToken("pull-xcode", "dynamich264"));
+    assertEquals(MiniPlayer.buildEffDeliveryToken("pull", null, sage.enhance.EnhancementTier.NONE),
+        "pull:direct");
+    assertEquals(MiniPlayer.buildEffDeliveryToken("push", null, sage.enhance.EnhancementTier.NONE),
+        "push");
+  }
+
+  @Test
+  public void testEnhancementTierAppendsSuffix()
+  {
+    assertEquals(MiniPlayer.buildEffDeliveryToken("pull-xcode", "dynamich264",
+        sage.enhance.EnhancementTier.ENHANCE_2160P),
+        "pull-xcode:dynamich264:enhance;tier=2160p");
+    assertEquals(MiniPlayer.buildEffDeliveryToken("push", null,
+        sage.enhance.EnhancementTier.ENHANCE_1080P),
+        "push:enhance;tier=1080p");
+    assertEquals(MiniPlayer.buildEffDeliveryToken("pull-xcode", "mpeg2tsremux",
+        sage.enhance.EnhancementTier.DEINTERLACE_ONLY),
+        "pull-xcode:mpeg2tsremux:enhance;tier=deint");
+  }
+
+  @Test
+  public void testEnhancementNeverResurrectsANullToken()
+  {
+    assertNull(MiniPlayer.buildEffDeliveryToken(null, null,
+        sage.enhance.EnhancementTier.ENHANCE_2160P),
+        "An absent delivery must stay absent even with a tier set");
+  }
+
   // =======================================================================
   // Item 2: audioRelativeIndexOf -- 0-based position of the chosen audio
   // stream among the source's audio streams (for -map 0:a:<rel>).

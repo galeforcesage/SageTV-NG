@@ -1,6 +1,51 @@
 # Change Log
 
 ## Next
+* Server Video Enhancement, phase 0 (foundations only — no playback behavior
+  change): `sage.enhance` package with the tier vocabulary and 720-line source
+  floor, a `nvidia-smi`-backed `GpuMonitor`, the `GpuGovernor` admission
+  cascade (recording veto → free VRAM → video-engine pressure → disk-write
+  budget → calibrated concurrency), a `CapacityCalibrator` that measures the
+  per-host concurrency ceiling instead of hardcoding a GPU-model table, the
+  shared `GpuEnhancePipeline` ffmpeg token builder, and outcome telemetry with
+  a demote-fast/promote-slow feedback loop. Nothing is wired into the live
+  playback paths yet; the feature is off by default.
+* `HwEncoder` gained a cached ffmpeg filter probe (`yadif_cuda`, `bwdif_cuda`,
+  `scale_npp`, `scale_cuda`) so the CUDA scaler and deinterlacer are detected
+  rather than assumed, plus a *functional* enhancement probe that runs a
+  fractional-second encode instead of trusting `ffmpeg -encoders`. The listing
+  probe alone is not sufficient: an ffmpeg built against a newer NVENC SDK than
+  the installed driver supports still advertises `hevc_nvenc` and then fails at
+  encoder open ("Driver does not support the required nvenc API version"),
+  which would have admitted enhanced sessions on a host where every one of them
+  dies at stream start (`multimedia/hwaccel/enhance_runtime_probe`, default on).
+* Windows transcoder priority parity: `xcode_reduce_process_priority` has always
+  defaulted to true, but the `nice`/`ionice` wrap that implements it is
+  POSIX-only, so Windows hosts were silently running transcodes at normal
+  priority against in-progress recordings. New `ProcessPriority` helper applies
+  the equivalent by PID after the child starts (`xcode_windows_priority_class`,
+  default `BelowNormal`).
+* Added [docs/NGServerVideoEnhancement.md](docs/NGServerVideoEnhancement.md) —
+  the client protocol contract for server-side enhancement, including
+  `DISPLAY_SINK_RESOLUTION`, which is what finally lets the server tell a Shield
+  on a 4K TV apart from a 1080p device.
+* Server Video Enhancement, phase 1 (decision logic, observe-only): the NG
+  capability round now queries `DISPLAY_SINK_RESOLUTION`, `DISPLAY_REFRESH_RATES`,
+  `DISPLAY_HDR_TYPES`, `LOCAL_ENHANCEMENT` and `QUALITY_HINT`; `PlaybackSurface`
+  gained the output-limit dimension (`MAX_OUTPUT_WIDTH/_HEIGHT/_MAX_FPS`,
+  optional array indices 9-11) so a surface must prove it can decode 4K rather
+  than merely listing HEVC. New `EnhancementAdvisor` decides whether enhancement
+  would actually help — it defers to a client whose own upscaler is active,
+  requires a 1.5x size gain before re-encoding, enforces the 720-line source
+  floor on HEIGHT (so 720x480 DVD is excluded, since its 720 is the width), and
+  downgrades rather than refusing when a decoder ceiling is lower than the panel.
+  The decision is wired into the per-tune surface path as a post-rank treatment,
+  next to the existing server-EQ promotion, and gated behind a second switch:
+  `playback/gpu_enhance/dry_run` defaults true, so enabling the feature logs
+  decisions against real traffic without re-encoding anything.
+* `CAP_EFFECTIVE_DELIVERY` gained an optional enhancement suffix
+  (`pull-xcode:dynamich264:enhance;tier=2160p`). Purely additive — with no active
+  tier the token is byte-identical to before.
 * Added [FORK_INVENTORY.md](FORK_INVENTORY.md) — reference catalogue
   of capabilities the fork adds vs upstream `google/sagetv` (NG
   protocol, recording-copy transfer queue, BW-aware playback,

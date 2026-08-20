@@ -295,7 +295,7 @@ public final class PlaybackSurfaceSet
    * The array is read positionally:
    * {@code [ROUTE, PRIORITY, DELIVERY_MODES, VIDEO_CODECS, AUDIO_CODECS,
    * CONTAINERS, AUDIO_TRACK_ACCESS, AUDIO_TRACK_SELECTION_MODE,
-   * AUDIO_CONTAINER_RULES]}.
+   * AUDIO_CONTAINER_RULES, MAX_OUTPUT_WIDTH, MAX_OUTPUT_HEIGHT, MAX_FPS]}.
    *
    * <p>Indices 0-5 are required (pre-2.1.0006). Indices 6-8 (the track-access
    * dimension) are OPTIONAL -- when the array is shorter than 9, or those
@@ -303,6 +303,11 @@ public final class PlaybackSurfaceSet
    * ({@code audioTrackAccess="default_only"}, NEVER {@code "all"}). This keeps
    * the additive contract: a client that advertises surfaces but hasn't added
    * the track-access fields still parses, it just gets safe defaults.
+   *
+   * <p>Indices 9-11 (the output-limit dimension used by server video
+   * enhancement) are likewise OPTIONAL; absent or unparseable entries become 0,
+   * meaning "undeclared", which disables enhancement for that surface rather
+   * than assuming it can decode whatever the server would like to send.
    *
    * <p>Callers own the transport (the miniclient uses
    * {@code sendGetPropertyAsync} + {@code recvr.getStringReply()}). Any
@@ -358,11 +363,46 @@ public final class PlaybackSurfaceSet
       String audioTrackAccess = canonicalTrackAccess(id, rawAccess);
       String audioTrackSelectionMode = canonicalSelectionMode(id, rawSelMode);
       Map<String, List<String>> audioContainerRules = parseContainerRules(id, rawRules);
+      // --- output-limit dimension (optional; unknown => 0 => enhancement off) ---
+      int maxOutW = parseOptionalDimension(id, "MAX_OUTPUT_WIDTH",  props, 9);
+      int maxOutH = parseOptionalDimension(id, "MAX_OUTPUT_HEIGHT", props, 10);
+      int maxFps  = parseOptionalDimension(id, "MAX_FPS",           props, 11);
       out.put(id, new PlaybackSurface(id, route, priority,
           deliveryModes, videoCodecs, audioCodecs, containers,
-          audioTrackAccess, audioTrackSelectionMode, audioContainerRules));
+          audioTrackAccess, audioTrackSelectionMode, audioContainerRules,
+          maxOutW, maxOutH, maxFps));
     }
     return out.isEmpty() ? empty() : new PlaybackSurfaceSet(out);
+  }
+
+  /**
+   * Parse an optional non-negative integer capability at {@code idx}. Anything
+   * missing, empty, unparseable, or negative yields 0, which every consumer
+   * reads as "the client didn't declare this" and therefore declines to
+   * enhance. Garbage must never be allowed to look like a capability.
+   */
+  private static int parseOptionalDimension(String id, String name, String[] props, int idx)
+  {
+    if (props == null || props.length <= idx || props[idx] == null) return 0;
+    String raw = props[idx].trim();
+    if (raw.length() == 0) return 0;
+    try
+    {
+      int v = Integer.parseInt(raw);
+      if (v < 0)
+      {
+        System.err.println("PlaybackSurfaceSet WARN: surface '" + id + "' " + name
+            + " '" + raw + "' is negative; treating as undeclared");
+        return 0;
+      }
+      return v;
+    }
+    catch (NumberFormatException e)
+    {
+      System.err.println("PlaybackSurfaceSet WARN: surface '" + id + "' " + name
+          + " '" + raw + "' not an integer; treating as undeclared");
+      return 0;
+    }
   }
 
   @Override
