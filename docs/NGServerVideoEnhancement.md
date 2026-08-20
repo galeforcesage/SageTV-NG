@@ -59,6 +59,12 @@ A Shield rendering its UI at 1080p on a 4K TV **must report `3840x2160`**. This 
 the field the entire feature turns on: without it the server has no honest reason
 to build a 4K stream for anybody.
 
+Accepted range is **640–7680 wide by 480–4320 high**. Anything outside it, or any
+value that doesn't parse as `<int>x<int>`, is discarded and treated as *undeclared*
+rather than clamped — a bogus sink size is the one input that could talk the server
+into building a stream nothing can play. The separator may be `x` or `X`;
+surrounding whitespace is tolerated.
+
 ### 2.2 `DISPLAY_REFRESH_RATES`
 
 ```
@@ -133,26 +139,49 @@ Declaring HEVC support is not sufficient on its own: plenty of decoders advertis
 HEVC and top out at 1080p. Report the real `MediaCodec` /
 `MediaCapabilities.decodingInfo()` limits for the codec the surface will use.
 
+Exact gate semantics, because "partly declared" is the case client teams get wrong:
+
+- **Width and height must both be > 0.** Declaring one without the other counts as
+  undeclared, and an undeclared surface is never enhanced. Absent, empty,
+  non-numeric and negative values all become 0.
+- **`MAX_FPS` is optional.** Leaving it out does not block enhancement — geometry
+  is the limit that actually breaks decoders in practice. When it *is* declared,
+  a proposed output frame rate above it disqualifies the surface.
+- These are positional fields **9, 10 and 11** on the existing per-surface reply,
+  after the 2.1.0006 track-access fields. A client that stops at index 8 still
+  parses cleanly; it just never gets enhancement.
+
 ---
 
 ## 3. What the server sends back
 
 No new channel and no new message type. The existing effective-delivery token
-gains extra `;k=v` pairs, which the format already carries for audio:
+gains one extra suffix, in the `;k=v` shape the format already carries for audio:
 
 ```
-pull-xcode:enhance;tier=2160p;vcodec=hevc;acodec=eac3;ac=6
+pull-xcode:<mode>:enhance;tier=2160p
 ```
+
+Concretely, a surface whose delivery is `pull-xcode` with xcode mode `mp4h264`
+receives `pull-xcode:mp4h264` today and `pull-xcode:mp4h264:enhance;tier=2160p`
+when enhancement is active. `push` and `hls` bases are unchanged apart from the
+same suffix; a bare `pull` base normalizes to `pull:direct` first.
 
 | Pair | Values |
 |---|---|
 | `enhance` | present only when enhancement is active |
 | `tier` | `deint` \| `1080p` \| `1440p` \| `2160p` |
-| `vcodec` | `hevc` for every enhanced stream |
+
+Nothing else is added to this token by the enhancement path — in particular the
+server does **not** append `vcodec`, `acodec` or `ac` here. Codec and channel
+information continues to arrive by the routes it always did.
 
 **Required client behavior: none.** Clients already map this token onto their
 request. The only requirement is the one that was always there — tolerate
-unrecognized `;k=v` pairs rather than failing to parse the token.
+unrecognized `;k=v` pairs, and an extra `:`-separated segment, rather than failing
+to parse the token. When no tier is active the token is byte-identical to what the
+server sent before enhancement existed, so a client can ship §2 support and observe
+no change until an admin clears both switches.
 
 Clients that want to show something in a stream-info overlay can surface `tier`,
 but no client is required to display or act on it.
@@ -192,6 +221,26 @@ Worth knowing, because they explain why enhancement sometimes doesn't happen:
    `BANDWIDTH_FEEDBACK_V1` causes the *next* stream for that client to start a
    tier lower. Keeping that feedback accurate is the most useful thing a client
    can do after §2.1.
+
+### 4.1 Diagnosing "why am I not getting enhanced?"
+
+Every decision is logged with a verdict. These are the ones a client controls:
+
+| Verdict | What the client did |
+|---|---|
+| `offered` | enhancement was granted |
+| `client did not report a sink resolution` | `DISPLAY_SINK_RESOLUTION` empty, unparseable, or outside 640×480–7680×4320 |
+| `client surface cannot decode the enhanced output` | surface declared no `MAX_OUTPUT_WIDTH`+`MAX_OUTPUT_HEIGHT`, or the target exceeds them / `MAX_FPS` |
+| `client's own upscaler is active and preferred` | `LOCAL_ENHANCEMENT` reported `status=active` |
+| `client explicitly prefers local enhancement` | `LOCAL_ENHANCEMENT` reported `pref=local` |
+| `sink is not meaningfully larger than the source` | sink height below ~1.5× source height — expected on a 1080p panel |
+| `source below the 720-line floor and not interlaced` | source material, not a client fault |
+| `source geometry unknown` | server could not determine source size |
+| `feature disabled` / `ffmpeg/GPU cannot run the pipeline` | server-side, nothing the client can change |
+
+The first four are the ones worth checking before reporting a bug: three of them
+mean the client declined, and one means it never declared enough for the server to
+say yes.
 
 ---
 
