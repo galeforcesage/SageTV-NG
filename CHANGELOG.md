@@ -1,6 +1,18 @@
 # Change Log
 
 ## Next
+* Enhancement can now be restricted by device form factor. A GPU session spent
+  upscaling for a 14.6" tablet held at arm's length buys far less than the same
+  session spent on a 65" panel across the room, and both draw on the same
+  encoder — but how much less depends on the room, so
+  `playback/gpu_enhance/upscale_form_factors` ships empty (every device
+  eligible) and the dry-run log now records `DEVICE_FORM_FACTOR` so the question
+  can be settled from real traffic rather than a guess baked into the default.
+  `DEVICE_FORM_FACTOR` was already collected but had never been consulted.
+  Excluded devices still receive deinterlacing, which is cheap and helps a
+  handheld as much as a television, and a client that never reported a form
+  factor is never excluded — this is a judgement about where the GPU is best
+  spent, not a safety gate.
 * Server Video Enhancement now accepts a client's **per-codec** decode ceilings
   as proof it can play an enhanced stream, not just the per-surface
   `MAX_OUTPUT_*` fields. Android `MediaCodec` and the browser's

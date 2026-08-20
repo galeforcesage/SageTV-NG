@@ -114,16 +114,16 @@ public final class EnhancementDryRun
     if (!EnhancementAdvisor.isEnabled()) return EnhancementTier.NONE;
 
     EnhancementAdvisor.Advice advice = EnhancementAdvisor.advise(sourceWidth, sourceHeight,
-        interlaced, sourceFps, sinkWidth, sinkHeight, surface, constraints, localPref,
-        localStatus, gpuSupported);
+        interlaced, sourceFps, sinkWidth, sinkHeight, surface, constraints, formFactor,
+        localPref, localStatus, gpuSupported);
 
     boolean dry = isDryRun();
     if (Sage.DBG)
     {
-      // formFactor and the physical sink are logged even though neither gates
-      // anything today: whether a tablet-class panel is WORTH a GPU session is
-      // a judgement call, and this is the evidence needed to settle it from
-      // real traffic instead of by assertion.
+      // formFactor is logged even when PROP_FORM_FACTORS is open (the default):
+      // whether a tablet-class panel is WORTH a GPU session is a judgement call,
+      // and this is the evidence needed to settle it from real traffic instead
+      // of by assertion.
       System.out.println("GPU_ENHANCE " + (dry ? "DRYRUN" : "LIVE")
           + " client=" + safe(clientId)
           + " media=" + safe(mediaDesc)

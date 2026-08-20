@@ -71,6 +71,7 @@ public class EnhancementCodecGateTest
     Sage.remove(EnhancementAdvisor.PROP_MAX_HEIGHT);
     Sage.remove(EnhancementAdvisor.PROP_MIN_GAIN_TENTHS);
     Sage.remove(EnhancementAdvisor.PROP_OVERRIDE_LOCAL);
+    Sage.remove(EnhancementAdvisor.PROP_FORM_FACTORS);
   }
 
   private EnhancementAdvisor.Advice advise(int sw, int sh, int sinkW, int sinkH,
@@ -259,5 +260,62 @@ public class EnhancementCodecGateTest
         1920, 1080, undeclaredSurface(), null, "auto", "none", true);
     assertEquals(a.getTier(), EnhancementTier.DEINTERLACE_ONLY,
         "deinterlace emits the geometry the client was already decoding");
+  }
+
+  // ---------- form-factor eligibility (opt-in) ----------
+
+  private EnhancementAdvisor.Advice adviseForm(String formFactor, boolean interlaced)
+  {
+    return EnhancementAdvisor.advise(1920, 1080, interlaced, 30, 3840, 2160,
+        surface(3840, 2160, 60), null, formFactor, "auto", "none", true);
+  }
+
+  /** Ships open: nobody is excluded until an admin looks at their own traffic. */
+  @Test
+  public void testFormFactorGateIsOpenByDefault()
+  {
+    assertEquals(adviseForm("TABLET", false).getTier(), EnhancementTier.ENHANCE_2160P,
+        "with no configured list, every form factor stays eligible");
+  }
+
+  @Test
+  public void testNarrowedListExcludesOtherFormFactors()
+  {
+    Sage.put(EnhancementAdvisor.PROP_FORM_FACTORS, "tv");
+    EnhancementAdvisor.Advice a = adviseForm("TABLET", false);
+    assertEquals(a.getTier(), EnhancementTier.NONE, "tablet excluded when the list is tv-only");
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.FORM_FACTOR_EXCLUDED, "verdict");
+  }
+
+  @Test
+  public void testNarrowedListStillAdmitsListedFormFactors()
+  {
+    Sage.put(EnhancementAdvisor.PROP_FORM_FACTORS, "tv,desktop");
+    assertEquals(adviseForm("TV", false).getTier(), EnhancementTier.ENHANCE_2160P,
+        "a listed form factor is unaffected");
+    assertEquals(adviseForm("desktop", false).getTier(), EnhancementTier.ENHANCE_2160P,
+        "matching is case-insensitive and reads every CSV entry");
+  }
+
+  /**
+   * The exclusion is about where an upscale is worth spending a GPU session, not
+   * about safety, so it must not take deinterlacing away from a handheld.
+   */
+  @Test
+  public void testExcludedFormFactorStillGetsDeinterlace()
+  {
+    Sage.put(EnhancementAdvisor.PROP_FORM_FACTORS, "tv");
+    assertEquals(adviseForm("PHONE", true).getTier(), EnhancementTier.DEINTERLACE_ONLY,
+        "deinterlace is cheap and still worth it on a handheld");
+  }
+
+  /** A client predating the field must not be silently dropped. */
+  @Test
+  public void testUndeclaredFormFactorIsNotExcluded()
+  {
+    Sage.put(EnhancementAdvisor.PROP_FORM_FACTORS, "tv");
+    assertEquals(adviseForm(null, false).getTier(), EnhancementTier.ENHANCE_2160P,
+        "an undeclared form factor is not grounds for exclusion");
+    assertTrue(EnhancementAdvisor.isFormFactorEligible("  "), "blank counts as undeclared");
   }
 }

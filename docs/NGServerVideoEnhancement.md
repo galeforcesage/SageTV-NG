@@ -266,15 +266,23 @@ Worth knowing, because they explain why enhancement sometimes doesn't happen:
    deinterlacing is not upscaling.
 3. **Sink must be meaningfully bigger than source.** Roughly 1.5x source height.
    A 1080i source on a 1080p panel gets `tier=deint`, not an upscale.
-4. **The GPU is shared.** The server budgets against *currently free* VRAM, so
+4. **The target never exceeds the panel.** See §2.8 — the server picks the
+   largest tier that fits the reported sink in both dimensions.
+5. **Admins may restrict upscaling by form factor.**
+   `playback/gpu_enhance/upscale_form_factors` is a CSV of eligible
+   `DEVICE_FORM_FACTOR` values and is **empty by default**, meaning every device
+   is eligible. An admin who decides a handheld is not worth an encoder session
+   can set it to `tv`. Excluded devices still receive `tier=deint`, and a client
+   that never reported a form factor is never excluded by it.
+6. **The GPU is shared.** The server budgets against *currently free* VRAM, so
    another application on the same GPU simply results in fewer or lower tiers. No
    enhancement resources are held while nothing is playing.
-5. **Tier is fixed for the life of a stream.** Mid-stream adaptation changes
+7. **Tier is fixed for the life of a stream.** Mid-stream adaptation changes
    bitrate only, using the existing rate-adjustment path, so there is no
    re-buffer. A new tier is chosen at the next channel or stream change. The one
    exception is recording distress, where enhancement may be torn down mid-stream
    to protect the capture.
-6. **Outcomes feed back.** Sustained rebuffering reported through
+8. **Outcomes feed back.** Sustained rebuffering reported through
    `BANDWIDTH_FEEDBACK_V1` causes the *next* stream for that client to start a
    tier lower. Keeping that feedback accurate is the most useful thing a client
    can do after §2.1.
@@ -291,6 +299,7 @@ Every decision is logged with a verdict. These are the ones a client controls:
 | `client's own upscaler is active and preferred` | `LOCAL_ENHANCEMENT` reported `status=active` |
 | `client explicitly prefers local enhancement` | `LOCAL_ENHANCEMENT` reported `pref=local` |
 | `sink is not meaningfully larger than the source` | sink height below ~1.5× source height — expected on a 1080p panel |
+| `device form factor is not in the upscale-eligible set` | this server's admin restricted upscaling to certain `DEVICE_FORM_FACTOR` values; not a client fault, and deinterlace is still offered |
 | `source below the 720-line floor and not interlaced` | source material, not a client fault |
 | `source geometry unknown` | server could not determine source size |
 | `feature disabled` / `ffmpeg/GPU cannot run the pipeline` | server-side, nothing the client can change |

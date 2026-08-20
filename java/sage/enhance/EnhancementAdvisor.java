@@ -42,6 +42,22 @@ public final class EnhancementAdvisor
   public static final String PROP_MIN_GAIN_TENTHS = "playback/gpu_enhance/min_gain_tenths";
   /** Whether to enhance for clients whose own upscaler is already running. */
   public static final String PROP_OVERRIDE_LOCAL = "playback/gpu_enhance/override_local_upscaler";
+  /**
+   * CSV of {@code DEVICE_FORM_FACTOR} values eligible for upscaling, e.g.
+   * {@code "tv"}. Empty (the default) means every form factor is eligible.
+   *
+   * <p>A GPU session spent on a 14.6" tablet held at arm's length buys far less
+   * than the same session spent on a 65" panel across a room, and the two
+   * compete for the same encoder. But "how much less" depends on the room, and
+   * the honest way to settle it is the dry-run log -- which now records the form
+   * factor -- rather than a guess baked into the default. So this ships open,
+   * and an admin who has looked at their own traffic can close it.
+   *
+   * <p>A client that never reported a form factor is never excluded by this
+   * gate: it is a benefit heuristic, not a safety gate, and silently refusing
+   * every legacy client would be a regression rather than a policy.
+   */
+  public static final String PROP_FORM_FACTORS = "playback/gpu_enhance/upscale_form_factors";
 
   private static final int DEFAULT_MIN_GAIN_TENTHS = 15;
 
@@ -55,6 +71,7 @@ public final class EnhancementAdvisor
     UNKNOWN_SINK("client did not report a sink resolution"),
     SOURCE_BELOW_FLOOR("source below the 720-line floor and not interlaced"),
     NO_VISIBLE_GAIN("sink is not meaningfully larger than the source"),
+    FORM_FACTOR_EXCLUDED("device form factor is not in the upscale-eligible set"),
     SURFACE_CANNOT_DECODE("client cannot decode the enhanced output (no surface or codec proved it)"),
     CLIENT_UPSCALES_LOCALLY("client's own upscaler is active and preferred"),
     CLIENT_PREFERS_LOCAL("client explicitly prefers local enhancement");
@@ -133,6 +150,22 @@ public final class EnhancementAdvisor
       ClientConstraints constraints,
       String localPref, String localStatus, boolean gpuSupported)
   {
+    return advise(sourceWidth, sourceHeight, sourceInterlaced, sourceFps, sinkWidth,
+        sinkHeight, surface, constraints, null, localPref, localStatus, gpuSupported);
+  }
+
+  /**
+   * As above, with the client's declared {@code DEVICE_FORM_FACTOR}.
+   *
+   * @param formFactor {@code TV} / {@code TABLET} / {@code PHONE} / etc., or
+   *                   null when the client didn't say. Only consulted when an
+   *                   admin has narrowed {@link #PROP_FORM_FACTORS}.
+   */
+  public static Advice advise(int sourceWidth, int sourceHeight, boolean sourceInterlaced,
+      int sourceFps, int sinkWidth, int sinkHeight, PlaybackSurface surface,
+      ClientConstraints constraints, String formFactor,
+      String localPref, String localStatus, boolean gpuSupported)
+  {
     if (!isEnabled()) return NONE_DISABLED;
     if (!gpuSupported) return new Advice(EnhancementTier.NONE, Verdict.NO_GPU_SUPPORT);
     if (sourceHeight <= 0) return new Advice(EnhancementTier.NONE, Verdict.UNKNOWN_SOURCE);
@@ -157,6 +190,12 @@ public final class EnhancementAdvisor
 
     if (sourceHeight < EnhancementTier.SOURCE_HEIGHT_FLOOR)
       return finish(deintFloor, Verdict.SOURCE_BELOW_FLOOR, surface, constraints, deintFloor, sourceFps);
+
+    // Upscaling only. A handheld panel still benefits from deinterlacing, and
+    // that costs a fraction of an upscale, so an excluded form factor drops to
+    // the deinterlace question rather than being refused outright.
+    if (!isFormFactorEligible(formFactor))
+      return finish(deintFloor, Verdict.FORM_FACTOR_EXCLUDED, surface, constraints, deintFloor, sourceFps);
 
     // Require a real size gain before re-encoding anything. A 1080i source on a
     // 1080p panel gets deinterlaced, not "upscaled" to the size it already is.
@@ -223,6 +262,30 @@ public final class EnhancementAdvisor
     // otherwise deinterlace progressive content, which is both wrong and costly.
     if (fallback.isActive()) return new Advice(fallback, verdict);
     return new Advice(EnhancementTier.NONE, Verdict.SURFACE_CANNOT_DECODE);
+  }
+
+  /**
+   * True when this device's form factor may receive an upscale.
+   *
+   * <p>Open by default. When an admin narrows {@link #PROP_FORM_FACTORS}, a
+   * client that declared a form factor outside the list is excluded -- but a
+   * client that declared nothing is still allowed through, because this is a
+   * judgement about where a GPU session is best spent, not a safety gate, and
+   * excluding every client that predates the field would be a regression.
+   */
+  static boolean isFormFactorEligible(String formFactor)
+  {
+    String allowed = Sage.get(PROP_FORM_FACTORS, "");
+    if (allowed == null) return true;
+    allowed = allowed.trim();
+    if (allowed.length() == 0) return true;
+    if (formFactor == null || formFactor.trim().length() == 0) return true;
+
+    String mine = formFactor.trim().toLowerCase();
+    String[] parts = allowed.toLowerCase().split(",");
+    for (int i = 0; i < parts.length; i++)
+      if (mine.equals(parts[i].trim())) return true;
+    return false;
   }
 
   /**
