@@ -124,6 +124,57 @@ public class FFMPEGTranscoder implements TranscodeEngine
     return killed;
   }
 
+  // Grace period between SIGTERM and SIGKILL when ending a single session.
+  private static final String PROP_KILL_GRACE_MS = "media_server/transcode_kill_grace_ms";
+
+  /**
+   * Terminate one ffmpeg child with escalation: SIGTERM (plus descendants),
+   * a bounded grace period, then SIGKILL for anything still alive.
+   *
+   * A plain destroy() is NOT sufficient. SageTV's custom -stdinctrl ffmpeg
+   * blocks waiting for stdin commands rather than exiting on stdin-EOF or
+   * stdout EPIPE (see the phantom-reaping note at the top of this file), so a
+   * polite SIGTERM can be ignored indefinitely. Because the caller then drops
+   * its Process reference, an un-escalated survivor becomes unkillable from
+   * the JVM and lingers until the container restarts -- holding CPU, VRAM/CUDA
+   * contexts, and file handles (including handles to already-deleted
+   * recordings, which prevents the disk space from ever being reclaimed).
+   *
+   * @return true if the process is confirmed dead when this returns.
+   */
+  static boolean terminateChildWithEscalation(Process p)
+  {
+    if (p == null) return true;
+    if (!p.isAlive()) return true;
+    try { p.descendants().forEach(ProcessHandle::destroy); } catch (Throwable t) {}
+    try { p.destroy(); } catch (Throwable t) {}
+
+    long graceMs = Sage.getLong(PROP_KILL_GRACE_MS, 1500);
+    if (graceMs > 0)
+    {
+      try
+      {
+        if (p.waitFor(graceMs, java.util.concurrent.TimeUnit.MILLISECONDS)) return true;
+      }
+      catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+    }
+    if (!p.isAlive()) return true;
+
+    if (Sage.DBG) System.out.println("FFMPEGTranscoder: transcode child ignored SIGTERM after "
+        + graceMs + "ms; escalating to SIGKILL to avoid a phantom ffmpeg leak");
+    try { p.descendants().forEach(ProcessHandle::destroyForcibly); } catch (Throwable t) {}
+    try { p.destroyForcibly(); } catch (Throwable t) {}
+    try
+    {
+      p.waitFor(2000, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+    catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+    boolean dead = !p.isAlive();
+    if (!dead && Sage.DBG)
+      System.out.println("FFMPEGTranscoder: WARNING transcode child survived SIGKILL; leaving it registered for shutdown reaping");
+    return dead;
+  }
+
   public FFMPEGTranscoder()
   {
   }
@@ -1559,6 +1610,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
     java.util.ArrayList xcodeParamsVec = new java.util.ArrayList();
     // Reduce process priority this way on non-windows platforms.
+    // Windows has no command-prefix equivalent, so it is handled after the child
+    // starts via ProcessPriority.reduce() (see below, near xcodePb.start()).
     // Optional ionice wrap (transcoder I/O priority class):
     //   xcode_ionice_class= (empty = skip) | 1 (realtime) | 2 (besteffort) | 3 (idle)
     // Optional explicit nice level:
@@ -2864,6 +2917,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
     ProcessBuilder xcodePb = new ProcessBuilder(xcodeParamArray);
     Sage.applyTimeZoneToProcessBuilder(xcodePb);
     xcodeProcess = xcodePb.start();
+    // Windows can't express priority reduction as a command prefix, so the
+    // nice/ionice block above is POSIX-only. Apply the equivalent by PID here so
+    // Windows hosts aren't left running transcodes at normal priority against
+    // in-progress recordings.
+    ProcessPriority.reduce(xcodeProcess);
     // Track this child so a JVM shutdown (e.g. stopsage during a deploy)
     // while it's still streaming reaps it instead of orphaning a phantom
     // ffmpeg to PID 1. Cleared again in stopTranscode() on the normal path.
@@ -3590,16 +3648,22 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (XCODE_DEBUG) System.out.println("Destroying old transcode process...");
     if (xcodeProcess != null)
     {
-      unregisterLiveChild(xcodeProcess);
+      Process doomed = xcodeProcess;
       try
       {
-        lastExitCode = xcodeProcess.exitValue();
+        lastExitCode = doomed.exitValue();
       }
       catch (IllegalThreadStateException ise)
       {
         lastExitCode = -1;
       }
-      xcodeProcess.destroy();
+      // Escalate to SIGKILL if needed, and only drop it from the shutdown
+      // reaper's registry once it is confirmed dead. Unregistering first (the
+      // previous behavior) meant a child that ignored SIGTERM was orphaned
+      // beyond the reach of both this method and the shutdown hook.
+      boolean dead = terminateChildWithEscalation(doomed);
+      if (dead)
+        unregisterLiveChild(doomed);
     }
     xcodeProcess = null;
     if (XCODE_DEBUG) System.out.println("Destroyed!");
