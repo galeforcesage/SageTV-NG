@@ -162,10 +162,11 @@ gains one extra suffix, in the `;k=v` shape the format already carries for audio
 pull-xcode:<mode>:enhance;tier=2160p
 ```
 
-Concretely, a surface whose delivery is `pull-xcode` with xcode mode `mp4h264`
-receives `pull-xcode:mp4h264` today and `pull-xcode:mp4h264:enhance;tier=2160p`
-when enhancement is active. `push` and `hls` bases are unchanged apart from the
-same suffix; a bare `pull` base normalizes to `pull:direct` first.
+Concretely, a surface whose delivery is `pull-xcode` with xcode mode `dynamich264`
+receives `pull-xcode:dynamich264` today and
+`pull-xcode:dynamich264:enhance;tier=2160p` when enhancement is active. `push` and
+`hls` bases are unchanged apart from the same suffix; a bare `pull` base normalizes
+to `pull:direct` first.
 
 | Pair | Values |
 |---|---|
