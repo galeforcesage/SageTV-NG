@@ -18,7 +18,9 @@
   post-deploy port check used `ss`, which returns an empty table inside this
   container and so warned "ports not listening" on every healthy deploy. Both
   now report unverified-vs-clean honestly, with the port check on `/dev/tcp`.
-  The default container name was `sagetv-ng`; the actual one is `sagetv-mine`.
+  The container name is now taken from `$CONTAINER` and the script aborts with a
+  clear message when the named container doesn't exist, rather than defaulting to
+  a name that happens to suit one deployment.
 * Removed the `SUPPORTS_4K` capability field. It was never part of the client
   contract — the Android client sends no such property, so the query always came
   back empty and every branch reading it was unreachable. The real contract

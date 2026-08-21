@@ -33,7 +33,8 @@
 #          STAGE=/path/to/serverrelease ./deploy_jar_ng.sh
 #
 # CONFIG (env overridable):
-#   CONTAINER   target container name           (default: sagetv-mine)
+#   CONTAINER   target container name           (default: sagetv-ng; deployments
+#               whose container is named differently must set this explicitly)
 #   STAGE       staging dir with Sage.jar+JARs/ (default: ./serverrelease)
 #   SHA         commit stamp for DEPLOYED_COMMIT (default: git rev-parse --short)
 #   SKIP_JDEPS  set to 1 to skip the preflight   (NOT recommended)
@@ -41,7 +42,7 @@
 #   PORTS       ports to verify after restart    (default: 8080 31099 42024)
 set -euo pipefail
 
-CONTAINER="${CONTAINER:-sagetv-mine}"
+CONTAINER="${CONTAINER:-sagetv-ng}"
 STAGE="${STAGE:-./serverrelease}"
 SRV=/opt/sagetv/server
 SHA="${SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
@@ -55,7 +56,7 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [ -f "$STAGE/Sage.jar" ] || die "missing $STAGE/Sage.jar"
 [ -d "$STAGE/JARs" ]     || die "missing $STAGE/JARs/ (must ship the runtime classpath, not just Sage.jar)"
 ls "$STAGE"/JARs/*.jar >/dev/null 2>&1 || die "no jars in $STAGE/JARs/"
-docker inspect "$CONTAINER" >/dev/null 2>&1 || die "container '$CONTAINER' not found"
+docker inspect "$CONTAINER" >/dev/null 2>&1 || die "container '$CONTAINER' not found (set CONTAINER=<name> if yours is named differently)"
 
 # -- 1. preflight: no unresolved app classes on the NEW classpath ----------
 # Catches the jcifs-ng-style dependency drift BEFORE we touch the server.
