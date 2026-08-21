@@ -31,6 +31,12 @@ config*.log
 /Dockerfile.entrypoint-overlay
 # Private local AI-assistant scratch notes (host IPs, container names, creds) — never commit.
 /AI_LOCAL_CONTEXT.md
+# Private local AI-assistant operating rules. Auto-loaded from disk by the agent,
+# so it works while staying untracked — it describes this deployment environment
+# (hosts, container names, restart procedure) and must never become public.
+/AGENTS.md
+/CLAUDE.md
+/.github/copilot-instructions.md
 # Throwaway debug shell scripts and probe artifacts (lineup.json, etc.)
 /scripts/
 /tmp-*.sh
