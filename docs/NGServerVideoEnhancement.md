@@ -65,6 +65,20 @@ rather than clamped — a bogus sink size is the one input that could talk the s
 into building a stream nothing can play. The separator may be `x` or `X`;
 surrounding whitespace is tolerated.
 
+**Normative: this field is a measurement, not a decision.** A client MUST report
+the true physical panel whenever it knows it. Empty means **"I don't know"** — it
+never means "I don't want this". A client MUST NOT withhold, zero, or shrink this
+value to express a preference, and MUST NOT inflate it to request a larger
+stream; the reported number is the honest panel, and the server treats it as a
+ceiling, never as a target.
+
+That restriction is what makes the field usable at all. A measurement that is
+sometimes a refusal cannot be read as either: an empty sink would then mean
+"unknown" *or* "opted out" *or* "the client's own policy said no", three
+conditions the server must handle differently and cannot tell apart. Preference
+belongs in a field of its own — see §2.9, which documents the current
+contradiction of this rule rather than a resolution to it.
+
 ### 2.2 `DISPLAY_REFRESH_RATES`
 
 ```
@@ -112,6 +126,17 @@ Guidance:
   `status=none`, which biases toward server enhancement.
 - If the user explicitly picked a side, report it in `pref` and the server will
   honor it.
+
+**Note — `pref` has no value meaning "nobody".** The three values answer *which
+side* should enhance, and every one of them presumes that enhancement is wanted:
+`auto` defers, `local` claims it, `server` requests it. There is no way to say
+"neither of you — leave the stream alone." This matters because it is the field
+that would most naturally carry a user's opt-out: it is already sent
+unconditionally, on every connection, and already has the shape of a preference
+rather than a measurement. It is recorded here as an observation about the
+existing contract, **not as a proposal** — whether the user's intent belongs in
+this field, or in one of its own, is an open question owned by the client teams.
+See §2.9.1.
 
 ### 2.5 `QUALITY_HINT`
 
@@ -223,7 +248,14 @@ panel — never a fabricated 4K.
 | **Auto** | physical `WxH`, but only when the client judges itself eligible (TV-class, external/HDMI display, or an internal panel over 12"); otherwise `""` | Phone/small tablet → no upscale. Shield on a 4K TV → `3840x2160`. |
 | **Always** (on) | honest physical `WxH`, unconditionally — a 6" phone sends `2400x1080` | Forces the invitation; server still clamps to `min(tier, sink)`. |
 
-Two consequences the server honours:
+> **Status of this table: DESCRIPTIVE, NOT NORMATIVE.** It records how the Android
+> client currently behaves, as reported by that client's team. It is not a
+> specification, nothing was written against it, and no other client is obliged to
+> match it. It is also **in direct conflict with the normative rule in §2.1**,
+> which forbids using the sink to express a preference. That conflict is the
+> subject of §2.9.1 and is not resolved in this document.
+
+Two consequences the server honours **given the behaviour above**:
 
 **Auto and Always are indistinguishable on the wire.** Both simply produce a
 sink. So the server cannot apply different policy to them: *a sink that arrives
@@ -247,12 +279,91 @@ panel as an external display, so `DEVICE_FORM_FACTOR=PHONE` does not refuse it.
 can show. The server never invents a 4K target for a screen that can't display
 one.
 
-> **Open contract question.** Because "Never" and "client predates this spec"
-> both arrive as an empty sink, the server cannot tell them apart, and currently
-> still offers `tier=deint` on an empty sink so that legacy clients keep the
-> cheapest win. If Never should suppress deinterlacing too, that needs a
-> distinguishable signal. Triage this from the `sinkKind=none` field in the
-> `GPU_ENHANCE` log.
+### 2.9.1 The sink field is overloaded, and that is the defect (OPEN)
+
+`DISPLAY_SINK_RESOLUTION` is currently asked to carry two incompatible things:
+
+| Section | What it says the field is |
+|---|---|
+| §2.1 | the physical panel — a **measurement**. Empty means *uncertain*. |
+| §2.9 | the carrier for Auto/Always/Never — empty means *opted out*, or *the client's own eligibility test said no*. A **policy decision**. |
+
+A field cannot be both a fact and an intent. Three distinct conditions —
+"unknown", "user opted out", "client-side policy declined" — are pushed through
+one value slot, so they arrive identical and the server cannot act on the
+difference. **This is the root defect; the "Never vs. legacy" ambiguity below is
+a symptom of it, not a separate problem.**
+
+Concretely, an empty sink today means any of:
+
+| Client | Sends | Means |
+|---|---|---|
+| implements this spec, user chose **Never** | `""` | "don't upscale for me" |
+| implements this spec, user chose **Auto**, judged itself ineligible | `""` | "my own policy says don't bother" |
+| genuinely does not know its panel size | `""` | "I can't measure this" |
+| predates this spec entirely | `""` (absent) | "I've never heard of this question" |
+
+**Why no existing field can disambiguate them.** The obvious idea is to read the
+capability token — a client implementing the sink field advertises
+`DISPLAY_SINK_V1` regardless of the user's setting, so its presence alongside an
+empty sink looks like it should mean "deliberate opt-out". It fails twice:
+
+1. **The collapse happens at the client, not the server.** Rows 1 and 2 above are
+   already identical before the bytes leave. No server-side reading of any field
+   can recover a distinction the client never encoded.
+2. **The token tracks a different switch.** `DISPLAY_SINK_V1` is gated on the
+   master `cap_display_sink_v1` toggle, not on Auto/Always/Never, so disabling
+   that toggle produces a legacy-looking wire from a spec-aware client.
+
+#### What has to be specified to close this
+
+1. **§2.1 becomes unconditional and normative.** Always report the true physical
+   panel when it is known; empty means *unknown*, never *unwanted*. This is now
+   written into §2.1 and is the rule §2.9's table conflicts with.
+2. **Intent gets its own value slot**, because a measurement cannot carry a
+   refusal. §2.4's `LOCAL_ENHANCEMENT` is the closest existing machinery — always
+   sent, already a preference rather than a measurement — but its `pref` has no
+   value meaning "nobody" (see the note in §2.4). **Whether intent rides there or
+   in a field of its own is the client teams' decision. This document does not
+   pick, and no server-side field is proposed here** — an invented field no client
+   sends is worse than an acknowledged gap, which is what the removal of
+   `SUPPORTS_4K` cost us.
+3. **Each setting must state its obligations across every relevant field**, not
+   just the sink. "Auto" is currently defined only by what it does to one value;
+   a usable specification says what a client asserting Auto guarantees about the
+   sink, the decode ceilings, `LOCAL_ENHANCEMENT`, and the capability tokens
+   together. Until that exists there is nothing for a client to comply with and
+   nothing a server can validate.
+4. **Client-side eligibility policy must be declared advisory, or moved to the
+   server.** §2.9's Auto rule has the client decide whether a screen is worth
+   enhancing ("TV-class, external/HDMI, or an internal panel over 12 inches").
+   That is a server judgement, and the server already owns it via
+   `playback/gpu_enhance/upscale_form_factors` and
+   `playback/gpu_enhance/builtin_panel_max`. When the client pre-filters, the
+   server never sees the sink it would have judged and **both admin settings
+   become unreachable**. It also means every client team reimplements the
+   12-inch heuristic independently, and they will drift.
+
+Until items 2–4 are settled the behaviour is as described above: empty sink ⇒ no
+upscale, deinterlace still offered (see below). Use the `sinkKind=none` field in
+the `GPU_ENHANCE` log line to triage — it tells you the sink was empty, but not
+which of the four cases produced it.
+
+#### Why deinterlace survives an empty sink
+
+An empty sink yields `verdict=UNKNOWN_SINK` and no upscale, but the **deinterlace
+floor still applies**: an interlaced source on an empty-sink client is still
+offered `tier=deint`. The user-facing setting is described as controlling
+*upscaling*, and deinterlacing is not upscaling — it removes comb artifacts that
+are a defect at any resolution, costs a fraction of an upscale, and never changes
+the frame size. Suppressing it on an empty sink would silently strip
+deinterlacing from **every legacy client**, a regression inflicted on clients
+that never asked for anything.
+
+Whether "Never" should also suppress deinterlacing is a policy question for the
+client teams. If the answer is "no change", nothing needs designing. If it is
+"Never means nothing at all", that cannot be expressed until item 2 above is
+resolved.
 
 ---
 
@@ -289,6 +400,80 @@ no change until an admin clears both switches.
 
 Clients that want to show something in a stream-info overlay can surface `tier`,
 but no client is required to display or act on it.
+
+### 3.1 A refusal is invisible — `GPU_ENHANCE_REPORT_V1` (OPEN)
+
+The token above reports only the **positive** case. When the tier is `NONE` — for
+any reason, including a refusal the client could have fixed — the token is
+byte-for-byte what a server without this feature would send. That property is
+deliberate and is what makes §3 safe to ship, but it has a cost: **a client
+cannot distinguish "the server declined, and here's why" from "this server has
+no enhancement feature at all."**
+
+This is not theoretical. On 2026-08-20 a PWA client produced all three of these
+in the space of sixteen minutes, and received an **identical**
+`pull-xcode:browserhd;acodec=aac;ac=6` token every time:
+
+| Server's actual decision | What the client could observe |
+|---|---|
+| `tier=none verdict=SURFACE_CANNOT_DECODE` (client declared no decode ceiling) | nothing |
+| `tier=enhance_1080p verdict=OFFERED` | nothing |
+| `tier=deinterlace_only verdict=NO_VISIBLE_GAIN` | nothing |
+
+The first row is the painful one: the client was one capability field away from
+being served, and had no way to know. That diagnosis existed only in the server
+log, which a client developer generally cannot read.
+
+At least one client already advertises a `GPU_ENHANCE_REPORT_V1` capability in
+`SAGETV_NG_CAPABILITIES`, evidently anticipating exactly this. **The server
+currently implements nothing for it** — the string does not appear anywhere in
+the server source.
+
+**Why nothing already in this contract covers it.** Three candidate answers
+exist, and all three fail:
+
+1. **Infer it from the token's absence.** A client knows what it declared, so it
+   could in principle treat "I declared a sink and a decode ceiling, yet got no
+   `:enhance` suffix" as a refusal. This is wrong in a way that matters: the
+   server runs a **dry-run mode** in which the advisor reaches a full positive
+   decision and then deliberately returns `NONE` so the wire stays byte-identical
+   (`EnhancementDryRun.java:155`). During dry-run — the current default, and the
+   state all three measurements above were taken in — a client inferring from
+   token absence would conclude it was misconfigured when the server had in fact
+   decided in its favour. The inference is not merely incomplete; it is
+   confidently wrong at exactly the moment a client developer would be relying
+   on it.
+2. **Read §4.1.** The diagnosis table is prose for a human reading a server log.
+   It is not reachable by a running client and cannot drive a settings screen.
+3. **Widen the §3 token to report refusals.** This would break the property that
+   makes §3 safe: today a server with no tier active is byte-identical to a
+   server without the feature, which is what lets clients ship §2 support and
+   observe nothing until an admin opts in. Emitting refusal detail on the
+   delivery token would change the wire for every client on every non-enhanced
+   stream, including clients that never asked.
+
+So the gap is real and cannot be closed with what is already specified.
+**This document deliberately does not specify the replacement.** A field invented
+server-side and never implemented by any client is worse than an acknowledged
+gap — that is precisely what happened with `SUPPORTS_4K`, which was designed,
+built, tested, deployed and then removed without a single client ever sending it.
+`GPU_ENHANCE_REPORT_V1` is a name a client team has already chosen, so the shape
+belongs to them.
+
+What the server team needs in order to implement it:
+
+1. the **property name** and the **value grammar** the client is prepared to read;
+2. whether it carries only the verdict, or also the inputs the verdict was
+   computed from (the server has `verdict`, `tier`, `sink`, `sinkKind`,
+   `surfaceMax`, `codecMax` available at decision time and can expose any subset);
+3. whether it is a `GetProperty` the server answers on demand, or a value pushed
+   alongside the delivery token at OPENURL time;
+4. what it should report while the server is in dry-run — the honest decision, or
+   an explicit "evaluated only" state, since these are genuinely different
+   situations and conflating them would reintroduce failure mode 1 above.
+
+Until that is agreed, the §4.1 table plus the server log remain the only
+diagnosis route.
 
 ---
 
