@@ -2038,7 +2038,6 @@ public class MiniPlayer implements DVDMediaPlayer
                     chosenSurface,
                     enhanceConstraints,
                     (mcsr != null ? mcsr.getDeviceFormFactor() : null),
-                    (mcsr != null ? mcsr.getSupports4k() : null),
                     (mcsr != null ? mcsr.getLocalEnhancementPref() : "auto"),
                     (mcsr != null ? mcsr.getLocalEnhancementStatus() : "none"),
                     sage.HwEncoder.gpuEnhanceSupported());

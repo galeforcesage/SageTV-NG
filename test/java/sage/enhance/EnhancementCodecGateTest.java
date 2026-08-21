@@ -326,119 +326,95 @@ public class EnhancementCodecGateTest
     Sage.put(EnhancementAdvisor.PROP_FORM_FACTORS, "tv");
     assertEquals(adviseForm(null, false).getTier(), EnhancementTier.ENHANCE_2160P,
         "an undeclared form factor is not grounds for exclusion");
-    assertTrue(EnhancementAdvisor.isFormFactorEligible("  ", 1920, 1080, null),
+    assertTrue(EnhancementAdvisor.isFormFactorEligible("  ", 1920, 1080),
         "blank counts as undeclared");
   }
 
-  // ---------- SUPPORTS_4K: the user's answer beats every inference ----------
+  // ---------- the real client override: it rides on the sink ----------
+  //
+  // The Android client does NOT send a separate 4K flag. Its user-facing
+  // Auto / Always / Never setting is expressed entirely through
+  // DISPLAY_SINK_RESOLUTION, and the value is always the true physical panel --
+  // never a fabricated 4K:
+  //
+  //   Never  -> ""            (full opt-out)
+  //   Auto   -> physical WxH, but only when the client deems itself eligible
+  //             (TV-class, external/HDMI, or an internal panel over 12")
+  //   Always -> physical WxH, unconditionally
+  //
+  // Two consequences the server must respect. First, "Auto" and "Always" are
+  // INDISTINGUISHABLE on the wire, so the server cannot apply different policy
+  // to them -- a sink that arrives at all is a request to upscale up to that
+  // size. Second, the per-codec rows are sent unconditionally and are unaffected
+  // by the setting, so a decode refusal is always a hardware fact.
 
-  private EnhancementAdvisor.Advice adviseUhd(String formFactor, int sinkW, int sinkH,
-      PlaybackSurface s, ClientConstraints c, Boolean supports4k)
+  private EnhancementAdvisor.Advice adviseSink(String formFactor, int sinkW, int sinkH,
+      PlaybackSurface s)
   {
-    return EnhancementAdvisor.advise(1920, 1080, false, 60, sinkW, sinkH, s, c,
-        formFactor, supports4k, "auto", "none", true);
+    return EnhancementAdvisor.advise(1280, 720, false, 60, sinkW, sinkH, s, null,
+        formFactor, "auto", "none", true);
+  }
+
+  /** "Never" arrives as an empty sink, and must refuse rather than guess. */
+  @Test
+  public void testEmptySinkIsAFullOptOut()
+  {
+    EnhancementAdvisor.Advice a = adviseSink("TV", 0, 0, surface(3840, 2160, 60));
+    assertEquals(a.getTier(), EnhancementTier.NONE, "no sink means no upscale");
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.UNKNOWN_SINK, "verdict");
   }
 
   /**
-   * The headline case: a phone in desktop mode driving a television. Form
-   * factor still reads PHONE and the admin has restricted upscaling to TVs, but
-   * the user turned 4K on, so it gets served.
+   * The docked-phone case, which is what the whole override exists for. The
+   * client reports the TELEVISION's geometry, not the handset's, so the server
+   * needs no special knowledge -- and the sink is large enough to read as an
+   * external display, so a tv-only admin policy doesn't refuse it either.
    */
   @Test
-  public void testPhoneWith4kOnIsServed4kDespiteTvOnlyPolicy()
+  public void testDockedPhoneReportsTheTelevisionAndIsServed()
   {
     Sage.put(EnhancementAdvisor.PROP_FORM_FACTORS, "tv");
-    EnhancementAdvisor.Advice a = adviseUhd("PHONE", 3840, 2160,
-        surface(3840, 2160, 60), null, Boolean.TRUE);
+    EnhancementAdvisor.Advice a = adviseSink("PHONE", 3840, 2160, surface(3840, 2160, 60));
     assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P,
-        "a phone that reports 4K support must be served 4K");
-    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.OFFERED, "verdict");
+        "a phone driving a 4K TV reports 3840x2160 and must be served");
   }
 
   /**
-   * Same phone, but HDMI sensing reported the handset's own panel. The user's
-   * override is the only correct signal in the room, so it raises the sink too
-   * -- otherwise the clamp would quietly cap a 4K television at phone size.
+   * "Always" on a handset sends the handset's own panel. The user opted in, so
+   * they get the upscale their panel can actually show -- 1080p-class from a
+   * 720p source -- and emphatically not a fabricated 4K.
    */
   @Test
-  public void testForced4kRaisesAMisSensedSink()
+  public void testAlwaysOnAPhoneUpscalesToThePhonePanelOnly()
   {
-    Sage.put(EnhancementAdvisor.PROP_FORM_FACTORS, "tv");
-    EnhancementAdvisor.Advice a = adviseUhd("PHONE", 1080, 2340,
-        surface(3840, 2160, 60), null, Boolean.TRUE);
-    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P,
-        "a mis-sensed sink must not cap a user who says 4K works");
+    EnhancementAdvisor.Advice a = adviseSink("PHONE", 2400, 1080, surface(3840, 2160, 60));
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_1080P,
+        "the reported panel is the ceiling; never invent 4K for a 6-inch screen");
   }
 
-  /**
-   * And it satisfies the decode gate. The declared ceilings come from the same
-   * auto-detection the user is overriding, so refusing here would make the
-   * override useless in exactly the case it was built for.
-   */
+  /** The tablet's own panel is not mistaken for an external display. */
   @Test
-  public void testForced4kSatisfiesTheDecodeGate()
+  public void testBuiltInPanelsAreNotInferredExternal()
   {
-    EnhancementAdvisor.Advice a = adviseUhd("PHONE", 3840, 2160,
-        undeclaredSurface(), null, Boolean.TRUE);
-    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P,
-        "an explicit yes stands in for the declaration the client never made");
-  }
-
-  /** Without the override, that same phone is excluded by a tv-only policy. */
-  @Test
-  public void testPhoneOnAutoIsStillExcludedByTvOnlyPolicy()
-  {
-    Sage.put(EnhancementAdvisor.PROP_FORM_FACTORS, "tv");
-    EnhancementAdvisor.Advice a = adviseUhd("PHONE", 2400, 1080,
-        surface(3840, 2160, 60), null, null);
-    assertEquals(a.getTier(), EnhancementTier.NONE,
-        "auto plus a handset-sized sink stays excluded");
-    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.FORM_FACTOR_EXCLUDED, "verdict");
-  }
-
-  /**
-   * A phone on auto whose sink is too big to be its own panel is inferred to be
-   * driving something external, so clients that never implement SUPPORTS_4K
-   * still work.
-   */
-  @Test
-  public void testPhoneOnAutoWithA4kSinkIsInferredExternal()
-  {
-    Sage.put(EnhancementAdvisor.PROP_FORM_FACTORS, "tv");
-    EnhancementAdvisor.Advice a = adviseUhd("PHONE", 3840, 2160,
-        surface(3840, 2160, 60), null, null);
-    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P,
-        "a 3840x2160 sink is not a phone panel");
-  }
-
-  /** The tablet's own 2960x1848 panel must NOT be inferred external. */
-  @Test
-  public void testTabletOwnPanelIsNotInferredExternal()
-  {
-    assertFalse(EnhancementAdvisor.isSinkExternal(2960, 1848, null),
+    assertFalse(EnhancementAdvisor.isSinkExternal(2960, 1848),
         "the largest shipping tablet panel is still a built-in panel");
-    assertTrue(EnhancementAdvisor.isSinkExternal(3840, 2160, null),
+    assertFalse(EnhancementAdvisor.isSinkExternal(2400, 1080), "phone panel");
+    assertTrue(EnhancementAdvisor.isSinkExternal(3840, 2160),
         "4K is beyond any built-in handheld panel");
   }
 
-  /** An explicit no caps below 4K but still allows a useful upscale. */
+  /**
+   * The setting only ever moves the sink -- it can never talk the server past
+   * the decode gate, because the per-codec rows report real MediaCodec limits
+   * and are sent regardless of the setting.
+   */
   @Test
-  public void testSupports4kNoCapsAt1440p()
+  public void testOptingInCannotOverrideARealDecodeCeiling()
   {
-    EnhancementAdvisor.Advice a = adviseUhd("TV", 3840, 2160,
-        surface(3840, 2160, 60), null, Boolean.FALSE);
-    assertEquals(a.getTier(), EnhancementTier.ENHANCE_1440P,
-        "an explicit no is a ceiling, not a refusal");
-  }
-
-  /** The override is about capability, not about overruling safety limits. */
-  @Test
-  public void testForced4kStillRespectsTheAdminCeiling()
-  {
-    Sage.put(EnhancementAdvisor.PROP_MAX_HEIGHT, "1440");
-    EnhancementAdvisor.Advice a = adviseUhd("PHONE", 3840, 2160,
-        surface(3840, 2160, 60), null, Boolean.TRUE);
-    assertEquals(a.getTier(), EnhancementTier.ENHANCE_1440P,
-        "a client override cannot exceed what the server admin allows");
+    ClientConstraints c = codecs("HEVC;decoder=hw;maxW=1920;maxH=1080;maxFps=60");
+    EnhancementAdvisor.Advice a = EnhancementAdvisor.advise(1280, 720, false, 60,
+        3840, 2160, undeclaredSurface(), c, "TV", "auto", "none", true);
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_1080P,
+        "a 4K sink cannot beat a 1080p decoder; the tier walks down to what plays");
   }
 }

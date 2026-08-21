@@ -19,21 +19,25 @@
   container and so warned "ports not listening" on every healthy deploy. Both
   now report unverified-vs-clean honestly, with the port check on `/dev/tcp`.
   The default container name was `sagetv-ng`; the actual one is `sagetv-mine`.
-* The client's `SUPPORTS_4K` setting now overrides the server's own inference
-  about what a device can display. Everything the enhancement gate previously
-  relied on — EDID sink sensing, panel geometry, per-codec decoder tables — is
-  auto-detection, and all three are wrong for a phone in dock mode driving a
-  television: the sensed sink is the handset's panel, and the decoder tables
-  describe the wrong screen. That is also the case that benefits most from a
-  4K upscale, and it was being refused. So `SUPPORTS_4K=yes` now raises the
-  assumed sink to 2160p, exempts the device from any admin form-factor
-  restriction, and satisfies the decode gate on its own; the decision is logged
-  as `uhd=forced` so a wrong override has an obvious cause and a one-setting
-  fix. `no` caps the target at 1440p rather than refusing outright, since a user
-  whose 4K path is broken usually still wants the upscale that works. An
-  explicit `yes` overrules only screen-shaped inferences — it cannot exceed the
-  server's maximum-height ceiling and has no bearing on the recording veto, GPU
-  admission, or the 720-line source floor.
+* Removed the `SUPPORTS_4K` capability field. It was never part of the client
+  contract — the Android client sends no such property, so the query always came
+  back empty and every branch reading it was unreachable. The real contract
+  answers the two questions on two separate channels, and the distinction
+  matters: *"can I decode 4K?"* is hardware fact, reported per codec in
+  `EXO_VIDEO_CODECS`/`IJK_VIDEO_CODECS` and sent unconditionally; *"should you
+  upscale, and up to what?"* is the user's Auto/Always/Never setting, carried
+  entirely by whether and when the client populates `DISPLAY_SINK_RESOLUTION`.
+  Never sends an empty sink, Always sends the honest physical panel
+  unconditionally, Auto sends it only when the client judges itself eligible —
+  and the value is always the true panel, never a fabricated 4K. That split is
+  better than the field it replaces, because it keeps a user-facing toggle from
+  being able to talk the server past a real decoder limit. Auto and Always are
+  deliberately indistinguishable on the wire, so the server applies one rule: a
+  sink that arrives at all is a request to upscale, up to that size. The
+  docked-phone case that motivated the invented field turns out to need no
+  server support at all — Android reports the *television's* geometry when a
+  phone drives one, so it already resolves client-side. The dry-run log now
+  records `sinkKind=none|builtin|external` in place of `uhd=`.
 * Enhancement can now be restricted by device form factor. A GPU session spent
   upscaling for a 14.6" tablet held at arm's length buys far less than the same
   session spent on a 65" panel across the room, and both draw on the same

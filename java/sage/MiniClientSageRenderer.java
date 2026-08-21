@@ -4680,13 +4680,6 @@ public class MiniClientSageRenderer extends SageRenderer
           sendGetPropertyAsync("DISPLAY_HDR_TYPES");
           sendGetPropertyAsync("LOCAL_ENHANCEMENT");
           sendGetPropertyAsync("QUALITY_HINT");
-          // The client's answer to "can this session actually put 4K on a
-          // screen?" -- auto-detected, but user-overridable, because HDMI/EDID
-          // sensing gets it wrong often enough to need an escape hatch. A phone
-          // in desktop mode is still DEVICE_FORM_FACTOR=PHONE while driving a
-          // 65" television, and that is the case that benefits MOST, so an
-          // explicit yes here outranks every inference the server would make.
-          sendGetPropertyAsync("SUPPORTS_4K");
           sendBufferNow();
 
           clientPlatformProp = recvr.getStringReply();
@@ -4700,10 +4693,9 @@ public class MiniClientSageRenderer extends SageRenderer
           String hdrTypesProp = recvr.getStringReply();
           String localEnhancementProp = recvr.getStringReply();
           String qualityHintProp = recvr.getStringReply();
-          String supports4kProp = recvr.getStringReply();
           clientAudioLanguage = (clientAudioLanguageProp == null) ? "" : clientAudioLanguageProp.trim();
           applyEnhancementCapabilities(sinkResolutionProp, refreshRatesProp,
-              hdrTypesProp, localEnhancementProp, qualityHintProp, supports4kProp);
+              hdrTypesProp, localEnhancementProp, qualityHintProp);
 
           clientPlatform = (clientPlatformProp == null) ? "" : clientPlatformProp.trim();
           clientDeviceFormFactor = (deviceFormFactorProp == null) ? "" : deviceFormFactorProp.trim();
@@ -8251,7 +8243,7 @@ public class MiniClientSageRenderer extends SageRenderer
    * fields can ship before any client implements them.
    */
   private void applyEnhancementCapabilities(String sinkRes, String refreshRates,
-      String hdrTypes, String localEnhancement, String qualityHint, String supports4k)
+      String hdrTypes, String localEnhancement, String qualityHint)
   {
     sinkWidth = 0;
     sinkHeight = 0;
@@ -8260,10 +8252,6 @@ public class MiniClientSageRenderer extends SageRenderer
     localEnhancementPref = "auto";
     localEnhancementStatus = "none";
     clientQualityHint = "auto";
-    // Tri-state on purpose. "The client didn't say" is not the same as "the
-    // client said no": absent means fall back to inference, while an explicit
-    // no is a user decision that caps the tier.
-    supports4kOverride = parseTriState(supports4k);
 
     if (sinkRes != null)
     {
@@ -8317,8 +8305,7 @@ public class MiniClientSageRenderer extends SageRenderer
       System.out.println("MiniClient enhancement caps: sink=" + sinkWidth + "x" + sinkHeight
           + " refresh=" + displayRefreshRates + " hdr=" + displayHdrTypes
           + " localPref=" + localEnhancementPref + " localStatus=" + localEnhancementStatus
-          + " qualityHint=" + clientQualityHint
-          + " supports4k=" + (supports4kOverride == null ? "auto" : supports4kOverride.toString()));
+          + " qualityHint=" + clientQualityHint);
   }
 
   /** Physical sink width in pixels, or 0 when the client didn't declare it. */
@@ -8337,36 +8324,6 @@ public class MiniClientSageRenderer extends SageRenderer
   public String getClientQualityHint() { return clientQualityHint; }
   /** {@code TV} | {@code TABLET} | {@code PHONE} | {@code DESKTOP}, or empty. */
   public String getDeviceFormFactor() { return clientDeviceFormFactor; }
-
-  /**
-   * The client's {@code SUPPORTS_4K} answer: TRUE when this session can put 4K
-   * on a screen, FALSE when it explicitly cannot, null when it didn't say.
-   *
-   * <p>User-overridable on the client, so an explicit answer is a decision, not
-   * a measurement, and outranks anything the server would infer from form
-   * factor or sink size.
-   */
-  public Boolean getSupports4k() { return supports4kOverride; }
-
-  /**
-   * Parse an optional tri-state capability. Anything unrecognised is null --
-   * "didn't answer" and "answered no" must stay distinguishable, because they
-   * lead to different decisions. {@code auto} is deliberately unrecognised: it
-   * means "I have no opinion", which is exactly null.
-   */
-  private static Boolean parseTriState(String v)
-  {
-    if (v == null) return null;
-    String s = v.trim().toLowerCase();
-    if (s.length() == 0) return null;
-    if ("true".equals(s) || "1".equals(s) || "yes".equals(s) || "on".equals(s)
-        || "supported".equals(s))
-      return Boolean.TRUE;
-    if ("false".equals(s) || "0".equals(s) || "no".equals(s) || "off".equals(s)
-        || "unsupported".equals(s))
-      return Boolean.FALSE;
-    return null;
-  }
 
   /**
    * Fold the {@code *_VIDEO_CODECS} channel into the constraint rows when it
@@ -10140,8 +10097,6 @@ public class MiniClientSageRenderer extends SageRenderer
   private String localEnhancementPref = "auto";
   private String localEnhancementStatus = "none";
   private String clientQualityHint = "auto";
-  /** Tri-state: TRUE external, FALSE built-in, null undeclared. */
-  private Boolean supports4kOverride;
   private Boolean fullScreenChange;
   private String remoteResolutionChange;
   private final Object remoteResolutionChangeLock = new Object();

@@ -39,7 +39,14 @@ every property below to be answerable.
 | `DISPLAY_MAX_LUMINANCE` | same | nits — for tone mapping |
 | `DISPLAY_WIDE_COLOR` | `Configuration.isScreenWideColorGamut()` | `true` for BT.2020-capable sinks |
 | `LOCAL_ENHANCEMENT` | client's own upscaler state | `pref=auto\|local\|server;status=active\|available\|none`. Report `status=active` when the device is already upscaling, so the server doesn't duplicate it |
-| `SUPPORTS_4K` | the user's **4K support** setting | `auto` / `yes` / `no`. The user's override for when HDMI/EDID sensing gets it wrong. `yes` is authoritative — it raises the assumed sink to 4K, exempts the device from any admin form-factor restriction, and satisfies the decode gate, so **a phone in dock mode on a 4K TV gets served 4K**. `no` caps the target at 1440p. `auto` or omitted leaves the server on inference. See [NGServerVideoEnhancement.md](NGServerVideoEnhancement.md) §2.9 |
+
+> **There is no `SUPPORTS_4K` field.** A client's user-facing
+> Auto / Always / Never setting for server upscaling is carried entirely by
+> *whether and when* it populates `DISPLAY_SINK_RESOLUTION` — Never sends `""`,
+> Always sends the honest physical panel unconditionally, Auto sends it only
+> when the client judges itself eligible. The value is always the true panel and
+> never a fabricated 4K. See
+> [NGServerVideoEnhancement.md](NGServerVideoEnhancement.md) §2.9.
 
 > **Server video enhancement (GPU upscale to 4K)** additionally requires the
 > per-surface output limits `PLAYBACK_SURFACE_<id>_MAX_OUTPUT_WIDTH`,
@@ -298,9 +305,9 @@ on NOTIFY NET_STATS with throughput drop > 30% sustained 10 s:
 - [ ] `DISPLAY_SINK_RESOLUTION` — the **physical panel**, distinct from
       `DISPLAY_RESOLUTION`; without it the server can never offer 4K enhancement
 - [ ] `LOCAL_ENHANCEMENT` (`pref=…;status=…`)
-- [ ] `SUPPORTS_4K` (`auto`/`yes`/`no`) — the user's 4K override; required if the
-      device has HDMI-out or a dock mode, since the sensed sink will otherwise
-      describe the handset's own panel
+- [ ] Wire the user's Auto / Always / Never upscale setting to *whether* you send
+      `DISPLAY_SINK_RESOLUTION` (Never ⇒ `""`, Always ⇒ always the honest panel).
+      There is no separate field for this — see §2.9 of the enhancement doc
 - [ ] Per-surface `MAX_OUTPUT_WIDTH` / `MAX_OUTPUT_HEIGHT` (both, or neither
       counts) and optional `MAX_FPS`
 - [ ] `VIDEO_DECODER_MATRIX` JSON builder

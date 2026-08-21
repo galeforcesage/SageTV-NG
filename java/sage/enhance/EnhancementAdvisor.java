@@ -181,44 +181,9 @@ public final class EnhancementAdvisor
       ClientConstraints constraints, String formFactor,
       String localPref, String localStatus, boolean gpuSupported)
   {
-    return advise(sourceWidth, sourceHeight, sourceInterlaced, sourceFps, sinkWidth,
-        sinkHeight, surface, constraints, formFactor, null, localPref, localStatus,
-        gpuSupported);
-  }
-
-  /**
-   * As above, with the client's {@code SUPPORTS_4K} answer.
-   *
-   * @param supports4k TRUE when the client says this session can put 4K on a
-   *                   screen, FALSE when it says it cannot, null for "auto".
-   *                   User-overridable on the client, so a non-null value is a
-   *                   decision rather than a measurement.
-   */
-  public static Advice advise(int sourceWidth, int sourceHeight, boolean sourceInterlaced,
-      int sourceFps, int sinkWidth, int sinkHeight, PlaybackSurface surface,
-      ClientConstraints constraints, String formFactor, Boolean supports4k,
-      String localPref, String localStatus, boolean gpuSupported)
-  {
     if (!isEnabled()) return NONE_DISABLED;
     if (!gpuSupported) return new Advice(EnhancementTier.NONE, Verdict.NO_GPU_SUPPORT);
     if (sourceHeight <= 0) return new Advice(EnhancementTier.NONE, Verdict.UNKNOWN_SOURCE);
-
-    // A client that says it can do 4K is describing the screen it is attached
-    // to, which the server cannot see. HDMI/EDID sensing is wrong often enough
-    // that this is user-overridable on the client, so treat an explicit yes as
-    // ground truth: raise the sink to 4K when the sensed value is smaller, and
-    // let the tier be decided on the merits below. A phone in desktop mode
-    // driving a 65" television lands here, and it is the case that benefits
-    // most -- refusing it because DEVICE_FORM_FACTOR still reads PHONE would be
-    // trusting a static device attribute over the user standing in the room.
-    boolean forced4k = Boolean.TRUE.equals(supports4k);
-    if (forced4k)
-    {
-      if (sinkWidth < EnhancementTier.ENHANCE_2160P.getTargetWidth())
-        sinkWidth = EnhancementTier.ENHANCE_2160P.getTargetWidth();
-      if (sinkHeight < EnhancementTier.ENHANCE_2160P.getTargetHeight())
-        sinkHeight = EnhancementTier.ENHANCE_2160P.getTargetHeight();
-    }
 
     // The client's own opinion comes first: never spend a GPU session fighting
     // an upscaler the device is already running well. A Shield doing its own AI
@@ -235,21 +200,24 @@ public final class EnhancementAdvisor
     EnhancementTier deintFloor = sourceInterlaced
         ? EnhancementTier.DEINTERLACE_ONLY : EnhancementTier.NONE;
 
+    // No sink means no upscale, and that is also how a client says "never":
+    // the Android override reports an empty DISPLAY_SINK_RESOLUTION rather than
+    // adding a separate opt-out field, so silence here is a deliberate answer
+    // as well as the legacy default. Either way there is nothing to scale to.
     if (sinkHeight <= 0 || sinkWidth <= 0)
       return finish(deintFloor, Verdict.UNKNOWN_SINK, surface, constraints, deintFloor,
-          sourceFps, forced4k);
+          sourceFps);
 
     if (sourceHeight < EnhancementTier.SOURCE_HEIGHT_FLOOR)
       return finish(deintFloor, Verdict.SOURCE_BELOW_FLOOR, surface, constraints, deintFloor,
-          sourceFps, forced4k);
+          sourceFps);
 
     // Upscaling only. A handheld panel still benefits from deinterlacing, and
     // that costs a fraction of an upscale, so an excluded form factor drops to
-    // the deinterlace question rather than being refused outright. An explicit
-    // SUPPORTS_4K=yes skips this entirely -- see isFormFactorEligible.
-    if (!isFormFactorEligible(formFactor, sinkWidth, sinkHeight, supports4k))
+    // the deinterlace question rather than being refused outright.
+    if (!isFormFactorEligible(formFactor, sinkWidth, sinkHeight))
       return finish(deintFloor, Verdict.FORM_FACTOR_EXCLUDED, surface, constraints, deintFloor,
-          sourceFps, forced4k);
+          sourceFps);
 
     // Require a real size gain before re-encoding anything. A 1080i source on a
     // 1080p panel gets deinterlaced, not "upscaled" to the size it already is.
@@ -257,17 +225,12 @@ public final class EnhancementAdvisor
     if (minGainTenths < 10) minGainTenths = 10;
     if ((long) sinkHeight * 10L < (long) sourceHeight * (long) minGainTenths)
       return finish(deintFloor, Verdict.NO_VISIBLE_GAIN, surface, constraints, deintFloor,
-          sourceFps, forced4k);
+          sourceFps);
 
     // Never build a picture larger than the panel can show -- in EITHER
     // dimension -- then apply the admin ceiling on top.
     EnhancementTier tier = EnhancementTier.clampToSink(
         EnhancementTier.ENHANCE_2160P, sinkWidth, sinkHeight);
-    // An explicit SUPPORTS_4K=no is the user telling us 4K will not play here,
-    // whatever the sink or the codec rows claim. Honour it as a ceiling rather
-    // than a refusal: a 1440p upscale may still be exactly what they want.
-    if (Boolean.FALSE.equals(supports4k))
-      tier = EnhancementTier.clampToHeight(tier, EnhancementTier.ENHANCE_1440P.getTargetHeight());
     int adminMax = Sage.getInt(PROP_MAX_HEIGHT, 2160);
     if (adminMax > 0) tier = EnhancementTier.clampToHeight(tier, adminMax);
 
@@ -275,13 +238,13 @@ public final class EnhancementAdvisor
     // gain by scaling, so fall back to the deinterlace question.
     if (tier.isUpscaling() && tier.getTargetHeight() <= sourceHeight)
       return finish(deintFloor, Verdict.NO_VISIBLE_GAIN, surface, constraints, deintFloor,
-          sourceFps, forced4k);
+          sourceFps);
 
     if (!tier.isLegalForSourceHeight(sourceHeight))
       return finish(deintFloor, Verdict.SOURCE_BELOW_FLOOR, surface, constraints, deintFloor,
-          sourceFps, forced4k);
+          sourceFps);
 
-    return finish(tier, Verdict.OFFERED, surface, constraints, deintFloor, sourceFps, forced4k);
+    return finish(tier, Verdict.OFFERED, surface, constraints, deintFloor, sourceFps);
   }
 
   /**
@@ -300,15 +263,15 @@ public final class EnhancementAdvisor
    * consent: the whole point of this gate is that listing a codec says nothing
    * about the resolution its decoder was built for.
    *
-   * <p>The exception is {@code forced4k}: an explicit, user-overridable
-   * {@code SUPPORTS_4K=yes}. That answer comes from the one party who can see
-   * the screen, and it exists precisely because the auto-detection behind the
-   * declared ceilings is sometimes wrong. So it satisfies the gate on its own
-   * -- deliberately, and logged as {@code uhd=forced}, because if it IS wrong
-   * the symptom is an unplayable stream and the cause needs to be obvious.
+   * <p>Note there is deliberately no user override here. The Android client
+   * separates the two questions: the per-codec rows report what MediaCodec can
+   * actually decode and are sent unconditionally, while the user's Auto /
+   * Always / Never setting only ever moves the SINK. So a decode refusal is
+   * always a hardware fact, never a preference, and nothing the user can toggle
+   * should be able to talk us past it.
    */
   private static Advice finish(EnhancementTier tier, Verdict verdict, PlaybackSurface surface,
-      ClientConstraints constraints, EnhancementTier fallback, int sourceFps, boolean forced4k)
+      ClientConstraints constraints, EnhancementTier fallback, int sourceFps)
   {
     if (!tier.isActive()) return new Advice(EnhancementTier.NONE, verdict);
 
@@ -318,8 +281,6 @@ public final class EnhancementAdvisor
     // against an UNDECLARED ceiling would wrongly refuse the cheapest and most
     // broadly applicable win the feature has.
     if (!tier.isUpscaling()) return new Advice(tier, verdict);
-
-    if (forced4k) return new Advice(tier, verdict);
 
     EnhancementTier t = tier;
     while (t.isUpscaling())
@@ -348,14 +309,13 @@ public final class EnhancementAdvisor
    * DISPLAY. Those are the same thing right up until someone puts a phone in
    * desktop mode and plugs it into a television, at which point
    * {@code DEVICE_FORM_FACTOR=PHONE} is driving a 65" 4K panel -- the case that
-   * benefits most, refused by the crudest possible reading of the field. So an
-   * explicit {@code SUPPORTS_4K=yes} always wins: a phone that says it can do
-   * 4K gets served 4K, whatever the admin's form-factor list says. For clients
-   * still answering {@code auto}, the same conclusion is inferred from a sink
-   * too large to be a panel the device could have shipped with.
+   * benefits most, refused by the crudest possible reading of the field. The
+   * Android client reports the panel it is actually attached to, so a docked
+   * phone sends the TV's geometry; a sink too large to be anything the device
+   * could have shipped with is therefore taken as an external display and
+   * exempted from the list.
    */
-  static boolean isFormFactorEligible(String formFactor, int sinkWidth, int sinkHeight,
-      Boolean supports4k)
+  static boolean isFormFactorEligible(String formFactor, int sinkWidth, int sinkHeight)
   {
     String allowed = Sage.get(PROP_FORM_FACTORS, "");
     if (allowed == null) return true;
@@ -369,19 +329,20 @@ public final class EnhancementAdvisor
       if (mine.equals(parts[i].trim())) return true;
 
     // Not in the list -- but the device may be driving something that is.
-    return isSinkExternal(sinkWidth, sinkHeight, supports4k);
+    return isSinkExternal(sinkWidth, sinkHeight);
   }
 
   /**
    * Whether the reported sink is a screen worth upscaling for, rather than the
-   * device's own built-in panel. The client's explicit {@code SUPPORTS_4K}
-   * answer is authoritative in both directions; the size heuristic is only a
-   * fallback for clients still answering {@code auto}.
+   * device's own built-in panel.
+   *
+   * <p>Inferred from size alone, because the client sends no "this is external"
+   * flag: the Android override moves the sink itself rather than adding a
+   * field, so a docked phone simply reports the television's geometry. The
+   * default ceiling sits above every shipping handheld panel and below 4K.
    */
-  static boolean isSinkExternal(int sinkWidth, int sinkHeight, Boolean supports4k)
+  static boolean isSinkExternal(int sinkWidth, int sinkHeight)
   {
-    if (supports4k != null) return supports4k.booleanValue();
-
     int maxW = DEFAULT_BUILTIN_PANEL_MAX_W;
     int maxH = DEFAULT_BUILTIN_PANEL_MAX_H;
     String cfg = Sage.get(PROP_BUILTIN_PANEL_MAX, "");

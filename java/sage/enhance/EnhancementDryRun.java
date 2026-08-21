@@ -101,21 +101,21 @@ public final class EnhancementDryRun
       String localPref, String localStatus, boolean gpuSupported)
   {
     return evaluateAndLog(clientId, mediaDesc, sourceWidth, sourceHeight, interlaced,
-        sourceFps, sinkWidth, sinkHeight, surface, null, null, null, localPref,
+        sourceFps, sinkWidth, sinkHeight, surface, null, null, localPref,
         localStatus, gpuSupported);
   }
 
   public static EnhancementTier evaluateAndLog(String clientId, String mediaDesc,
       int sourceWidth, int sourceHeight, boolean interlaced, int sourceFps,
       int sinkWidth, int sinkHeight, PlaybackSurface surface,
-      ClientConstraints constraints, String formFactor, Boolean supports4k,
+      ClientConstraints constraints, String formFactor,
       String localPref, String localStatus, boolean gpuSupported)
   {
     if (!EnhancementAdvisor.isEnabled()) return EnhancementTier.NONE;
 
     EnhancementAdvisor.Advice advice = EnhancementAdvisor.advise(sourceWidth, sourceHeight,
         interlaced, sourceFps, sinkWidth, sinkHeight, surface, constraints, formFactor,
-        supports4k, localPref, localStatus, gpuSupported);
+        localPref, localStatus, gpuSupported);
 
     boolean dry = isDryRun();
     if (Sage.DBG)
@@ -124,15 +124,23 @@ public final class EnhancementDryRun
       // whether a tablet-class panel is WORTH a GPU session is a judgement call,
       // and this is the evidence needed to settle it from real traffic instead
       // of by assertion.
+      //
+      // sinkKind is the single most important field here, because the client's
+      // user-facing Auto/Always/Never setting is expressed ENTIRELY through the
+      // sink: "never" arrives as an empty sink, indistinguishable from a legacy
+      // client that never implemented the field. Logging how the sink was read
+      // is the only way to tell an opt-out from an unimplemented capability
+      // when triaging "why didn't this client get enhanced".
+      String sinkKind = (sinkWidth <= 0 || sinkHeight <= 0) ? "none"
+          : (EnhancementAdvisor.isSinkExternal(sinkWidth, sinkHeight) ? "external" : "builtin");
       System.out.println("GPU_ENHANCE " + (dry ? "DRYRUN" : "LIVE")
           + " client=" + safe(clientId)
           + " media=" + safe(mediaDesc)
           + " src=" + sourceWidth + "x" + sourceHeight + (interlaced ? "i" : "p")
           + "@" + sourceFps
           + " sink=" + sinkWidth + "x" + sinkHeight
+          + " sinkKind=" + sinkKind
           + " form=" + safe(formFactor)
-          + " uhd=" + (supports4k == null ? "auto"
-              : (supports4k.booleanValue() ? "forced" : "off"))
           + " surface=" + (surface == null ? "none" : surface.getId())
           + " surfaceMax=" + (surface == null ? "n/a"
               : (surface.getMaxOutputWidth() + "x" + surface.getMaxOutputHeight()

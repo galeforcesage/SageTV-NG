@@ -209,49 +209,50 @@ only spend power downscaling.
 
 ---
 
-### 2.9 `SUPPORTS_4K` — the user's override, and it wins
+### 2.9 The user's Auto / Always / Never override rides on the sink
 
-Everything above is inference: EDID sensing, panel geometry, decoder capability
-tables. All three are wrong often enough that clients now expose a user-facing
-**4K support** setting. Report it verbatim.
+Clients expose a user-facing setting for server upscaling, because the detection
+behind §2.1 is not always right — most obviously on a phone in dock mode. There
+is **no separate flag for this.** The override is expressed entirely through
+`DISPLAY_SINK_RESOLUTION`, and the reported value is always the true physical
+panel — never a fabricated 4K.
 
-| Value | Meaning |
-|---|---|
-| `auto` (or the field omitted) | Use the server's inference — §2.1 sink, §2.6/§2.7 ceilings, form factor |
-| `yes` | This device can play 4K. Serve it. |
-| `no` | Do not send 4K here. |
+| Client setting | `DISPLAY_SINK_RESOLUTION` sent | Result |
+|---|---|---|
+| **Never** (off) | `""` | Full opt-out. No sink ⇒ no upscale, fail-closed. |
+| **Auto** | physical `WxH`, but only when the client judges itself eligible (TV-class, external/HDMI display, or an internal panel over 12"); otherwise `""` | Phone/small tablet → no upscale. Shield on a 4K TV → `3840x2160`. |
+| **Always** (on) | honest physical `WxH`, unconditionally — a 6" phone sends `2400x1080` | Forces the invitation; server still clamps to `min(tier, sink)`. |
 
-Accepted spellings for `yes`: `yes`, `true`, `1`, `on`, `supported`. For `no`:
-`no`, `false`, `0`, `off`, `unsupported`. Anything else, including `auto`, reads
-as "not answered" and falls back to inference. A client that never implements the
-field is byte-for-byte a client answering `auto`.
+Two consequences the server honours:
 
-**`yes` is authoritative, deliberately.** It:
+**Auto and Always are indistinguishable on the wire.** Both simply produce a
+sink. So the server cannot apply different policy to them: *a sink that arrives
+at all is a request to upscale, up to that size.* Under Auto the client has
+already applied its own eligibility test, so second-guessing it server-side would
+override a decision made with better information.
 
-- raises the effective sink to at least `3840x2160`, so a mis-sensed HDMI
-  connection can't cap the target at the handset's own panel size;
-- bypasses the form-factor restriction of §4 rule 3 entirely — **a phone that
-  reports 4K support is served 4K**, even when an admin has narrowed upscaling to
-  televisions;
-- satisfies the §2.6/§2.7 decode gate on its own.
+**The setting can never talk past the decode gate.** The per-codec rows of §2.7
+report real MediaCodec limits and are sent unconditionally, unaffected by the
+setting. A decode refusal is therefore always a hardware fact, never a
+preference, and nothing the user can toggle should be able to override it.
 
-That last one is the sharp edge and it is intentional. The declared codec ceilings
-come from the same auto-detection the user is overriding, so honouring them here
-would make the override useless in precisely the situation it was built for — a
-phone in desktop mode driving a television, where the handset's panel and the
-decoder tables both describe the wrong screen. The decision is logged as
-`uhd=forced` so that if the override is wrong, the unplayable stream has an
-obvious cause and a one-setting fix.
+**The docked-phone case needs no special server logic.** When a phone drives a
+television, `Display.getMode()` reports the *television's* geometry, so the
+client sends `3840x2160` and the normal path serves 4K. The form-factor rule
+(§4 rule 5) additionally treats any sink too large to be a built-in handheld
+panel as an external display, so `DEVICE_FORM_FACTOR=PHONE` does not refuse it.
 
-**`no` is a ceiling, not a refusal.** It caps the target at 1440p rather than
-disabling enhancement, because a user who knows 4K doesn't work on their setup
-usually still wants the deinterlace and the upscale that does.
+**"Always" on a genuine handset is honoured, not inflated.** A 6" phone sending
+`2400x1080` gets a 1080p-class upscale from a 720p source — the best its panel
+can show. The server never invents a 4K target for a screen that can't display
+one.
 
-**What `yes` does *not* override.** It is a statement about the screen, so it only
-overrules screen-shaped inferences. It cannot exceed the server's
-`playback/gpu_enhance/max_height` ceiling, and it has no effect on the recording
-veto, GPU admission, or the §A.1 source floor — none of which are about what the
-client can display.
+> **Open contract question.** Because "Never" and "client predates this spec"
+> both arrive as an empty sink, the server cannot tell them apart, and currently
+> still offers `tier=deint` on an empty sink so that legacy clients keep the
+> cheapest win. If Never should suppress deinterlacing too, that needs a
+> distinguishable signal. Triage this from the `sinkKind=none` field in the
+> `GPU_ENHANCE` log.
 
 ---
 
@@ -319,13 +320,15 @@ Worth knowing, because they explain why enhancement sometimes doesn't happen:
    `DEVICE_FORM_FACTOR` values and is **empty by default**, meaning every device
    is eligible. An admin who decides a handheld is not worth an encoder session
    can set it to `tv`. Excluded devices still receive `tier=deint`, and a client
-   that never reported a form factor is never excluded by it. A device reporting
-   `SUPPORTS_4K=yes`, or sensed to be driving an external display, is exempt —
-   see §2.9.
-6. **The user's `SUPPORTS_4K` answer outranks the server's inference.** `yes`
-   raises the sink to 4K, bypasses rule 5, and satisfies the decode gate; `no`
-   caps the target at 1440p. Neither affects rules 1, 2 or 7 — those are not
-   questions about the screen. See §2.9.
+   that never reported a form factor is never excluded by it. A device whose
+   sink is too large to be a built-in handheld panel is treated as driving an
+   external display and is exempt — that is how a docked phone reaches 4K
+   despite `DEVICE_FORM_FACTOR=PHONE`. See §2.9.
+6. **A sink that arrives at all is a request to upscale.** The client's
+   Auto / Always / Never setting is carried entirely by
+   `DISPLAY_SINK_RESOLUTION` (§2.9), so the server does not second-guess it: an
+   empty sink is a full opt-out, and a present sink is both the invitation and
+   the ceiling. Auto and Always are indistinguishable on the wire by design.
 7. **The GPU is shared.** The server budgets against *currently free* VRAM, so
    another application on the same GPU simply results in fewer or lower tiers. No
    enhancement resources are held while nothing is playing.
@@ -351,7 +354,7 @@ Every decision is logged with a verdict. These are the ones a client controls:
 | `client's own upscaler is active and preferred` | `LOCAL_ENHANCEMENT` reported `status=active` |
 | `client explicitly prefers local enhancement` | `LOCAL_ENHANCEMENT` reported `pref=local` |
 | `sink is not meaningfully larger than the source` | sink height below ~1.5× source height — expected on a 1080p panel |
-| `device form factor is not in the upscale-eligible set` | this server's admin restricted upscaling to certain `DEVICE_FORM_FACTOR` values, and the client neither reported `SUPPORTS_4K=yes` nor a sink large enough to be an external display; not a client fault, and deinterlace is still offered |
+| `device form factor is not in the upscale-eligible set` | this server's admin restricted upscaling to certain `DEVICE_FORM_FACTOR` values, and the client's sink was not large enough to read as an external display; not a client fault, and deinterlace is still offered |
 | `source below the 720-line floor and not interlaced` | source material, not a client fault |
 | `source geometry unknown` | server could not determine source size |
 | `feature disabled` / `ffmpeg/GPU cannot run the pipeline` | server-side, nothing the client can change |
@@ -374,9 +377,10 @@ If a client team implements only part of this, do it in this order:
    whichever one your platform already exposes; you do not need both.
 3. **`LOCAL_ENHANCEMENT`** — stops the server from duplicating work a Shield is
    already doing better.
-4. **`SUPPORTS_4K`** — cheap to implement (you already have the setting) and the
-   only way a user can rescue a device the server mis-senses. Worth doing early
-   on any platform with an HDMI-out or dock mode.
+4. **The Auto / Always / Never user setting** — implemented purely as *when and
+   whether* you populate `DISPLAY_SINK_RESOLUTION` (§2.9); no extra field, no
+   server change. Worth doing early on any platform with HDMI-out or a dock
+   mode, since that is where sink detection is most likely to be wrong.
 5. **`DISPLAY_REFRESH_RATES`**, **`QUALITY_HINT`** — refinement.
 6. **`DISPLAY_HDR_TYPES`** — forward-looking only.
 
