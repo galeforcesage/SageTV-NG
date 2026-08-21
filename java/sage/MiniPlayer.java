@@ -1683,6 +1683,10 @@ public class MiniPlayer implements DVDMediaPlayer
         sage.client.PlaybackSurface chosenSurface = null;
         String chosenSurfaceDelivery = null;
         String chosenSurfaceXcodeMode = null;
+        // Decided once, below, after both negotiation paths converge -- see the
+        // "Server video enhancement" block. Declared here so the surface branch
+        // that builds CAP_EFFECTIVE_DELIVERY can carry it.
+        sage.enhance.EnhancementTier enhanceTier = sage.enhance.EnhancementTier.NONE;
         int chosenSurfaceAudioStreamIndex = -1;
         int chosenSurfaceAudioChannels = 0;
         // Item 2: audio-relative index (0-based across audio streams) the server
@@ -1969,6 +1973,82 @@ public class MiniPlayer implements DVDMediaPlayer
             if (Sage.DBG) System.out.println("MiniPlayer failed to send CAP_EFFECTIVE_PLAYER=" + chosenPlayer + ": " + ioe);
           }
         }
+        // --- Server video enhancement (post-decision treatment) ---
+        // Evaluated HERE, after both negotiation paths have converged on a
+        // profileDecision and chosenPlayer, rather than inside the
+        // playback-surface branch below.
+        //
+        // That placement was a real defect: PLAYBACK_SURFACES is an NG feature
+        // that non-PWA clients "typically don't implement at all" (see the
+        // fall-through comment above), and the Android/Shield client is exactly
+        // such a client -- and also the primary target for GPU enhancement. So
+        // the decision was gated on a capability the clients that most need it
+        // do not advertise, and those sessions produced no verdict at all: not
+        // "refused", but silently never asked. A client reporting a 4K sink and
+        // no surfaces must still get an answer.
+        //
+        // Enhancement is a treatment applied after ranking, so it depends on
+        // the decision, not on how the decision was reached. chosenSurface is
+        // simply null on the legacy path, which the advisor already handles as
+        // "no per-surface output limits declared".
+        //
+        // In dry-run (the default) this only logs and returns NONE, so the
+        // token built below stays byte-identical to today.
+        try
+        {
+          if (sage.enhance.EnhancementAdvisor.isEnabled())
+          {
+            int srcFps = 0;
+            if (cf != null && cf.getVideoFormat() != null)
+              srcFps = Math.round(cf.getVideoFormat().getFps());
+            // Consult the per-codec decode ceilings of the player that will
+            // ACTUALLY decode -- which is the locked chosenPlayer, not the
+            // client's default -- so a player switch above can't leave us
+            // gating against the wrong decoder's limits.
+            sage.client.ClientConstraints enhanceConstraints = constraints;
+            if (chosenPlayer != null && chosenPlayer.length() > 0)
+            {
+              if (chosenPlayer.toLowerCase().indexOf("exo") >= 0 && exoConstraints != null)
+                enhanceConstraints = exoConstraints;
+              else if (chosenPlayer.toLowerCase().indexOf("ijk") >= 0 && ijkConstraints != null)
+                enhanceConstraints = ijkConstraints;
+            }
+            // What the stream is being delivered as. The surface path knows the
+            // concrete xcode/delivery mode; the legacy path only has the
+            // decision itself, which is the honest answer there.
+            String enhanceMediaDesc = (chosenSurfaceXcodeMode != null && chosenSurfaceXcodeMode.length() > 0)
+                ? chosenSurfaceXcodeMode
+                : ((chosenSurfaceDelivery != null && chosenSurfaceDelivery.length() > 0)
+                    ? chosenSurfaceDelivery
+                    : ("legacy:" + (profileDecision != null && profileDecision.decision != null
+                        ? profileDecision.decision.toString() : "unknown")));
+            enhanceTier = sage.enhance.EnhancementDryRun.evaluateAndLog(
+                (mcsr != null ? mcsr.getNgClientId() : null),
+                enhanceMediaDesc,
+                mediaW, mediaH, srcInterlaced, srcFps,
+                (mcsr != null ? mcsr.getSinkWidth() : 0),
+                (mcsr != null ? mcsr.getSinkHeight() : 0),
+                chosenSurface,
+                enhanceConstraints,
+                (mcsr != null ? mcsr.getDeviceFormFactor() : null),
+                (mcsr != null ? mcsr.getLocalEnhancementPref() : "auto"),
+                (mcsr != null ? mcsr.getLocalEnhancementStatus() : "none"),
+                sage.HwEncoder.gpuEnhanceSupported(),
+                // The network gate (§4 rule 6a). These are the SAME numbers
+                // the bandwidth-aware ranking above already used, so
+                // enhancement is measured against the budget that sized the
+                // stream rather than spending headroom nothing accounted
+                // for. Both are 0 when unknown, which imposes no cap.
+                sourceBitrateKbps, availableBwKbps);
+          }
+        }
+        catch (Throwable t)
+        {
+          // Enhancement is an optimization and must never be able to break
+          // a tune. Any failure here degrades to "no enhancement".
+          enhanceTier = sage.enhance.EnhancementTier.NONE;
+          if (Sage.DBG) System.out.println("GPU_ENHANCE evaluation failed (ignored): " + t);
+        }
         // --- Playback Surface capability model (Protocol v2.1) — Phase 2 ---
         // If a surface won the ranking above, emit CAP_EFFECTIVE_SURFACE
         // exactly once per OPENURL. Same session-stickiness contract as
@@ -2004,58 +2084,9 @@ public class MiniPlayer implements DVDMediaPlayer
           // checks below) is left untouched. push/hls are unchanged.
           if (chosenSurfaceDelivery != null && chosenSurfaceDelivery.length() > 0)
           {
-            // --- Server video enhancement (post-rank treatment) ---
-            // Runs AFTER the winner is chosen, exactly like the server-EQ
-            // promotion above, so the four-tier ranking semantics are untouched.
-            // In dry-run (the default) this only logs, and evaluateAndLog
-            // returns NONE, so the token below is byte-identical to today.
-            sage.enhance.EnhancementTier enhanceTier = sage.enhance.EnhancementTier.NONE;
-            try
-            {
-              if (sage.enhance.EnhancementAdvisor.isEnabled())
-              {
-                int srcFps = 0;
-                if (cf != null && cf.getVideoFormat() != null)
-                  srcFps = Math.round(cf.getVideoFormat().getFps());
-                // Consult the per-codec decode ceilings of the player that will
-                // ACTUALLY decode -- which is the locked chosenPlayer, not the
-                // client's default -- so a player switch above can't leave us
-                // gating against the wrong decoder's limits.
-                sage.client.ClientConstraints enhanceConstraints = constraints;
-                if (chosenPlayer != null && chosenPlayer.length() > 0)
-                {
-                  if (chosenPlayer.toLowerCase().indexOf("exo") >= 0 && exoConstraints != null)
-                    enhanceConstraints = exoConstraints;
-                  else if (chosenPlayer.toLowerCase().indexOf("ijk") >= 0 && ijkConstraints != null)
-                    enhanceConstraints = ijkConstraints;
-                }
-                enhanceTier = sage.enhance.EnhancementDryRun.evaluateAndLog(
-                    (mcsr != null ? mcsr.getNgClientId() : null),
-                    (chosenSurfaceXcodeMode == null ? chosenSurfaceDelivery : chosenSurfaceXcodeMode),
-                    mediaW, mediaH, srcInterlaced, srcFps,
-                    (mcsr != null ? mcsr.getSinkWidth() : 0),
-                    (mcsr != null ? mcsr.getSinkHeight() : 0),
-                    chosenSurface,
-                    enhanceConstraints,
-                    (mcsr != null ? mcsr.getDeviceFormFactor() : null),
-                    (mcsr != null ? mcsr.getLocalEnhancementPref() : "auto"),
-                    (mcsr != null ? mcsr.getLocalEnhancementStatus() : "none"),
-                    sage.HwEncoder.gpuEnhanceSupported(),
-                    // The network gate (§4 rule 6a). These are the SAME numbers
-                    // the bandwidth-aware ranking above already used, so
-                    // enhancement is measured against the budget that sized the
-                    // stream rather than spending headroom nothing accounted
-                    // for. Both are 0 when unknown, which imposes no cap.
-                    sourceBitrateKbps, availableBwKbps);
-              }
-            }
-            catch (Throwable t)
-            {
-              // Enhancement is an optimization and must never be able to break
-              // a tune. Any failure here degrades to "no enhancement".
-              enhanceTier = sage.enhance.EnhancementTier.NONE;
-              if (Sage.DBG) System.out.println("GPU_ENHANCE evaluation failed (ignored): " + t);
-            }
+            // enhanceTier was decided above, on the path both negotiation
+            // branches share. In dry-run it is always NONE, so this token is
+            // byte-identical to today.
             String effDelivery = buildEffDeliveryToken(chosenSurfaceDelivery,
                 chosenSurfaceXcodeMode, enhanceTier);
             // Protocol 2.1 option B: for the fMP4 modes that TRANSCODE audio
