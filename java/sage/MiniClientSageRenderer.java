@@ -4784,10 +4784,23 @@ public class MiniClientSageRenderer extends SageRenderer
               playbackSurfaces = sage.client.PlaybackSurfaceSet.empty();
             }
           }
-          if (Sage.DBG && playbackSurfacesProp != null && playbackSurfacesProp.length() > 0)
+          // Logged UNCONDITIONALLY, including when empty, and distinguishing a
+          // null reply from an empty one. Those are different failures: null
+          // means the client did not answer the query at all (property
+          // unsupported, or a protocol desync), empty means it answered "I have
+          // none". Logging only the non-empty case makes the absence of a log
+          // line ambiguous between "no surfaces", "never asked" and "reply
+          // lost" -- which cost real diagnostic time when a client that
+          // genuinely had no surfaces was indistinguishable from a bug.
+          if (Sage.DBG)
           {
-            System.out.println("MiniClient PLAYBACK_SURFACES=" + playbackSurfacesProp);
-            System.out.println("MiniClient PlaybackSurfaces parsed: " + playbackSurfaces);
+            System.out.println("MiniClient PLAYBACK_SURFACES="
+                + (playbackSurfacesProp == null ? "<null: client did not answer the query>"
+                    : (playbackSurfacesProp.length() == 0
+                        ? "<empty: client answered, advertises none>"
+                        : playbackSurfacesProp))
+                + " parsedIds=" + surfaceIds
+                + " parsedSet=" + playbackSurfaces);
           }
         }
         // --- end NG-only capability round ---
@@ -8038,8 +8051,15 @@ public class MiniClientSageRenderer extends SageRenderer
           sage.client.PlaybackSurfaceSet.split(surfacesProp);
       if (surfaceIds.isEmpty())
       {
+        // Print the raw reply, not just the conclusion. "still advertises no
+        // surfaces" is an interpretation; the value is the evidence, and
+        // without it a null reply (query unanswered) reads identically to an
+        // empty one (answered, has none).
         if (Sage.DBG) System.out.println("MiniClient refreshPlaybackSurfaces: client still "
-            + "advertises no surfaces");
+            + "advertises no surfaces (raw reply="
+            + (surfacesProp == null ? "<null: query unanswered>"
+                : (surfacesProp.length() == 0 ? "<empty>" : "\"" + surfacesProp + "\""))
+            + ")");
         return playbackSurfaces != null && !playbackSurfaces.isEmpty();
       }
       for (String sid : surfaceIds)
