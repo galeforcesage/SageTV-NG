@@ -341,11 +341,12 @@ decode gate, not by the sink check.** What is lost without a sink is only the
 panel clamp, so the worst case is bandwidth spent upscaling for a smaller panel —
 never an unplayable stream.
 
-**Network overrides everything above it.** Measured throughput is not a
-preference to be weighed against the others; a stream that cannot cross the link
-is not a better picture, whatever the client asked for or the server decided.
-This applies equally to `Always`, to an admin `Force`, and to any inference made
-here.
+**Network overrides everything above it — as a design rule; see §4 rule 6a for
+what is actually wired.** Measured throughput is not a preference to be weighed
+against the others; a stream that cannot cross the link is not a better picture,
+whatever the client asked for or the server decided. This is intended to apply
+equally to `Always`, to an admin `Force`, and to any inference made here. It does
+not constrain anything yet, because the pipeline re-encodes nothing yet.
 
 Rows 1, 3 and 4 of the table therefore all resolve identically — *decide for me* —
 and the server does not need to tell them apart, because it would act the same
@@ -595,10 +596,16 @@ Worth knowing, because they explain why enhancement sometimes doesn't happen:
    here. Nothing is fabricated, so a client that declared nothing gets nothing.
    Set `playback/gpu_enhance/unknown_sink=refuse` to read silence as "no"
    instead. See §2.9.1.
-6a. **Network overrides all of it.** Measured throughput is not weighed against
-   the other inputs, it caps them. A stream that cannot cross the link is not a
-   better picture, so bandwidth clamps apply to `Always`, to an admin `Force`,
-   and to any decision made in the absence of a sink.
+6a. **Network overrides all of it — by design, not yet by implementation.**
+   Measured throughput is not weighed against the other inputs, it caps them: a
+   stream that cannot cross the link is not a better picture, so bandwidth
+   clamps are intended to apply to `Always`, to an admin `Force`, and to any
+   decision made in the absence of a sink. **Status: not wired.** The advisor
+   consults no client throughput today; what exists is a server-side disk-write
+   budget and a `max_bitrate_kbps` cap. Client-measured bandwidth
+   (`BANDWIDTH_FEEDBACK_V1`, `getServerActiveWindowPeakKbps()`) joins the
+   decision when the pipeline goes live. Until then this rule constrains nothing,
+   which is safe only because enhancement re-encodes nothing (rule 0).
 7. **The GPU is shared.** The server budgets against *currently free* VRAM, so
    another application on the same GPU simply results in fewer or lower tiers. No
    enhancement resources are held while nothing is playing.
