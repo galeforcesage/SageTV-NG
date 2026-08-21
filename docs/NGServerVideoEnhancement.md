@@ -692,10 +692,12 @@ If a client team implements only part of this, do it in this order:
    whichever one your platform already exposes; you do not need both.
 3. **`LOCAL_ENHANCEMENT`** — stops the server from duplicating work a Shield is
    already doing better.
-4. **The Auto / Always / Never user setting** — implemented purely as *when and
-   whether* you populate `DISPLAY_SINK_RESOLUTION` (§2.9); no extra field, no
-   server change. Worth doing early on any platform with HDMI-out or a dock
-   mode, since that is where sink detection is most likely to be wrong.
+4. **The Auto / Always / Never user setting.** **This item changed — see §7.**
+   Do *not* implement "Never" by withholding `DISPLAY_SINK_RESOLUTION`. As of the
+   server change described in §2.9.1, an absent sink is an abstention, so
+   withholding no longer refuses anything; it only discards the ceiling that
+   would have capped the target. Report the true panel under all three settings
+   (§2.1) and express the user's cost preference through `QUALITY_HINT` (§2.5).
 5. **`DISPLAY_REFRESH_RATES`**, **`QUALITY_HINT`** — refinement.
 6. **`DISPLAY_HDR_TYPES`** — forward-looking only.
 
@@ -744,15 +746,150 @@ Everything in §2, which is the part that is easy to get wrong:
 
 ```
 GPU_ENHANCE DRYRUN client=<id> media=<mode> src=1920x1080i@30 sink=3840x2160
-  surface=<id> surfaceMax=3840x2160@60 local=auto/none
-  -> tier=enhance_2160p verdict=OFFERED (offered)
+  sinkKind=external form=TV surface=<id> surfaceMax=3840x2160@60
+  codecMax=<per-codec ceilings> srcKbps=8000 linkKbps=45000/38250
+  local=auto/none -> tier=enhance_2160p verdict=OFFERED (offered)
 ```
 
 That single line confirms the whole client contract: `sink=` proves
 `DISPLAY_SINK_RESOLUTION` arrived and parsed, `surfaceMax=` proves the per-surface
-limits arrived, `local=` proves `LOCAL_ENHANCEMENT` arrived, and `verdict=` says
-whether the server would have accepted. `sink=0x0` or `surfaceMax=0x0@0` means the
-field never made it — see the §4.1 table.
+limits arrived, `codecMax=` proves the §2.7 decode ceilings arrived, `local=`
+proves `LOCAL_ENHANCEMENT` arrived, and `verdict=` says whether the server would
+have accepted. `sink=0x0` or `surfaceMax=0x0@0` means the field never made it —
+see the §4.1 table.
+
+Three fields on that line are newer than the first round of client integration:
+
+- **`sinkKind=`** — `external`, `builtin`, `inferred`, or `none`. `inferred` is
+  the case where no sink arrived and the server fell back to your declared decode
+  ceilings (§2.9.1). If you believe you are sending a sink and see `inferred`,
+  the field is not arriving.
+- **`srcKbps=` / `linkKbps=`** — the source bitrate and the measured link, the
+  second shown as `measured/after-safety-factor`. `linkKbps=0` means the link was
+  never measured, which imposes no cap (§4 rule 6a). NG direct-play clients
+  deliberately skip the probe, so `0` is expected and correct there.
+- **`verdict=INSUFFICIENT_BANDWIDTH`** — the enhanced stream did not fit the
+  measured link at any tier. This blames the network, not your decoder.
 
 What cannot be tested yet is the picture itself: no stream is re-encoded until the
 pipeline is wired.
+
+---
+
+## 7. Revision log — what changed after the first client integration round
+
+Everything in this section postdates the capability dumps taken from the live
+Android MiniClient, PWA and Tizen clients. **A client team that implemented
+against the earlier version of this document should read only this section**; the
+rest of the document has already been rewritten to match, so §2 and §4 no longer
+show what changed.
+
+Four of these five items are corrections to *this document*, not to client code.
+Three of them exist because the earlier text was wrong, and the live traffic is
+what proved it.
+
+### 7.1 `SUPPORTS_4K` never existed — remove it if you send it
+
+**Removed. No client action required unless you implemented it.**
+
+An earlier draft described a `SUPPORTS_4K` boolean. No client has ever sent it,
+and the server no longer looks for it. It was specified from an assumption rather
+than from a capability dump, and the dumps showed it absent everywhere. Use the
+§2.7 per-codec decode ceilings, which real clients do send.
+
+### 7.2 The user's 4K override now beats the server's inference
+
+**Behaviour change, favourable to clients.**
+
+Where a client reports a sink the server would otherwise have judged too small or
+the wrong form factor, an explicit user setting is honoured rather than
+second-guessed. The rationale is unchanged from §2.9: under Auto the client has
+already applied an eligibility test using better information than the server has.
+
+### 7.3 An absent `DISPLAY_SINK_RESOLUTION` is an ABSTENTION, not a refusal
+
+**This is the one that breaks a shipped client behaviour. Read §2.1 and §2.9.1.**
+
+The earlier document told client teams to implement the user's "Never" setting by
+sending an empty `DISPLAY_SINK_RESOLUTION`. The server was written to match, and
+treated an empty sink as a full opt-out.
+
+That was wrong, and the reasoning is worth stating because it governs every other
+optional field in this contract:
+
+> A value a client never sent carries **no opinion**. Reading absence as refusal
+> lets silence — the least informative thing a client can do — veto a decision,
+> and hands that decision to the least informed party. Absence means *don't
+> care*: the server should do what is best for perceived quality and server
+> capacity.
+
+The field is a **measurement** (§2.1), and a measurement cannot carry a refusal.
+Empty now means *unknown*, never *unwanted*.
+
+What this means for you, concretely:
+
+| | Before | Now |
+|---|---|---|
+| Sink absent | no enhancement at all | server infers from your §2.7 decode ceilings; **the panel clamp is skipped** |
+| Effect of withholding | refuses enhancement | only discards the ceiling that would have capped the target |
+| "Never" toggle as shipped | worked | **non-functional** |
+
+Withholding the sink no longer avoids enhancement — it removes the *ceiling*. That
+is strictly worse for the user than sending the honest value, so the honest value
+is now in your own interest.
+
+This is not a hole in the safety story. The decode gate (§2.7) requires a client
+to have **affirmatively** declared a ceiling before any upscale is offered, so a
+legacy client that declares nothing still gets nothing. Legacy clients were always
+protected by the decode gate, not by the sink check. What is lost without a sink
+is only the panel clamp, so the worst case is wasted bandwidth, never an
+unplayable stream.
+
+Server operators can restore the old behaviour with
+`playback/gpu_enhance/unknown_sink=refuse`. That switch exists as an escape hatch;
+it is not the recommended configuration, and it defaults to `infer`.
+
+**Where the intent should live instead.** §2.5 `QUALITY_HINT` already carries a
+preference, is already sent unconditionally, and is currently queried by nobody.
+The reasons a client legitimately cannot be overruled on — metered data, thermal
+headroom, battery — are all statements about *cost*, which is exactly what
+`QUALITY_HINT=savings` means. Wiring an existing field beats inventing one. The
+client teams own that decision; the server is not asking to be told, and will not
+require a new field.
+
+### 7.4 Enhancement now answers to the measured link (§4 rule 6a)
+
+**New gate. May change which tier you are offered; will not surprise you.**
+
+Enhancement is now evaluated against the same source bitrate and measured
+bandwidth the delivery ranking already used — deliberately the same numbers, so
+enhancement is checked against the budget that sized the stream rather than
+forming a second opinion. This applies to **recording playback and transfers as
+well as live TV**; the bandwidth machinery was never live-specific.
+
+Three properties matter to a client:
+
+1. **It degrades, it does not veto.** The check runs inside the tier ladder, so a
+   tight link steps 2160p to 1440p to 1080p before giving up.
+2. **Deinterlace is exempt.** It emits roughly the stream you were already being
+   sent, which the existing rate machinery already sized. A slow link must not
+   strip the cheapest quality win.
+3. **An unmeasured link imposes no cap** — the same abstention rule as §7.3.
+   `linkKbps=0` means *not measured*, never *measured as zero*. NG direct-play
+   deliberately skips the probe, so refusing on a skipped probe would disable
+   enhancement for precisely the clients best able to use it.
+
+New verdict `INSUFFICIENT_BANDWIDTH` (§4.1).
+
+### 7.5 Still open, still owned by the client teams
+
+Unchanged from earlier drafts, and still blocked on client input rather than on
+server work:
+
+- **`GPU_ENHANCE_REPORT_V1`** (§3.1) — advertised by at least one client,
+  implemented by nothing on the server. The wire format is the client team's to
+  define; the server will not guess it.
+- **`DEVICE_FORM_FACTOR` instability** — one client reported `TV`, then `TABLET`,
+  then `TV` across three consecutive capability rounds on the same physical
+  device. This feeds an admin-facing eligibility knob, so the flapping is a live
+  correctness risk. Whether the value is user-settable is still unanswered.
