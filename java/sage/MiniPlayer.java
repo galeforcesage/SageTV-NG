@@ -2040,7 +2040,13 @@ public class MiniPlayer implements DVDMediaPlayer
                     (mcsr != null ? mcsr.getDeviceFormFactor() : null),
                     (mcsr != null ? mcsr.getLocalEnhancementPref() : "auto"),
                     (mcsr != null ? mcsr.getLocalEnhancementStatus() : "none"),
-                    sage.HwEncoder.gpuEnhanceSupported());
+                    sage.HwEncoder.gpuEnhanceSupported(),
+                    // The network gate (§4 rule 6a). These are the SAME numbers
+                    // the bandwidth-aware ranking above already used, so
+                    // enhancement is measured against the budget that sized the
+                    // stream rather than spending headroom nothing accounted
+                    // for. Both are 0 when unknown, which imposes no cap.
+                    sourceBitrateKbps, availableBwKbps);
               }
             }
             catch (Throwable t)

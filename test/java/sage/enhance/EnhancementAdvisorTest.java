@@ -60,12 +60,110 @@ public class EnhancementAdvisorTest
     Sage.remove(EnhancementAdvisor.PROP_MIN_GAIN_TENTHS);
     Sage.remove(EnhancementAdvisor.PROP_OVERRIDE_LOCAL);
     Sage.remove(EnhancementAdvisor.PROP_UNKNOWN_SINK);
+    Sage.remove(EnhancementAdvisor.PROP_BW_SAFETY);
+    Sage.remove("playback/bandwidth_safety_factor");
   }
 
   private EnhancementAdvisor.Advice advise(int sw, int sh, boolean inter, int fps,
       int sinkW, int sinkH, PlaybackSurface s, String pref, String status)
   {
     return EnhancementAdvisor.advise(sw, sh, inter, fps, sinkW, sinkH, s, pref, status, true);
+  }
+
+  private EnhancementAdvisor.Advice adviseBw(int sw, int sh, boolean inter, int fps,
+      int sinkW, int sinkH, PlaybackSurface s, long srcKbps, long linkKbps)
+  {
+    return EnhancementAdvisor.advise(sw, sh, inter, fps, sinkW, sinkH, s, null, null,
+        "auto", "none", true, srcKbps, linkKbps);
+  }
+
+  // ---------- the network gate (rule 6a) ----------
+  //
+  // Not a live-TV concern: the same delivery path carries recorded files, and
+  // PlaybackDecisionEngine already forces a transcode-down when a RECORDING's
+  // bitrate exceeds the measured link. Enhancement raises bitrate, so it has to
+  // answer the same question or it spends headroom that was already budgeted.
+
+  @Test
+  public void testAmpleBandwidthAllowsTheFullTier()
+  {
+    EnhancementAdvisor.Advice a =
+        adviseBw(1920, 1080, false, 30, 3840, 2160, surface(3840, 2160, 60), 8000, 100000);
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P);
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.OFFERED, "verdict");
+  }
+
+  /**
+   * A constrained link DEGRADES rather than refuses. 2160p@30 asks 25000kbps
+   * and 20000 * 0.85 = 17000 won't carry it, but 1440p asks 16000 and fits.
+   * A smaller enhancement is nearly always better than none.
+   */
+  @Test
+  public void testConstrainedLinkDowngradesRatherThanRefusing()
+  {
+    EnhancementAdvisor.Advice a =
+        adviseBw(1920, 1080, false, 30, 3840, 2160, surface(3840, 2160, 60), 8000, 20000);
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_1440P,
+        "should step down the ladder, not refuse outright");
+  }
+
+  @Test
+  public void testLinkTooSmallForAnyUpscaleIsRefused()
+  {
+    EnhancementAdvisor.Advice a =
+        adviseBw(1920, 1080, false, 30, 3840, 2160, surface(3840, 2160, 60), 8000, 5000);
+    assertEquals(a.getTier(), EnhancementTier.NONE);
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.INSUFFICIENT_BANDWIDTH,
+        "the reason must say bandwidth, not blame the decoder");
+  }
+
+  /**
+   * Deinterlacing is exempt: it emits roughly the stream the client was already
+   * being sent, so the existing delivery-side rate machinery has already sized
+   * it. Only upscaling adds bits nothing budgeted for.
+   */
+  @Test
+  public void testDeinterlaceSurvivesALinkTooSmallToUpscale()
+  {
+    EnhancementAdvisor.Advice a =
+        adviseBw(1920, 1080, true, 30, 3840, 2160, surface(3840, 2160, 60), 8000, 5000);
+    assertEquals(a.getTier(), EnhancementTier.DEINTERLACE_ONLY,
+        "a slow link must not strip the cheapest win");
+  }
+
+  /**
+   * An unmeasured link is an abstention, exactly as an absent sink is. A probe
+   * that was skipped is not evidence of a slow network.
+   */
+  @Test
+  public void testUnknownBandwidthImposesNoCap()
+  {
+    EnhancementAdvisor.Advice a =
+        adviseBw(1920, 1080, false, 30, 3840, 2160, surface(3840, 2160, 60), 0, 0);
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P,
+        "0 means 'not measured', never 'measured as zero'");
+  }
+
+  @Test
+  public void testBandwidthSafetyFactorInheritsTheGlobalSetting()
+  {
+    Sage.put("playback/bandwidth_safety_factor", "0.5");
+    assertEquals(EnhancementAdvisor.bandwidthSafetyFactor(), 0.5f,
+        "enhancement must not need the link tuned twice");
+    // 30000 * 0.5 = 15000, which no longer carries 1440p's 16000.
+    EnhancementAdvisor.Advice a =
+        adviseBw(1920, 1080, false, 30, 3840, 2160, surface(3840, 2160, 60), 8000, 30000);
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_1080P);
+    Sage.remove("playback/bandwidth_safety_factor");
+  }
+
+  @Test
+  public void testEnhancementSpecificSafetyFactorOverridesTheGlobal()
+  {
+    Sage.put("playback/bandwidth_safety_factor", "0.5");
+    Sage.put(EnhancementAdvisor.PROP_BW_SAFETY, "0.9");
+    assertEquals(EnhancementAdvisor.bandwidthSafetyFactor(), 0.9f);
+    Sage.remove("playback/bandwidth_safety_factor");
   }
 
   // ---------- master switch ----------

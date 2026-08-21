@@ -38,6 +38,26 @@
   server support at all — Android reports the *television's* geometry when a
   phone drives one, so it already resolves client-side. The dry-run log now
   records `sinkKind=none|builtin|external` in place of `uhd=`.
+* Enhancement now answers to the **network gate**, and this is not a live-TV
+  concern: the same delivery machinery carries recorded files, and
+  `PlaybackDecisionEngine` already forces a transcode-down when a *recording's*
+  bitrate exceeds the measured link. Enhancement raises bitrate, so leaving it
+  outside that budget meant spending headroom the ranking had already
+  accounted for — the advisor ran after the bandwidth-aware decision and
+  nothing re-checked it. It now receives the same `sourceBitrateKbps` and
+  `availableBwKbps` that ranking used, projects a per-tier bitrate via
+  `GpuEnhancePipeline.suggestBitrateKbps()`, and requires it to fit
+  `link × safety factor`. The check sits inside the tier ladder beside the
+  decode gate, so a constrained link degrades 2160p → 1440p → 1080p rather than
+  refusing outright. Deinterlace is exempt, because it emits roughly the stream
+  the client was already being sent and the existing rate machinery has already
+  sized it. An unmeasured link (`0`) imposes no cap — "not measured" is not
+  "measured as zero", the same abstention rule as the sink, and NG direct-play
+  deliberately skips the probe. Inherits `playback/bandwidth_safety_factor`
+  (0.85) so a tuned link isn't tuned twice;
+  `playback/gpu_enhance/bandwidth_safety_factor` overrides it for enhancement
+  alone. New verdict `INSUFFICIENT_BANDWIDTH`; the log gains `srcKbps=` and
+  `linkKbps=<measured>/<after safety>`. Mid-stream degradation remains open.
 * An absent `DISPLAY_SINK_RESOLUTION` is now read as an **abstention rather than
   a refusal**, and the server decides. The previous reading came from the Android
   client expressing its "Never" setting by clearing the sink, which conflated

@@ -111,11 +111,23 @@ public final class EnhancementDryRun
       ClientConstraints constraints, String formFactor,
       String localPref, String localStatus, boolean gpuSupported)
   {
+    return evaluateAndLog(clientId, mediaDesc, sourceWidth, sourceHeight, interlaced,
+        sourceFps, sinkWidth, sinkHeight, surface, constraints, formFactor, localPref,
+        localStatus, gpuSupported, 0L, 0L);
+  }
+
+  public static EnhancementTier evaluateAndLog(String clientId, String mediaDesc,
+      int sourceWidth, int sourceHeight, boolean interlaced, int sourceFps,
+      int sinkWidth, int sinkHeight, PlaybackSurface surface,
+      ClientConstraints constraints, String formFactor,
+      String localPref, String localStatus, boolean gpuSupported,
+      long sourceBitrateKbps, long availableBandwidthKbps)
+  {
     if (!EnhancementAdvisor.isEnabled()) return EnhancementTier.NONE;
 
     EnhancementAdvisor.Advice advice = EnhancementAdvisor.advise(sourceWidth, sourceHeight,
         interlaced, sourceFps, sinkWidth, sinkHeight, surface, constraints, formFactor,
-        localPref, localStatus, gpuSupported);
+        localPref, localStatus, gpuSupported, sourceBitrateKbps, availableBandwidthKbps);
 
     boolean dry = isDryRun();
     if (Sage.DBG)
@@ -146,6 +158,11 @@ public final class EnhancementDryRun
               : (surface.getMaxOutputWidth() + "x" + surface.getMaxOutputHeight()
                  + "@" + surface.getMaxFps()))
           + " codecMax=" + describeCodecCeiling(constraints)
+          + " srcKbps=" + sourceBitrateKbps
+          + " linkKbps=" + availableBandwidthKbps
+          + (availableBandwidthKbps > 0
+              ? "/" + (long) (availableBandwidthKbps * EnhancementAdvisor.bandwidthSafetyFactor())
+              : "")
           + " local=" + safe(localPref) + "/" + safe(localStatus)
           + " -> tier=" + advice.getTier().token()
           + " verdict=" + advice.getVerdict()

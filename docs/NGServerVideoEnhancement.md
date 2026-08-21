@@ -596,16 +596,49 @@ Worth knowing, because they explain why enhancement sometimes doesn't happen:
    here. Nothing is fabricated, so a client that declared nothing gets nothing.
    Set `playback/gpu_enhance/unknown_sink=refuse` to read silence as "no"
    instead. See §2.9.1.
-6a. **Network overrides all of it — by design, not yet by implementation.**
-   Measured throughput is not weighed against the other inputs, it caps them: a
-   stream that cannot cross the link is not a better picture, so bandwidth
-   clamps are intended to apply to `Always`, to an admin `Force`, and to any
-   decision made in the absence of a sink. **Status: not wired.** The advisor
-   consults no client throughput today; what exists is a server-side disk-write
-   budget and a `max_bitrate_kbps` cap. Client-measured bandwidth
-   (`BANDWIDTH_FEEDBACK_V1`, `getServerActiveWindowPeakKbps()`) joins the
-   decision when the pipeline goes live. Until then this rule constrains nothing,
-   which is safe only because enhancement re-encodes nothing (rule 0).
+6a. **Network overrides all of it — and this is not a live-TV concern.** A stream
+   that cannot cross the link is not a better picture, so bandwidth caps apply
+   to `Always`, to an admin `Force`, and to any decision made in the absence of
+   a sink.
+
+   The adaptation machinery already exists and is **general to delivery, not
+   specific to live**. Playing back a *recording* uses it too:
+   `PlaybackDecisionEngine.decide(...)` takes `sourceBitrateKbps` and
+   `availableBandwidthKbps`, applies `playback/bandwidth_safety_factor`
+   (default 0.85, overridable per profile), and will refuse direct play and
+   force a transcode-down when a recording's own bitrate exceeds the measured
+   link. Alongside it: `setEstimatedBandwidth()` →
+   `selectDynamicVideoBitrateKbps()` in the transcoder, `XCODE_ADJUST` on the
+   pull proxy, the HTTPLS ladder rebuild, and `clampPolicy()` on recording copy
+   transfers.
+
+   **Enhancement now participates in it.** The advisor is handed the *same*
+   `sourceBitrateKbps` and `availableBwKbps` the bandwidth-aware ranking above
+   already used, so an enhanced stream is measured against the budget that
+   sized the stream instead of spending headroom nothing accounted for. The
+   projected bitrate per tier comes from `GpuEnhancePipeline.suggestBitrateKbps()`
+   and must fit `link × safety factor`.
+
+   Three properties of the gate are deliberate:
+   - **It degrades, it does not veto.** The check sits inside the tier ladder
+     next to the decode gate, so a constrained link steps 2160p → 1440p →
+     1080p and only then to nothing. A smaller enhancement beats none.
+   - **Deinterlace is exempt.** It emits roughly the stream the client was
+     already being sent, so the existing rate machinery has already sized it.
+     Only upscaling adds bits nothing budgeted for.
+   - **An unmeasured link imposes no cap.** `0` means "not measured", never
+     "measured as zero" — the same abstention rule as §2.9.1. A bandwidth probe
+     that was skipped (NG direct-play skips it deliberately) is not evidence of
+     a slow network.
+
+   Inherits `playback/bandwidth_safety_factor` so a tuned link doesn't have to
+   be tuned twice; `playback/gpu_enhance/bandwidth_safety_factor` overrides it
+   for enhancement alone. Refusals log `verdict=INSUFFICIENT_BANDWIDTH`, and
+   every decision logs `srcKbps=` and `linkKbps=<measured>/<after safety>`.
+
+   Still open: the gate is evaluated at *decision* time only. Mid-stream
+   degradation is `runtime-adapt`, and the case that will exercise it first is
+   a high-bitrate recording played to a client whose link drops — not live TV.
 7. **The GPU is shared.** The server budgets against *currently free* VRAM, so
    another application on the same GPU simply results in fewer or lower tiers. No
    enhancement resources are held while nothing is playing.
@@ -628,8 +661,8 @@ Every decision is logged with a verdict. These are the ones a client controls:
 | `offered` | enhancement was granted |
 | `client reported no sink and policy is to refuse rather than infer` | `DISPLAY_SINK_RESOLUTION` empty, unparseable, or outside 640×480–7680×4320 — **and** this server sets `playback/gpu_enhance/unknown_sink=refuse`. On a default server this verdict never appears: an absent sink is an abstention and the decision falls through to the decode gate instead (`sinkKind=inferred`) |
 | `client cannot decode the enhanced output (no surface or codec proved it)` | neither §2.6 surface limits nor §2.7 codec ceilings permitted the target — declared nothing, target exceeds the declared ceiling, or every eligible codec was `decoder=sw` |
-| `client's own upscaler is active and preferred` | `LOCAL_ENHANCEMENT` reported `status=active` |
-| `client explicitly prefers local enhancement` | `LOCAL_ENHANCEMENT` reported `pref=local` |
+| `measured link cannot carry the enhanced stream` | every upscale tier projected above `linkKbps × safety factor`; check `linkKbps=` in the log. Not a client fault, and deinterlace is still offered. Applies to recordings as much as to live |
+| `client's own upscaler is active and preferred` | `LOCAL_ENHANCEMENT` reported `status=active` || `client explicitly prefers local enhancement` | `LOCAL_ENHANCEMENT` reported `pref=local` |
 | `sink is not meaningfully larger than the source` | sink height below ~1.5× source height — expected on a 1080p panel |
 | `device form factor is not in the upscale-eligible set` | this server's admin restricted upscaling to certain `DEVICE_FORM_FACTOR` values, and the client's sink was not large enough to read as an external display; not a client fault, and deinterlace is still offered |
 | `source below the 720-line floor and not interlaced` | source material, not a client fault |

@@ -102,6 +102,13 @@ public final class EnhancementAdvisor
    * behaviour of treating silence as no.
    */
   public static final String PROP_UNKNOWN_SINK = "playback/gpu_enhance/unknown_sink";
+  /**
+   * Optional enhancement-specific override for the bandwidth safety factor.
+   * Unset (the default) means inherit {@code playback/bandwidth_safety_factor},
+   * which the rest of delivery already uses, so a link that has been tuned once
+   * doesn't have to be tuned twice.
+   */
+  public static final String PROP_BW_SAFETY = "playback/gpu_enhance/bandwidth_safety_factor";
 
   private static final int DEFAULT_BUILTIN_PANEL_MAX_W = 3200;
   private static final int DEFAULT_BUILTIN_PANEL_MAX_H = 1920;
@@ -120,6 +127,7 @@ public final class EnhancementAdvisor
     NO_VISIBLE_GAIN("sink is not meaningfully larger than the source"),
     FORM_FACTOR_EXCLUDED("device form factor is not in the upscale-eligible set"),
     SURFACE_CANNOT_DECODE("client cannot decode the enhanced output (no surface or codec proved it)"),
+    INSUFFICIENT_BANDWIDTH("measured link cannot carry the enhanced stream"),
     CLIENT_UPSCALES_LOCALLY("client's own upscaler is active and preferred"),
     CLIENT_PREFERS_LOCAL("client explicitly prefers local enhancement");
 
@@ -213,6 +221,39 @@ public final class EnhancementAdvisor
       ClientConstraints constraints, String formFactor,
       String localPref, String localStatus, boolean gpuSupported)
   {
+    return advise(sourceWidth, sourceHeight, sourceInterlaced, sourceFps, sinkWidth,
+        sinkHeight, surface, constraints, formFactor, localPref, localStatus,
+        gpuSupported, 0L, 0L);
+  }
+
+  /**
+   * As above, with the measured link to this client and the source's own
+   * bitrate -- the network gate (§4 rule 6a).
+   *
+   * <p>This is not a live-TV concern. The same delivery machinery carries
+   * recorded files, and {@code PlaybackDecisionEngine} already refuses direct
+   * play and forces a transcode-down when a recording's bitrate exceeds the
+   * measured link. Enhancement RAISES bitrate, so it has to answer the same
+   * question or it silently spends headroom that was already budgeted.
+   *
+   * <p>The gate is applied inside the tier ladder rather than as a veto, so a
+   * constrained link degrades 2160p to 1440p to 1080p and only then to nothing
+   * -- the same shape as the decode gate, and for the same reason: a smaller
+   * enhancement is nearly always better than none.
+   *
+   * @param sourceBitrateKbps the source's own bitrate, or 0 when unknown. Only
+   *        used to anchor the deinterlace-only estimate.
+   * @param availableBandwidthKbps measured throughput to this client, or 0 when
+   *        unknown. Zero is an abstention, exactly as for the sink (§2.9.1):
+   *        an unmeasured link imposes no cap, because inventing one would
+   *        refuse every client whose bandwidth probe was skipped.
+   */
+  public static Advice advise(int sourceWidth, int sourceHeight, boolean sourceInterlaced,
+      int sourceFps, int sinkWidth, int sinkHeight, PlaybackSurface surface,
+      ClientConstraints constraints, String formFactor,
+      String localPref, String localStatus, boolean gpuSupported,
+      long sourceBitrateKbps, long availableBandwidthKbps)
+  {
     if (!isEnabled()) return NONE_DISABLED;
     if (!gpuSupported) return new Advice(EnhancementTier.NONE, Verdict.NO_GPU_SUPPORT);
     if (sourceHeight <= 0) return new Advice(EnhancementTier.NONE, Verdict.UNKNOWN_SOURCE);
@@ -241,18 +282,18 @@ public final class EnhancementAdvisor
     boolean sinkKnown = sinkWidth > 0 && sinkHeight > 0;
     if (!sinkKnown && !inferOnUnknownSink())
       return finish(deintFloor, Verdict.UNKNOWN_SINK, surface, constraints, deintFloor,
-          sourceFps);
+          sourceFps, sourceBitrateKbps, availableBandwidthKbps);
 
     if (sourceHeight < EnhancementTier.SOURCE_HEIGHT_FLOOR)
       return finish(deintFloor, Verdict.SOURCE_BELOW_FLOOR, surface, constraints, deintFloor,
-          sourceFps);
+          sourceFps, sourceBitrateKbps, availableBandwidthKbps);
 
     // Upscaling only. A handheld panel still benefits from deinterlacing, and
     // that costs a fraction of an upscale, so an excluded form factor drops to
     // the deinterlace question rather than being refused outright.
     if (!isFormFactorEligible(formFactor, sinkWidth, sinkHeight))
       return finish(deintFloor, Verdict.FORM_FACTOR_EXCLUDED, surface, constraints, deintFloor,
-          sourceFps);
+          sourceFps, sourceBitrateKbps, availableBandwidthKbps);
 
     // Require a real size gain before re-encoding anything. A 1080i source on a
     // 1080p panel gets deinterlaced, not "upscaled" to the size it already is.
@@ -264,7 +305,7 @@ public final class EnhancementAdvisor
       if (minGainTenths < 10) minGainTenths = 10;
       if ((long) sinkHeight * 10L < (long) sourceHeight * (long) minGainTenths)
         return finish(deintFloor, Verdict.NO_VISIBLE_GAIN, surface, constraints, deintFloor,
-            sourceFps);
+            sourceFps, sourceBitrateKbps, availableBandwidthKbps);
     }
 
     // Never build a picture larger than the panel can show -- in EITHER
@@ -280,13 +321,13 @@ public final class EnhancementAdvisor
     // gain by scaling, so fall back to the deinterlace question.
     if (tier.isUpscaling() && tier.getTargetHeight() <= sourceHeight)
       return finish(deintFloor, Verdict.NO_VISIBLE_GAIN, surface, constraints, deintFloor,
-          sourceFps);
+          sourceFps, sourceBitrateKbps, availableBandwidthKbps);
 
     if (!tier.isLegalForSourceHeight(sourceHeight))
       return finish(deintFloor, Verdict.SOURCE_BELOW_FLOOR, surface, constraints, deintFloor,
-          sourceFps);
+          sourceFps, sourceBitrateKbps, availableBandwidthKbps);
 
-    return finish(tier, Verdict.OFFERED, surface, constraints, deintFloor, sourceFps);
+    return finish(tier, Verdict.OFFERED, surface, constraints, deintFloor, sourceFps, sourceBitrateKbps, availableBandwidthKbps);
   }
 
   /**
@@ -313,7 +354,8 @@ public final class EnhancementAdvisor
    * should be able to talk us past it.
    */
   private static Advice finish(EnhancementTier tier, Verdict verdict, PlaybackSurface surface,
-      ClientConstraints constraints, EnhancementTier fallback, int sourceFps)
+      ClientConstraints constraints, EnhancementTier fallback, int sourceFps,
+      long sourceBitrateKbps, long availableBandwidthKbps)
   {
     if (!tier.isActive()) return new Advice(EnhancementTier.NONE, verdict);
 
@@ -322,20 +364,64 @@ public final class EnhancementAdvisor
     // testing it against a decode ceiling is meaningless -- and testing it
     // against an UNDECLARED ceiling would wrongly refuse the cheapest and most
     // broadly applicable win the feature has.
+    //
+    // It is exempt from the BANDWIDTH gate for the same reason: it produces
+    // roughly the stream the client was already being sent, so the existing
+    // delivery-side rate machinery has already sized it. Only upscaling adds
+    // bits that nothing else budgeted for.
     if (!tier.isUpscaling()) return new Advice(tier, verdict);
 
     EnhancementTier t = tier;
+    boolean bandwidthRefused = false;
     while (t.isUpscaling())
     {
       if (canDecode(surface, constraints, t.getTargetWidth(), t.getTargetHeight(), sourceFps))
-        return new Advice(t, verdict);
+      {
+        if (fitsBandwidth(t, sourceFps, sourceBitrateKbps, availableBandwidthKbps))
+          return new Advice(t, verdict);
+        bandwidthRefused = true;
+      }
       t = t.downgrade();
     }
     // Every upscale tier was refused. Fall back only to what the caller said is
     // legal for this source -- walking the ladder down to DEINTERLACE_ONLY would
     // otherwise deinterlace progressive content, which is both wrong and costly.
     if (fallback.isActive()) return new Advice(fallback, verdict);
-    return new Advice(EnhancementTier.NONE, Verdict.SURFACE_CANNOT_DECODE);
+    return new Advice(EnhancementTier.NONE,
+        bandwidthRefused ? Verdict.INSUFFICIENT_BANDWIDTH : Verdict.SURFACE_CANNOT_DECODE);
+  }
+
+  /**
+   * Whether the enhanced stream this tier would produce still fits the measured
+   * link, after the same safety factor the rest of delivery already applies.
+   *
+   * <p>An unmeasured link (0) imposes no cap. That is the abstention rule
+   * again: a bandwidth probe that was skipped is not evidence of a slow
+   * network, and refusing on it would silently disable enhancement for every
+   * client that direct-plays its way past the probe.
+   */
+  static boolean fitsBandwidth(EnhancementTier tier, int sourceFps,
+      long sourceBitrateKbps, long availableBandwidthKbps)
+  {
+    if (availableBandwidthKbps <= 0) return true;
+    long want = GpuEnhancePipeline.suggestBitrateKbps(tier, sourceFps, sourceBitrateKbps);
+    if (want <= 0) return true;
+    return want <= (long) (availableBandwidthKbps * bandwidthSafetyFactor());
+  }
+
+  /**
+   * Safety factor applied to measured throughput, matching
+   * {@code PlaybackDecisionEngine}'s. Falls back to the global
+   * {@code playback/bandwidth_safety_factor} (0.85) so an admin who has already
+   * tuned their link doesn't have to tune it twice.
+   */
+  static float bandwidthSafetyFactor()
+  {
+    float global = Sage.getFloat("playback/bandwidth_safety_factor", 0.85f);
+    float mine = Sage.getFloat(PROP_BW_SAFETY, Float.NaN);
+    float f = (Float.isNaN(mine) ? global : mine);
+    if (f <= 0f || f > 1f) f = 0.85f;
+    return f;
   }
 
   /**
