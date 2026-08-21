@@ -125,13 +125,13 @@ public final class EnhancementDryRun
       // and this is the evidence needed to settle it from real traffic instead
       // of by assertion.
       //
-      // sinkKind is the single most important field here, because the client's
-      // user-facing Auto/Always/Never setting is expressed ENTIRELY through the
-      // sink: "never" arrives as an empty sink, indistinguishable from a legacy
-      // client that never implemented the field. Logging how the sink was read
-      // is the only way to tell an opt-out from an unimplemented capability
-      // when triaging "why didn't this client get enhanced".
-      String sinkKind = (sinkWidth <= 0 || sinkHeight <= 0) ? "none"
+      // sinkKind records how the sink was read. An absent sink is an
+      // ABSTENTION, not a refusal -- "inferred" means the server decided from
+      // the client's declared decode ceilings instead, which is the only way to
+      // tell that case apart from a genuine panel report when triaging "why did
+      // this client get what it got".
+      String sinkKind = (sinkWidth <= 0 || sinkHeight <= 0)
+          ? (EnhancementAdvisor.inferOnUnknownSink() ? "inferred" : "none")
           : (EnhancementAdvisor.isSinkExternal(sinkWidth, sinkHeight) ? "external" : "builtin");
       System.out.println("GPU_ENHANCE " + (dry ? "DRYRUN" : "LIVE")
           + " client=" + safe(clientId)

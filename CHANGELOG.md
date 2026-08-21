@@ -38,6 +38,28 @@
   server support at all — Android reports the *television's* geometry when a
   phone drives one, so it already resolves client-side. The dry-run log now
   records `sinkKind=none|builtin|external` in place of `uhd=`.
+* An absent `DISPLAY_SINK_RESOLUTION` is now read as an **abstention rather than
+  a refusal**, and the server decides. The previous reading came from the Android
+  client expressing its "Never" setting by clearing the sink, which conflated
+  what a client *sends* with what it *wants*: an empty value is equally what
+  "I can't measure my panel", "my own eligibility heuristic said no" and "I
+  predate this spec" look like. Treating all four as a veto let the least
+  informative thing a client can do decide the outcome, and handed the decision
+  to the least informed party in the exchange. Now the panel clamp is simply
+  skipped and the tier falls through to rules that are each independently
+  fail-closed — the per-codec decode ceilings above all, which the client must
+  have affirmatively declared. Nothing is fabricated, so a client that declared
+  nothing still gets nothing, and every legacy client lands exactly where it did
+  before, protected by the decode gate rather than by the sink check. What is
+  lost without a sink is only the panel ceiling, so the worst case is bandwidth
+  spent upscaling for a smaller panel, never an unplayable stream. The log
+  reports `sinkKind=inferred` for this case, and
+  `playback/gpu_enhance/unknown_sink=refuse` restores the old behaviour. Note
+  the consequence for clients: **withholding the sink no longer avoids
+  enhancement, it only removes the ceiling** — the honest value is now in the
+  client's own interest, and a client that genuinely wants less should say so via
+  `QUALITY_HINT=savings`, which is an existing preference field that neither side
+  currently wires up.
 * Enhancement can now be restricted by device form factor. A GPU session spent
   upscaling for a 14.6" tablet held at arm's length buys far less than the same
   session spent on a 65" panel across the room, and both draw on the same

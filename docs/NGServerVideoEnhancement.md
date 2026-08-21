@@ -72,6 +72,13 @@ value to express a preference, and MUST NOT inflate it to request a larger
 stream; the reported number is the honest panel, and the server treats it as a
 ceiling, never as a target.
 
+**Withholding it does not refuse anything — it abstains.** An empty sink hands
+the decision to the server, which then settles it from the client's declared
+decode ceilings, the source, the admin ceiling, GPU capacity and the network
+(§2.9.1). So a client that clears this field to avoid enhancement does not avoid
+enhancement; it only removes the one input that would have capped the result at
+its own panel size. The honest value is in the client's own interest.
+
 That restriction is what makes the field usable at all. A measurement that is
 sometimes a refusal cannot be read as either: an empty sink would then mean
 "unknown" *or* "opted out" *or* "the client's own policy said no", three
@@ -134,8 +141,9 @@ side* should enhance, and every one of them presumes that enhancement is wanted:
 that would most naturally carry a user's opt-out: it is already sent
 unconditionally, on every connection, and already has the shape of a preference
 rather than a measurement. It is recorded here as an observation about the
-existing contract, **not as a proposal** — whether the user's intent belongs in
-this field, or in one of its own, is an open question owned by the client teams.
+existing contract, **not as a proposal** — and note that for the *bandwidth* axis
+§2.5's `QUALITY_HINT=savings` already says most of it. Whether anything more is
+needed, and where it would live, is an open question owned by the client teams.
 See §2.9.1.
 
 ### 2.5 `QUALITY_HINT`
@@ -147,6 +155,18 @@ QUALITY_HINT  ->  "auto"    (or "quality" | "savings")
 Already specced in [NGClientCapabilities.md](NGClientCapabilities.md) §8 but never
 queried. Wire it up: `savings` pins the bitrate ladder to its floor, `quality`
 allows the ceiling.
+
+**This is the existing home for "spend less on me".** Of the reasons a client
+might want to decline enhancement, the ones the server genuinely cannot see are
+metered or capped data, thermal headroom and battery — and all of them are
+fundamentally a statement about *cost*, which is what `savings` already says. It
+is a preference field, not a measurement, and it is sent unconditionally. A
+client that wants less should say so here rather than by withholding §2.1, which
+does not mean that and (see §2.9.1) does not achieve it.
+
+Wiring this up is therefore worth more than it looks: it is the only intent
+channel in the contract that already exists, and it is currently ignored by both
+sides.
 
 ### 2.6 Per-surface output limits
 
@@ -244,7 +264,7 @@ panel — never a fabricated 4K.
 
 | Client setting | `DISPLAY_SINK_RESOLUTION` sent | Result |
 |---|---|---|
-| **Never** (off) | `""` | Full opt-out. No sink ⇒ no upscale, fail-closed. |
+| **Never** (off) | `""` | **Does not produce an opt-out.** An empty sink is an abstention (§2.9.1), so the server decides from the client's declared decode ceilings. |
 | **Auto** | physical `WxH`, but only when the client judges itself eligible (TV-class, external/HDMI display, or an internal panel over 12"); otherwise `""` | Phone/small tablet → no upscale. Shield on a 4K TV → `3840x2160`. |
 | **Always** (on) | honest physical `WxH`, unconditionally — a 6" phone sends `2400x1080` | Forces the invitation; server still clamps to `min(tier, sink)`. |
 
@@ -303,6 +323,38 @@ Concretely, an empty sink today means any of:
 | genuinely does not know its panel size | `""` | "I can't measure this" |
 | predates this spec entirely | `""` (absent) | "I've never heard of this question" |
 
+**An absent value is an abstention, and the server decides.** This is the
+governing rule, and it settles most of what follows. A field the client never
+sent carries no opinion, so reading it as a refusal lets *silence* — the least
+informative thing a client can do — veto a decision, and hands that decision to
+the least informed party in the exchange. The server therefore does what is best
+for perceived picture quality within its own capacity, using what the client
+**did** state.
+
+That is not a licence to guess. Nothing is fabricated: with no sink the server
+skips the panel clamp and settles the tier from rules that are each independently
+fail-closed — the §2.7 decode ceilings (which the client must have *affirmatively*
+declared), the 720-line source floor, the admin ceiling, GPU admission, and the
+network. A client that declared nothing therefore still receives nothing, which
+is why this is safe to have on by default: **legacy clients are protected by the
+decode gate, not by the sink check.** What is lost without a sink is only the
+panel clamp, so the worst case is bandwidth spent upscaling for a smaller panel —
+never an unplayable stream.
+
+**Network overrides everything above it.** Measured throughput is not a
+preference to be weighed against the others; a stream that cannot cross the link
+is not a better picture, whatever the client asked for or the server decided.
+This applies equally to `Always`, to an admin `Force`, and to any inference made
+here.
+
+Rows 1, 3 and 4 of the table therefore all resolve identically — *decide for me* —
+and the server does not need to tell them apart, because it would act the same
+way if it could. Row 2 is the one that costs something: there the client wanted a
+sensible decision and pre-empted it, discarding a measurement the server needed
+using a heuristic the server owns (item 4). That is the only case where the
+overload makes the server reach a **worse** answer than it would with full
+information.
+
 **Why no existing field can disambiguate them.** The obvious idea is to read the
 capability token — a client implementing the sink field advertises
 `DISPLAY_SINK_V1` regardless of the user's setting, so its presence alongside an
@@ -320,14 +372,26 @@ empty sink looks like it should mean "deliberate opt-out". It fails twice:
 1. **§2.1 becomes unconditional and normative.** Always report the true physical
    panel when it is known; empty means *unknown*, never *unwanted*. This is now
    written into §2.1 and is the rule §2.9's table conflicts with.
-2. **Intent gets its own value slot**, because a measurement cannot carry a
-   refusal. §2.4's `LOCAL_ENHANCEMENT` is the closest existing machinery — always
-   sent, already a preference rather than a measurement — but its `pref` has no
-   value meaning "nobody" (see the note in §2.4). **Whether intent rides there or
-   in a field of its own is the client teams' decision. This document does not
-   pick, and no server-side field is proposed here** — an invented field no client
-   sends is worse than an acknowledged gap, which is what the removal of
-   `SUPPORTS_4K` cost us.
+2. **If a client genuinely needs to refuse, that needs a slot — but check that
+   it does.** Because silence is now an abstention, the "Never" toggle as
+   described in §2.9 no longer does anything: an empty sink invites the server
+   to decide rather than telling it to stop. **That is a live defect in the
+   client as shipped**, and it is worth settling whether the setting should
+   exist at all before designing a wire field for it.
+   - The server never needs to be told "no" in order to behave well. It needs
+     to be told the *truth* — items 1 and 4 — after which it declines on the
+     merits wherever declining is right. Refusal is only necessary for reasons
+     the server genuinely cannot see.
+   - Those reasons are real but narrow: metered or capped data, thermal
+     headroom, battery. Note that the bandwidth axis is **already specced** —
+     §2.5's `QUALITY_HINT=savings` is an existing preference field, sent
+     unconditionally, and it is not queried today. Wiring up a field that
+     already exists is a smaller and better-founded change than inventing one.
+   - What `savings` cannot say is "do not re-encode my stream at all". Whether
+     that is a requirement, and where it would ride, **is the client teams'
+     decision. This document does not pick, and proposes no field** — an
+     invented field no client sends is worse than an acknowledged gap, which is
+     what the removal of `SUPPORTS_4K` cost us.
 3. **Each setting must state its obligations across every relevant field**, not
    just the sink. "Auto" is currently defined only by what it does to one value;
    a usable specification says what a client asserting Auto guarantees about the
@@ -344,26 +408,38 @@ empty sink looks like it should mean "deliberate opt-out". It fails twice:
    become unreachable**. It also means every client team reimplements the
    12-inch heuristic independently, and they will drift.
 
-Until items 2–4 are settled the behaviour is as described above: empty sink ⇒ no
-upscale, deinterlace still offered (see below). Use the `sinkKind=none` field in
-the `GPU_ENHANCE` log line to triage — it tells you the sink was empty, but not
-which of the four cases produced it.
+**Implemented behaviour, as of this revision.** An empty sink is treated as an
+abstention: the panel clamp is skipped and the tier is settled by the decode
+ceilings, source floor, admin ceiling, GPU admission and network. The log line
+reports `sinkKind=inferred` for this case, distinguishing it from a real panel
+report (`builtin`/`external`). An installation that wants the older
+read-silence-as-no behaviour sets
+`playback/gpu_enhance/unknown_sink=refuse`, which restores
+`verdict=UNKNOWN_SINK` and logs `sinkKind=none`.
 
-#### Why deinterlace survives an empty sink
+Note this does **not** resolve items 2–4. The four meanings of an empty sink are
+still indistinguishable; the server has simply stopped pretending that treating
+them all as refusals was a decision rather than an accident.
 
-An empty sink yields `verdict=UNKNOWN_SINK` and no upscale, but the **deinterlace
-floor still applies**: an interlaced source on an empty-sink client is still
-offered `tier=deint`. The user-facing setting is described as controlling
-*upscaling*, and deinterlacing is not upscaling — it removes comb artifacts that
-are a defect at any resolution, costs a fraction of an upscale, and never changes
-the frame size. Suppressing it on an empty sink would silently strip
-deinterlacing from **every legacy client**, a regression inflicted on clients
-that never asked for anything.
+#### Why deinterlace is offered regardless of the sink
 
-Whether "Never" should also suppress deinterlacing is a policy question for the
-client teams. If the answer is "no change", nothing needs designing. If it is
-"Never means nothing at all", that cannot be expressed until item 2 above is
-resolved.
+The **deinterlace floor applies whatever the sink says**, including when it says
+nothing: an interlaced source on a client with no declared panel is still offered
+`tier=deint`. Deinterlacing is not upscaling — it removes comb artifacts that are
+a defect at any resolution, costs a fraction of an upscale, and never changes the
+frame size, so none of the sink-based reasoning above bears on it. It is also the
+one tier that needs no decode ceiling, because it emits exactly the geometry the
+client was already decoding.
+
+Suppressing it on an empty sink would silently strip deinterlacing from **every
+legacy client**, a regression inflicted on clients that never asked for anything.
+
+Whether a client should be able to refuse even this is a policy question for the
+client teams, and a weak one: deinterlacing has been a server-side encode
+decision since long before this feature existed (`shouldAutoAddYadif()`), no
+client has ever had a say in it, and the user-facing setting is described as
+controlling *upscaling*. If the answer turns out to be "a client must be able to
+refuse everything", that cannot be expressed until item 2 is resolved.
 
 ---
 
@@ -497,7 +573,9 @@ Worth knowing, because they explain why enhancement sometimes doesn't happen:
    AI upscale path. Interlaced SD can still receive `tier=deint`, since
    deinterlacing is not upscaling.
 3. **Sink must be meaningfully bigger than source.** Roughly 1.5x source height.
-   A 1080i source on a 1080p panel gets `tier=deint`, not an upscale.
+   A 1080i source on a 1080p panel gets `tier=deint`, not an upscale. Only
+   applied when a sink was actually reported; with none, rule 4's target-must-
+   exceed-source check does the equivalent job.
 4. **The target never exceeds the panel.** See §2.8 — the server picks the
    largest tier that fits the reported sink in both dimensions.
 5. **Admins may restrict upscaling by form factor.**
@@ -509,11 +587,18 @@ Worth knowing, because they explain why enhancement sometimes doesn't happen:
    sink is too large to be a built-in handheld panel is treated as driving an
    external display and is exempt — that is how a docked phone reaches 4K
    despite `DEVICE_FORM_FACTOR=PHONE`. See §2.9.
-6. **A sink that arrives at all is a request to upscale.** The client's
-   Auto / Always / Never setting is carried entirely by
-   `DISPLAY_SINK_RESOLUTION` (§2.9), so the server does not second-guess it: an
-   empty sink is a full opt-out, and a present sink is both the invitation and
-   the ceiling. Auto and Always are indistinguishable on the wire by design.
+6. **A sink that arrives is a ceiling; a sink that doesn't is an abstention.**
+   A present sink is both the invitation and the upper bound, and Auto and
+   Always are indistinguishable on the wire by design. An **absent** sink is not
+   a refusal: it says "no opinion", and the server decides from what the client
+   did declare — the decode ceilings above all — subject to every other rule
+   here. Nothing is fabricated, so a client that declared nothing gets nothing.
+   Set `playback/gpu_enhance/unknown_sink=refuse` to read silence as "no"
+   instead. See §2.9.1.
+6a. **Network overrides all of it.** Measured throughput is not weighed against
+   the other inputs, it caps them. A stream that cannot cross the link is not a
+   better picture, so bandwidth clamps apply to `Always`, to an admin `Force`,
+   and to any decision made in the absence of a sink.
 7. **The GPU is shared.** The server budgets against *currently free* VRAM, so
    another application on the same GPU simply results in fewer or lower tiers. No
    enhancement resources are held while nothing is playing.
@@ -534,7 +619,7 @@ Every decision is logged with a verdict. These are the ones a client controls:
 | Verdict | What the client did |
 |---|---|
 | `offered` | enhancement was granted |
-| `client did not report a sink resolution` | `DISPLAY_SINK_RESOLUTION` empty, unparseable, or outside 640×480–7680×4320 |
+| `client reported no sink and policy is to refuse rather than infer` | `DISPLAY_SINK_RESOLUTION` empty, unparseable, or outside 640×480–7680×4320 — **and** this server sets `playback/gpu_enhance/unknown_sink=refuse`. On a default server this verdict never appears: an absent sink is an abstention and the decision falls through to the decode gate instead (`sinkKind=inferred`) |
 | `client cannot decode the enhanced output (no surface or codec proved it)` | neither §2.6 surface limits nor §2.7 codec ceilings permitted the target — declared nothing, target exceeds the declared ceiling, or every eligible codec was `decoder=sw` |
 | `client's own upscaler is active and preferred` | `LOCAL_ENHANCEMENT` reported `status=active` |
 | `client explicitly prefers local enhancement` | `LOCAL_ENHANCEMENT` reported `pref=local` |
@@ -547,6 +632,11 @@ Every decision is logged with a verdict. These are the ones a client controls:
 The first four are the ones worth checking before reporting a bug: three of them
 mean the client declined, and one means it never declared enough for the server to
 say yes.
+
+Note that on a default server, **omitting `DISPLAY_SINK_RESOLUTION` is not a way
+to avoid enhancement** — it only removes the panel ceiling. The verdict a
+sink-less client actually gets is decided by its decode ceilings, so a client
+seeing an unexpected `offered` should look at §2.7, not §2.1.
 
 ---
 

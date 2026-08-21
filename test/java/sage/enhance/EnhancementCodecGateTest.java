@@ -337,16 +337,25 @@ public class EnhancementCodecGateTest
   // DISPLAY_SINK_RESOLUTION, and the value is always the true physical panel --
   // never a fabricated 4K:
   //
-  //   Never  -> ""            (full opt-out)
+  //   Never  -> ""            (see below -- this does NOT reach the server as a
+  //                            refusal, because an empty value is also what
+  //                            "unknown" and "legacy client" look like)
   //   Auto   -> physical WxH, but only when the client deems itself eligible
   //             (TV-class, external/HDMI, or an internal panel over 12")
   //   Always -> physical WxH, unconditionally
   //
-  // Two consequences the server must respect. First, "Auto" and "Always" are
+  // Three consequences the server must respect. First, "Auto" and "Always" are
   // INDISTINGUISHABLE on the wire, so the server cannot apply different policy
   // to them -- a sink that arrives at all is a request to upscale up to that
   // size. Second, the per-codec rows are sent unconditionally and are unaffected
   // by the setting, so a decode refusal is always a hardware fact.
+  //
+  // Third, and the reason the empty-sink test below asserts the OPPOSITE of what
+  // it once did: clearing a measurement is not a way to express a refusal. An
+  // empty sink is an abstention -- "I have no opinion" -- and the server answers
+  // it from what the client did state. A client that wants to refuse needs to
+  // say so somewhere that means refusal; §2.9.1 of NGServerVideoEnhancement.md
+  // tracks that gap.
 
   private EnhancementAdvisor.Advice adviseSink(String formFactor, int sinkW, int sinkH,
       PlaybackSurface s)
@@ -355,13 +364,25 @@ public class EnhancementCodecGateTest
         formFactor, "auto", "none", true);
   }
 
-  /** "Never" arrives as an empty sink, and must refuse rather than guess. */
+  /**
+   * An empty sink is an abstention, not an opt-out. A client that sends no
+   * panel size has expressed no opinion, and the server answers from what the
+   * client did declare -- here, a proven 4K decoder on a TV.
+   *
+   * <p>This test previously asserted the opposite, on the strength of the
+   * Android client expressing its "Never" setting by clearing the sink. That
+   * conflated two things: what a client SENDS and what it WANTS. Clearing a
+   * measurement is not a way to say no, because it is indistinguishable from
+   * three other conditions -- and reading silence as refusal means the least
+   * informed party in the exchange decides.
+   */
   @Test
-  public void testEmptySinkIsAFullOptOut()
+  public void testEmptySinkIsAnAbstentionNotAnOptOut()
   {
     EnhancementAdvisor.Advice a = adviseSink("TV", 0, 0, surface(3840, 2160, 60));
-    assertEquals(a.getTier(), EnhancementTier.NONE, "no sink means no upscale");
-    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.UNKNOWN_SINK, "verdict");
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P,
+        "no sink means 'server, you decide'");
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.OFFERED, "verdict");
   }
 
   /**

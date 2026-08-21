@@ -59,6 +59,7 @@ public class EnhancementAdvisorTest
     Sage.remove(EnhancementAdvisor.PROP_MAX_HEIGHT);
     Sage.remove(EnhancementAdvisor.PROP_MIN_GAIN_TENTHS);
     Sage.remove(EnhancementAdvisor.PROP_OVERRIDE_LOCAL);
+    Sage.remove(EnhancementAdvisor.PROP_UNKNOWN_SINK);
   }
 
   private EnhancementAdvisor.Advice advise(int sw, int sh, boolean inter, int fps,
@@ -176,14 +177,49 @@ public class EnhancementAdvisorTest
         "Nothing to deinterlace and nothing to gain in size");
   }
 
+  /**
+   * An absent sink is an abstention, not a refusal. The client stated no
+   * opinion about its display but DID state a 4K decode ceiling, so the server
+   * decides from the evidence it was given rather than handing the decision to
+   * silence.
+   */
   @Test
-  public void testUnknownSinkDeclinesToUpscale()
+  public void testUnknownSinkIsAnAbstentionNotARefusal()
   {
     EnhancementAdvisor.Advice a =
         advise(1920, 1080, false, 30, 0, 0, surface(3840, 2160, 60), "auto", "none");
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P,
+        "No sink means 'you decide', and the client proved it can decode 4K");
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.OFFERED, "verdict");
+  }
+
+  /**
+   * The admin escape hatch: an installation that wants silence read as "no"
+   * gets the older behaviour back with one property.
+   */
+  @Test
+  public void testUnknownSinkCanBeConfiguredToRefuse()
+  {
+    Sage.put(EnhancementAdvisor.PROP_UNKNOWN_SINK, "refuse");
+    EnhancementAdvisor.Advice a =
+        advise(1920, 1080, false, 30, 0, 0, surface(3840, 2160, 60), "auto", "none");
     assertEquals(a.getTier(), EnhancementTier.NONE);
-    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.UNKNOWN_SINK,
-        "A client that never reported its sink must not get a 4K stream");
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.UNKNOWN_SINK, "verdict");
+  }
+
+  /**
+   * The safety property that makes inference safe to default on: inferring
+   * from declared decode ceilings gives a client that declared NOTHING exactly
+   * nothing. Every legacy client lands where it always did, via the decode
+   * gate rather than the sink check.
+   */
+  @Test
+  public void testUnknownSinkWithNoDeclaredCeilingStillGetsNoUpscale()
+  {
+    EnhancementAdvisor.Advice a =
+        advise(1920, 1080, false, 30, 0, 0, undeclaredSurface(), "auto", "none");
+    assertEquals(a.getTier(), EnhancementTier.NONE,
+        "Inference reads what the client declared; a legacy client declared nothing");
   }
 
   @Test

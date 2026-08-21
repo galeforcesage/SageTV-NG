@@ -70,6 +70,38 @@ public final class EnhancementAdvisor
    * television.
    */
   public static final String PROP_BUILTIN_PANEL_MAX = "playback/gpu_enhance/builtin_panel_max";
+  /**
+   * What an absent {@code DISPLAY_SINK_RESOLUTION} means: {@code "infer"} (the
+   * default) or {@code "refuse"}.
+   *
+   * <p>A value the client never sent is an ABSTENTION, not a refusal. It says
+   * "I have no opinion -- serve me as well as you can", and answering it with a
+   * flat no hands the decision to the least informed party in the exchange. So
+   * the default is to decide from what the client did affirmatively state.
+   *
+   * <p>This is much safer than it sounds, because it does not fabricate a sink.
+   * The sink clamp is simply skipped, and the tier is then settled by rules that
+   * are all independently fail-closed:
+   *
+   * <ul>
+   * <li>the decode gate in {@code finish()}, which requires the client to have
+   *     PROVED it can decode the output. A client that declared no ceiling gets
+   *     nothing, so every legacy client lands exactly where it does today.</li>
+   * <li>the 720-line source floor, and the rule that the target must exceed the
+   *     source.</li>
+   * <li>the admin ceiling {@link #PROP_MAX_HEIGHT}, and {@link #PROP_FORM_FACTORS}
+   *     if it has been narrowed.</li>
+   * <li>network headroom and GPU admission downstream, which override any of
+   *     this unconditionally -- a stream that cannot cross the link is not a
+   *     better picture.</li>
+   * </ul>
+   *
+   * <p>What is lost without a sink is only the panel clamp, so the failure mode
+   * is sending 2160p to a 4K-capable decoder attached to a smaller panel: wasted
+   * bandwidth, not a broken stream. Set {@code refuse} to restore the older
+   * behaviour of treating silence as no.
+   */
+  public static final String PROP_UNKNOWN_SINK = "playback/gpu_enhance/unknown_sink";
 
   private static final int DEFAULT_BUILTIN_PANEL_MAX_W = 3200;
   private static final int DEFAULT_BUILTIN_PANEL_MAX_H = 1920;
@@ -83,7 +115,7 @@ public final class EnhancementAdvisor
     DISABLED("feature disabled"),
     NO_GPU_SUPPORT("ffmpeg/GPU cannot run the pipeline"),
     UNKNOWN_SOURCE("source geometry unknown"),
-    UNKNOWN_SINK("client did not report a sink resolution"),
+    UNKNOWN_SINK("client reported no sink and policy is to refuse rather than infer"),
     SOURCE_BELOW_FLOOR("source below the 720-line floor and not interlaced"),
     NO_VISIBLE_GAIN("sink is not meaningfully larger than the source"),
     FORM_FACTOR_EXCLUDED("device form factor is not in the upscale-eligible set"),
@@ -200,11 +232,14 @@ public final class EnhancementAdvisor
     EnhancementTier deintFloor = sourceInterlaced
         ? EnhancementTier.DEINTERLACE_ONLY : EnhancementTier.NONE;
 
-    // No sink means no upscale, and that is also how a client says "never":
-    // the Android override reports an empty DISPLAY_SINK_RESOLUTION rather than
-    // adding a separate opt-out field, so silence here is a deliberate answer
-    // as well as the legacy default. Either way there is nothing to scale to.
-    if (sinkHeight <= 0 || sinkWidth <= 0)
+    // An absent sink is an abstention, not a refusal: the client has expressed
+    // no opinion, so the server decides from what it did state. Refusing here
+    // would let silence -- the least informative thing a client can do -- veto a
+    // decision the server is better placed to make. See PROP_UNKNOWN_SINK: the
+    // sink clamp is skipped, nothing is fabricated, and the decode gate still
+    // requires the client to have proved it can play the result.
+    boolean sinkKnown = sinkWidth > 0 && sinkHeight > 0;
+    if (!sinkKnown && !inferOnUnknownSink())
       return finish(deintFloor, Verdict.UNKNOWN_SINK, surface, constraints, deintFloor,
           sourceFps);
 
@@ -221,16 +256,23 @@ public final class EnhancementAdvisor
 
     // Require a real size gain before re-encoding anything. A 1080i source on a
     // 1080p panel gets deinterlaced, not "upscaled" to the size it already is.
-    int minGainTenths = Sage.getInt(PROP_MIN_GAIN_TENTHS, DEFAULT_MIN_GAIN_TENTHS);
-    if (minGainTenths < 10) minGainTenths = 10;
-    if ((long) sinkHeight * 10L < (long) sourceHeight * (long) minGainTenths)
-      return finish(deintFloor, Verdict.NO_VISIBLE_GAIN, surface, constraints, deintFloor,
-          sourceFps);
+    // Only meaningful when a panel was actually reported; without one the
+    // equivalent test is the target-vs-source check below.
+    if (sinkKnown)
+    {
+      int minGainTenths = Sage.getInt(PROP_MIN_GAIN_TENTHS, DEFAULT_MIN_GAIN_TENTHS);
+      if (minGainTenths < 10) minGainTenths = 10;
+      if ((long) sinkHeight * 10L < (long) sourceHeight * (long) minGainTenths)
+        return finish(deintFloor, Verdict.NO_VISIBLE_GAIN, surface, constraints, deintFloor,
+            sourceFps);
+    }
 
     // Never build a picture larger than the panel can show -- in EITHER
-    // dimension -- then apply the admin ceiling on top.
-    EnhancementTier tier = EnhancementTier.clampToSink(
-        EnhancementTier.ENHANCE_2160P, sinkWidth, sinkHeight);
+    // dimension -- then apply the admin ceiling on top. With no panel reported
+    // there is nothing to clamp against, so the admin ceiling and the decode
+    // gate carry the whole load.
+    EnhancementTier tier = EnhancementTier.ENHANCE_2160P;
+    if (sinkKnown) tier = EnhancementTier.clampToSink(tier, sinkWidth, sinkHeight);
     int adminMax = Sage.getInt(PROP_MAX_HEIGHT, 2160);
     if (adminMax > 0) tier = EnhancementTier.clampToHeight(tier, adminMax);
 
@@ -315,6 +357,16 @@ public final class EnhancementAdvisor
    * could have shipped with is therefore taken as an external display and
    * exempted from the list.
    */
+  /**
+   * Whether an absent sink is treated as an abstention (decide from what the
+   * client did state) or as a refusal. See {@link #PROP_UNKNOWN_SINK}.
+   */
+  static boolean inferOnUnknownSink()
+  {
+    String mode = Sage.get(PROP_UNKNOWN_SINK, "infer");
+    return mode == null || !"refuse".equalsIgnoreCase(mode.trim());
+  }
+
   static boolean isFormFactorEligible(String formFactor, int sinkWidth, int sinkHeight)
   {
     String allowed = Sage.get(PROP_FORM_FACTORS, "");
