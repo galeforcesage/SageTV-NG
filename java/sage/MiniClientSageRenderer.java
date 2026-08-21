@@ -4661,7 +4661,7 @@ public class MiniClientSageRenderer extends SageRenderer
         if (isNgCapableSession())
         {
           // Second burst: NG-only queries. These are queued, flushed, and read
-          // in one round â€” exactly like the initial burst but separated so
+          // in one round -- exactly like the initial burst but separated so
           // Legacy clients never see them on the wire.
           sendGetPropertyAsync("CLIENT_PLATFORM");
           sendGetPropertyAsync("DEVICE_FORM_FACTOR");
@@ -4802,6 +4802,22 @@ public class MiniClientSageRenderer extends SageRenderer
                 + " parsedIds=" + surfaceIds
                 + " parsedSet=" + playbackSurfaces);
           }
+        }
+        else if (Sage.DBG)
+        {
+          // Say so out loud. Otherwise the only evidence that the whole NG
+          // capability round was skipped is the ABSENCE of its log lines, and
+          // an absence reads identically to "the client answered everything
+          // with null" -- two very different faults. An Android client that
+          // intermittently fails to identify itself as NG was diagnosable only
+          // by recognising a wall of nulls, which is not a diagnosis anyone
+          // should have to make twice.
+          System.out.println("MiniClient NG detection FAILED: client reported"
+              + " SAGETV_NG_VERSION=\"" + getNgVersion() + "\""
+              + " capabilities=" + ngCapabilities
+              + " -- treating as a legacy client and SKIPPING the entire NG"
+              + " capability round (no sink, no constraints, no surfaces, and"
+              + " therefore no video enhancement for this session)");
         }
         // --- end NG-only capability round ---
 
@@ -7964,6 +7980,33 @@ public class MiniClientSageRenderer extends SageRenderer
   public String getNgClientId()
   {
     return ngClientId == null ? "" : ngClientId;
+  }
+
+  /**
+   * The best available identifier for this session <em>for logging</em>.
+   *
+   * <p>Deliberately separate from {@link #getNgClientId()}, which is protocol
+   * state: callers that make decisions must keep seeing an empty string when
+   * the client sent no id, because "the client did not identify itself" is a
+   * fact some of them act on. Only diagnostics use this.
+   *
+   * <p>The fallback exists because the Android client sends an empty
+   * {@code SAGETV_NG_CLIENT_ID} even on sessions where the rest of the NG
+   * handshake completed, which made every decision it produced log as
+   * {@code client=-} and left server-side decisions impossible to correlate
+   * back to a device. The server always knows the connection name, so there is
+   * no reason for diagnosis to depend on the client getting its own identity
+   * right.
+   *
+   * @return the NG client id, else the connection name, else {@code "-"}.
+   */
+  public String getClientIdForLogging()
+  {
+    String id = getNgClientId();
+    if (id != null && id.length() > 0) return id;
+    String conn = (uiMgr != null) ? uiMgr.getLocalUIClientName() : null;
+    if (conn != null && conn.length() > 0) return "conn:" + conn;
+    return "-";
   }
 
   /**

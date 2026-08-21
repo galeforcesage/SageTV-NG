@@ -2023,7 +2023,7 @@ public class MiniPlayer implements DVDMediaPlayer
                     : ("legacy:" + (profileDecision != null && profileDecision.decision != null
                         ? profileDecision.decision.toString() : "unknown")));
             enhanceTier = sage.enhance.EnhancementDryRun.evaluateAndLog(
-                (mcsr != null ? mcsr.getNgClientId() : null),
+                (mcsr != null ? mcsr.getClientIdForLogging() : null),
                 enhanceMediaDesc,
                 mediaW, mediaH, srcInterlaced, srcFps,
                 (mcsr != null ? mcsr.getSinkWidth() : 0),
