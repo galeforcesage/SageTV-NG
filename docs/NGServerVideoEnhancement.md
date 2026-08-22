@@ -554,31 +554,44 @@ diagnosis route.
 
 ---
 
-## 3.2 What the client echoes back — `XCODE_SETUP ;enhance=<tier>`
+## 3.2 What the client echoes back — `XCODE_SETUP <mode>:enhance;tier=<tier>`
 
 The token in §3 is an *advertisement*; it does nothing on its own. The transcode
 that actually runs is set up on the separate transcode socket, and the tier only
 takes effect if the client **echoes it back** there.
 
-When a client acts on a `pull-xcode:<mode>:enhance;tier=<t>` delivery token, it
-issues its usual `XCODE_SETUP <mode>;k=v;k=v…` on the transcode connection. To
-request the enhancement it appends one more pair, in the exact `;k=v` shape it
-already uses for `acodec`, `ac` and `ss`:
+When a client acts on a `pull-xcode:<mode>:enhance;tier=<t>` delivery token, the
+pull bridge maps it 1:1 to `/msproxy?mode=<mode>:enhance;tier=<t>` and the mode
+part is forwarded **verbatim** to the transcode socket. So the server receives
+its usual `XCODE_SETUP <mode>;k=v;k=v…` with the enhancement carried exactly as
+it appeared on the delivery token — the `:enhance` marker on the mode plus the
+`;tier=<t>` pair, in the same `;k=v` shape already used for `acodec`, `ac`, `ss`:
 
 ```
-XCODE_SETUP <mode>;enhance=<tier>
+XCODE_SETUP <mode>:enhance;tier=<tier>
 ```
 
-- `<tier>` is the value taken verbatim from the delivery token: `deint`, `1080p`,
-  `1440p`, or `2160p`. (`2160p` is the common case.)
-- The pair is **optional and additive**. A client that never sends it gets exactly
-  today's behavior — the server enhances nothing it was not asked to enhance.
-- Sending it is only a **request**. The server re-checks every gate at transcode
+- The `:enhance` suffix on the mode is the marker; the server strips it to recover
+  the real copy-family `<mode>` (e.g. `mpeg2tsremux`) and treats the base mode
+  exactly as it would without enhancement. A server that receives `<mode>:enhance`
+  but does **not** strip the marker will not recognize the mode and will fall
+  through to its default SD transcode — that is the failure mode this contract
+  prevents.
+- `<tier>` (on the `;tier=` pair) is the value taken verbatim from the delivery
+  token: `deint`, `1080p`, `1440p`, or `2160p`. (`2160p` is the common case.)
+- The marker + pair are **optional and additive**. A client that never sends them
+  gets exactly today's behavior — the server enhances nothing it was not asked to.
+- Sending them is only a **request**. The server re-checks every gate at transcode
   start — the dry-run interlock, that the mode is a copy-family *playback* mode
   (never an in-progress recording), and `GpuGovernor` admission (recording veto +
   live GPU capacity) — and silently runs the unenhanced command if any gate says
   no. A client therefore never has to reason about GPU load; it just relays the
   tier the server already offered.
+
+This is deliberately the mirror of the audio-EQ precedent (`;afeq=` / `;afeqcodec=`):
+the server resolves a decision, advertises it on the delivery token, and the client
+reflects the relevant pieces back on `XCODE_SETUP` so the transcode socket — which
+has no other view of the per-tune decision — can reconstruct it.
 
 This is deliberately the mirror of the audio-EQ precedent (`;afeq=` / `;afeqcodec=`):
 the server resolves a decision, advertises it on the delivery token, and the client

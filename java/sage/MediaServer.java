@@ -128,6 +128,66 @@ public class MediaServer implements Runnable
     return out;
   }
 
+  /**
+   * Immutable result of {@link #parseXcodeEnhanceRequest(String)}: the base
+   * transcode mode with any enhancement marker removed, whether enhancement was
+   * requested, and the requested tier token (or null).
+   */
+  static final class XcodeEnhanceRequest
+  {
+    final String baseMode;       // xcode mode with any trailing ":enhance" marker stripped
+    final boolean enhanceRequested; // the mode carried the ":enhance" marker
+    final String tierToken;      // value of the ";tier=" param, or null
+    XcodeEnhanceRequest(String baseMode, boolean enhanceRequested, String tierToken)
+    {
+      this.baseMode = baseMode;
+      this.enhanceRequested = enhanceRequested;
+      this.tierToken = tierToken;
+    }
+  }
+
+  /**
+   * Extract the GPU-enhancement request from an {@code XCODE_SETUP} mode argument.
+   *
+   * <p>{@link MiniPlayer#buildEffDeliveryToken} publishes
+   * {@code pull-xcode:<mode>:enhance;tier=<wire>}; the pull bridge strips the
+   * {@code pull-xcode:} prefix and forwards the remainder verbatim, so the server
+   * receives {@code <mode>:enhance;tier=<wire>}. This recovers the base
+   * {@code <mode>} (marker stripped, so it is recognized as a copy-family mode
+   * rather than falling through to the default SD transcode), the fact that
+   * enhancement was requested, and the tier token. Non-enhancement {@code ;k=v}
+   * pairs (acodec, ac, ss, afeq…) are ignored here; the caller parses those
+   * separately. A plain mode with no marker returns {@code enhanceRequested=false}
+   * and the mode unchanged, so this is byte-for-byte compatible with today.
+   */
+  static XcodeEnhanceRequest parseXcodeEnhanceRequest(String xcodeArg)
+  {
+    if (xcodeArg == null) return new XcodeEnhanceRequest(null, false, null);
+    String mode = xcodeArg;
+    String tier = null;
+    int semi = xcodeArg.indexOf(';');
+    if (semi >= 0)
+    {
+      mode = xcodeArg.substring(0, semi).trim();
+      java.util.StringTokenizer pt = new java.util.StringTokenizer(xcodeArg.substring(semi + 1), ";");
+      while (pt.hasMoreTokens())
+      {
+        String p = pt.nextToken();
+        int eq = p.indexOf('=');
+        if (eq <= 0) continue;
+        String k = p.substring(0, eq).trim().toLowerCase();
+        if (k.equals("tier")) tier = p.substring(eq + 1).trim();
+      }
+    }
+    boolean req = false;
+    if (mode.endsWith(":enhance"))
+    {
+      req = true;
+      mode = mode.substring(0, mode.length() - ":enhance".length()).trim();
+    }
+    return new XcodeEnhanceRequest(mode, req, tier);
+  }
+
   public MediaServer()
   {
     alive = true;
@@ -1347,11 +1407,17 @@ public class MediaServer implements Runnable
             long surfSs = 0; // pull-xcode seek start position (ms); 0 = from start
             String surfEqGraph = null; // server audio-EQ v1 (";afeq="): url-encoded -af filtergraph
             String surfEqCodec = null; // server audio-EQ v1 (";afeqcodec="): echo of the audio-selection logic's target codec
-            String surfEnhance = null; // GPU enhancement (";enhance="): granted tier token from MiniPlayer's CAP_EFFECTIVE_DELIVERY
+            // GPU enhancement (":enhance" mode marker + ";tier="): recover the base
+            // mode and the requested tier. See parseXcodeEnhanceRequest — the marker
+            // MUST be stripped here or "mpeg2tsremux:enhance" is unrecognized and the
+            // transcoder falls through to the default SD profile.
+            XcodeEnhanceRequest enhReq = parseXcodeEnhanceRequest(xcodeArg);
+            xcodeMode = enhReq.baseMode;
+            boolean surfEnhanceReq = enhReq.enhanceRequested;
+            String surfEnhance = enhReq.tierToken;
             int semi = xcodeArg.indexOf(';');
             if (semi >= 0)
             {
-              xcodeMode = xcodeArg.substring(0, semi).trim();
               java.util.StringTokenizer pt = new java.util.StringTokenizer(xcodeArg.substring(semi + 1), ";");
               while (pt.hasMoreTokens())
               {
@@ -1371,7 +1437,6 @@ public class MediaServer implements Runnable
                 {
                   try { surfEqCodec = java.net.URLDecoder.decode(v, "UTF-8"); } catch (Exception e) { surfEqCodec = null; }
                 }
-                else if (k.equals("enhance")) surfEnhance = v;
               }
             }
             if (Sage.DBG) System.out.println("MediaServer is serving up in transcode mode: " + xcodeMode
@@ -1433,12 +1498,12 @@ public class MediaServer implements Runnable
             // re-opens /msproxy with ss=<ms>) so the transcode starts there via -ss
             // instead of restarting from 0.
             if (surfSs > 0) fftc.setTranscodeStartSeekTime(surfSs);
-            // GPU enhancement request (Protocol 2.1 ";enhance=<tier>"): the tier
-            // was decided by MiniPlayer and echoed by the client from
-            // CAP_EFFECTIVE_DELIVERY. It is only a REQUEST -- FFMPEGTranscoder
+            // GPU enhancement request (Protocol 2.1 "<mode>:enhance;tier=<tier>"):
+            // the marker + tier were decided by MiniPlayer and echoed by the client
+            // from CAP_EFFECTIVE_DELIVERY. It is only a REQUEST -- FFMPEGTranscoder
             // re-checks the dry-run interlock, copy-family/activeFile safety, and
             // GpuGovernor admission (recording veto + capacity) before honoring it.
-            if (surfEnhance != null && surfEnhance.length() > 0)
+            if (surfEnhanceReq && surfEnhance != null && surfEnhance.length() > 0)
               fftc.setEnhancementRequest(sage.enhance.EnhancementTier.fromToken(surfEnhance));
             fftc.setTranscodeFormat(xcodeMode, currMF != null ? currMF.getFileFormat() : null);
             commBufWrite.clear();
