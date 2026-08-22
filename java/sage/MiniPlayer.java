@@ -1027,6 +1027,8 @@ public class MiniPlayer implements DVDMediaPlayer
     else
       downer = null;
     CaptureDevice capDev = currMF.guessCaptureDeviceFromEncoding();
+    // Reset per-tune server-enhancement state; the decision below re-derives it.
+    this.currentTuneEnhanceTier = sage.enhance.EnhancementTier.NONE;
     if (capDev != null && mcsr != null)
     {
       // Enable the special mode for when we are using Qian's HDHRPrime support along w/ a Bruno client.
@@ -2049,6 +2051,12 @@ public class MiniPlayer implements DVDMediaPlayer
           enhanceTier = sage.enhance.EnhancementTier.NONE;
           if (Sage.DBG) System.out.println("GPU_ENHANCE evaluation failed (ignored): " + t);
         }
+        // Carry the decided tier to the STREAMINFO / ng_fmt hint sites further
+        // below, which live outside this block's lexical scope. Reset per tune
+        // at the top of load() so a prior enhanced tune can't leak into a plain
+        // one on a reused MiniPlayer.
+        this.currentTuneEnhanceTier =
+            (enhanceTier != null) ? enhanceTier : sage.enhance.EnhancementTier.NONE;
         // --- Playback Surface capability model (Protocol v2.1) — Phase 2 ---
         // If a surface won the ranking above, emit CAP_EFFECTIVE_SURFACE
         // exactly once per OPENURL. Same session-stickiness contract as
@@ -3416,6 +3424,10 @@ public class MiniPlayer implements DVDMediaPlayer
             int aEnd = formatString.indexOf(';', aStart);
             if (aEnd > aStart) aMime = toMimeType(formatString.substring(aStart, aEnd));
           }
+          // Enhancement re-encodes video to HEVC on the wire; advertise the
+          // real wire codec so the client sets up the right decoder.
+          if (currentTuneEnhanceTier != null && currentTuneEnhanceTier.isActive())
+            vMime = toMimeType(sage.media.format.MediaFormat.HEVC);
           if (cMime != null || vMime != null || aMime != null)
           {
             formatString += "|ng_fmt=" + (cMime != null ? cMime : "") + ","
@@ -3457,6 +3469,9 @@ public class MiniPlayer implements DVDMediaPlayer
            streamInfoDuration = streamInfoCf.getDuration();
           if (streamInfoCf != null)
           {
+           // Enhancement rewrites the wire video stream to HEVC (and rescales
+           // for upscaling tiers); describe those bytes, not the source.
+           streamInfoCf = describeEnhancedWireFormat(streamInfoCf, currentTuneEnhanceTier);
            int siAck = sendStreamInfo0(streamInfoCf, streamInfoWireContainer,
                streamInfoDuration, streamInfoLive);
            // If client requested WAIT_READY, the openURL below serves as
@@ -3561,6 +3576,10 @@ public class MiniPlayer implements DVDMediaPlayer
             if (ngVf != null) vMime = toMimeType(ngVf.getFormatName());
             sage.media.format.AudioFormat ngAf = ngCf.getAudioFormat();
             if (ngAf != null) aMime = toMimeType(ngAf.getFormatName());
+            // Enhancement re-encodes video to HEVC on the wire; advertise the
+            // real wire codec so the client sets up the right decoder.
+            if (currentTuneEnhanceTier != null && currentTuneEnhanceTier.isActive())
+              vMime = toMimeType(sage.media.format.MediaFormat.HEVC);
             if (cMime != null || vMime != null || aMime != null)
             {
               String sep = theURL.contains("?") ? "&" : "?";
@@ -3580,6 +3599,10 @@ public class MiniPlayer implements DVDMediaPlayer
           if (pullCf != null)
           {
             long pullDur = timeshifted ? 0 : pullCf.getDuration();
+            // Enhancement rewrites the wire video stream to HEVC (and rescales
+            // for upscaling tiers); describe those bytes, not the source, or the
+            // client pre-configures the wrong decoder and freezes after one frame.
+            pullCf = describeEnhancedWireFormat(pullCf, currentTuneEnhanceTier);
             sendStreamInfo0(pullCf, null, pullDur, timeshifted);
           }
         }
@@ -5648,6 +5671,71 @@ public class MiniPlayer implements DVDMediaPlayer
   }
 
   /**
+   * When server video enhancement is active for this tune, the bytes the client
+   * actually receives are the ENHANCED output, not the source: the video stream
+   * is re-encoded to HEVC (by {@code hevc_nvenc}, for every active tier
+   * including {@code DEINTERLACE_ONLY}), rescaled to the tier's target geometry
+   * for upscaling tiers, and deinterlaced. STREAMINFO / ng_fmt hints must
+   * describe those bytes — a client that pre-configures its decoder for the
+   * source codec/resolution and then receives HEVC 2160p paints one frame and
+   * then stalls (the "one frame then freeze" symptom).
+   *
+   * <p>Returns a deep copy of {@code src} with its video stream rewritten to the
+   * enhancement output. Audio and container are untouched: enhancement copies
+   * audio through ({@code -c:a copy}) and keeps the MPEG2-TS container. Returns
+   * {@code src} unchanged when the tier is inactive, {@code src}/{@code tier} is
+   * null, or anything goes wrong — enhancement must never break a tune.
+   *
+   * <p>The copy is made via serialize/parse so the shared, cached source
+   * {@code ContainerFormat} held by the media library is never mutated.
+   */
+  private static sage.media.format.ContainerFormat describeEnhancedWireFormat(
+      sage.media.format.ContainerFormat src, sage.enhance.EnhancementTier tier)
+  {
+    return describeEnhancedWireFormat0(src, tier);
+  }
+
+  /** Package-private worker for {@link #describeEnhancedWireFormat}; exposed for tests. */
+  static sage.media.format.ContainerFormat describeEnhancedWireFormat0(
+      sage.media.format.ContainerFormat src, sage.enhance.EnhancementTier tier)
+  {
+    if (src == null || tier == null || !tier.isActive()) return src;
+    try
+    {
+      sage.media.format.ContainerFormat copy =
+          sage.media.format.ContainerFormat.buildFormatFromString(src.getFullPropertyString());
+      if (copy == null) return src;
+      sage.media.format.BitstreamFormat[] streams = copy.getStreamFormats();
+      if (streams == null) return src;
+      boolean rewrote = false;
+      for (int i = 0; i < streams.length; i++)
+      {
+        if (streams[i] instanceof sage.media.format.VideoFormat)
+        {
+          sage.media.format.VideoFormat vf = (sage.media.format.VideoFormat) streams[i];
+          vf.setFormatName(sage.media.format.MediaFormat.HEVC);
+          // Deinterlacing (yadif_cuda) always produces progressive frames.
+          vf.setInterlaced(false);
+          // Only upscaling tiers change the frame geometry; DEINTERLACE_ONLY
+          // keeps the source dimensions.
+          if (tier.isUpscaling())
+          {
+            vf.setWidth(tier.getTargetWidth());
+            vf.setHeight(tier.getTargetHeight());
+          }
+          rewrote = true;
+        }
+      }
+      return rewrote ? copy : src;
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("MiniPlayer: could not build enhanced STREAMINFO format: " + t);
+      return src;
+    }
+  }
+
+  /**
    * Sends a MEDIACMD_STREAMINFO payload to an NG client BEFORE openURL.
    * <p>
    * The payload is a UTF-8 JSON object containing all known stream metadata so the
@@ -7042,6 +7130,12 @@ public class MiniPlayer implements DVDMediaPlayer
   private long lastParserTimestampBytePos;
 
   private int pushBufferSize;
+
+  // Server video enhancement tier decided for the CURRENT tune, carried from the
+  // post-rank decision block to the STREAMINFO / ng_fmt hint sites (which live
+  // in a different lexical scope). NONE = no enhancement, behavior unchanged.
+  private volatile sage.enhance.EnhancementTier currentTuneEnhanceTier =
+      sage.enhance.EnhancementTier.NONE;
 
   private boolean firstSeek;
 
