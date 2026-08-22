@@ -248,4 +248,100 @@ public class GpuEnhancePipelineTest
   {
     assertEquals(GpuEnhancePipeline.suggestBitrateKbps(EnhancementTier.NONE, 60, 0), 0L);
   }
+
+  // ---- Argv rewrite -------------------------------------------------------
+
+  /** The exact mpeg2tsremux playback command, as assembled by FFMPEGTranscoder. */
+  private static java.util.List<String> mpeg2tsremuxArgv()
+  {
+    return new java.util.ArrayList<String>(java.util.Arrays.asList(
+        "ffmpeg", "-v", "info", "-y", "-hwaccel", "cuda", "-threads", "2",
+        "-i", "/media/rec.mpg",
+        "-f", "mpegts", "-muxdelay", "0", "-muxpreload", "0",
+        "-c:v", "copy", "-c:a", "copy", "-copyts", "-"));
+  }
+
+  @Test
+  public void testRewriteInsertsHwaccelOutputFormatBeforeInput()
+  {
+    java.util.List<String> argv = mpeg2tsremuxArgv();
+    assertTrue(GpuEnhancePipeline.rewriteArgv(argv, plan(EnhancementTier.ENHANCE_2160P, false, "scale_cuda"), 60));
+    int of = argv.indexOf("-hwaccel_output_format");
+    int i = argv.indexOf("-i");
+    assertTrue(of >= 0 && of < i, "output format must be a global, before -i: " + argv);
+    assertEquals(argv.get(of + 1), "cuda");
+    // The pre-existing -hwaccel cuda must not be duplicated.
+    int first = argv.indexOf("-hwaccel");
+    int last = argv.lastIndexOf("-hwaccel");
+    assertEquals(first, last, "-hwaccel must not be duplicated: " + argv);
+  }
+
+  @Test
+  public void testRewriteReplacesCopyWithEncoderAndFilter()
+  {
+    java.util.List<String> argv = mpeg2tsremuxArgv();
+    assertTrue(GpuEnhancePipeline.rewriteArgv(argv, plan(EnhancementTier.ENHANCE_2160P, false, "scale_cuda"), 60));
+    // No stray "-c:v copy" remains; the video codec is now hevc_nvenc.
+    int vc = argv.indexOf("-c:v");
+    assertEquals(argv.get(vc + 1), "hevc_nvenc", argv.toString());
+    assertFalse(argv.contains("copy") && argv.indexOf("copy") < argv.indexOf("-c:a"),
+        "no video copy should remain: " + argv);
+    // The scale filter is present and after -i.
+    int vf = argv.indexOf("-vf");
+    assertTrue(vf > argv.indexOf("-i"), "filter must be in the output section: " + argv);
+    assertEquals(argv.get(vf + 1), "scale_cuda=3840:2160");
+  }
+
+  /** Audio copy must be left exactly as it was. */
+  @Test
+  public void testRewriteNeverTouchesAudio()
+  {
+    java.util.List<String> argv = mpeg2tsremuxArgv();
+    GpuEnhancePipeline.rewriteArgv(argv, plan(EnhancementTier.ENHANCE_1080P, false, "scale_cuda"), 60);
+    int ca = argv.indexOf("-c:a");
+    assertTrue(ca >= 0, "audio codec flag must survive: " + argv);
+    assertEquals(argv.get(ca + 1), "copy");
+  }
+
+  @Test
+  public void testRewriteIsNoOpForInactivePlan()
+  {
+    java.util.List<String> argv = mpeg2tsremuxArgv();
+    java.util.List<String> before = new java.util.ArrayList<String>(argv);
+    assertFalse(GpuEnhancePipeline.rewriteArgv(argv, EnhancementPlan.NONE, 60));
+    assertEquals(argv, before, "inactive plan must leave the command byte-identical");
+  }
+
+  /** A command whose video is already being encoded (not copy) must be left alone. */
+  @Test
+  public void testRewriteRefusesNonCopyVideo()
+  {
+    java.util.List<String> argv = new java.util.ArrayList<String>(java.util.Arrays.asList(
+        "ffmpeg", "-i", "/media/rec.mpg", "-c:v", "libx264", "-c:a", "copy", "-"));
+    java.util.List<String> before = new java.util.ArrayList<String>(argv);
+    assertFalse(GpuEnhancePipeline.rewriteArgv(argv, plan(EnhancementTier.ENHANCE_2160P, false, "scale_cuda"), 60));
+    assertEquals(argv, before);
+  }
+
+  @Test
+  public void testRewriteRefusesArgvWithNoInput()
+  {
+    java.util.List<String> argv = new java.util.ArrayList<String>(java.util.Arrays.asList(
+        "ffmpeg", "-c:v", "copy", "-c:a", "copy", "-"));
+    assertFalse(GpuEnhancePipeline.rewriteArgv(argv, plan(EnhancementTier.ENHANCE_2160P, false, "scale_cuda"), 60));
+  }
+
+  /** The encoder args re-supply -tag:v; a pre-existing one must not be left to conflict. */
+  @Test
+  public void testRewriteStripsPreexistingTagV()
+  {
+    java.util.List<String> argv = new java.util.ArrayList<String>(java.util.Arrays.asList(
+        "ffmpeg", "-hwaccel", "cuda", "-i", "/media/rec.mpg",
+        "-f", "mp4", "-c:v", "copy", "-tag:v", "hvc1", "-c:a", "copy", "-"));
+    assertTrue(GpuEnhancePipeline.rewriteArgv(argv, plan(EnhancementTier.ENHANCE_1440P, false, "scale_cuda"), 60));
+    // Exactly one -tag:v (the encoder's), not two.
+    int count = 0;
+    for (String s : argv) if ("-tag:v".equals(s)) count++;
+    assertEquals(count, 1, "must not leave a duplicate -tag:v: " + argv);
+  }
 }

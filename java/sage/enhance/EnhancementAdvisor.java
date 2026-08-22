@@ -109,6 +109,24 @@ public final class EnhancementAdvisor
    * doesn't have to be tuned twice.
    */
   public static final String PROP_BW_SAFETY = "playback/gpu_enhance/bandwidth_safety_factor";
+  /**
+   * Whether an <em>unmeasured</em> link is trusted to carry the enhanced stream.
+   *
+   * <p>Near-term default ({@code true} — "trust LAN"): a client whose link has
+   * not been probed (no {@code BANDWIDTH_FEEDBACK_V1}, direct-plays past the
+   * transcode bandwidth probe) is assumed to be on a fat home LAN, so the upscale
+   * is offered. Correct for a single-home gigabit network; deliberately
+   * <em>wrong</em> for a remote/WAN client, where blindly sizing a ~25 Mbps 4K
+   * stream at an unknown link is exactly the failure this abstains from.
+   *
+   * <p>Set {@code false} (the WAN-safe target state — see ROADMAP "Enhancement ×
+   * delivery-mode coupling") to <em>require</em> a measured or asserted link
+   * before any bitrate-raising tier: an unmeasured link then refuses the upscale,
+   * and delivery falls back to direct-play until a probe or a trusted-LAN
+   * assertion clears it. Deinterlace-only is never bitrate-raising and is
+   * unaffected either way.
+   */
+  public static final String PROP_ASSUME_LAN = "playback/gpu_enhance/assume_lan";
 
   private static final int DEFAULT_BUILTIN_PANEL_MAX_W = 3200;
   private static final int DEFAULT_BUILTIN_PANEL_MAX_H = 1920;
@@ -400,12 +418,26 @@ public final class EnhancementAdvisor
    * network, and refusing on it would silently disable enhancement for every
    * client that direct-plays its way past the probe.
    */
+  /**
+   * Whether the enhanced stream this tier would produce still fits the link,
+   * after the same safety factor the rest of delivery already applies.
+   *
+   * <p>An unmeasured link (0) is resolved by policy, not accident: with
+   * {@link #PROP_ASSUME_LAN} set (the near-term "trust LAN" default) it imposes
+   * no cap, because a skipped probe is not evidence of a slow network and
+   * refusing on it would silently disable enhancement for every client that
+   * direct-plays past the probe. With {@code assume_lan=false} (the WAN-safe
+   * target state) an unmeasured link instead refuses any bitrate-raising tier,
+   * so delivery falls back to direct-play until a real measurement or a
+   * trusted-LAN assertion authorizes the upscale.
+   */
   static boolean fitsBandwidth(EnhancementTier tier, int sourceFps,
       long sourceBitrateKbps, long availableBandwidthKbps)
   {
-    if (availableBandwidthKbps <= 0) return true;
     long want = GpuEnhancePipeline.suggestBitrateKbps(tier, sourceFps, sourceBitrateKbps);
-    if (want <= 0) return true;
+    if (want <= 0) return true; // deinterlace-only / non-raising: no envelope to check
+    if (availableBandwidthKbps <= 0)
+      return Sage.getBoolean(PROP_ASSUME_LAN, true);
     return want <= (long) (availableBandwidthKbps * bandwidthSafetyFactor());
   }
 

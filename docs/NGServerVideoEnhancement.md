@@ -554,6 +554,39 @@ diagnosis route.
 
 ---
 
+## 3.2 What the client echoes back — `XCODE_SETUP ;enhance=<tier>`
+
+The token in §3 is an *advertisement*; it does nothing on its own. The transcode
+that actually runs is set up on the separate transcode socket, and the tier only
+takes effect if the client **echoes it back** there.
+
+When a client acts on a `pull-xcode:<mode>:enhance;tier=<t>` delivery token, it
+issues its usual `XCODE_SETUP <mode>;k=v;k=v…` on the transcode connection. To
+request the enhancement it appends one more pair, in the exact `;k=v` shape it
+already uses for `acodec`, `ac` and `ss`:
+
+```
+XCODE_SETUP <mode>;enhance=<tier>
+```
+
+- `<tier>` is the value taken verbatim from the delivery token: `deint`, `1080p`,
+  `1440p`, or `2160p`. (`2160p` is the common case.)
+- The pair is **optional and additive**. A client that never sends it gets exactly
+  today's behavior — the server enhances nothing it was not asked to enhance.
+- Sending it is only a **request**. The server re-checks every gate at transcode
+  start — the dry-run interlock, that the mode is a copy-family *playback* mode
+  (never an in-progress recording), and `GpuGovernor` admission (recording veto +
+  live GPU capacity) — and silently runs the unenhanced command if any gate says
+  no. A client therefore never has to reason about GPU load; it just relays the
+  tier the server already offered.
+
+This is deliberately the mirror of the audio-EQ precedent (`;afeq=` / `;afeqcodec=`):
+the server resolves a decision, advertises it on the delivery token, and the client
+reflects the relevant pieces back on `XCODE_SETUP` so the transcode socket — which
+has no other view of the per-tune decision — can reconstruct it.
+
+---
+
 ## 4. Rules the server follows
 
 Worth knowing, because they explain why enhancement sometimes doesn't happen:

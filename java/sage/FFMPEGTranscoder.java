@@ -1495,7 +1495,107 @@ public class FFMPEGTranscoder implements TranscodeEngine
   }
 
   /**
-   * The shared {@code browserhd_copyv} pull-xcode preset hardcodes
+   * Honor a pending {@link #enhanceRequest} by rewriting the assembled argv to
+   * add the GPU upscale/deinterlace pipeline. Every guard that could forbid it is
+   * checked HERE, at the last possible moment, so no earlier caller can leak an
+   * enhanced command out by accident:
+   *
+   * <ol>
+   *   <li><b>Interlock/dry-run</b> — {@link sage.enhance.EnhancementDryRun#isLive()}
+   *       is false unless the pipeline is wired AND the admin cleared dry-run.</li>
+   *   <li><b>Recording safety</b> — only copy-family PLAYBACK modes
+   *       ({@link #isModernCopyFamilyXcodeMode()}) and only when {@code !activeFile}.
+   *       An active-file (in-progress recording) source is never rewritten.</li>
+   *   <li><b>Capacity + recording veto</b> — {@link sage.enhance.GpuGovernor}
+   *       admission, which runs the {@link sage.enhance.RecordingGuard} veto first
+   *       and steps the tier down the ladder until it fits.</li>
+   * </ol>
+   *
+   * <p>On admission the granted session is registered with the governor and its id
+   * stored in {@link #enhanceSessionId} so {@link #stopTranscode()} releases the
+   * held capacity. Any failure degrades to "no enhancement" — never a broken tune.
+   */
+  void maybeApplyGpuEnhancement(java.util.ArrayList xcodeParamsVec)
+  {
+    try
+    {
+      if (enhanceRequest == null || !enhanceRequest.isActive()) return;
+      if (!sage.enhance.EnhancementDryRun.isLive()) return;
+      // Recording-integrity gate: never touch a recording mux or an active-file
+      // source, and only ever a confirmed modern copy-family playback mode.
+      if (activeFile || !isModernCopyFamilyXcodeMode()) return;
+
+      int srcH = 0, srcFps = 0;
+      boolean interlaced = false;
+      long srcKbps = 0L;
+      if (sourceFormat != null)
+      {
+        sage.media.format.VideoFormat vf = sourceFormat.getVideoFormat();
+        if (vf != null)
+        {
+          srcH = vf.getHeight();
+          srcFps = Math.round(vf.getFps());
+          interlaced = vf.isInterlaced();
+        }
+        long br = sourceFormat.getBitrate();
+        if (br > 0) srcKbps = br / 1000L;
+      }
+
+      // Per-transcode session id: stable for this instance, unique across
+      // concurrent transcoders, so the governor's concurrency count is honest.
+      String sessionId = "xcode-" + System.identityHashCode(this);
+      long estKbps = sage.enhance.GpuEnhancePipeline.suggestBitrateKbps(
+          enhanceRequest, srcFps, srcKbps);
+
+      sage.enhance.GpuGovernor gov = sage.enhance.GpuGovernor.getInstance();
+      sage.enhance.GpuGovernor.Admission adm =
+          gov.requestAdmission(sessionId, enhanceRequest, srcH, estKbps);
+      if (adm == null || !adm.isGranted())
+      {
+        if (Sage.DBG) System.out.println("GPU_ENHANCE apply: not admitted ("
+            + (adm == null ? "null" : adm.getReason()) + ")");
+        return;
+      }
+
+      sage.enhance.EnhancementTier granted = adm.getTier();
+      sage.enhance.EnhancementPlan plan = sage.enhance.GpuEnhancePipeline.buildPlan(
+          granted, interlaced, srcH, estKbps);
+      if (plan == null || !plan.isActive())
+      {
+        gov.release(sessionId);
+        if (Sage.DBG) System.out.println("GPU_ENHANCE apply: no buildable plan for "
+            + granted.token() + " (" + (plan == null ? "null" : plan.getReason()) + ")");
+        return;
+      }
+
+      boolean rewritten = sage.enhance.GpuEnhancePipeline.rewriteArgv(
+          xcodeParamsVec, plan, srcFps);
+      if (!rewritten)
+      {
+        gov.release(sessionId);
+        if (Sage.DBG) System.out.println("GPU_ENHANCE apply: argv not copy-family shape, left untouched");
+        return;
+      }
+      enhanceSessionId = sessionId;
+      if (Sage.DBG) System.out.println("GPU_ENHANCE LIVE applied " + plan
+          + " session=" + sessionId + " mode=" + xcodeModeName);
+    }
+    catch (Throwable t)
+    {
+      // Enhancement is an optimization and must never break a tune.
+      if (enhanceSessionId != null)
+      {
+        try { sage.enhance.GpuGovernor.getInstance().release(enhanceSessionId); }
+        catch (Throwable ignore) {}
+        enhanceSessionId = null;
+      }
+      if (Sage.DBG) System.out.println("GPU_ENHANCE apply failed (ignored): " + t);
+    }
+  }
+
+
+  /**
+   * Some copy-family presets unconditionally add
    * {@code -tag:v hvc1} because its primary user is HEVC/ATSC3 video-copy (Chromium
    * MSE requires the {@code hvc1} sample-entry tag — parameter sets out-of-band in
    * {@code hvcC} — to decode HEVC in fragmented MP4). But the same preset is
@@ -2911,6 +3011,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
     maybeOverrideAc4AudioCodec(xcodeParamsVec);
     maybeOverrideSurfaceAudio(xcodeParamsVec);
     maybeStripInapplicableHvc1Tag(xcodeParamsVec);
+    // GPU enhancement (upscale/deinterlace) — the LAST argv edit, so it operates
+    // on the final copy-family command and can never be undone by an audio
+    // override above. No-op unless enhancement is live AND admitted; audio is
+    // never touched here.
+    maybeApplyGpuEnhancement(xcodeParamsVec);
     String[] xcodeParamArray = (String[]) xcodeParamsVec.toArray(Pooler.EMPTY_STRING_ARRAY);
     // Always log the FFmpeg command line for diagnosability (disable with xcode_cmdline_debug=FALSE)
     if (Sage.DBG && !"FALSE".equals(Sage.get("xcode_cmdline_debug", "TRUE"))) System.out.println("Executing xcoding process with args: " + java.util.Arrays.asList(xcodeParamArray));
@@ -3667,6 +3772,14 @@ public class FFMPEGTranscoder implements TranscodeEngine
     }
     xcodeProcess = null;
     if (XCODE_DEBUG) System.out.println("Destroyed!");
+    // Return any GPU-enhance capacity this session held, so VRAM/engine budget
+    // is freed for the next admission the moment the stream ends.
+    if (enhanceSessionId != null)
+    {
+      try { sage.enhance.GpuGovernor.getInstance().release(enhanceSessionId); }
+      catch (Throwable ignore) {}
+      enhanceSessionId = null;
+    }
     try
     {
       if (xcodeStderrThread != null)
@@ -3788,6 +3901,28 @@ public class FFMPEGTranscoder implements TranscodeEngine
     hwaccelDecode = (api != null && api.trim().length() > 0) ? api.trim() : null;
   }
   protected String hwaccelDecode;
+
+  /**
+   * The enhancement tier requested for this transcode session, carried from the
+   * MiniPlayer decision through the {@code XCODE_SETUP ;enhance=<tier>} param.
+   * {@link sage.enhance.EnhancementTier#NONE} (the default) means no request and
+   * the command is left byte-identical to today.
+   */
+  protected sage.enhance.EnhancementTier enhanceRequest = sage.enhance.EnhancementTier.NONE;
+  /** Governor session id held while an enhanced session is admitted; null when none. */
+  protected String enhanceSessionId;
+
+  /**
+   * Record the enhancement tier the client's {@code XCODE_SETUP} asked for. The
+   * request is only <i>honored</i> later in {@link #startTranscode()} via
+   * {@link #maybeApplyGpuEnhancement}, which re-checks the live/dry-run interlock,
+   * the copy-family mode gate, and the {@link sage.enhance.GpuGovernor} admission
+   * (recording veto + capacity). Setting it here commits to nothing.
+   */
+  public void setEnhancementRequest(sage.enhance.EnhancementTier tier)
+  {
+    enhanceRequest = (tier == null) ? sage.enhance.EnhancementTier.NONE : tier;
+  }
 
   public void setActiveFile(boolean x)
   {

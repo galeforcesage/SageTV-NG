@@ -222,4 +222,127 @@ public final class GpuEnhancePipeline
     if (cap > 0 && base > cap) base = cap;
     return base;
   }
+
+  /**
+   * Rewrite an already-assembled ffmpeg argv <b>in place</b> to apply an
+   * enhancement plan to the video stream of a copy-family remux command.
+   *
+   * <p>This is the single place the live command shape is edited, deliberately
+   * kept as a pure list transform so it can be unit-tested without a running
+   * transcoder. It performs exactly three edits and touches nothing else:
+   * <ol>
+   *   <li>Makes the decode GPU-resident: ensures {@code -hwaccel cuda} and
+   *       {@code -hwaccel_output_format cuda} appear <b>before</b> {@code -i}, so
+   *       the CUDA scaler/deinterlacer receive VRAM frames.</li>
+   *   <li>Inserts the {@code -vf} deinterlace/scale chain in the output section.</li>
+   *   <li>Replaces the video codec {@code -c:v copy} (or {@code -vcodec copy})
+   *       with the NVENC HEVC encoder args, stripping any pre-existing
+   *       {@code -tag:v} / {@code -fps_mode} the encoder args re-supply.</li>
+   * </ol>
+   *
+   * <p>Audio is never touched: no {@code -c:a}, {@code -acodec}, {@code -b:a} or
+   * audio filter is inspected or moved. If the argv is not the expected
+   * copy-family shape (no {@code -i}, or the video codec is not {@code copy}),
+   * the method makes no change and returns false — the fail-closed direction, so
+   * a surprising command is left byte-identical rather than half-rewritten.
+   *
+   * @return true if the argv was rewritten, false if it was left untouched.
+   */
+  public static boolean rewriteArgv(java.util.List<String> argv, EnhancementPlan plan, int fps)
+  {
+    if (argv == null || plan == null || !plan.isActive()) return false;
+
+    int iIdx = argv.indexOf("-i");
+    if (iIdx < 0) return false;
+
+    // Only rewrite a genuine copy-family video stream. Find the video codec
+    // token in the OUTPUT section (after -i) and require it to be "copy".
+    int vci = indexOfVideoCodec(argv, iIdx + 1);
+    if (vci < 0 || vci + 1 >= argv.size()) return false;
+    if (!"copy".equalsIgnoreCase(argv.get(vci + 1))) return false;
+
+    // (1) GPU-resident decode: ensure the two global tokens precede -i.
+    ensureGpuGlobals(argv, iIdx);
+
+    // Indices may have shifted; re-anchor on -i and the video codec token.
+    iIdx = argv.indexOf("-i");
+    // Strip encoder-supplied duplicates from the output section only.
+    stripPairAfter(argv, iIdx, "-tag:v");
+    stripPairAfter(argv, iIdx, "-fps_mode");
+    iIdx = argv.indexOf("-i");
+    vci = indexOfVideoCodec(argv, iIdx + 1);
+    if (vci < 0 || vci + 1 >= argv.size() || !"copy".equalsIgnoreCase(argv.get(vci + 1)))
+      return false;
+
+    // (3) Remove "-c:v","copy".
+    argv.remove(vci);
+    argv.remove(vci);
+
+    // (2)+(3) Build the replacement: optional -vf chain, then encoder args.
+    java.util.List<String> repl = new java.util.ArrayList<String>();
+    String vf = buildFilterChain(plan);
+    if (vf != null) { repl.add("-vf"); repl.add(vf); }
+    repl.addAll(buildEncoderArgs(plan, fps));
+    if (repl.isEmpty()) return false; // no encoder available: leave copy in place
+    argv.addAll(vci, repl);
+    return true;
+  }
+
+  /** Ensure {@code -hwaccel cuda -hwaccel_output_format cuda} appear before {@code iIdx}. */
+  private static void ensureGpuGlobals(java.util.List<String> argv, int iIdx)
+  {
+    int hw = indexOfBefore(argv, iIdx, "-hwaccel");
+    if (hw >= 0)
+    {
+      // -hwaccel already present (the decode-only path sets it). Only add the
+      // output format if it is missing, so we don't duplicate -hwaccel.
+      if (indexOfBefore(argv, iIdx, "-hwaccel_output_format") < 0)
+      {
+        int insAt = Math.min(hw + 2, iIdx);
+        argv.add(insAt, "cuda");
+        argv.add(insAt, "-hwaccel_output_format");
+      }
+      return;
+    }
+    java.util.List<String> globals = new java.util.ArrayList<String>();
+    globals.add("-hwaccel"); globals.add("cuda");
+    globals.add("-hwaccel_output_format"); globals.add("cuda");
+    int idx = Sage.getInt(PROP_GPU_INDEX, -1);
+    if (idx >= 0) { globals.add("-hwaccel_device"); globals.add(String.valueOf(idx)); }
+    argv.addAll(iIdx, globals);
+  }
+
+  /** First index of {@code -c:v} or {@code -vcodec} at or after {@code from}. */
+  private static int indexOfVideoCodec(java.util.List<String> argv, int from)
+  {
+    for (int i = Math.max(0, from); i < argv.size(); i++)
+    {
+      String s = argv.get(i);
+      if ("-c:v".equals(s) || "-vcodec".equals(s)) return i;
+    }
+    return -1;
+  }
+
+  /** First index of {@code flag} strictly before {@code limit}. */
+  private static int indexOfBefore(java.util.List<String> argv, int limit, String flag)
+  {
+    int lim = Math.min(limit, argv.size());
+    for (int i = 0; i < lim; i++)
+      if (flag.equals(argv.get(i))) return i;
+    return -1;
+  }
+
+  /** Remove the first {@code flag <value>} pair occurring after {@code afterIdx}. */
+  private static void stripPairAfter(java.util.List<String> argv, int afterIdx, String flag)
+  {
+    for (int i = Math.max(0, afterIdx + 1); i < argv.size(); i++)
+    {
+      if (flag.equals(argv.get(i)))
+      {
+        argv.remove(i);
+        if (i < argv.size()) argv.remove(i); // its value
+        return;
+      }
+    }
+  }
 }

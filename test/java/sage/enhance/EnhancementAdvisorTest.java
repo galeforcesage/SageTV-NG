@@ -61,6 +61,7 @@ public class EnhancementAdvisorTest
     Sage.remove(EnhancementAdvisor.PROP_OVERRIDE_LOCAL);
     Sage.remove(EnhancementAdvisor.PROP_UNKNOWN_SINK);
     Sage.remove(EnhancementAdvisor.PROP_BW_SAFETY);
+    Sage.remove(EnhancementAdvisor.PROP_ASSUME_LAN);
     Sage.remove("playback/bandwidth_safety_factor");
   }
 
@@ -91,6 +92,44 @@ public class EnhancementAdvisorTest
         adviseBw(1920, 1080, false, 30, 3840, 2160, surface(3840, 2160, 60), 8000, 100000);
     assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P);
     assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.OFFERED, "verdict");
+  }
+
+  // ---------- unmeasured-link policy (trust-LAN now vs WAN-safe target) ----------
+
+  /**
+   * Near-term default ("trust LAN"): an unmeasured link (linkKbps=0, the 2015
+   * Shield case) is assumed fat enough, so the full upscale is still offered.
+   */
+  @Test
+  public void testUnmeasuredLinkIsTrustedByDefault()
+  {
+    assertTrue(EnhancementAdvisor.fitsBandwidth(EnhancementTier.ENHANCE_2160P, 60, 2285, 0),
+        "an unmeasured link must be trusted while assume_lan defaults on");
+    Sage.put(EnhancementAdvisor.PROP_ASSUME_LAN, "true");
+    EnhancementAdvisor.Advice a =
+        adviseBw(1280, 720, false, 60, 3840, 2160, surface(3840, 2160, 60), 2285, 0);
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P);
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.OFFERED);
+  }
+
+  /**
+   * WAN-safe target state: with assume_lan=false an unmeasured link refuses any
+   * bitrate-raising tier, so delivery can fall back to direct-play until a probe
+   * or trusted-LAN assertion authorizes it.
+   */
+  @Test
+  public void testUnmeasuredLinkIsRefusedWhenLanTrustDisabled()
+  {
+    Sage.put(EnhancementAdvisor.PROP_ASSUME_LAN, "false");
+    assertFalse(EnhancementAdvisor.fitsBandwidth(EnhancementTier.ENHANCE_2160P, 60, 2285, 0),
+        "an unproven link must not authorize an upscale when LAN-trust is off");
+    // The deinterlace-only exemption lives in the caller (it gates only upscaling
+    // tiers), so an unmeasured link still degrades an upscale to deint rather than
+    // to nothing.
+    EnhancementAdvisor.Advice a =
+        adviseBw(1920, 1080, true, 30, 3840, 2160, surface(3840, 2160, 60), 8000, 0);
+    assertEquals(a.getTier(), EnhancementTier.DEINTERLACE_ONLY,
+        "an interlaced source must still get deinterlacing when the upscale is link-refused");
   }
 
   /**

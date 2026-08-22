@@ -1347,6 +1347,7 @@ public class MediaServer implements Runnable
             long surfSs = 0; // pull-xcode seek start position (ms); 0 = from start
             String surfEqGraph = null; // server audio-EQ v1 (";afeq="): url-encoded -af filtergraph
             String surfEqCodec = null; // server audio-EQ v1 (";afeqcodec="): echo of the audio-selection logic's target codec
+            String surfEnhance = null; // GPU enhancement (";enhance="): granted tier token from MiniPlayer's CAP_EFFECTIVE_DELIVERY
             int semi = xcodeArg.indexOf(';');
             if (semi >= 0)
             {
@@ -1370,6 +1371,7 @@ public class MediaServer implements Runnable
                 {
                   try { surfEqCodec = java.net.URLDecoder.decode(v, "UTF-8"); } catch (Exception e) { surfEqCodec = null; }
                 }
+                else if (k.equals("enhance")) surfEnhance = v;
               }
             }
             if (Sage.DBG) System.out.println("MediaServer is serving up in transcode mode: " + xcodeMode
@@ -1431,6 +1433,13 @@ public class MediaServer implements Runnable
             // re-opens /msproxy with ss=<ms>) so the transcode starts there via -ss
             // instead of restarting from 0.
             if (surfSs > 0) fftc.setTranscodeStartSeekTime(surfSs);
+            // GPU enhancement request (Protocol 2.1 ";enhance=<tier>"): the tier
+            // was decided by MiniPlayer and echoed by the client from
+            // CAP_EFFECTIVE_DELIVERY. It is only a REQUEST -- FFMPEGTranscoder
+            // re-checks the dry-run interlock, copy-family/activeFile safety, and
+            // GpuGovernor admission (recording veto + capacity) before honoring it.
+            if (surfEnhance != null && surfEnhance.length() > 0)
+              fftc.setEnhancementRequest(sage.enhance.EnhancementTier.fromToken(surfEnhance));
             fftc.setTranscodeFormat(xcodeMode, currMF != null ? currMF.getFileFormat() : null);
             commBufWrite.clear();
             commBufWrite.put(OK_BYTES).flip();

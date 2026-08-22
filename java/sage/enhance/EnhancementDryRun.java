@@ -50,7 +50,7 @@ public final class EnhancementDryRun
    *
    * <p>Flip this to true in the same change that wires the pipeline.
    */
-  static final boolean PIPELINE_WIRED = false;
+  static final boolean PIPELINE_WIRED = true;
 
   private static volatile boolean interlockLogged = false;
 

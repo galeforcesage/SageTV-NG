@@ -719,6 +719,61 @@ RTX VSR) — the items below are the ones not previously captured.
   should be fully self-consistent end-to-end without the operator
   also having to set `TZ` and `/etc/localtime`.
 
+### Enhancement × delivery-mode coupling — link-aware upscale routing
+
+**The gap.** Server-side GPU enhancement (deint / upscale toward 4K) can
+only run when the server is in the pixel path — i.e. a copy-family
+*transcode-remux* delivery (`mpeg2tsremux`, `browserhd_remux`,
+`browserhd_copyv`). But `EnhancementAdvisor` runs *after*
+`PlaybackDecisionEngine` has already chosen a delivery mode
+(`MiniPlayer` ~L1999) and only appends `;enhance=<tier>` to the delivery
+token. It never **promotes** the delivery. So a client that both (a) can
+decode the source and (b) cannot upscale it locally — e.g. a 2015 NVIDIA
+Shield: 4K HEVC decoder, no 720p upscaler, `localStatus=none` — gets a
+`DIRECT_PLAY` raw pull, the `enhance_2160p` verdict is stranded, and the
+4K panel naive-scales a soft 720p while the RTX sits idle. Field-observed
+2026-08-21 20:49 (`GPU_ENHANCE DRYRUN … media=legacy:DIRECT_PLAY …
+tier=enhance_2160p verdict=OFFERED`).
+
+**Target state — measured / asserted link, WAN-safe.** Before promoting a
+`DIRECT_PLAY` decision to a server-upscaled remux, *require evidence the
+link can carry the enhanced bitrate*:
+
+- **Active probe** — `BANDWIDTH_FEEDBACK_V1` (`pollNgBandwidthFeedbackPayload`,
+  `MiniClientSageRenderer` L8471) when the client advertises it; or
+- **Asserted LAN** — an admin/subnet trust flag
+  (`playback/gpu_enhance/trusted_lan_cidrs`) marking a client as
+  gigabit-local; or
+- **Legacy passive estimator floor** (`getEstimatedBandwidthDiagnostics`,
+  L7496) — note this only measures the *rate of what is flowing*, never
+  headroom, so it can lower-bound but never authorize an upscale on its
+  own.
+
+  If none of the three clears the enhanced bitrate through
+  `EnhancementAdvisor.fitsBandwidth` (after `bandwidth_safety_factor`),
+  **fall back to `DIRECT_PLAY`** — never blindly push 25 Mbps at a WAN
+  client. This is the crux: a `DIRECT_PLAY` may survive an `OFFERED`
+  verdict when, and only when, the link is unproven.
+
+**Near-term (shipping first — "trust LAN"):** default
+`playback/gpu_enhance/assume_lan=true`. When the advisor yields an active
+*upscale* tier, the client reports `localStatus=none` (won't self-enhance),
+and the chosen delivery is a raw `DIRECT_PLAY`, **promote** the delivery to
+`pull-xcode:mpeg2tsremux` (+ `;enhance=<tier>`) so the RTX does the work the
+client can't. Correct for a single-home gigabit LAN; explicitly *wrong* for
+a future remote/WAN client — which is exactly why the target state above
+gates on a measured/asserted link and this near-term default is a stopgap
+knob, not the end state. Deinterlace-only tiers are exempt (no bitrate
+blow-up) and follow existing delivery selection.
+
+**Files likely touched.** `MiniPlayer.java` (delivery-promotion seam at the
+enhance-tier computation ~L1999–2091), `sage/client/PlaybackDecisionEngine.java`
+(surface the promotion so `transcoded`/`pushMode`/xcodeMode flip coherently
+for native MiniClients, not just PWA/bridge token clients),
+`sage/enhance/EnhancementAdvisor.java` (make the LAN-trust assumption an
+explicit documented policy rather than the current accidental fail-open on
+`availableBandwidthKbps<=0`).
+
 ---
 
 ## Longer-term modernization track  *(backlog, not scheduled)*
