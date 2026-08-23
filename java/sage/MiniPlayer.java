@@ -2785,6 +2785,40 @@ public class MiniPlayer implements DVDMediaPlayer
       currMute = !mediaExtender;
       serverSideTranscoding = false;
       usingRemuxer = false;
+      // --- GPU enhancement: PUSH direct-play upgrade ---
+      // A direct-play-capable NG push client with a 4K-class HEVC decoder is
+      // otherwise left at the native source (e.g. an NVIDIA Shield direct-playing
+      // 720p MPEG2) even when the advisor decided an active upscale tier and both
+      // the client and the LAN can carry the enhanced stream. Enhancement only
+      // ever rides a copy-family TRANSCODE — FFMPEGTranscoder.maybeApplyGpuEnhancement
+      // is gated on isModernCopyFamilyXcodeMode() — and a raw direct-play push runs
+      // NO transcoder at all, so there is nothing to rewrite. Promote such a tune to
+      // a video-copy MPEG2-TS remux (mpeg2tsremux) so a transcoder exists; the
+      // enhancement pass then swaps the video copy for the NVENC HEVC upscale. This
+      // is the push analogue of the pull-xcode "mpeg2tsremux:enhance" path the Tizen
+      // PWA already uses. Audio is copied untouched (enhancement never re-encodes it).
+      //
+      // Safety: never a recording / active-file source (!timeshifted; Invariant 0 is
+      // also re-checked in maybeApplyGpuEnhancement), only NG video sessions, only a
+      // pending raw direct-play push (!transcoded), and only when the client actually
+      // advertises BOTH HEVC decode AND MPEG2-TS push so it can receive HEVC-in-TS.
+      // Flag-guarded for instant rollback. When the tier is NONE (the default and the
+      // dry-run state) this never fires and delivery is byte-identical to today.
+      if (pushMode && !transcoded && !timeshifted && ngSession && mcsr != null
+          && majorTypeHint == MediaFile.MEDIATYPE_VIDEO
+          && currentTuneEnhanceTier != null && currentTuneEnhanceTier.isActive()
+          && Sage.getBoolean("miniplayer/enhance_push_upgrade", true)
+          && mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_TS)
+          && mcsr.isSupportedVideoCodec(sage.media.format.MediaFormat.HEVC))
+      {
+        transcoded = true;
+        prefTranscodeMode = "mpeg2tsremux";
+        useOriginalAudioTrack = true;
+        dynamicRateAdjust = false;
+        if (Sage.DBG) System.out.println("MiniPlayer: GPU-enhance push upgrade — direct-play client "
+            + "promoted to mpeg2tsremux copy-family transcode for tier="
+            + currentTuneEnhanceTier.token() + " (client advertises HEVC decode + MPEG2-TS push)");
+      }
       if (pushMode)
       {
         if (bufferSize > 0 && hostname == null)
@@ -2895,6 +2929,12 @@ public class MiniPlayer implements DVDMediaPlayer
               System.out.println("MiniPlayer: keeping audio-only transcode (skipping client fixedPushFormat override)");
             }
             mpegSrc.setStreamTranscodeMode(prefTranscodeMode, currFileFormat);
+            // Carry the GPU-enhance tier (if any) into the push-mode transcoder
+            // that FastMpeg2Reader.init() constructs. NONE is a no-op, so plain
+            // transcodes are byte-identical; an active tier attaches the request
+            // that maybeApplyGpuEnhancement honors (after its own live/recording/
+            // copy-family/governor re-checks) to rewrite the copy into the upscale.
+            mpegSrc.setEnhancementTier(currentTuneEnhanceTier);
             // If the source has Dolby AC-4 audio (ATSC 3.0), prefer E-AC-3 for
             // any client that advertises EAC3 (higher quality / 5.1 preserved).
             // Otherwise fall back to AC-3 (universal among legacy SageTV clients).
@@ -3427,7 +3467,15 @@ public class MiniPlayer implements DVDMediaPlayer
           // Enhancement re-encodes video to HEVC on the wire; advertise the
           // real wire codec so the client sets up the right decoder.
           if (currentTuneEnhanceTier != null && currentTuneEnhanceTier.isActive())
+          {
             vMime = toMimeType(sage.media.format.MediaFormat.HEVC);
+            // The GPU-enhance push stream is carried in MPEG2-TS (mpeg2tsremux
+            // output) regardless of the source container. Advertise TS so the
+            // client's demuxer expects the bytes it will actually receive — the
+            // same wire-container honesty the mpeg2psremux/STREAMINFO paths use.
+            if ("mpeg2tsremux".equals(prefTranscodeMode))
+              cMime = toMimeType(sage.media.format.MediaFormat.MPEG2_TS);
+          }
           if (cMime != null || vMime != null || aMime != null)
           {
             formatString += "|ng_fmt=" + (cMime != null ? cMime : "") + ","
@@ -3463,6 +3511,12 @@ public class MiniPlayer implements DVDMediaPlayer
           {
            // Wire is PS even though source may be TS
            streamInfoWireContainer = sage.media.format.MediaFormat.MPEG2_PS;
+          }
+          else if (serverSideTranscoding && "mpeg2tsremux".equals(prefTranscodeMode))
+          {
+           // Wire is TS even though the source may be PS (video-copy TS remux;
+           // this is also the GPU-enhance push path, whose HEVC output rides TS).
+           streamInfoWireContainer = sage.media.format.MediaFormat.MPEG2_TS;
           }
           // Duration from the format (0 for live)
           if (streamInfoCf != null && !timeshifted)

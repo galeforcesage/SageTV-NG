@@ -659,6 +659,13 @@ public class FFMPEGTranscoder implements TranscodeEngine
       int buffOffset = (int) (offset - xcodeBufferVirtualOffset) % xcodeBuffer[0].length;
       if (XCODE_DEBUG) System.out.println("Xcode transferData(" + offset + ", " + leftToRead + ") buffNum=" + buffNum +
           " buffOffset=" + buffOffset);
+      // Bytes actually served out of the ring for this read (excludes any overage
+      // filler that was not yet produced). Freeing must be based on the END of this
+      // span, not the start offset — otherwise a read that begins at a buffer
+      // boundary (e.g. offset 0) frees nothing, the ring stays full, and the encoder
+      // deadlocks. This mirrors readFullyTranscodedData(), which frees by the
+      // advanced read position rather than the read's start.
+      long ringServed = leftToRead;
       while (leftToRead > 0)
       {
         int currRead = Math.min((int)leftToRead, xcodeBuffer[buffNum].length - buffOffset);
@@ -668,9 +675,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
         buffOffset = 0;
       }
       if (XCODE_DEBUG) System.out.println("Xcode transferData complete overage=" + overage);
+      long ringReadEnd = offset + ringServed;
       synchronized (xcodeSyncLock)
       {
-        while (offset - xcodeBufferVirtualOffset >= xcodeBuffer[0].length)
+        while (ringReadEnd - xcodeBufferVirtualOffset >= xcodeBuffer[0].length)
         {
           // Kill the buffers we've consumed
           xcodeBufferBaseNum = (xcodeBufferBaseNum + 1) % xcodeBuffer.length;
@@ -1577,8 +1585,17 @@ public class FFMPEGTranscoder implements TranscodeEngine
         return;
       }
       enhanceSessionId = sessionId;
+      // Size the output ring for the REAL encode bitrate. The copy-family base mode
+      // this enhancement was layered onto left currVideoBitrateKbps at the tiny copy
+      // default (~200 kbps), which makes startTranscode() allocate a 128 KB ring
+      // (32 x 4096). That is orders of magnitude too small for a multi-megabit
+      // enhanced HEVC stream drained over the MediaServer HTTP pull path, so the
+      // encoder wedges on a full ring after ~128 KB. Record the true target here so
+      // the enhanceSessionId branch in startTranscode() sizes the ring generously.
+      if (estKbps > 0) currVideoBitrateKbps = (int) Math.min(Integer.MAX_VALUE, estKbps);
       if (Sage.DBG) System.out.println("GPU_ENHANCE LIVE applied " + plan
-          + " session=" + sessionId + " mode=" + xcodeModeName);
+          + " session=" + sessionId + " mode=" + xcodeModeName
+          + " ringBitrateKbps=" + currVideoBitrateKbps);
     }
     catch (Throwable t)
     {
@@ -3037,7 +3054,23 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (xcodeBuffer == null)
     {
       // Don't use properties for these because it leads to major inconsistencies between systems that are quite difficult to diagnose
-      if (currVideoBitrateKbps >= 1000)
+      if (enhanceSessionId != null)
+      {
+        // Enhanced sessions emit a high-bitrate (up to ~40 Mbps) HEVC stream that is
+        // drained by the MediaServer HTTP pull path (SIZE/READ round-trips), which
+        // has much higher per-chunk latency than the in-process native reader. The
+        // 128 KB copy-family default ring fills in tens of milliseconds and wedges
+        // the encoder between HTTP reads, so size the ring to hold ~1 second of
+        // output (clamped to a sane [1 MB, 8 MB] window) using 64 KB slots.
+        final int chunk = 65536;
+        long kbps = currVideoBitrateKbps > 0 ? currVideoBitrateKbps : 20000L;
+        long targetBytes = Math.max(1L << 20, Math.min(8L << 20, kbps * 1000L / 8L));
+        int count = Math.max(16, (int) ((targetBytes + chunk - 1) / chunk));
+        xcodeBuffer = new byte[count][chunk];
+        if (Sage.DBG) System.out.println("GPU_ENHANCE ring sized for " + kbps + " kbps: "
+            + count + " x " + chunk + " = " + (count * (long) chunk) + " bytes");
+      }
+      else if (currVideoBitrateKbps >= 1000)
         xcodeBuffer = new byte[16][32768];
       else
         xcodeBuffer = new byte[32][currVideoBitrateKbps >= 300 ? 16384 : 4096];

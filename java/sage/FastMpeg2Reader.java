@@ -300,6 +300,18 @@ public final class FastMpeg2Reader
     this.ac4SourceAudioCodec = codec;
   }
   private String ac4SourceAudioCodec;
+  /**
+   * Optional GPU-enhancement tier for this push transcode. When set to an
+   * active tier it is forwarded to the FFMPEGTranscoder constructed in init(),
+   * which re-checks its own live/recording/copy-family/governor gates before
+   * rewriting the video-copy remux into the NVENC HEVC upscale. Defaults to
+   * NONE, in which case the transcode is byte-identical to a plain remux.
+   */
+  public void setEnhancementTier(sage.enhance.EnhancementTier tier)
+  {
+    this.enhancementTier = tier;
+  }
+  private sage.enhance.EnhancementTier enhancementTier;
   public void setRemuxToTS(boolean ts)
   {
     remuxToTS = ts;
@@ -374,6 +386,8 @@ public final class FastMpeg2Reader
       inxs.setEnableOutputBuffering(true);
       if (ac4SourceAudioCodec != null && inxs instanceof FFMPEGTranscoder)
         ((FFMPEGTranscoder) inxs).setAc4SourceAudioCodec(ac4SourceAudioCodec);
+      if (enhancementTier != null && enhancementTier.isActive() && inxs instanceof FFMPEGTranscoder)
+        ((FFMPEGTranscoder) inxs).setEnhancementRequest(enhancementTier);
       forcedPS = true;
       firstPTS = 45000;
       findFirstPTS = false;
