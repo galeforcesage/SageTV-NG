@@ -1,8 +1,37 @@
 # Upscale Logic
 
+> ## ⚠️ Implementation status — read first
+>
+> **What the server actually does today is GPU _Lanczos_ upscaling, not AI super-resolution.**
+> The shipping live/recorded enhancement pipeline is
+> `-hwaccel cuda -hwaccel_output_format cuda` → `yadif_cuda`/`bwdif_cuda` (deinterlace) →
+> `scale_npp=…:interp_algo=lanczos` (or `scale_cuda` where NPP is absent) → `hevc_nvenc`.
+> This is a fast, deterministic, **non-AI** classical resampler running on CUDA/NPP and the
+> NVENC encoder. It is a real quality win over most client scalers for interlaced and
+> compressed HD, but it is **not** a neural network and does not reconstruct detail.
+>
+> **"RTX VSR" / "RTX Video Super Resolution" and every `RTX_VSR_*` mode name in this document
+> describe the _planned_ AI premium tier, which is not yet implemented.** Real server-side AI
+> upscaling means integrating NVIDIA's **Maxine Video Effects SDK "Super Resolution"** (or the
+> newer RTX Video SDK / NIM VSR) between decode and NVENC — there is no ffmpeg VSR filter and
+> `scale_npp` is not it. That integration (TensorRT + Maxine SDK + NGC models) is **not present
+> in the deployment** as of this writing.
+>
+> So, when reading this document:
+> - Treat each `RTX_VSR_TO_*` mode as a **tier intent** ("server upscales to 2160p/1080p"),
+>   whose scaler backend is **Lanczos (`scale_npp`) today** and **AI VSR when integrated.**
+> - The decision logic below (when to upscale on the server vs let the client scale) is
+>   backend-agnostic and applies to the Lanczos tier shipping now; the AI backend, once real,
+>   raises the quality ceiling of the *same* decision, it does not change the decision shape.
+> - Do **not** cite this document as evidence that AI VSR is running. See
+>   [Important implementation distinction](#important-implementation-distinction).
+
 ## Purpose
 
-Use server-side **RTX Video Super Resolution (RTX VSR)** only when the final displayed result is expected to be meaningfully better for the user than the upscaling performed by the playback client.
+Decide when the server should upscale (today via GPU **Lanczos**; via **AI VSR** once that
+premium tier is integrated) instead of letting the playback client scale. Engage server-side
+upscaling only when the final displayed result is expected to be meaningfully better for the
+user than the upscaling performed by the playback client.
 
 If client-side upscaling is expected to be visually equivalent, prefer the client path because it avoids unnecessary GPU work, network bitrate, latency, and an additional lossy encode generation.
 
@@ -54,7 +83,11 @@ The default tie-breaker is:
 | `TRANSCODE_NATIVE_CLIENT_SCALE` | Convert codec or reduce bitrate while retaining source resolution | Decode and upscale | Client needs a compatible stream, but server scaling is unnecessary |
 | `DEINTERLACE_CLIENT_SCALE` | Deinterlace or IVTC while retaining native spatial resolution | Decode progressive output and upscale | Client scaler is sufficient after interlace correction |
 | `RTX_VSR_TO_1080_CLIENT_SCALE` | Enhance or upscale lower-resolution material to 1080p | Finish scaling to 4K | Optional middle path for poor 720p material |
-| `RTX_VSR_TO_2160` | Deinterlace if needed, apply RTX VSR, encode 4K | Decode the final 4K result | Server result is expected to be visibly better |
+| `RTX_VSR_TO_2160` | Deinterlace if needed, upscale, encode 4K | Decode the final 4K result | Server result is expected to be visibly better |
+
+> **Backend note:** the `RTX_VSR_*` tokens are tier *intents*, not a claim about the scaler.
+> Their backend today is GPU **Lanczos** (`scale_npp`); the AI VSR backend replaces only the
+> scaling stage when integrated. See the status banner at the top of this document.
 | `DIRECT_NATIVE_4K` | None, or remux only | Decode native 4K | Source is already 4K and compatible |
 | `COMPATIBILITY_TRANSCODE` | Minimum processing required for reliable playback | Decode and perform normal display scaling | Client capabilities are limited or unknown |
 
@@ -508,9 +541,11 @@ In both cases the pipeline is identical after the mode decision: resolve profile
 
 ---
 
-## RTX VSR 4K Bitrate Table
+## 4K Upscale Bitrate Table
 
-This table is used only when server-side enhancement has been selected.
+This table is used only when server-side enhancement has been selected. Bitrates are a
+property of the HEVC/NVENC encode and are the same whether the scaler stage is Lanczos
+(today) or AI VSR (planned) — the scaler changes picture quality, not the target bitrate.
 
 | Tier / `scale_npp` target | HIGH | MEDIUM | LOW |
 |---|---:|---:|---:|
@@ -608,7 +643,11 @@ RTX 5080 + another AI model
     = quality determined by that model and its settings
 ```
 
-Only the genuine RTX VSR integration should be classified as `RTX_VSR_TO_2160` or `RTX_VSR_TO_1080_CLIENT_SCALE`. A `scale_npp`-only path must use a separate classification.
+Only a genuine AI VSR integration (Maxine SuperRes / RTX Video SDK) should be reported to
+users or telemetry as "AI"/"VSR" enhancement. The `scale_npp` (Lanczos) path shipping today
+is classified as GPU-Lanczos enhancement — it may still populate a `RTX_VSR_TO_*` tier
+*intent*, but it must never be labelled as AI super-resolution anywhere user- or
+operator-visible.
 
 ---
 

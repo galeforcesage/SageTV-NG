@@ -5,6 +5,11 @@ sustain, and how that interacts with recording OTA to disk. **Everything below
 the measured RTX 5080 line is an estimate** and will be replaced with real data
 once we benchmark upscale-while-recording on live OTA.
 
+> **Scaler backend:** these numbers are for the GPU **Lanczos** path shipping today
+> (`scale_npp` + `hevc_nvenc`), which is NVENC-bound. An AI VSR tier (Maxine SuperRes /
+> RTX Video SDK), if integrated later, is Tensor-core-bound and will have a **much lower**
+> concurrency ceiling — do not read this table as AI-VSR capacity.
+
 ## Status / plan
 
 - We are **not** wiring any GPU-aware concurrency governor yet. The current
