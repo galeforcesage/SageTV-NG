@@ -122,8 +122,30 @@ public final class GpuEnhancePipeline
     long rate = bitrateKbps;
     if (cap > 0 && rate > cap) rate = cap;
 
+    // Provider seam: resolve and capture the scale stage now, at plan time, so a
+    // later registry change cannot alter this session's rendered chain. The
+    // built-in provider reproduces the current scale fragment exactly and takes
+    // no specialized permit, keeping behavior byte-identical when no external
+    // provider is selected. A deinterlace-only tier still runs through selection
+    // but contributes no scale fragment.
+    sage.enhance.spi.ScaleExecutionPlan scaleExec = null;
+    sage.enhance.spi.ScaleGovernor.Lease scaleLease = null;
+    {
+      sage.enhance.spi.ScaleRequest req = new sage.enhance.spi.ScaleRequest(
+          tier, tier.getTargetWidth(), tier.getTargetHeight(), sourceHeight,
+          sourceInterlaced, scaler, sage.enhance.spi.ScaleRequest.Purpose.LIVE);
+      sage.enhance.spi.ScaleSelection sel =
+          sage.enhance.spi.ScaleProviderRegistry.getInstance().select(req);
+      if (sel != null)
+      {
+        scaleExec = sel.getExecutionPlan();
+        scaleLease = sel.getLease();
+      }
+    }
+
     return new EnhancementPlan(tier, deint != null, deint, scaler,
-        tier.getTargetWidth(), tier.getTargetHeight(), rate, cap, "built");
+        tier.getTargetWidth(), tier.getTargetHeight(), rate, cap, "built",
+        scaleExec, scaleLease);
   }
 
   /**
@@ -161,9 +183,20 @@ public final class GpuEnhancePipeline
     if (plan.isScaling())
     {
       if (sb.length() > 0) sb.append(',');
-      sb.append(plan.getScaler()).append('=')
-        .append(plan.getTargetWidth()).append(':').append(plan.getTargetHeight());
-      if ("scale_npp".equals(plan.getScaler())) sb.append(":interp_algo=lanczos");
+      // Prefer the provider-captured scale stage; fall back to the legacy render
+      // for directly-constructed plans (calibration) so their tokens are
+      // byte-identical to pre-seam behavior.
+      sage.enhance.spi.ScaleExecutionPlan exec = plan.getScaleExec();
+      if (exec != null && exec.rendersFilterFragment())
+      {
+        sb.append(exec.getFfmpegFilter());
+      }
+      else
+      {
+        sb.append(plan.getScaler()).append('=')
+          .append(plan.getTargetWidth()).append(':').append(plan.getTargetHeight());
+        if ("scale_npp".equals(plan.getScaler())) sb.append(":interp_algo=lanczos");
+      }
     }
     return (sb.length() == 0) ? null : sb.toString();
   }

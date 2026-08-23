@@ -1582,6 +1582,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
       if (plan == null || !plan.isActive())
       {
         gov.release(sessionId);
+        // buildPlan guarantees an inactive plan holds no specialized permit, but
+        // release defensively in case a provider planned then failed validation.
+        if (plan != null) plan.releaseScaleLease();
         if (Sage.DBG) System.out.println("GPU_ENHANCE apply: no buildable plan for "
             + granted.token() + " (" + (plan == null ? "null" : plan.getReason()) + ")");
         return;
@@ -1592,10 +1595,15 @@ public class FFMPEGTranscoder implements TranscodeEngine
       if (!rewritten)
       {
         gov.release(sessionId);
+        // Active plan we are discarding unused: return its specialized permit.
+        plan.releaseScaleLease();
         if (Sage.DBG) System.out.println("GPU_ENHANCE apply: argv not copy-family shape, left untouched");
         return;
       }
       enhanceSessionId = sessionId;
+      // Capture the specialized permit (null for the built-in scaler) so it is
+      // released with the governor session no matter how this session unwinds.
+      enhanceScaleLease = plan.getScaleLease();
       // Size the output ring for the REAL encode bitrate. The copy-family base mode
       // this enhancement was layered onto left currVideoBitrateKbps at the tiny copy
       // default (~200 kbps), which makes startTranscode() allocate a 128 KB ring
@@ -1619,7 +1627,19 @@ public class FFMPEGTranscoder implements TranscodeEngine
         catch (Throwable ignore) {}
         enhanceSessionId = null;
       }
+      releaseEnhanceScaleLease();
       if (Sage.DBG) System.out.println("GPU_ENHANCE apply failed (ignored): " + t);
+    }
+  }
+
+  /** Release the specialized scale permit exactly once (idempotent, null-safe). */
+  private void releaseEnhanceScaleLease()
+  {
+    sage.enhance.spi.ScaleGovernor.Lease lease = enhanceScaleLease;
+    if (lease != null)
+    {
+      enhanceScaleLease = null;
+      try { lease.close(); } catch (Throwable ignore) {}
     }
   }
 
@@ -3826,6 +3846,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
       catch (Throwable ignore) {}
       enhanceSessionId = null;
     }
+    // Return any specialized scale permit this session held (null for the
+    // built-in scaler path).
+    releaseEnhanceScaleLease();
     try
     {
       if (xcodeStderrThread != null)
@@ -3957,6 +3980,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
   protected sage.enhance.EnhancementTier enhanceRequest = sage.enhance.EnhancementTier.NONE;
   /** Governor session id held while an enhanced session is admitted; null when none. */
   protected String enhanceSessionId;
+  /** Specialized scale-provider permit held for this enhanced session; null for
+   *  the built-in scaler path. Released exactly once alongside the governor
+   *  session, so it is safe to release from multiple lifecycle unwinds. */
+  protected sage.enhance.spi.ScaleGovernor.Lease enhanceScaleLease;
 
   /**
    * Record the enhancement tier the client's {@code XCODE_SETUP} asked for. The
