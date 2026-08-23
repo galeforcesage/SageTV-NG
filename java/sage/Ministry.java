@@ -1347,7 +1347,7 @@ public class Ministry implements Runnable
    */
   public static boolean aiUpscaleDeviceAvailable()
   {
-    return aiUpscaleDeviceAvailable(Ministry::probeAiUpscaleVulkan);
+    return aiUpscaleDeviceAvailable(Ministry::probeAiUpscaleDevice);
   }
 
   /**
@@ -1403,20 +1403,20 @@ public class Ministry implements Runnable
     aiUpscaleLastFailedProbeMs = 0L;
   }
 
-  private static boolean probeAiUpscaleVulkan()
+  private static boolean probeAiUpscaleDevice()
   {
     Process p = null;
     try
     {
-      String wrapper = Sage.get("transcoder/ai_upscale_wrapper", "bin/sage-ai-upscale.sh");
-      String binary  = Sage.get("transcoder/ai_upscale_binary", "/usr/local/bin/realesrgan-ncnn-vulkan");
-      String model   = Sage.get("transcoder/ai_upscale_model", "realesr-general-x4v3");
-      java.util.ArrayList<String> argv = new java.util.ArrayList<String>();
-      argv.add("/bin/bash");
-      argv.add(wrapper);
-      argv.add("--probe");
-      argv.add("--realesrgan"); argv.add(binary);
-      argv.add("--model"); argv.add(model);
+      // The selected offline provider owns the probe argv. A null/empty command
+      // means the provider needs no device probe -> treat as available.
+      java.util.List<String> argv =
+          sage.enhance.spi.offline.OfflineUpscaleRegistry.getInstance().buildProbeCommand();
+      if (argv == null || argv.isEmpty())
+      {
+        if (Sage.DBG) System.out.println("Ministry: AI-upscale probe: none required by provider");
+        return true;
+      }
       if (Sage.DBG) System.out.println("Ministry: AI-upscale probe: " + argv);
       p = new ProcessBuilder(argv).redirectErrorStream(true).start();
       // Drain output so a full pipe can't block the child.
@@ -1468,20 +1468,13 @@ public class Ministry implements Runnable
   public static Process spawnAiUpscaleProcess(java.io.File input,
       java.io.File intermediate, int targetWidth, int targetHeight) throws java.io.IOException
   {
-    String wrapper = Sage.get("transcoder/ai_upscale_wrapper", "bin/sage-ai-upscale.sh");
-    String model = Sage.get("transcoder/ai_upscale_model", "realesr-general-x4v3");
-    String binary = Sage.get("transcoder/ai_upscale_binary", "/usr/local/bin/realesrgan-ncnn-vulkan");
-    int chunk = Sage.getInt("transcoder/ai_upscale_chunk_frames", 500);
-    java.util.ArrayList<String> argv = new java.util.ArrayList<String>();
-    argv.add("/bin/bash");
-    argv.add(wrapper);
-    argv.add("--input"); argv.add(input.getAbsolutePath());
-    argv.add("--output"); argv.add(intermediate.getAbsolutePath());
-    argv.add("--width"); argv.add(Integer.toString(targetWidth));
-    argv.add("--height"); argv.add(Integer.toString(targetHeight));
-    argv.add("--model"); argv.add(model);
-    argv.add("--chunk-frames"); argv.add(Integer.toString(chunk));
-    argv.add("--realesrgan"); argv.add(binary);
+    // The selected offline provider owns the upscale argv; the registry falls
+    // back to the built-in Real-ESRGAN command if a plugin provider misbehaves.
+    sage.enhance.spi.offline.OfflineUpscaleRequest req =
+        new sage.enhance.spi.offline.OfflineUpscaleRequest(
+            input, intermediate, targetWidth, targetHeight, -1);
+    java.util.List<String> argv =
+        sage.enhance.spi.offline.OfflineUpscaleRegistry.getInstance().buildUpscaleCommand(req);
     if (Sage.DBG) System.out.println("Ministry: spawning AI upscale: " + argv);
     return Runtime.getRuntime().exec(argv.toArray(new String[0]));
   }

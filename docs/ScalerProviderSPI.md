@@ -292,8 +292,124 @@ Registration rules:
 
 ---
 
-*Source:* `java/sage/enhance/spi/*`; integration in
-`java/sage/enhance/GpuEnhancePipeline.java` and `java/sage/FFMPEGTranscoder.java`.
-Tests in `test/java/sage/enhance/spi/` — `ScaleSeamRenderTest` proves the seam
-renders byte-identically to the pre-seam path; `ScaleProviderRegistryTest` proves
-the fallback, duplicate-rejection, and capture-immunity semantics.
+## 10. Offline / batch upscale provider
+
+SageTV-NG upscales in **two** places, and they are different mechanisms:
+
+- The **live** seam above (`sage.enhance.spi`) selects an in-graph scale stage
+  for a live transcode.
+- The **offline / batch** seam (`sage.enhance.spi.offline`) selects the external
+  worker for the chained-job path in `Ministry`: a source is upscaled to a
+  lossless **intermediate file** by a separate process, then a second transcode
+  pass encodes that intermediate (with its `-vf scale` token stripped). The
+  built-in worker is Real-ESRGAN (ncnn-vulkan).
+
+This seam exists so a plugin can replace the offline worker generically — the
+same "no backend code in this repo" rule applies.
+
+### 10.1 The interface
+
+```java
+package sage.enhance.spi.offline;
+
+public interface OfflineUpscaleProvider {
+  String id();                                        // stable, unique
+  boolean isSpecialized();                            // informational
+  java.util.List<String> buildProbeCommand();         // argv, or null/empty = no probe
+  java.util.List<String> buildUpscaleCommand(OfflineUpscaleRequest request); // argv for one job
+}
+```
+
+`OfflineUpscaleRequest` (immutable) gives you `getInput()` (source `File`),
+`getOutput()` (intermediate `File` you must write), `getTargetWidth()`,
+`getTargetHeight()`, and `getSourceHeight()` (advisory; `<=0` when unknown).
+
+### 10.2 The server ↔ worker command contract (this is the syntax you must honor)
+
+A provider returns a **complete argv `List<String>`** — the server runs it
+verbatim; the provider owns every token, including the interpreter (`/bin/bash`,
+a binary path, etc.). There is no implicit shell, so **no shell quoting/escaping**
+applies: each list element is one process argument, passed straight to
+`Runtime.exec` / `ProcessBuilder`.
+
+**Upscale command** (`buildUpscaleCommand`): the process must
+
+- read `request.getInput()`, write `request.getOutput()` upscaled to
+  `getTargetWidth() × getTargetHeight()`,
+- **exit 0 on success, non-zero on failure** (the core fails the job on
+  non-zero),
+- write only to its declared output (the core manages the intermediate dir and
+  the phase-2 re-encode).
+
+**Probe command** (`buildProbeCommand`): a cheap device check the core runs with
+output draining and a timeout (`transcoder/ai_upscale_probe_timeout_secs`,
+default 60). **Exit 0 = available.** Return `null` or an empty list to declare
+"no device probe needed" (treated as available). A successful probe is cached for
+the JVM's life; a failure is re-probed after
+`transcoder/ai_upscale_probe_retry_backoff_secs` (default 30s).
+
+For reference, the built-in Real-ESRGAN provider emits exactly (byte-identical to
+the pre-seam invocation):
+
+```
+# upscale
+/bin/bash <wrapper> --input <in> --output <out> --width <W> --height <H> \
+  --model <model> --chunk-frames <N> --realesrgan <binary>
+
+# probe (only when transcoder/ai_upscale_require_vulkan=true)
+/bin/bash <wrapper> --probe --realesrgan <binary> --model <model>
+```
+
+with `<wrapper>`, `<binary>`, `<model>`, `<N>` from the `transcoder/ai_upscale_*`
+properties below. A plugin provider is **not** required to use this flag shape —
+it returns its own argv.
+
+### 10.3 Registration and selection
+
+Identical lifecycle to the live seam, via `OfflineUpscaleRegistry`:
+
+```java
+OfflineUpscaleRegistration reg;
+public void start() { reg = OfflineUpscaleRegistry.getInstance().register(new MyOfflineProvider()); }
+public void stop()  { if (reg != null) { reg.close(); reg = null; } }
+```
+
+- Two-step opt-in: register **and** set `transcoder/ai_upscale_provider = <id>`.
+- Duplicate id is rejected; the built-in id cannot be shadowed.
+- **Any failure is safe:** an unknown configured id, a `null`/empty upscale
+  command, or an exception from either method → the core uses the built-in
+  Real-ESRGAN command. A misbehaving plugin degrades to the built-in, never fails
+  the job outright.
+- There is **no per-session lease** here (unlike the live seam): offline batch
+  concurrency is already bounded elsewhere — it drops to 1 while a tuner records.
+- Genre routing, intermediate management, the phase-2 scale-filter strip, and
+  recording protection remain in `Ministry`; a provider only supplies the two
+  commands.
+
+### 10.4 Offline properties
+
+| Property | Default | Meaning |
+|---|---|---|
+| `transcoder/ai_upscale_provider` | built-in id (`realesrgan-ncnn`) | Which offline provider to use. |
+| `transcoder/ai_upscale_enabled` | `true` | Master switch for the offline pass. |
+| `transcoder/ai_upscale_wrapper` | `bin/sage-ai-upscale.sh` | Built-in wrapper script. |
+| `transcoder/ai_upscale_binary` | `/usr/local/bin/realesrgan-ncnn-vulkan` | Built-in upscaler binary. |
+| `transcoder/ai_upscale_model` | `realesr-general-x4v3` | Built-in model. |
+| `transcoder/ai_upscale_chunk_frames` | `500` | Built-in chunk size. |
+| `transcoder/ai_upscale_require_vulkan` | `true` | When `false`, built-in needs no probe. |
+| `transcoder/ai_upscale_probe_timeout_secs` | `60` | Probe subprocess timeout. |
+| `transcoder/ai_upscale_probe_retry_backoff_secs` | `30` | Re-probe backoff after a failed probe. |
+
+*The `transcoder/ai_upscale_*` wrapper/binary/model/chunk properties are consumed
+only by the built-in provider; a plugin provider owns its own configuration.*
+
+---
+
+*Source:* live seam `java/sage/enhance/spi/*` (integration in
+`GpuEnhancePipeline.java` / `FFMPEGTranscoder.java`); offline seam
+`java/sage/enhance/spi/offline/*` (integration in `Ministry.java`
+`spawnAiUpscaleProcess` / device probe). Tests in
+`test/java/sage/enhance/spi/` and `test/java/sage/enhance/spi/offline/` —
+`ScaleSeamRenderTest` proves the live seam renders byte-identically to the
+pre-seam path; `OfflineUpscaleRegistryTest` proves the offline built-in command
+is byte-identical and the fallback/duplicate-rejection semantics hold.
