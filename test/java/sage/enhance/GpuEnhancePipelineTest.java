@@ -22,6 +22,11 @@ public class GpuEnhancePipelineTest
 {
   private static final String PROP_MAX_BITRATE = "playback/gpu_enhance/max_bitrate_kbps";
   private static final String PROP_GPU_INDEX   = "playback/gpu_enhance/gpu_index";
+  private static final String PROP_SPATIAL_AQ   = "playback/gpu_enhance/spatial_aq";
+  private static final String PROP_TEMPORAL_AQ  = "playback/gpu_enhance/temporal_aq";
+  private static final String PROP_AQ_STRENGTH  = "playback/gpu_enhance/aq_strength";
+  private static final String PROP_RC_LOOKAHEAD = "playback/gpu_enhance/rc_lookahead";
+  private static final String PROP_MULTIPASS    = "playback/gpu_enhance/multipass";
 
   @BeforeMethod
   public void setUp() throws Throwable
@@ -29,6 +34,13 @@ public class GpuEnhancePipelineTest
     TestUtils.initializeSageTVForTesting();
     Sage.remove(PROP_MAX_BITRATE);
     Sage.remove(PROP_GPU_INDEX);
+    Sage.remove(PROP_SPATIAL_AQ);
+    Sage.remove(PROP_TEMPORAL_AQ);
+    Sage.remove(PROP_AQ_STRENGTH);
+    Sage.remove(PROP_RC_LOOKAHEAD);
+    Sage.remove(PROP_MULTIPASS);
+    Sage.remove("playback/gpu_enhance/bitrate/enhance_2160p/high");
+    Sage.remove("playback/gpu_enhance/bitrate/enhance_2160p/low");
   }
 
   private static EnhancementPlan plan(EnhancementTier tier, boolean deint, String scaler)
@@ -150,6 +162,76 @@ public class GpuEnhancePipelineTest
     assertEquals(e.get(e.indexOf("-tag:v") + 1), "hvc1");
   }
 
+  /**
+   * Adaptive quantization is on by default (spatial + temporal), improving
+   * high-detail/high-motion quality-per-bit at no latency cost.
+   */
+  @Test
+  public void testAdaptiveQuantizationOnByDefault()
+  {
+    List<String> e = GpuEnhancePipeline.buildEncoderArgs(
+        plan(EnhancementTier.ENHANCE_2160P, false, "scale_npp"), 60);
+    assertTrue(e.contains("-spatial_aq"), e.toString());
+    assertEquals(e.get(e.indexOf("-spatial_aq") + 1), "1");
+    assertTrue(e.contains("-temporal_aq"), e.toString());
+    assertEquals(e.get(e.indexOf("-temporal_aq") + 1), "1");
+    // No aq-strength unless explicitly configured.
+    assertFalse(e.contains("-aq-strength"), e.toString());
+  }
+
+  @Test
+  public void testAdaptiveQuantizationCanBeDisabled()
+  {
+    Sage.putBoolean(PROP_SPATIAL_AQ, false);
+    Sage.putBoolean(PROP_TEMPORAL_AQ, false);
+    List<String> e = GpuEnhancePipeline.buildEncoderArgs(
+        plan(EnhancementTier.ENHANCE_2160P, false, "scale_npp"), 60);
+    assertFalse(e.contains("-spatial_aq"), e.toString());
+    assertFalse(e.contains("-temporal_aq"), e.toString());
+  }
+
+  @Test
+  public void testAqStrengthAppliedWhenInRange()
+  {
+    Sage.putInt(PROP_AQ_STRENGTH, 8);
+    List<String> e = GpuEnhancePipeline.buildEncoderArgs(
+        plan(EnhancementTier.ENHANCE_2160P, false, "scale_npp"), 60);
+    assertEquals(e.get(e.indexOf("-aq-strength") + 1), "8");
+  }
+
+  /**
+   * Lookahead and multipass add latency, so they must be absent unless a
+   * deployment explicitly opts in — the live/trickplay path stays low-latency.
+   */
+  @Test
+  public void testLookaheadAndMultipassOffByDefault()
+  {
+    List<String> e = GpuEnhancePipeline.buildEncoderArgs(
+        plan(EnhancementTier.ENHANCE_2160P, false, "scale_npp"), 60);
+    assertFalse(e.contains("-rc-lookahead"), e.toString());
+    assertFalse(e.contains("-multipass"), e.toString());
+  }
+
+  @Test
+  public void testLookaheadAndMultipassOptIn()
+  {
+    Sage.putInt(PROP_RC_LOOKAHEAD, 20);
+    Sage.put(PROP_MULTIPASS, "fullres");
+    List<String> e = GpuEnhancePipeline.buildEncoderArgs(
+        plan(EnhancementTier.ENHANCE_2160P, false, "scale_npp"), 60);
+    assertEquals(e.get(e.indexOf("-rc-lookahead") + 1), "20");
+    assertEquals(e.get(e.indexOf("-multipass") + 1), "fullres");
+  }
+
+  @Test
+  public void testMultipassSentinelValuesAreIgnored()
+  {
+    Sage.put(PROP_MULTIPASS, "none");
+    List<String> e = GpuEnhancePipeline.buildEncoderArgs(
+        plan(EnhancementTier.ENHANCE_2160P, false, "scale_npp"), 60);
+    assertFalse(e.contains("-multipass"), e.toString());
+  }
+
   @Test
   public void testGopTracksFrameRate()
   {
@@ -247,6 +329,67 @@ public class GpuEnhancePipelineTest
   public void testNoneTierGetsNoBitrate()
   {
     assertEquals(GpuEnhancePipeline.suggestBitrateKbps(EnhancementTier.NONE, 60, 0), 0L);
+  }
+
+  @Test
+  public void testMotionClassLadderIsMonotonic()
+  {
+    long high = GpuEnhancePipeline.suggestBitrateKbps(
+        EnhancementTier.ENHANCE_2160P, EnhancementProfile.MotionClass.HIGH, 0);
+    long med  = GpuEnhancePipeline.suggestBitrateKbps(
+        EnhancementTier.ENHANCE_2160P, EnhancementProfile.MotionClass.MEDIUM, 0);
+    long low  = GpuEnhancePipeline.suggestBitrateKbps(
+        EnhancementTier.ENHANCE_2160P, EnhancementProfile.MotionClass.LOW, 0);
+    assertTrue(high > med, "high motion must exceed medium");
+    assertTrue(med > low, "medium motion must exceed low");
+  }
+
+  @Test
+  public void testNewsTalkGetsFewerBitsThanSportsAtSameTier()
+  {
+    long sports = GpuEnhancePipeline.suggestBitrateKbps(
+        EnhancementTier.ENHANCE_2160P, EnhancementProfile.SPORTS.motionClass(), 0);
+    long talk = GpuEnhancePipeline.suggestBitrateKbps(
+        EnhancementTier.ENHANCE_2160P, EnhancementProfile.NEWS_TALK.motionClass(), 0);
+    assertTrue(sports > talk, "sports must be given more bits than news/talk");
+  }
+
+  @Test
+  public void testPerGenreBitrateOverride()
+  {
+    // playback/gpu_enhance/bitrate/<tier>/<motion> lets a deployment tie bitrate
+    // to genre without a rebuild.
+    Sage.put("playback/gpu_enhance/bitrate/enhance_2160p/high", "55000");
+    assertEquals(GpuEnhancePipeline.suggestBitrateKbps(
+        EnhancementTier.ENHANCE_2160P, EnhancementProfile.MotionClass.HIGH, 0), 55000L);
+    // A different motion cell is unaffected by the high override.
+    assertNotEquals(GpuEnhancePipeline.suggestBitrateKbps(
+        EnhancementTier.ENHANCE_2160P, EnhancementProfile.MotionClass.LOW, 0), 55000L);
+    Sage.remove("playback/gpu_enhance/bitrate/enhance_2160p/high");
+  }
+
+  @Test
+  public void testOverrideStillClampedByAdminCap()
+  {
+    Sage.put("playback/gpu_enhance/bitrate/enhance_2160p/high", "55000");
+    Sage.put(PROP_MAX_BITRATE, "30000");
+    assertEquals(GpuEnhancePipeline.suggestBitrateKbps(
+        EnhancementTier.ENHANCE_2160P, EnhancementProfile.MotionClass.HIGH, 0), 30000L);
+    Sage.remove("playback/gpu_enhance/bitrate/enhance_2160p/high");
+  }
+
+  @Test
+  public void testFpsOverloadDelegatesToMotionClass()
+  {
+    // 60fps => HIGH, 30fps => MEDIUM, matching the motion-class ladder directly.
+    assertEquals(
+        GpuEnhancePipeline.suggestBitrateKbps(EnhancementTier.ENHANCE_1080P, 60, 0),
+        GpuEnhancePipeline.suggestBitrateKbps(
+            EnhancementTier.ENHANCE_1080P, EnhancementProfile.MotionClass.HIGH, 0));
+    assertEquals(
+        GpuEnhancePipeline.suggestBitrateKbps(EnhancementTier.ENHANCE_1080P, 30, 0),
+        GpuEnhancePipeline.suggestBitrateKbps(
+            EnhancementTier.ENHANCE_1080P, EnhancementProfile.MotionClass.MEDIUM, 0));
   }
 
   // ---- Argv rewrite -------------------------------------------------------

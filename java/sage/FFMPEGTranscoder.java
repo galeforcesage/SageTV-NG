@@ -1552,8 +1552,19 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // Per-transcode session id: stable for this instance, unique across
       // concurrent transcoders, so the governor's concurrency count is honest.
       String sessionId = "xcode-" + System.identityHashCode(this);
+      // Genre-aware bitrate: read the recording's EPG categories (Wiz.bin) to pick
+      // a motion class, so sports/nature claim bits while news/talk save them. Kept
+      // bandwidth-safe: never exceed the frame-rate figure the advisor's envelope
+      // check already approved, so a genre bump can't overrun the measured link.
+      sage.enhance.EnhancementProfile enhanceProfile =
+          sage.enhance.MotionHint.profileForFile(currFile);
+      sage.enhance.EnhancementProfile.MotionClass motion =
+          sage.enhance.MotionHint.motionFor(enhanceProfile, srcFps);
       long estKbps = sage.enhance.GpuEnhancePipeline.suggestBitrateKbps(
+          enhanceRequest, motion, srcKbps);
+      long fpsEst = sage.enhance.GpuEnhancePipeline.suggestBitrateKbps(
           enhanceRequest, srcFps, srcKbps);
+      if (fpsEst > 0 && estKbps > fpsEst) estKbps = fpsEst;
 
       sage.enhance.GpuGovernor gov = sage.enhance.GpuGovernor.getInstance();
       sage.enhance.GpuGovernor.Admission adm =
@@ -1595,6 +1606,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
       if (estKbps > 0) currVideoBitrateKbps = (int) Math.min(Integer.MAX_VALUE, estKbps);
       if (Sage.DBG) System.out.println("GPU_ENHANCE LIVE applied " + plan
           + " session=" + sessionId + " mode=" + xcodeModeName
+          + " profile=" + (enhanceProfile == null ? "unknown" : enhanceProfile.name())
+          + " motion=" + motion
           + " ringBitrateKbps=" + currVideoBitrateKbps);
     }
     catch (Throwable t)

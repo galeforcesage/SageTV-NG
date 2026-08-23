@@ -58,6 +58,15 @@ public final class GpuEnhancePipeline
   private static final String PROP_PREFER_BWDIF = "playback/gpu_enhance/prefer_bwdif";
   private static final String PROP_GPU_INDEX    = "playback/gpu_enhance/gpu_index";
   private static final String PROP_MAX_BITRATE  = "playback/gpu_enhance/max_bitrate_kbps";
+  // Quality knobs. AQ is on by default: it redistributes bits within a frame
+  // (grass, crowds, jersey numbers on sports) at no extra latency. Lookahead and
+  // multipass default OFF because both add encode latency, which we keep out of
+  // the live/trickplay path unless explicitly opted in.
+  private static final String PROP_SPATIAL_AQ   = "playback/gpu_enhance/spatial_aq";
+  private static final String PROP_TEMPORAL_AQ  = "playback/gpu_enhance/temporal_aq";
+  private static final String PROP_AQ_STRENGTH  = "playback/gpu_enhance/aq_strength";
+  private static final String PROP_RC_LOOKAHEAD = "playback/gpu_enhance/rc_lookahead";
+  private static final String PROP_MULTIPASS    = "playback/gpu_enhance/multipass";
 
   private static final String DEFAULT_PRESET = "p4";
   private static final String DEFAULT_TUNE   = "hq";
@@ -165,7 +174,10 @@ public final class GpuEnhancePipeline
    * <p>{@code -bf 0} and a short GOP are not arbitrary: they match what the
    * existing push and HLS branches already do, keeping live latency and trickplay
    * behavior consistent rather than making enhanced streams behave differently
-   * from every other live stream.
+   * from every other live stream. Adaptive quantization (spatial + temporal) is
+   * added by default because it improves quality-per-bit on high-detail,
+   * high-motion content (sports) at no latency cost; lookahead and multipass are
+   * opt-in only, since both add encode latency to the live/trickplay path.
    */
   public static List<String> buildEncoderArgs(EnhancementPlan plan, int fps)
   {
@@ -190,6 +202,38 @@ public final class GpuEnhancePipeline
     out.add("-bufsize"); out.add((maxrate * 2L) + "k");
     out.add("-bf"); out.add("0");
     out.add("-g"); out.add(String.valueOf(fps * 2));
+
+    // Adaptive quantization: default on. Redistributes bits toward high-detail
+    // regions (grass, crowds) without adding encode latency, so it stays in the
+    // live/trickplay path safely.
+    if (Sage.getBoolean(PROP_SPATIAL_AQ, true))
+    {
+      out.add("-spatial_aq"); out.add("1");
+      int aqStrength = Sage.getInt(PROP_AQ_STRENGTH, 0);
+      if (aqStrength >= 1 && aqStrength <= 15)
+      {
+        out.add("-aq-strength"); out.add(String.valueOf(aqStrength));
+      }
+    }
+    if (Sage.getBoolean(PROP_TEMPORAL_AQ, true))
+    {
+      out.add("-temporal_aq"); out.add("1");
+    }
+    // Lookahead and multipass both add latency, so they are opt-in only. When a
+    // deployment has spare NVENC headroom and no trickplay concern, they buy
+    // extra quality-per-bit on high-motion content.
+    int lookahead = Sage.getInt(PROP_RC_LOOKAHEAD, 0);
+    if (lookahead > 0)
+    {
+      out.add("-rc-lookahead"); out.add(String.valueOf(lookahead));
+    }
+    String multipass = Sage.get(PROP_MULTIPASS, "").trim();
+    if (multipass.length() > 0 && !"0".equals(multipass) && !"none".equalsIgnoreCase(multipass)
+        && !"disabled".equalsIgnoreCase(multipass))
+    {
+      out.add("-multipass"); out.add(multipass);
+    }
+
     out.add("-fps_mode"); out.add("passthrough");
     out.add("-tag:v"); out.add("hvc1");
     return out;
@@ -202,25 +246,64 @@ public final class GpuEnhancePipeline
    * is overwhelmingly sports, 24/30fps is drama and news — so it drives the
    * choice. The result is still clamped by the admin cap and by measured client
    * throughput before it reaches the encoder.
+   *
+   * <p>This frame-rate overload is retained for the advisor's bandwidth-envelope
+   * check; the genre-aware {@link #suggestBitrateKbps(EnhancementTier,
+   * EnhancementProfile.MotionClass, long)} overload is what the encoder uses.
    */
   public static long suggestBitrateKbps(EnhancementTier tier, int fps, long sourceBitrateKbps)
   {
-    boolean highMotion = (fps >= 50);
+    return suggestBitrateKbps(tier,
+        (fps >= 50) ? EnhancementProfile.MotionClass.HIGH
+                    : EnhancementProfile.MotionClass.MEDIUM,
+        sourceBitrateKbps);
+  }
+
+  /**
+   * Genre-aware bitrate ladder. The {@link EnhancementProfile.MotionClass} lets
+   * sports/nature claim more bits while news/talk claim fewer, at the same
+   * perceived quality. Each (tier, motion) cell is overridable with the property
+   * {@code playback/gpu_enhance/bitrate/<tier>/<motion>} so a deployment can tie
+   * bitrate directly to genre without a rebuild. Clamped by the admin cap.
+   */
+  public static long suggestBitrateKbps(EnhancementTier tier,
+      EnhancementProfile.MotionClass motion, long sourceBitrateKbps)
+  {
+    if (motion == null) motion = EnhancementProfile.MotionClass.MEDIUM;
     long base;
     switch (tier)
     {
-      case ENHANCE_2160P: base = highMotion ? 40000L : 25000L; break;
-      case ENHANCE_1440P: base = highMotion ? 24000L : 16000L; break;
-      case ENHANCE_1080P: base = highMotion ? 14000L : 9000L;  break;
+      case ENHANCE_2160P: base = pick(motion, 40000L, 28000L, 20000L); break;
+      case ENHANCE_1440P: base = pick(motion, 24000L, 17000L, 13000L); break;
+      case ENHANCE_1080P: base = pick(motion, 14000L, 10000L,  7000L); break;
       case DEINTERLACE_ONLY:
         // Not rescaling, so the source's own bitrate is the best anchor we have.
         base = (sourceBitrateKbps > 0) ? Math.max(6000L, sourceBitrateKbps) : 8000L;
         break;
       default: return 0L;
     }
+    long override = Sage.getLong(bitrateKey(tier, motion), 0L);
+    if (override > 0) base = override;
     long cap = Sage.getLong(PROP_MAX_BITRATE, 0L);
     if (cap > 0 && base > cap) base = cap;
     return base;
+  }
+
+  private static long pick(EnhancementProfile.MotionClass m, long hi, long med, long lo)
+  {
+    switch (m)
+    {
+      case HIGH: return hi;
+      case LOW:  return lo;
+      default:   return med;
+    }
+  }
+
+  private static String bitrateKey(EnhancementTier tier, EnhancementProfile.MotionClass motion)
+  {
+    return "playback/gpu_enhance/bitrate/"
+        + tier.name().toLowerCase(java.util.Locale.ROOT) + "/"
+        + motion.name().toLowerCase(java.util.Locale.ROOT);
   }
 
   /**
