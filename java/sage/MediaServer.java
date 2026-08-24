@@ -1407,6 +1407,7 @@ public class MediaServer implements Runnable
             long surfSs = 0; // pull-xcode seek start position (ms); 0 = from start
             String surfEqGraph = null; // server audio-EQ v1 (";afeq="): url-encoded -af filtergraph
             String surfEqCodec = null; // server audio-EQ v1 (";afeqcodec="): echo of the audio-selection logic's target codec
+            String surfSink = null; // live monitor-move sink (";sink=WxH"): new physical display size for a mid-session re-clamp
             // GPU enhancement (":enhance" mode marker + ";tier="): recover the base
             // mode and the requested tier. See parseXcodeEnhanceRequest — the marker
             // MUST be stripped here or "mpeg2tsremux:enhance" is unrecognized and the
@@ -1437,6 +1438,7 @@ public class MediaServer implements Runnable
                 {
                   try { surfEqCodec = java.net.URLDecoder.decode(v, "UTF-8"); } catch (Exception e) { surfEqCodec = null; }
                 }
+                else if (k.equals("sink")) surfSink = v;
               }
             }
             if (Sage.DBG) System.out.println("MediaServer is serving up in transcode mode: " + xcodeMode
@@ -1505,6 +1507,42 @@ public class MediaServer implements Runnable
             // GpuGovernor admission (recording veto + capacity) before honoring it.
             if (surfEnhanceReq && surfEnhance != null && surfEnhance.length() > 0)
               fftc.setEnhancementRequest(sage.enhance.EnhancementTier.fromToken(surfEnhance));
+            // Live sink update (Protocol 2.1 ";sink=WxH"): a PWA dragged to a
+            // different-resolution monitor re-opens with its new physical sink.
+            // Forward it verbatim (MediaServer decides nothing -- like ss/acodec);
+            // FFMPEGTranscoder re-clamps the already-requested tier to this sink
+            // via EnhancementAdvisor when it applies enhancement. Validate the
+            // geometry with the same bounds the capability handshake enforces
+            // (640..7680 x 480..4320); out-of-range or malformed => ignored, so
+            // the negotiated tier stands unchanged.
+            if (surfSink != null && surfSink.length() > 0)
+            {
+              int xIdx = -1;
+              for (int ci = 0; ci < surfSink.length(); ci++)
+              {
+                char c = surfSink.charAt(ci);
+                if (c == 'x' || c == 'X') { xIdx = ci; break; }
+              }
+              if (xIdx > 0 && xIdx < surfSink.length() - 1)
+              {
+                try
+                {
+                  int sw = Integer.parseInt(surfSink.substring(0, xIdx).trim());
+                  int sh = Integer.parseInt(surfSink.substring(xIdx + 1).trim());
+                  if (sw >= 640 && sw <= 7680 && sh >= 480 && sh <= 4320)
+                    fftc.setLiveSinkResolution(sw, sh);
+                  else if (Sage.DBG) System.out.println(
+                      "MediaServer XCODE_SETUP: ignoring out-of-range sink " + surfSink);
+                }
+                catch (NumberFormatException nfe)
+                {
+                  if (Sage.DBG) System.out.println(
+                      "MediaServer XCODE_SETUP: ignoring malformed sink " + surfSink);
+                }
+              }
+              else if (Sage.DBG) System.out.println(
+                  "MediaServer XCODE_SETUP: ignoring malformed sink " + surfSink);
+            }
             fftc.setTranscodeFormat(xcodeMode, currMF != null ? currMF.getFileFormat() : null);
             commBufWrite.clear();
             commBufWrite.put(OK_BYTES).flip();

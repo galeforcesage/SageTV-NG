@@ -63,14 +63,18 @@ public final class BuiltinScaleProvider implements ScaleProvider
     StringBuilder sb = new StringBuilder();
     sb.append(scaler).append('=')
       .append(request.getTargetWidth()).append(':').append(request.getTargetHeight());
-    if ("scale_npp".equals(scaler)) sb.append(":interp_algo=lanczos");
+    // Lanczos when the chosen scaler supports it: scale_npp always, scale_cuda on
+    // builds whose filter exposes interp_algo. Gated on capability so a
+    // bilinear-only scale_cuda is never handed an option ffmpeg would reject.
+    if (sage.HwEncoder.scalerSupportsLanczos(scaler)) sb.append(":interp_algo=lanczos");
     return new ScaleExecutionPlan(ExecutionForm.BUILTIN, sb.toString(), label(scaler));
   }
 
   private static String label(String scaler)
   {
     if ("scale_npp".equals(scaler)) return "NPP/Lanczos";
-    if ("scale_cuda".equals(scaler)) return "CUDA";
+    if ("scale_cuda".equals(scaler))
+      return sage.HwEncoder.scalerSupportsLanczos(scaler) ? "CUDA/Lanczos" : "CUDA";
     if (scaler == null) return "none";
     return scaler;
   }

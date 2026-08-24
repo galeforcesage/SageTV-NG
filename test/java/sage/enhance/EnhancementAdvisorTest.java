@@ -517,4 +517,90 @@ public class EnhancementAdvisorTest
     assertFalse(EnhancementAdvisor.isCandidateSource(480, false), "SD progressive has nothing to do");
     assertFalse(EnhancementAdvisor.isCandidateSource(0, true), "Unknown height is never a candidate");
   }
+
+  // ---------- live sink re-clamp (mid-session monitor move) ----------
+  //
+  // A PWA dragged from a 1080p to a 1440p monitor re-opens with a new sink;
+  // tierForLiveSink re-derives the target resolution WITHOUT re-running the full
+  // advise (form-factor/local/bandwidth/decode gates), only adjusting an
+  // enhancement already granted for the session.
+
+  @Test
+  public void testLiveSinkMovesUpToLargerMonitor()
+  {
+    // 720p source that was upscaling to 1080p on the old sink now sees a 1440p
+    // panel: the tier climbs to fill it.
+    assertEquals(
+        EnhancementAdvisor.tierForLiveSink(2560, 1440, 720, false),
+        EnhancementTier.ENHANCE_1440P);
+  }
+
+  @Test
+  public void testLiveSinkMovesUpToFourK()
+  {
+    assertEquals(
+        EnhancementAdvisor.tierForLiveSink(3840, 2160, 1080, false),
+        EnhancementTier.ENHANCE_2160P);
+  }
+
+  @Test
+  public void testLiveSinkStepsDownToSmallerMonitor()
+  {
+    // Was 2160p on a 4K panel; dragged to a 1080p window -> 1080p source can no
+    // longer gain (sink == source), so nothing to upscale, no deinterlace needed.
+    assertEquals(
+        EnhancementAdvisor.tierForLiveSink(1920, 1080, 1080, false),
+        EnhancementTier.NONE);
+  }
+
+  @Test
+  public void testLiveSinkSmallWindowKeepsDeinterlaceForInterlacedSource()
+  {
+    // A 1080i source dragged to a window too small to gain still keeps the GPU
+    // deinterlace -- the same deintFloor advise() falls back to.
+    assertEquals(
+        EnhancementAdvisor.tierForLiveSink(1280, 720, 1080, true),
+        EnhancementTier.DEINTERLACE_ONLY);
+  }
+
+  @Test
+  public void testLiveSinkRespectsAdminCeiling()
+  {
+    Sage.put(EnhancementAdvisor.PROP_MAX_HEIGHT, "1440");
+    assertEquals(
+        EnhancementAdvisor.tierForLiveSink(3840, 2160, 1080, false),
+        EnhancementTier.ENHANCE_1440P,
+        "admin ceiling caps the re-clamp even on a 4K panel");
+  }
+
+  @Test
+  public void testLiveSinkRespectsMinGain()
+  {
+    // 1080 source, 1440 sink: 1.33x gain is below the 1.5x default floor, so no
+    // upscale is offered and a progressive source drops to NONE.
+    assertEquals(
+        EnhancementAdvisor.tierForLiveSink(2560, 1440, 1080, false),
+        EnhancementTier.NONE);
+  }
+
+  @Test
+  public void testLiveSinkUnknownSinkAbstains()
+  {
+    assertEquals(
+        EnhancementAdvisor.tierForLiveSink(0, 0, 1080, false),
+        EnhancementTier.NONE);
+    assertEquals(
+        EnhancementAdvisor.tierForLiveSink(0, 0, 1080, true),
+        EnhancementTier.DEINTERLACE_ONLY);
+  }
+
+  @Test
+  public void testLiveSinkClampsWidthNotJustHeight()
+  {
+    // A tall/narrow panel (1920x2160) must not be handed a 3840-wide 2160p
+    // picture; clampToSink caps on BOTH dimensions down to 1080p.
+    assertEquals(
+        EnhancementAdvisor.tierForLiveSink(1920, 2160, 720, false),
+        EnhancementTier.ENHANCE_1080P);
+  }
 }

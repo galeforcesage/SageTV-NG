@@ -349,6 +349,61 @@ public final class EnhancementAdvisor
   }
 
   /**
+   * Re-derive the upscale tier for a MID-SESSION sink change -- a PWA browser
+   * window dragged from, say, a 1080p monitor to a 1440p one -- reusing the exact
+   * resolution logic {@link #advise} applies: the minimum-visible-gain test, the
+   * clamp to the physical sink in BOTH dimensions, the admin ceiling
+   * ({@link #PROP_MAX_HEIGHT}), and the source floor.
+   *
+   * <p>This is deliberately NOT a full re-advise. It does not re-run the
+   * form-factor, local-preference, bandwidth or decode gates, because it only
+   * ADJUSTS an enhancement the advisor already granted for this session: it can
+   * move the target resolution up or down within the new physical sink and the
+   * admin ceiling, but it can never enable enhancement that was not already
+   * offered. The caller (the live msproxy re-open) has an active
+   * {@code enhanceRequest}; a stream that was never enhanced never reaches here.
+   *
+   * <p>When the new sink yields no worthwhile upscale (moved to a small window,
+   * or a sink below the min-gain ratio over the source) this returns
+   * {@link EnhancementTier#DEINTERLACE_ONLY} for interlaced sources and
+   * {@link EnhancementTier#NONE} otherwise -- the same {@code deintFloor} shape
+   * {@code advise} falls back to, so a shrink degrades gracefully rather than
+   * clinging to an oversized tier.
+   *
+   * @param sinkWidth  the new physical sink width in pixels, or {@code <=0} to
+   *                   abstain (returns the deinterlace floor, no re-clamp)
+   * @param sinkHeight the new physical sink height in pixels
+   * @param sourceHeight the source frame height (interlaced sources use frame,
+   *                     not field, height)
+   * @param sourceInterlaced whether the source is interlaced, so a no-upscale
+   *                         outcome still keeps a deinterlace
+   */
+  public static EnhancementTier tierForLiveSink(int sinkWidth, int sinkHeight,
+      int sourceHeight, boolean sourceInterlaced)
+  {
+    EnhancementTier deintFloor = sourceInterlaced
+        ? EnhancementTier.DEINTERLACE_ONLY : EnhancementTier.NONE;
+
+    boolean sinkKnown = sinkWidth > 0 && sinkHeight > 0;
+    if (!sinkKnown) return deintFloor;
+    if (sourceHeight < EnhancementTier.SOURCE_HEIGHT_FLOOR) return deintFloor;
+
+    int minGainTenths = Sage.getInt(PROP_MIN_GAIN_TENTHS, DEFAULT_MIN_GAIN_TENTHS);
+    if (minGainTenths < 10) minGainTenths = 10;
+    if ((long) sinkHeight * 10L < (long) sourceHeight * (long) minGainTenths)
+      return deintFloor;
+
+    EnhancementTier tier = EnhancementTier.clampToSink(
+        EnhancementTier.ENHANCE_2160P, sinkWidth, sinkHeight);
+    int adminMax = Sage.getInt(PROP_MAX_HEIGHT, 2160);
+    if (adminMax > 0) tier = EnhancementTier.clampToHeight(tier, adminMax);
+
+    if (tier.isUpscaling() && tier.getTargetHeight() <= sourceHeight) return deintFloor;
+    if (!tier.isLegalForSourceHeight(sourceHeight)) return deintFloor;
+    return tier;
+  }
+
+  /**
    * Apply the decode gate and settle the final verdict. Kept in one place so
    * every exit path is forced through the same "can the client actually play
    * this?" question -- the check most likely to be forgotten on one branch and

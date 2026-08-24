@@ -59,6 +59,10 @@ A Shield rendering its UI at 1080p on a 4K TV **must report `3840x2160`**. This 
 the field the entire feature turns on: without it the server has no honest reason
 to build a 4K stream for anybody.
 
+This value is measured **once, at the capability handshake**. For a client whose
+display can change mid-session — a browser tab dragged between monitors — the tier
+can be re-negotiated in place without a reconnect; see §3.3.
+
 Accepted range is **640–7680 wide by 480–4320 high**. Anything outside it, or any
 value that doesn't parse as `<int>x<int>`, is discarded and treated as *undeclared*
 rather than clamped — a bogus sink size is the one input that could talk the server
@@ -593,10 +597,77 @@ the server resolves a decision, advertises it on the delivery token, and the cli
 reflects the relevant pieces back on `XCODE_SETUP` so the transcode socket — which
 has no other view of the per-tune decision — can reconstruct it.
 
-This is deliberately the mirror of the audio-EQ precedent (`;afeq=` / `;afeqcodec=`):
-the server resolves a decision, advertises it on the delivery token, and the client
-reflects the relevant pieces back on `XCODE_SETUP` so the transcode socket — which
-has no other view of the per-tune decision — can reconstruct it.
+## 3.3 Mid-session monitor moves — `XCODE_SETUP …;sink=<W>x<H>`
+
+`DISPLAY_SINK_RESOLUTION` (§2.1) is measured **once**, at the capability
+handshake. That is fine for a fixed display, but a browser is not fixed: the user
+can drag the tab from a 1080p monitor to a 1440p or 4K one **mid-playback**. The
+handshake value is now stale — the tier was clamped to a panel the video no longer
+lives on — and until this addition the only way to re-negotiate was a full reload.
+
+The fix reuses the seek-reopen path the pull client already drives. On a monitor
+move the client re-opens the transcode at the current position with **one extra
+pair** — `;sink=<W>x<H>` — in the same `;k=v` shape as `acodec`, `ac`, `ss`:
+
+```
+XCODE_SETUP <mode>:enhance;tier=<tier>;ss=<currentMs>;sink=<W>x<H>
+```
+
+- `<W>` and `<H>` are the **true physical pixels of the monitor the video now
+  occupies** — the same measurement `DISPLAY_SINK_RESOLUTION` carries (§2.1),
+  re-taken for the new screen, not CSS pixels and not the window's inner size.
+  Separator is `x` (case-insensitive). Example: `sink=2560x1440`.
+- **The server re-derives the tier from this sink; the client never computes a
+  tier.** A move to a larger panel upscales further (e.g. `1080p → 1440p`), a move
+  to a smaller one steps down or off. The derivation reuses the exact resolution
+  logic §2.8/§4 already describe — the panel clamp in *both* dimensions, the admin
+  ceiling, the source floor, the min-gain test — so `;tier=` on the same line is
+  now advisory: when `;sink=` is present and valid it is what decides the target.
+- **Bounds are the §2.1 bounds:** `640×480`–`7680×4320`. A value outside them, or
+  one that does not parse as `<int>x<int>`, is **ignored** — the negotiated
+  `;tier=` stands and the stream is unaffected. Fail-closed, never an error.
+- **It only *adjusts* an enhancement already granted.** `;sink=` on a stream the
+  server did not already offer enhancement for does nothing; it never turns
+  enhancement on. Every gate (dry-run interlock, copy-family/active-file safety,
+  `GpuGovernor` admission) is re-checked on the re-open exactly as for any other
+  `XCODE_SETUP`, and a move to a window too small to gain drops cleanly to the
+  unenhanced (byte-identical) command.
+- **Optional and additive.** A client that never sends `;sink=` keeps today's
+  behavior: the tier stays clamped to the connect-time `DISPLAY_SINK_RESOLUTION`
+  until the next full reconnect. Nothing about the first open changes.
+
+### Client responsibilities
+
+1. **Detect the move.** Use the Window Management API — `getScreenDetails()` and
+   the `screen`/`currentScreen` `change` event, or a `window.matchMedia('(min-resolution …)')`
+   / `resize`-plus-`window.screen` fallback — to notice when the video's window
+   lands on a screen whose physical resolution differs from the one last reported.
+2. **Re-measure the new panel** to the same physical-pixel value §2.1 defines.
+3. **Re-open at the current position.** A monitor move is not a seek, so issue the
+   same re-open the client already performs for seek/FF/REW, with `ss=<currentMs>`
+   set to where playback is and `sink=<W>x<H>` appended. The server tears down the
+   prior transcode and starts a fresh one at that position and tier — the same
+   in-place re-open used for every seek, so the visible cost is one seek-sized
+   re-buffer, not a reload.
+4. **Debounce.** Coalesce rapid drags across several monitors into a single
+   re-open once the window settles, so a slow drag does not spawn a re-open per
+   intermediate screen.
+5. Optionally update the client's own cached sink so a later capability round or
+   reconnect reports the panel the user ended on.
+
+### Why this rides the transcode socket, not a re-sent capability
+
+The tier decision is made per stream-open and reconstructed on the transcode
+socket (§3.2); the transcode socket has no other view of it. Putting the live
+sink on the same re-open keeps the whole decision on one path and needs no new
+message type — the exact mirror of how `;tier=` and `;afeq=` already work. A
+client *may* also re-send `DISPLAY_SINK_RESOLUTION` on the control channel so a
+subsequent fresh tune is correct, but that alone will **not** re-clamp the stream
+already playing; the `;sink=` re-open is what does.
+
+The VSR seam is unaffected: a re-open rebuilds the plan through the same scaler
+provider path, so a plugged-in upscale provider is picked up at the new
+resolution automatically, with no extra client work.
 
 ---
 
@@ -939,3 +1010,22 @@ server work:
   then `TV` across three consecutive capability rounds on the same physical
   device. This feeds an admin-facing eligibility knob, so the flapping is a live
   correctness risk. Whether the value is user-settable is still unanswered.
+
+### 7.6 Mid-session monitor moves are now re-negotiable (§3.3)
+
+Added 2026-08-23. The connect-time `DISPLAY_SINK_RESOLUTION` (§2.1) no longer
+freezes the tier for the life of the session. A client that detects its window
+moving to a different-resolution monitor can re-open the transcode with
+`;sink=<W>x<H>` on `XCODE_SETUP` (§3.3), and the server re-derives the tier for
+the new panel on the same seek-reopen path — upscaling further on a larger
+display, stepping down on a smaller one.
+
+- **Server:** implemented and live. The `;sink=` pair is parsed on the msproxy
+  `XCODE_SETUP`, validated to the §2.1 bounds, and used to re-clamp an
+  already-granted enhancement; it never enables enhancement that was not already
+  offered, and an absent/malformed value leaves the negotiated tier untouched.
+- **Client:** owned by the client teams — screen-change detection, re-measuring
+  the new panel, and the re-open at the current position (`ss=<currentMs>`) with
+  the appended `sink=`. See §3.3 "Client responsibilities".
+- **Backward-compatible:** clients that never send `;sink=` behave exactly as
+  before, so this can ship server-first and be picked up per client.

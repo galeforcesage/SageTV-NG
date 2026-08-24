@@ -42,10 +42,12 @@ import sage.Sage;
  *       frame per frame), auto parity, and <b>deint=1 meaning "interlaced frames
  *       only"</b>. That last flag is what lets 720p60 pass through untouched and
  *       stops mixed-cadence channels from being mangled.</li>
- *   <li>The scaler is an abstraction on purpose. {@code scale_npp} is preferred
- *       for its Lanczos kernel, but it needs {@code --enable-libnpp}, which
- *       NVIDIA advises against on CUDA past 12.8; {@code scale_cuda} is the
- *       fallback. Never assume a specific one is present.</li>
+ *   <li>The scaler is an abstraction on purpose. {@code scale_cuda} is preferred
+ *       when its {@code interp_algo} (Lanczos) option is present — it is the
+ *       actively-maintained native CUDA kernel — falling back to {@code scale_npp}
+ *       (which needs {@code --enable-libnpp}, deprecated by NVIDIA on CUDA past
+ *       12.8) only when {@code scale_cuda} is bilinear-only, so quality is never
+ *       traded for the newer filter. Never assume a specific one is present.</li>
  *   <li>Audio is deliberately <b>not</b> handled here. A blind {@code -c:a copy}
  *       would break Tizen (which wants AC3/EAC3) and MSE (which wants AAC); audio
  *       stays with the existing per-surface target-codec machinery.</li>
@@ -195,7 +197,7 @@ public final class GpuEnhancePipeline
       {
         sb.append(plan.getScaler()).append('=')
           .append(plan.getTargetWidth()).append(':').append(plan.getTargetHeight());
-        if ("scale_npp".equals(plan.getScaler())) sb.append(":interp_algo=lanczos");
+        if (HwEncoder.scalerSupportsLanczos(plan.getScaler())) sb.append(":interp_algo=lanczos");
       }
     }
     return (sb.length() == 0) ? null : sb.toString();
@@ -402,6 +404,123 @@ public final class GpuEnhancePipeline
     if (repl.isEmpty()) return false; // no encoder available: leave copy in place
     argv.addAll(vci, repl);
     return true;
+  }
+
+  /**
+   * Rewrite an already-assembled <b>re-encode</b> ffmpeg argv <b>in place</b> to
+   * apply an enhancement plan while <b>keeping the base mode's negotiated video
+   * codec</b>. This is the browser/PWA counterpart to {@link #rewriteArgv}: when
+   * the source cannot be stream-copied to fMP4 (e.g. MPEG-2 DVR content), the
+   * server already re-encodes to H.264 for the browser ({@code browserhd}), so
+   * the copy-family rewrite does not apply. Here we enhance that H.264 output in
+   * place rather than switching it to the HEVC {@link #buildEncoderArgs} emits —
+   * browser MSE generally cannot decode HEVC.
+   *
+   * <p>The CUDA scaler/deinterlacer only exist behind {@code -hwaccel cuda} feeding
+   * an {@code *_nvenc} encoder, so this requires an NVENC video codec in the output
+   * section. Any other encoder (libx264/qsv/amf/vaapi) or a missing filter chain
+   * leaves the argv byte-identical and returns false — the fail-closed direction.
+   *
+   * <p>Exactly three edits, touching no audio token:
+   * <ol>
+   *   <li>Makes decode GPU-resident ({@code -hwaccel cuda -hwaccel_output_format
+   *       cuda} before {@code -i}).</li>
+   *   <li>Replaces the base CPU pixel-format filter ({@code -vf format=yuv420p})
+   *       with the CUDA deinterlace/scale chain from {@link #buildFilterChain} —
+   *       which routes through the {@code ScaleProvider} SPI, so a registered VSR
+   *       provider that renders a filter fragment is used here too. A CPU
+   *       {@code format=} filter is incompatible with {@code -hwaccel_output_format
+   *       cuda}, so replacing it is mandatory, not cosmetic.</li>
+   *   <li>Adds VBR rate control at the enhanced bitrate after the existing codec,
+   *       without disturbing {@code -c:v}/{@code -preset}/{@code -profile}/{@code -g}/
+   *       {@code -forced-idr} or any audio argument.</li>
+   * </ol>
+   *
+   * @return true if the argv was rewritten, false if it was left untouched.
+   */
+  public static boolean rewriteReencodeArgv(java.util.List<String> argv, EnhancementPlan plan, int fps)
+  {
+    if (argv == null || plan == null || !plan.isActive()) return false;
+
+    int iIdx = argv.indexOf("-i");
+    if (iIdx < 0) return false;
+
+    // Require an NVENC video codec in the output section: the CUDA scaler feeds
+    // nvenc directly; any other encoder can't consume VRAM frames.
+    int vci = indexOfVideoCodec(argv, iIdx + 1);
+    if (vci < 0 || vci + 1 >= argv.size()) return false;
+    String enc = argv.get(vci + 1);
+    if (enc == null || enc.toLowerCase().indexOf("nvenc") < 0) return false;
+
+    // Nothing to scale/deinterlace => leave the stream exactly as negotiated.
+    String enhanceVf = buildFilterChain(plan);
+    if (enhanceVf == null) return false;
+
+    // (1) GPU-resident decode.
+    ensureGpuGlobals(argv, iIdx);
+
+    // (2) Replace the base CPU -vf (or insert one if absent). Re-anchor first.
+    iIdx = argv.indexOf("-i");
+    int vfIdx = indexOfAfter(argv, iIdx, "-vf");
+    if (vfIdx >= 0 && vfIdx + 1 < argv.size())
+    {
+      argv.set(vfIdx + 1, enhanceVf);
+    }
+    else
+    {
+      int ins = Math.min(iIdx + 2, argv.size()); // after "-i <file>"
+      argv.add(ins, enhanceVf);
+      argv.add(ins, "-vf");
+    }
+
+    // (3) VBR rate control after the codec token, only for flags not already set.
+    iIdx = argv.indexOf("-i");
+    vci = indexOfVideoCodec(argv, iIdx + 1);
+    java.util.List<String> rc = buildReencodeRateControlArgs(plan, argv, iIdx);
+    if (!rc.isEmpty() && vci >= 0) argv.addAll(vci + 2, rc);
+    return true;
+  }
+
+  /**
+   * Rate-control tokens for the in-place re-encode path: VBR at the plan's
+   * bitrate plus adaptive quantization, mirroring {@link #buildEncoderArgs} but
+   * omitting anything the base {@code browserhd} command already supplies
+   * ({@code -c:v}/{@code -preset}/{@code -g}). Each flag is staged only if absent
+   * from the output section, so a variant that already sets a rate is not
+   * duplicated.
+   */
+  private static java.util.List<String> buildReencodeRateControlArgs(
+      EnhancementPlan plan, java.util.List<String> argv, int iIdx)
+  {
+    java.util.List<String> out = new java.util.ArrayList<String>();
+    long rate = plan.getBitrateKbps();
+    if (rate <= 0) rate = 20000L;
+    long maxrate = (plan.getBitrateCapKbps() > 0)
+        ? Math.max(rate, plan.getBitrateCapKbps()) : (rate * 3L / 2L);
+    addFlagIfAbsent(out, argv, iIdx, "-rc", "vbr");
+    addFlagIfAbsent(out, argv, iIdx, "-b:v", rate + "k");
+    addFlagIfAbsent(out, argv, iIdx, "-maxrate", maxrate + "k");
+    addFlagIfAbsent(out, argv, iIdx, "-bufsize", (maxrate * 2L) + "k");
+    if (Sage.getBoolean(PROP_SPATIAL_AQ, true))
+      addFlagIfAbsent(out, argv, iIdx, "-spatial_aq", "1");
+    if (Sage.getBoolean(PROP_TEMPORAL_AQ, true))
+      addFlagIfAbsent(out, argv, iIdx, "-temporal_aq", "1");
+    return out;
+  }
+
+  /** Stage {@code flag value} into {@code out} only if {@code flag} is absent after {@code iIdx}. */
+  private static void addFlagIfAbsent(java.util.List<String> out, java.util.List<String> argv,
+      int iIdx, String flag, String value)
+  {
+    if (indexOfAfter(argv, iIdx, flag) < 0) { out.add(flag); out.add(value); }
+  }
+
+  /** First index of {@code flag} strictly after {@code afterIdx}. */
+  private static int indexOfAfter(java.util.List<String> argv, int afterIdx, String flag)
+  {
+    for (int i = Math.max(0, afterIdx + 1); i < argv.size(); i++)
+      if (flag.equals(argv.get(i))) return i;
+    return -1;
   }
 
   /** Ensure {@code -hwaccel cuda -hwaccel_output_format cuda} appear before {@code iIdx}. */

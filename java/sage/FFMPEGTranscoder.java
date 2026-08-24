@@ -1489,6 +1489,21 @@ public class FFMPEGTranscoder implements TranscodeEngine
   }
 
   /**
+   * True for a non-copy re-encode PLAYBACK mode that can still be enhanced in
+   * place because it already decodes and re-encodes on the GPU. Currently only
+   * {@code browserhd} — the H.264 fMP4 re-encode the browser/PWA negotiates for
+   * sources that cannot be stream-copied (e.g. MPEG-2 DVR content). Unlike the
+   * copy-family modes, enhancement here keeps the H.264 codec (browser MSE
+   * generally cannot decode the HEVC the copy path emits) and only adds the CUDA
+   * scale/deinterlace chain plus a higher bitrate. Still gated on {@code
+   * !activeFile} exactly like the copy-family modes, so a recording is untouched.
+   */
+  boolean isEnhanceableReencodeMode()
+  {
+    return "browserhd".equalsIgnoreCase(xcodeModeName);
+  }
+
+  /**
    * Fix B gate: true when this instance's on-demand (VOD, {@code !activeFile})
    * probesize/analyzeduration tuning should apply -- i.e. a source format is
    * known to derive sane values from, AND the xcodeMode is one of the
@@ -1530,8 +1545,32 @@ public class FFMPEGTranscoder implements TranscodeEngine
       if (enhanceRequest == null || !enhanceRequest.isActive()) return;
       if (!sage.enhance.EnhancementDryRun.isLive()) return;
       // Recording-integrity gate: never touch a recording mux or an active-file
-      // source, and only ever a confirmed modern copy-family playback mode.
-      if (activeFile || !isModernCopyFamilyXcodeMode()) return;
+      // source. Enhancement applies to the confirmed modern copy-family playback
+      // modes (remux/copy) and to the browserhd re-encode path (H.264 for browser
+      // MSE, chosen when the source can't be stream-copied to fMP4, e.g. MPEG-2).
+      boolean copyFamily = isModernCopyFamilyXcodeMode();
+      boolean reencodeEnhanceable = isEnhanceableReencodeMode();
+      if (activeFile || (!copyFamily && !reencodeEnhanceable)) return;
+
+      // Optional operator override: force a specific tier regardless of the tier
+      // the client negotiated from its display sink (a 1080p browser sink caps the
+      // request at enhance_1080p). Lets an operator demonstrate the full 2160p
+      // upscale on demand. Unset => byte-identical to the negotiated request.
+      sage.enhance.EnhancementTier reqTier = enhanceRequest;
+      boolean forcedTier = false;
+      String forceTier = Sage.get("playback/gpu_enhance/force_tier", "");
+      if (forceTier != null && forceTier.trim().length() > 0)
+      {
+        sage.enhance.EnhancementTier forced =
+            sage.enhance.EnhancementTier.fromToken(forceTier.trim());
+        if (forced != null && forced.isActive())
+        {
+          reqTier = forced;
+          forcedTier = true;
+          if (Sage.DBG) System.out.println("GPU_ENHANCE apply: force_tier override -> "
+              + forced.token());
+        }
+      }
 
       int srcH = 0, srcFps = 0;
       boolean interlaced = false;
@@ -1549,6 +1588,36 @@ public class FFMPEGTranscoder implements TranscodeEngine
         if (br > 0) srcKbps = br / 1000L;
       }
 
+      // Live sink re-negotiation (Protocol 2.1 ";sink=WxH" on the msproxy
+      // re-open): a PWA dragged to a different-resolution monitor re-opens this
+      // stream with its new physical sink. Re-clamp the ALREADY-granted tier to
+      // that sink using the advisor's own resolution logic, so a larger panel
+      // upscales further and a smaller one steps down -- without re-running the
+      // full advise (this only adjusts an enhancement already offered). A pinned
+      // force_tier wins over the sink, matching its "demonstrate on demand" role.
+      if (!forcedTier && liveSinkWidth > 0 && liveSinkHeight > 0 && srcH > 0)
+      {
+        sage.enhance.EnhancementTier sinkTier =
+            sage.enhance.EnhancementAdvisor.tierForLiveSink(
+                liveSinkWidth, liveSinkHeight, srcH, interlaced);
+        if (sinkTier != null && sinkTier != reqTier)
+        {
+          if (Sage.DBG) System.out.println("GPU_ENHANCE apply: live sink "
+              + liveSinkWidth + "x" + liveSinkHeight + " re-clamps tier "
+              + reqTier.token() + " -> " + sinkTier.token());
+          reqTier = sinkTier;
+        }
+        if (!reqTier.isActive())
+        {
+          // The move (e.g. to a small window) leaves no worthwhile enhancement:
+          // fall back to the byte-identical negotiated command, unenhanced.
+          if (Sage.DBG) System.out.println("GPU_ENHANCE apply: live sink "
+              + liveSinkWidth + "x" + liveSinkHeight
+              + " yields no enhancement, leaving stream untouched");
+          return;
+        }
+      }
+
       // Per-transcode session id: stable for this instance, unique across
       // concurrent transcoders, so the governor's concurrency count is honest.
       String sessionId = "xcode-" + System.identityHashCode(this);
@@ -1561,14 +1630,14 @@ public class FFMPEGTranscoder implements TranscodeEngine
       sage.enhance.EnhancementProfile.MotionClass motion =
           sage.enhance.MotionHint.motionFor(enhanceProfile, srcFps);
       long estKbps = sage.enhance.GpuEnhancePipeline.suggestBitrateKbps(
-          enhanceRequest, motion, srcKbps);
+          reqTier, motion, srcKbps);
       long fpsEst = sage.enhance.GpuEnhancePipeline.suggestBitrateKbps(
-          enhanceRequest, srcFps, srcKbps);
+          reqTier, srcFps, srcKbps);
       if (fpsEst > 0 && estKbps > fpsEst) estKbps = fpsEst;
 
       sage.enhance.GpuGovernor gov = sage.enhance.GpuGovernor.getInstance();
       sage.enhance.GpuGovernor.Admission adm =
-          gov.requestAdmission(sessionId, enhanceRequest, srcH, estKbps);
+          gov.requestAdmission(sessionId, reqTier, srcH, estKbps);
       if (adm == null || !adm.isGranted())
       {
         if (Sage.DBG) System.out.println("GPU_ENHANCE apply: not admitted ("
@@ -1590,14 +1659,16 @@ public class FFMPEGTranscoder implements TranscodeEngine
         return;
       }
 
-      boolean rewritten = sage.enhance.GpuEnhancePipeline.rewriteArgv(
-          xcodeParamsVec, plan, srcFps);
+      boolean rewritten = copyFamily
+          ? sage.enhance.GpuEnhancePipeline.rewriteArgv(xcodeParamsVec, plan, srcFps)
+          : sage.enhance.GpuEnhancePipeline.rewriteReencodeArgv(xcodeParamsVec, plan, srcFps);
       if (!rewritten)
       {
         gov.release(sessionId);
         // Active plan we are discarding unused: return its specialized permit.
         plan.releaseScaleLease();
-        if (Sage.DBG) System.out.println("GPU_ENHANCE apply: argv not copy-family shape, left untouched");
+        if (Sage.DBG) System.out.println("GPU_ENHANCE apply: argv not "
+            + (copyFamily ? "copy-family" : "re-encode") + " shape, left untouched");
         return;
       }
       enhanceSessionId = sessionId;
@@ -3995,6 +4066,29 @@ public class FFMPEGTranscoder implements TranscodeEngine
   public void setEnhancementRequest(sage.enhance.EnhancementTier tier)
   {
     enhanceRequest = (tier == null) ? sage.enhance.EnhancementTier.NONE : tier;
+  }
+
+  /** New physical display sink width for a mid-session monitor move; 0 = none. */
+  protected int liveSinkWidth = 0;
+  /** New physical display sink height for a mid-session monitor move; 0 = none. */
+  protected int liveSinkHeight = 0;
+
+  /**
+   * Record an updated physical display sink for THIS msproxy re-open, sent by a
+   * PWA whose browser window was dragged to a different-resolution monitor
+   * (Protocol 2.1 {@code ";sink=WxH"} on {@code XCODE_SETUP}). It only takes
+   * effect when this session already carries an active {@code enhanceRequest};
+   * {@link #maybeApplyGpuEnhancement} then re-clamps the granted tier to this
+   * sink via {@link sage.enhance.EnhancementAdvisor#tierForLiveSink} -- upscaling
+   * further on a larger panel, stepping down on a smaller one -- so the same
+   * seek-reopen path rebuilds the plan at the new resolution. A non-positive or
+   * out-of-range value is ignored by the caller and leaves the negotiated tier
+   * untouched.
+   */
+  public void setLiveSinkResolution(int w, int h)
+  {
+    liveSinkWidth = (w > 0) ? w : 0;
+    liveSinkHeight = (h > 0) ? h : 0;
   }
 
   public void setActiveFile(boolean x)

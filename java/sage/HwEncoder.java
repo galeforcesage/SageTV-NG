@@ -102,6 +102,16 @@ public final class HwEncoder
   private static final Map<String, Boolean> runtimeCache = new ConcurrentHashMap<String, Boolean>();
 
   /**
+   * Cache: ffmpeg binary path -> whether its {@code scale_cuda} filter exposes
+   * the {@code interp_algo} option (i.e. can do Lanczos, not just bilinear).
+   * Older ffmpeg builds shipped a bilinear-only {@code scale_cuda}; modern ones
+   * (roughly ffmpeg 6.0+) added algorithm selection, which is what lets us prefer
+   * the actively-maintained native CUDA scaler over the deprecated NPP one
+   * without a quality regression.
+   */
+  private static final Map<String, Boolean> scaleCudaInterpCache = new ConcurrentHashMap<String, Boolean>();
+
+  /**
    * Binaries we have already explained the "enhancement unavailable" verdict
    * for, so the reason is stated once rather than on every admission check.
    */
@@ -308,17 +318,94 @@ public final class HwEncoder
   }
 
   /**
-   * Pick the CUDA scaler filter name, preferring {@code scale_npp} (Lanczos
-   * capable, matching the existing offline {@code upscale_2160} preset) and
-   * falling back to {@code scale_cuda}. Returns null when neither exists, which
-   * removes every upscale tier from the ladder.
+   * Pick the CUDA scaler filter name. Prefers {@code scale_cuda} when this
+   * ffmpeg's {@code scale_cuda} supports Lanczos ({@code interp_algo}): it is the
+   * actively-maintained native CUDA kernel, whereas {@code scale_npp} depends on
+   * the NPP library NVIDIA is deprecating on CUDA past 12.8 (ffmpeg prints a
+   * "libnpp based filters are deprecated" warning for it). When {@code scale_cuda}
+   * is bilinear-only on this build, {@code scale_npp} is preferred instead so we
+   * never trade Lanczos quality for the newer filter; bare {@code scale_cuda} is
+   * the last resort. Returns null when neither exists, which removes every upscale
+   * tier from the ladder.
+   *
+   * <p>An operator can pin the choice with {@code playback/gpu_enhance/scaler}
+   * ({@code scale_cuda} / {@code scale_npp}); an unavailable pin is ignored.
    */
   public static String cudaScaler()
   {
     Set<String> f = detectFilters();
-    if (f.contains("scale_npp")) return "scale_npp";
-    if (f.contains("scale_cuda")) return "scale_cuda";
+    String pin = Sage.get("playback/gpu_enhance/scaler", "").trim();
+    if (pin.length() > 0 && f.contains(pin)) return pin;
+
+    boolean npp = f.contains("scale_npp");
+    boolean cuda = f.contains("scale_cuda");
+    if (cuda && scaleCudaSupportsInterpAlgo()) return "scale_cuda";
+    if (npp) return "scale_npp";
+    if (cuda) return "scale_cuda";
     return null;
+  }
+
+  /** True if this scaler renders Lanczos on the default binary (so a
+   *  {@code :interp_algo=lanczos} suffix is valid). {@code scale_npp} always does;
+   *  {@code scale_cuda} only on builds whose filter exposes {@code interp_algo}. */
+  public static boolean scalerSupportsLanczos(String scaler)
+  {
+    if ("scale_npp".equals(scaler)) return true;
+    if ("scale_cuda".equals(scaler)) return scaleCudaSupportsInterpAlgo();
+    return false;
+  }
+
+  /** True if the default ffmpeg's {@code scale_cuda} exposes {@code interp_algo}. */
+  public static boolean scaleCudaSupportsInterpAlgo()
+  {
+    return scaleCudaSupportsInterpAlgo(Sage.get(PROP_PROBE_FFMPEG, DEFAULT_PROBE_FF));
+  }
+
+  /**
+   * Probe {@code ffmpeg -h filter=scale_cuda} for the {@code interp_algo} option,
+   * cached per binary like {@link #detectFilters(String)}. Fail-closed: a failed
+   * probe reads as "no Lanczos", so we keep {@code scale_npp}'s known-good quality.
+   */
+  public static boolean scaleCudaSupportsInterpAlgo(String ffmpegBin)
+  {
+    // Operator/test override: force the capability without probing. "auto"
+    // (default) probes the binary. Lets a deployment pin behavior and makes the
+    // decision unit-testable without a real ffmpeg present.
+    String ov = Sage.get("playback/gpu_enhance/scale_cuda_lanczos", "auto").trim().toLowerCase(Locale.ROOT);
+    if (ov.equals("true") || ov.equals("1") || ov.equals("yes") || ov.equals("on")) return true;
+    if (ov.equals("false") || ov.equals("0") || ov.equals("no") || ov.equals("off")) return false;
+
+    String key = (ffmpegBin == null || ffmpegBin.length() == 0)
+        ? Sage.get(PROP_PROBE_FFMPEG, DEFAULT_PROBE_FF) : ffmpegBin;
+    Boolean cached = scaleCudaInterpCache.get(key);
+    if (cached != null) return cached.booleanValue();
+    boolean found = false;
+    try
+    {
+      Process p = new ProcessBuilder(key, "-hide_banner", "-h", "filter=scale_cuda")
+          .redirectErrorStream(true).start();
+      BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+      try
+      {
+        String line;
+        while ((line = r.readLine()) != null)
+        {
+          if (line.indexOf("interp_algo") >= 0) { found = true; break; }
+        }
+      }
+      finally { try { r.close(); } catch (IOException ie) {} }
+      try { while (p.getInputStream().read() >= 0); } catch (IOException ie) {}
+      try { p.waitFor(); } catch (InterruptedException ie) { p.destroy(); }
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("HwEncoder: scale_cuda interp_algo probe of "
+          + key + " failed: " + t);
+    }
+    scaleCudaInterpCache.put(key, Boolean.valueOf(found));
+    if (Sage.DBG)
+      System.out.println("HwEncoder: scale_cuda interp_algo on " + key + " -> " + found);
+    return found;
   }
 
   /**
@@ -516,6 +603,7 @@ public final class HwEncoder
     probeCache.clear();
     filterCache.clear();
     runtimeCache.clear();
+    scaleCudaInterpCache.clear();
     unsupportedReasonLogged.clear();
   }
 

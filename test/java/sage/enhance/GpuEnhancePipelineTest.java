@@ -112,13 +112,35 @@ public class GpuEnhancePipelineTest
     assertEquals(chain, "scale_npp=3840:2160:interp_algo=lanczos");
   }
 
-  /** {@code scale_cuda} has no interp_algo option; adding one would break it. */
+  /** {@code scale_cuda} gets Lanczos too on builds that expose {@code interp_algo}
+   *  (gated by the capability probe / override), so switching off the deprecated
+   *  NPP filter costs no quality. */
   @Test
-  public void testScaleCudaFallbackOmitsInterpAlgo()
+  public void testScaleCudaUsesLanczosWhenSupported()
   {
-    String chain = GpuEnhancePipeline.buildFilterChain(
-        plan(EnhancementTier.ENHANCE_2160P, false, "scale_cuda"));
-    assertEquals(chain, "scale_cuda=3840:2160");
+    Sage.putBoolean("playback/gpu_enhance/scale_cuda_lanczos", true);
+    try
+    {
+      String chain = GpuEnhancePipeline.buildFilterChain(
+          plan(EnhancementTier.ENHANCE_2160P, false, "scale_cuda"));
+      assertEquals(chain, "scale_cuda=3840:2160:interp_algo=lanczos");
+    }
+    finally { Sage.remove("playback/gpu_enhance/scale_cuda_lanczos"); }
+  }
+
+  /** A bilinear-only {@code scale_cuda} (no interp_algo) must not be handed a
+   *  Lanczos option ffmpeg would reject. */
+  @Test
+  public void testScaleCudaOmitsInterpAlgoWhenUnsupported()
+  {
+    Sage.putBoolean("playback/gpu_enhance/scale_cuda_lanczos", false);
+    try
+    {
+      String chain = GpuEnhancePipeline.buildFilterChain(
+          plan(EnhancementTier.ENHANCE_2160P, false, "scale_cuda"));
+      assertEquals(chain, "scale_cuda=3840:2160");
+    }
+    finally { Sage.remove("playback/gpu_enhance/scale_cuda_lanczos"); }
   }
 
   @Test
@@ -486,5 +508,100 @@ public class GpuEnhancePipelineTest
     int count = 0;
     for (String s : argv) if ("-tag:v".equals(s)) count++;
     assertEquals(count, 1, "must not leave a duplicate -tag:v: " + argv);
+  }
+
+  /** The exact browserhd (PWA/MSE) re-encode command shape: H.264 nvenc, CPU
+   *  format filter, no explicit bitrate, AAC stereo audio. */
+  private static java.util.List<String> browserhdArgv()
+  {
+    return new java.util.ArrayList<String>(java.util.Arrays.asList(
+        "ffmpeg", "-v", "info", "-y", "-hwaccel", "cuda", "-threads", "2",
+        "-i", "/media/rec.mpg",
+        "-f", "mp4", "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
+        "-vf", "format=yuv420p",
+        "-c:v", "h264_nvenc", "-preset", "p4", "-profile:v", "high",
+        "-g", "60", "-forced-idr", "1",
+        "-acodec", "aac", "-ac", "2", "-ar", "48000", "-b:a", "128k", "-"));
+  }
+
+  /** The re-encode path keeps the browser's H.264 codec (MSE can't decode HEVC)
+   *  and swaps the CPU format filter for the CUDA scale chain. */
+  @Test
+  public void testReencodeKeepsH264AndSwapsFilter()
+  {
+    java.util.List<String> argv = browserhdArgv();
+    assertTrue(GpuEnhancePipeline.rewriteReencodeArgv(
+        argv, plan(EnhancementTier.ENHANCE_2160P, false, "scale_cuda"), 60));
+    int vc = argv.indexOf("-c:v");
+    assertEquals(argv.get(vc + 1), "h264_nvenc", "must NOT switch to HEVC: " + argv);
+    assertFalse(argv.contains("hevc_nvenc"), "no HEVC on the browser path: " + argv);
+    assertFalse(argv.contains("hvc1"), "no hvc1 tag on the browser path: " + argv);
+    int vf = argv.indexOf("-vf");
+    assertTrue(vf > argv.indexOf("-i"), "filter stays in the output section: " + argv);
+    assertEquals(argv.get(vf + 1), "scale_cuda=3840:2160", argv.toString());
+    assertFalse(argv.contains("format=yuv420p"), "CPU format filter must be replaced: " + argv);
+  }
+
+  /** Decode is made GPU-resident: -hwaccel_output_format cuda before -i, no dup -hwaccel. */
+  @Test
+  public void testReencodeInsertsHwaccelOutputFormat()
+  {
+    java.util.List<String> argv = browserhdArgv();
+    assertTrue(GpuEnhancePipeline.rewriteReencodeArgv(
+        argv, plan(EnhancementTier.ENHANCE_1080P, false, "scale_cuda"), 60));
+    int of = argv.indexOf("-hwaccel_output_format");
+    int i = argv.indexOf("-i");
+    assertTrue(of >= 0 && of < i, "output format must precede -i: " + argv);
+    assertEquals(argv.indexOf("-hwaccel"), argv.lastIndexOf("-hwaccel"),
+        "-hwaccel must not be duplicated: " + argv);
+  }
+
+  /** The browser command carries no explicit bitrate; enhancement adds VBR control. */
+  @Test
+  public void testReencodeAddsBitrateControl()
+  {
+    java.util.List<String> argv = browserhdArgv();
+    assertTrue(GpuEnhancePipeline.rewriteReencodeArgv(
+        argv, plan(EnhancementTier.ENHANCE_2160P, false, "scale_cuda"), 60));
+    int bv = argv.indexOf("-b:v");
+    assertTrue(bv > argv.indexOf("-i"), "bitrate must be set on output: " + argv);
+    assertEquals(argv.get(bv + 1), "25000k", argv.toString());
+    assertTrue(argv.contains("-maxrate") && argv.contains("-bufsize"), argv.toString());
+  }
+
+  /** Audio must be left exactly as negotiated. */
+  @Test
+  public void testReencodeNeverTouchesAudio()
+  {
+    java.util.List<String> argv = browserhdArgv();
+    GpuEnhancePipeline.rewriteReencodeArgv(
+        argv, plan(EnhancementTier.ENHANCE_1080P, false, "scale_cuda"), 60);
+    int ca = argv.indexOf("-acodec");
+    assertEquals(argv.get(ca + 1), "aac", argv.toString());
+    int ba = argv.indexOf("-b:a");
+    assertEquals(argv.get(ba + 1), "128k", argv.toString());
+  }
+
+  /** Only NVENC output can consume CUDA frames; a software/other encoder is refused. */
+  @Test
+  public void testReencodeRefusesNonNvencEncoder()
+  {
+    java.util.List<String> argv = new java.util.ArrayList<String>(java.util.Arrays.asList(
+        "ffmpeg", "-i", "/media/rec.mpg", "-vf", "format=yuv420p",
+        "-c:v", "libx264", "-acodec", "aac", "-"));
+    java.util.List<String> before = new java.util.ArrayList<String>(argv);
+    assertFalse(GpuEnhancePipeline.rewriteReencodeArgv(
+        argv, plan(EnhancementTier.ENHANCE_2160P, false, "scale_cuda"), 60));
+    assertEquals(argv, before, "non-nvenc encoder must be left byte-identical");
+  }
+
+  /** An inactive plan is a no-op on the re-encode path too. */
+  @Test
+  public void testReencodeIsNoOpForInactivePlan()
+  {
+    java.util.List<String> argv = browserhdArgv();
+    java.util.List<String> before = new java.util.ArrayList<String>(argv);
+    assertFalse(GpuEnhancePipeline.rewriteReencodeArgv(argv, EnhancementPlan.NONE, 60));
+    assertEquals(argv, before, "inactive plan must leave the command byte-identical");
   }
 }
