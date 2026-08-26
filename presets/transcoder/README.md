@@ -5,7 +5,7 @@ This directory ships the baseline set of "Transcode To..." presets consumed by
 precedence order:
 
 1. `${STATE_DIR}/transcoder/presets/*.properties` — deploy / user overrides
-   (e.g. `/opt/sagetv/state/mine/transcoder/presets/` in the state-managed
+   (e.g. `${STATE_DIR}/transcoder/presets/` in the state-managed
    container layout). Files here take precedence over baseline by `name`.
 2. `<install-root>/presets/transcoder/*.properties` — this directory, shipped
    in the source tree and copied into the container image by the Dockerfile.
@@ -61,6 +61,13 @@ Screen-class targets (H.264 unless noted):
 Notes:
 
 * All NVENC-backed presets use `-preset p5` (slow / quality balance).
+* The `PHONE_*` presets cap output at 30fps via `-fpsmax 30000/1001`. `-fpsmax`
+  only *reduces* frame rate, so 59.94/60fps sources are decimated to ~29.97 to
+  save bandwidth on small screens, while 24/25/30fps sources pass through
+  untouched (no frame duplication). It is applied as an output option, so it
+  works on both the GPU (`scale_npp` → NVENC) and software paths without a
+  filter round-trip. For `PHONE_HIGH_1080` the cap also keeps 1080p output
+  within H.264 Level 4.1 (which tops out at 1080p30).
 * Upscale presets use `scale_npp` with `interp_algo=lanczos` for GPU-side
   resampling; for higher quality try `super` or external SR filters.
 * `DVD_LEGACY_MPEG2` is software-only (NVENC has no MPEG-2 encoder).

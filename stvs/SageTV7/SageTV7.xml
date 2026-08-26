@@ -62545,6 +62545,1518 @@
    </ns0:Action>
   </ns0:Listener>
  </ns0:Menu>
+ <ns0:Menu ID="970001" Name="NG Guided Conversion" Sym="NGCONV-1001">
+  <ns0:Theme Ref="7168" Name="Free Menu Layout with ..." />
+  <ns0:Hook Name="BeforeMenuUnload" Sym="NGCONV-1002">
+   <ns0:Action Name="DiscardConversionDraft(NGDraft)" Sym="NGCONV-1003" />
+  </ns0:Hook>
+  <ns0:Panel Name="MenuContainer" Sym="NGCONV-1004">
+   <ns0:Theme Ref="7170" Name="Free Form Horizontal F..." />
+   <ns0:Panel Name="Buttons" Sym="NGCONV-1005">
+    <ns0:Item Name="Overview" Sym="NGCONV-1006">
+     <ns0:Attribute Name="SetupArea" Sym="NGCONV-1007">
+      <ns0:Value>&quot;xNgOverview&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Attribute Name="AreaName" Sym="NGCONV-1008">
+      <ns0:Value>&quot;Overview&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Attribute Name="HelpText" Sym="NGCONV-1009">
+      <ns0:Value>&quot;The recommended result and estimated output.&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Action Ref="22529" Name="REM render button" />
+     <ns0:Hook Ref="22543" Name="FocusGained" />
+    </ns0:Item>
+    <ns0:Item Name="Purpose &amp; Player" Sym="NGCONV-1010">
+     <ns0:Attribute Name="SetupArea" Sym="NGCONV-1011">
+      <ns0:Value>&quot;xNgPurpose&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Attribute Name="AreaName" Sym="NGCONV-1012">
+      <ns0:Value>&quot;Purpose &amp; Player&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Attribute Name="HelpText" Sym="NGCONV-1013">
+      <ns0:Value>&quot;Who this is for and where it will play.&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Action Ref="22529" Name="REM render button" />
+     <ns0:Hook Ref="22543" Name="FocusGained" />
+    </ns0:Item>
+    <ns0:Item Name="Transfer &amp; File Size" Sym="NGCONV-1014">
+     <ns0:Attribute Name="SetupArea" Sym="NGCONV-1015">
+      <ns0:Value>&quot;xNgTransfer&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Attribute Name="AreaName" Sym="NGCONV-1016">
+      <ns0:Value>&quot;Transfer &amp; File Size&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Attribute Name="HelpText" Sym="NGCONV-1017">
+      <ns0:Value>&quot;How you will move it and how big it should be.&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Action Ref="22529" Name="REM render button" />
+     <ns0:Hook Ref="22543" Name="FocusGained" />
+    </ns0:Item>
+    <ns0:Item Name="Picture" Sym="NGCONV-1018">
+     <ns0:Attribute Name="SetupArea" Sym="NGCONV-1019">
+      <ns0:Value>&quot;xNgPicture&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Attribute Name="AreaName" Sym="NGCONV-1020">
+      <ns0:Value>&quot;Picture&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Attribute Name="HelpText" Sym="NGCONV-1021">
+      <ns0:Value>&quot;Upscaling and HDR / dynamic range.&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Action Ref="22529" Name="REM render button" />
+     <ns0:Hook Ref="22543" Name="FocusGained" />
+    </ns0:Item>
+    <ns0:Item Name="Video Format" Sym="NGCONV-1022">
+     <ns0:Attribute Name="SetupArea" Sym="NGCONV-1023">
+      <ns0:Value>&quot;xNgFormat&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Attribute Name="AreaName" Sym="NGCONV-1024">
+      <ns0:Value>&quot;Video Format&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Attribute Name="HelpText" Sym="NGCONV-1025">
+      <ns0:Value>&quot;Container, video codec and frame rate.&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Action Ref="22529" Name="REM render button" />
+     <ns0:Hook Ref="22543" Name="FocusGained" />
+    </ns0:Item>
+    <ns0:Item Name="Audio &amp; Tracks" Sym="NGCONV-1026">
+     <ns0:Attribute Name="SetupArea" Sym="NGCONV-1027">
+      <ns0:Value>&quot;xNgAudio&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Attribute Name="AreaName" Sym="NGCONV-1028">
+      <ns0:Value>&quot;Audio &amp; Tracks&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Attribute Name="HelpText" Sym="NGCONV-1029">
+      <ns0:Value>&quot;Audio layout, codec and subtitles.&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Action Ref="22529" Name="REM render button" />
+     <ns0:Hook Ref="22543" Name="FocusGained" />
+    </ns0:Item>
+    <ns0:Item Name="Advanced" Sym="NGCONV-1030">
+     <ns0:Attribute Name="SetupArea" Sym="NGCONV-1031">
+      <ns0:Value>&quot;xNgAdvanced&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Attribute Name="AreaName" Sym="NGCONV-1032">
+      <ns0:Value>&quot;Advanced&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Attribute Name="HelpText" Sym="NGCONV-1033">
+      <ns0:Value>&quot;Encoding preferences and compatibility notes.&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Action Ref="22529" Name="REM render button" />
+     <ns0:Hook Ref="22543" Name="FocusGained" />
+    </ns0:Item>
+    <ns0:Item Name="Create File" Sym="NGCONV-1034">
+     <ns0:Attribute Name="SetupArea" Sym="NGCONV-1035">
+      <ns0:Value>&quot;xNgCreate&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Attribute Name="AreaName" Sym="NGCONV-1036">
+      <ns0:Value>&quot;Create File&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Attribute Name="HelpText" Sym="NGCONV-1037">
+      <ns0:Value>&quot;Name the file and start the conversion.&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Action Ref="22529" Name="REM render button" />
+     <ns0:Action Name="NGFileName = GetDraftSuggestedName(NGDraft)" Sym="NGCONV-1038">
+      <ns0:Action Name="NGDelOrig = false" Sym="NGCONV-1039">
+       <ns0:Action Name="NGClipStart = 0" Sym="NGCONV-1040">
+        <ns0:Action Name="NGClipDur = 0" Sym="NGCONV-1041">
+         <ns0:OptionsMenu Name="NG Create File" Sym="NGCONV-1042">
+          <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+          <ns0:Action Name="GetDraftReviewReport(NGDraft)" Sym="NGCONV-1043">
+           <ns0:Text Name="" Sym="NGCONV-1044">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Theme Name="NGReportFontTheme" Sym="NGCONV-1045">
+             <ns0:TileBackgroundImage>false</ns0:TileBackgroundImage>
+             <ns0:StretchBackgroundImage>false</ns0:StretchBackgroundImage>
+             <ns0:FontSize>=gFontSizeGeneral-6</ns0:FontSize>
+            </ns0:Theme>
+           </ns0:Text>
+          </ns0:Action>
+          <ns0:Item Name="" Sym="NGCONV-1046">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1047">
+            <ns0:Value>&quot;The output file name; the extension is added automatically.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="&quot;File name: &quot; + NGFileName" Sym="NGCONV-1048">
+            <ns0:Text Name="" Sym="NGCONV-1049" />
+           </ns0:Action>
+           <ns0:OptionsMenu Name="NG File Name" Sym="NGCONV-1050">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Listener Name="Select" Sym="NGCONV-1051">
+             <ns0:ListenerEvent>Select</ns0:ListenerEvent>
+             <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1052">
+              <ns0:Action Name="Refresh()" Sym="NGCONV-1053" />
+             </ns0:Action>
+            </ns0:Listener>
+            <ns0:Action Name="&quot;Enter a file name:&quot;" Sym="NGCONV-1054">
+             <ns0:Text Name="" Sym="NGCONV-1055" />
+            </ns0:Action>
+            <ns0:Panel Name="InputArea" Sym="NGCONV-1056">
+             <ns0:Layout>Horizontal</ns0:Layout>
+             <ns0:FixedWidth>0.95</ns0:FixedWidth>
+             <ns0:IgnoreThemeProps>true</ns0:IgnoreThemeProps>
+             <ns0:TextInput Name="NGFileName" Sym="NGCONV-1057">
+              <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+              <ns0:Shape Ref="941" Name="InputBorder" />
+             </ns0:TextInput>
+            </ns0:Panel>
+            <ns0:Theme Ref="2072" Name="TextEntryWithNTE_WideT..." />
+            <ns0:Conditional Ref="2073" Name="EnableNumericText" />
+           </ns0:OptionsMenu>
+          </ns0:Item>
+          <ns0:Item Name="" Sym="NGCONV-1058">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1059">
+            <ns0:Value>&quot;How much of the recording to convert.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="&quot;Duration: &quot; + If(NGClipDur == 0, &quot;Whole recording&quot;, &quot;&quot; + (NGClipDur / 60) + &quot; min&quot;)" Sym="NGCONV-1060">
+            <ns0:Text Name="" Sym="NGCONV-1061" />
+           </ns0:Action>
+           <ns0:OptionsMenu Name="NG Duration" Sym="NGCONV-1062">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Item Name="Whole recording" Sym="NGCONV-1063">
+             <ns0:Action Name="NGClipDur = 0" Sym="NGCONV-1064">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1065">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1066" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="First 5 minutes" Sym="NGCONV-1067">
+             <ns0:Action Name="NGClipDur = 300" Sym="NGCONV-1068">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1069">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1070" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="First 15 minutes" Sym="NGCONV-1071">
+             <ns0:Action Name="NGClipDur = 900" Sym="NGCONV-1072">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1073">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1074" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="First 30 minutes" Sym="NGCONV-1075">
+             <ns0:Action Name="NGClipDur = 1800" Sym="NGCONV-1076">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1077">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1078" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="First 60 minutes" Sym="NGCONV-1079">
+             <ns0:Action Name="NGClipDur = 3600" Sym="NGCONV-1080">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1081">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1082" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Back" Sym="NGCONV-1083">
+             <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1084">
+              <ns0:Action Name="Refresh()" Sym="NGCONV-1085" />
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+           </ns0:OptionsMenu>
+          </ns0:Item>
+          <ns0:Item Name="" Sym="NGCONV-1086">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1087">
+            <ns0:Value>&quot;Where in the recording to start.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="&quot;Start at: &quot; + If(NGClipStart == 0, &quot;Beginning&quot;, &quot;&quot; + (NGClipStart / 60) + &quot; min&quot;)" Sym="NGCONV-1088">
+            <ns0:Text Name="" Sym="NGCONV-1089" />
+           </ns0:Action>
+           <ns0:OptionsMenu Name="NG Start" Sym="NGCONV-1090">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Item Name="Beginning" Sym="NGCONV-1091">
+             <ns0:Action Name="NGClipStart = 0" Sym="NGCONV-1092">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1093">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1094" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Skip 1 minute" Sym="NGCONV-1095">
+             <ns0:Action Name="NGClipStart = 60" Sym="NGCONV-1096">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1097">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1098" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Skip 5 minutes" Sym="NGCONV-1099">
+             <ns0:Action Name="NGClipStart = 300" Sym="NGCONV-1100">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1101">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1102" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Skip 10 minutes" Sym="NGCONV-1103">
+             <ns0:Action Name="NGClipStart = 600" Sym="NGCONV-1104">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1105">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1106" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Back" Sym="NGCONV-1107">
+             <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1108">
+              <ns0:Action Name="Refresh()" Sym="NGCONV-1109" />
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+           </ns0:OptionsMenu>
+          </ns0:Item>
+          <ns0:Item Name="" Sym="NGCONV-1110">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1111">
+            <ns0:Value>&quot;Delete the source recording after a successful conversion.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="&quot;Delete original when done:  &quot; + If(NGDelOrig, &quot;[ ON ]&quot;, &quot;[ off ]&quot;)" Sym="NGCONV-1112">
+            <ns0:Text Name="" Sym="NGCONV-1113" />
+           </ns0:Action>
+           <ns0:Action Name="NGDelOrig = !NGDelOrig" Sym="NGCONV-1114">
+            <ns0:Action Name="Refresh()" Sym="NGCONV-1115" />
+           </ns0:Action>
+          </ns0:Item>
+          <ns0:Item Name="Create File" Sym="NGCONV-1116">
+           <ns0:Action Name="JobID = StartDraftConversion(NGDraft, MakeDraftDestFile(NGDraft, NGFileName), NGDelOrig, NGClipStart, NGClipDur)" Sym="NGCONV-1117">
+            <ns0:Conditional Name="JobID &gt; 0" Sym="NGCONV-1118">
+             <ns0:Branch Name="true" Sym="NGCONV-1119">
+              <ns0:Action Name="AddGlobalContext(&quot;JobID&quot;, JobID)" Sym="NGCONV-1120">
+               <ns0:Action Name="AddGlobalContext(&quot;ConversionFormat&quot;, &quot;NG Guided Conversion&quot;)" Sym="NGCONV-1121">
+                <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1122">
+                 <ns0:OptionsMenu Name="NG Conversion Progress" Sym="NGCONV-1123">
+                  <ns0:Layout>Vertical</ns0:Layout>
+                  <ns0:AnchorX>0.5</ns0:AnchorX>
+                  <ns0:AnchorY>0.5</ns0:AnchorY>
+                  <ns0:FixedWidth>0.95</ns0:FixedWidth>
+                  <ns0:PadY>0.01</ns0:PadY>
+                  <ns0:Insets>=gDialogBGUIWidgetInsets</ns0:Insets>
+                  <ns0:IgnoreThemeProps>true</ns0:IgnoreThemeProps>
+                  <ns0:Action Name="&quot;Video conversion in progress. You may wait for it to complete, or continue using SageTV.\n &quot;" Sym="NGCONV-1124">
+                   <ns0:Text Name="" Sym="NGCONV-1125" />
+                  </ns0:Action>
+                  <ns0:Action Name="&quot;Conversion format: &quot; + ConversionFormat" Sym="NGCONV-1126">
+                   <ns0:Text Name="" Sym="NGCONV-1127" />
+                  </ns0:Action>
+                  <ns0:Conditional Name="GetTranscodeJobDestFile(JobID) != null" Sym="NGCONV-1128">
+                   <ns0:Action Name="&quot;Destination file: &quot; + GetTranscodeJobDestFile(JobID)" Sym="NGCONV-1129">
+                    <ns0:Text Name="" Sym="NGCONV-1130" />
+                   </ns0:Action>
+                  </ns0:Conditional>
+                  <ns0:Action Name="ConversionStatus = GetTranscodeJobStatus(JobID)" Sym="NGCONV-1131">
+                   <ns0:Action Name="ConversionPercent = If(GetTranscodeJobStatus(JobID)==&quot;TRANSCODING&quot;,&quot; &quot; + NumberFormat(&quot;0&quot;,GetTranscodeJobCompletePercent(JobID)*100) + &quot;%&quot;,&quot;&quot;)" Sym="NGCONV-1132">
+                    <ns0:Action Name="&quot;Status: &quot; + ConversionStatus + ConversionPercent" Sym="NGCONV-1133">
+                     <ns0:Text Name="" Sym="NGCONV-1134" />
+                    </ns0:Action>
+                   </ns0:Action>
+                  </ns0:Action>
+                  <ns0:Conditional Name="GetTranscodeJobStatus(JobID)" Sym="NGCONV-1135">
+                   <ns0:Branch Name="&quot;TRANSCODING&quot;" Sym="NGCONV-1136">
+                    <ns0:Panel Name="Conversion Percent Complete Panel" Sym="NGCONV-1137">
+                     <ns0:FixedWidth>0.95</ns0:FixedWidth>
+                     <ns0:FixedHeight>0.05</ns0:FixedHeight>
+                     <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
+                     <ns0:Action Name="PercentDone = GetTranscodeJobCompletePercent(JobID)" Sym="NGCONV-1138">
+                      <ns0:Shape Name="FillPercentDynamic" Sym="NGCONV-1139">
+                       <ns0:ForegroundColor>0x00FF00</ns0:ForegroundColor>
+                       <ns0:FixedWidth>=PercentDone</ns0:FixedWidth>
+                       <ns0:FixedHeight>1.0</ns0:FixedHeight>
+                       <ns0:ShapeType>Rectangle</ns0:ShapeType>
+                       <ns0:ShapeFill>true</ns0:ShapeFill>
+                      </ns0:Shape>
+                     </ns0:Action>
+                     <ns0:Shape Name="ConversionPercentDoneOutline" Sym="NGCONV-1140">
+                      <ns0:ForegroundColor>0x00FF00</ns0:ForegroundColor>
+                      <ns0:AnchorX>1.0</ns0:AnchorX>
+                      <ns0:FixedWidth>2</ns0:FixedWidth>
+                      <ns0:FixedHeight>1.0</ns0:FixedHeight>
+                      <ns0:ShapeType>Rectangle</ns0:ShapeType>
+                      <ns0:ShapeFill>false</ns0:ShapeFill>
+                      <ns0:Thickness>2</ns0:Thickness>
+                     </ns0:Shape>
+                    </ns0:Panel>
+                   </ns0:Branch>
+                  </ns0:Conditional>
+                  <ns0:Conditional Name="GetTranscodeJobStatus(JobID)" Sym="NGCONV-1141">
+                   <ns0:Branch Name="&quot;COMPLETED&quot;" Sym="NGCONV-1142">
+                    <ns0:Item Name="Continue using SageTV" Sym="NGCONV-1143">
+                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1144">
+                      <ns0:Action Name="DialogActive = false" Sym="NGCONV-1145">
+                       <ns0:Action Name="SageCommand(&quot;Back&quot;)" Sym="NGCONV-1146" />
+                      </ns0:Action>
+                     </ns0:Action>
+                    </ns0:Item>
+                   </ns0:Branch>
+                   <ns0:Branch Name="&quot;TRANSCODING&quot;" Sym="NGCONV-1147">
+                    <ns0:Item Name="Continue using SageTV" Sym="NGCONV-1148">
+                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1149">
+                      <ns0:Action Name="DialogActive = false" Sym="NGCONV-1150">
+                       <ns0:Action Name="SageCommand(&quot;Back&quot;)" Sym="NGCONV-1151" />
+                      </ns0:Action>
+                     </ns0:Action>
+                    </ns0:Item>
+                    <ns0:Item Name="Cancel the Conversion" Sym="NGCONV-1152">
+                     <ns0:Action Name="CancelTranscodeJob(JobID)" Sym="NGCONV-1153">
+                      <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1154">
+                       <ns0:Action Name="DialogActive = false" Sym="NGCONV-1155">
+                        <ns0:Action Name="SageCommand(&quot;Back&quot;)" Sym="NGCONV-1156" />
+                       </ns0:Action>
+                      </ns0:Action>
+                     </ns0:Action>
+                    </ns0:Item>
+                   </ns0:Branch>
+                   <ns0:Branch Name="&quot;WAITING TO START&quot;" Sym="NGCONV-1157">
+                    <ns0:Item Name="Continue using SageTV" Sym="NGCONV-1158">
+                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1159">
+                      <ns0:Action Name="DialogActive = false" Sym="NGCONV-1160">
+                       <ns0:Action Name="SageCommand(&quot;Back&quot;)" Sym="NGCONV-1161" />
+                      </ns0:Action>
+                     </ns0:Action>
+                    </ns0:Item>
+                    <ns0:Item Name="Cancel the Conversion" Sym="NGCONV-1162">
+                     <ns0:Action Name="CancelTranscodeJob(JobID)" Sym="NGCONV-1163">
+                      <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1164">
+                       <ns0:Action Name="DialogActive = false" Sym="NGCONV-1165">
+                        <ns0:Action Name="SageCommand(&quot;Back&quot;)" Sym="NGCONV-1166" />
+                       </ns0:Action>
+                      </ns0:Action>
+                     </ns0:Action>
+                    </ns0:Item>
+                   </ns0:Branch>
+                   <ns0:Branch Name="&quot;FAILED&quot;" Sym="NGCONV-1167">
+                    <ns0:Item Name="Cancel the Conversion" Sym="NGCONV-1168">
+                     <ns0:Action Name="CancelTranscodeJob(JobID)" Sym="NGCONV-1169">
+                      <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1170">
+                       <ns0:Action Name="DialogActive = false" Sym="NGCONV-1171">
+                        <ns0:Action Name="SageCommand(&quot;Back&quot;)" Sym="NGCONV-1172" />
+                       </ns0:Action>
+                      </ns0:Action>
+                     </ns0:Action>
+                    </ns0:Item>
+                   </ns0:Branch>
+                   <ns0:Branch Name="else" Sym="NGCONV-1173">
+                    <ns0:Item Name="Continue using SageTV" Sym="NGCONV-1174">
+                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1175">
+                      <ns0:Action Name="DialogActive = false" Sym="NGCONV-1176">
+                       <ns0:Action Name="SageCommand(&quot;Back&quot;)" Sym="NGCONV-1177" />
+                      </ns0:Action>
+                     </ns0:Action>
+                    </ns0:Item>
+                    <ns0:Item Name="Cancel the Conversion" Sym="NGCONV-1178">
+                     <ns0:Action Name="CancelTranscodeJob(JobID)" Sym="NGCONV-1179">
+                      <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1180">
+                       <ns0:Action Name="DialogActive = false" Sym="NGCONV-1181">
+                        <ns0:Action Name="SageCommand(&quot;Back&quot;)" Sym="NGCONV-1182" />
+                       </ns0:Action>
+                      </ns0:Action>
+                     </ns0:Action>
+                    </ns0:Item>
+                   </ns0:Branch>
+                  </ns0:Conditional>
+                  <ns0:Attribute Name="JobID" Sym="NGCONV-1183">
+                   <ns0:Value>JobID</ns0:Value>
+                  </ns0:Attribute>
+                  <ns0:Attribute Name="DialogActive" Sym="NGCONV-1184">
+                   <ns0:Value>true</ns0:Value>
+                  </ns0:Attribute>
+                  <ns0:Attribute Name="LastStatus" Sym="NGCONV-1185">
+                   <ns0:Value>&quot;&quot;</ns0:Value>
+                  </ns0:Attribute>
+                  <ns0:Listener Name="" Sym="NGCONV-1186">
+                   <ns0:ListenerEvent>Options</ns0:ListenerEvent>
+                   <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1187">
+                    <ns0:Action Name="DialogActive = false" Sym="NGCONV-1188">
+                     <ns0:Action Name="SageCommand(&quot;Back&quot;)" Sym="NGCONV-1189" />
+                    </ns0:Action>
+                   </ns0:Action>
+                  </ns0:Listener>
+                  <ns0:Hook Name="BeforeMenuLoad" Sym="NGCONV-1190">
+                   <ns0:Action Name="LastStatus = GetTranscodeJobStatus(JobID)" Sym="NGCONV-1191" />
+                  </ns0:Hook>
+                  <ns0:Hook Name="AfterMenuLoad" Sym="NGCONV-1192">
+                   <ns0:Action Name="Fork()" Sym="NGCONV-1193">
+                    <ns0:Conditional ID="970061" Name="DialogActive" Sym="NGCONV-1194">
+                     <ns0:Action Name="CurStatus = GetTranscodeJobStatus(JobID)" Sym="NGCONV-1195">
+                      <ns0:Conditional Name="LastStatus != CurStatus" Sym="NGCONV-1196">
+                       <ns0:Branch Name="true" Sym="NGCONV-1197">
+                        <ns0:Action Name="LastStatus = GetTranscodeJobStatus(JobID)" Sym="NGCONV-1198">
+                         <ns0:Action Name="RefreshArea(&quot;NG Conversion Progress&quot;)" Sym="NGCONV-1199">
+                          <ns0:Action Ref="970062" Name="Wait(1000)" />
+                         </ns0:Action>
+                        </ns0:Action>
+                       </ns0:Branch>
+                       <ns0:Branch Name="else" Sym="NGCONV-1200">
+                        <ns0:Action ID="970062" Name="Wait(1000)" Sym="NGCONV-1201">
+                         <ns0:Conditional Ref="970061" Name="DialogActive" />
+                        </ns0:Action>
+                       </ns0:Branch>
+                      </ns0:Conditional>
+                     </ns0:Action>
+                    </ns0:Conditional>
+                   </ns0:Action>
+                  </ns0:Hook>
+                  <ns0:Theme Ref="2131" Name="MutliSelectOptionsTheme" />
+                 </ns0:OptionsMenu>
+                </ns0:Action>
+               </ns0:Action>
+              </ns0:Action>
+             </ns0:Branch>
+             <ns0:Branch Name="else" Sym="NGCONV-1202">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1203">
+               <ns0:OptionsMenu Name="NG Conversion Not Started" Sym="NGCONV-1204">
+                <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+                <ns0:Action Name="&quot;The conversion could not be started.\n \nThe file may be in use, or a conflicting job is already running.&quot;" Sym="NGCONV-1205">
+                 <ns0:Text Name="" Sym="NGCONV-1206" />
+                </ns0:Action>
+                <ns0:Item Name="OK" Sym="NGCONV-1207">
+                 <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1208" />
+                </ns0:Item>
+                <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+               </ns0:OptionsMenu>
+              </ns0:Action>
+             </ns0:Branch>
+            </ns0:Conditional>
+           </ns0:Action>
+          </ns0:Item>
+          <ns0:Item Name="Cancel" Sym="NGCONV-1209">
+           <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1210" />
+          </ns0:Item>
+          <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+         </ns0:OptionsMenu>
+        </ns0:Action>
+       </ns0:Action>
+      </ns0:Action>
+     </ns0:Action>
+     <ns0:Hook Ref="22543" Name="FocusGained" />
+    </ns0:Item>
+    <ns0:Item Name="Reset to Recommended" Sym="NGCONV-1211">
+     <ns0:Attribute Name="AreaName" Sym="NGCONV-1212">
+      <ns0:Value>&quot;Reset to Recommended&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Attribute Name="HelpText" Sym="NGCONV-1213">
+      <ns0:Value>&quot;Clear all custom choices.&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Action Ref="22529" Name="REM render button" />
+     <ns0:Action Name="ClearDraftOverrides(NGDraft)" Sym="NGCONV-1214">
+      <ns0:Action Name="Refresh()" Sym="NGCONV-1215" />
+     </ns0:Action>
+    </ns0:Item>
+    <ns0:Item Name="Cancel" Sym="NGCONV-1216">
+     <ns0:Attribute Name="AreaName" Sym="NGCONV-1217">
+      <ns0:Value>&quot;Cancel&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Attribute Name="HelpText" Sym="NGCONV-1218">
+      <ns0:Value>&quot;Discard and go back.&quot;</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Action Ref="22529" Name="REM render button" />
+     <ns0:Action Name="DiscardConversionDraft(NGDraft)" Sym="NGCONV-1219">
+      <ns0:Action Name="SageCommand(&quot;Back&quot;)" Sym="NGCONV-1220" />
+     </ns0:Action>
+    </ns0:Item>
+    <ns0:Theme Ref="22607" Name="LeftButtonPanelTheme 7" />
+   </ns0:Panel>
+   <ns0:Panel Name="SetupAreas" Sym="NGCONV-1221">
+    <ns0:AnchorX>1.0</ns0:AnchorX>
+    <ns0:FixedWidth>0.7</ns0:FixedWidth>
+    <ns0:FixedHeight>1.0</ns0:FixedHeight>
+    <ns0:IgnoreThemeProps>true</ns0:IgnoreThemeProps>
+    <ns0:BackgroundComponent>false</ns0:BackgroundComponent>
+    <ns0:Conditional Name="GetFocusContext()" Sym="NGCONV-1222">
+     <ns0:Branch Name="true" Sym="NGCONV-1223">
+      <ns0:Conditional Name="SetupArea != null" Sym="NGCONV-1224">
+       <ns0:Branch Name="true" Sym="NGCONV-1225">
+        <ns0:Action Name="AddGlobalContext(&quot;CurrSetupArea&quot;, SetupArea)" Sym="NGCONV-1226">
+         <ns0:Conditional Ref="970050" Name="CurrSetupArea" />
+        </ns0:Action>
+       </ns0:Branch>
+       <ns0:Branch Name="false" Sym="NGCONV-1227">
+        <ns0:Conditional Ref="970050" Name="CurrSetupArea" />
+       </ns0:Branch>
+      </ns0:Conditional>
+     </ns0:Branch>
+     <ns0:Branch Name="false" Sym="NGCONV-1228">
+      <ns0:Conditional ID="970050" Name="CurrSetupArea" Sym="NGCONV-1229">
+       <ns0:Branch Name="&quot;xNgOverview&quot;" Sym="NGCONV-1230">
+        <ns0:Panel Name="AreaItems" Sym="NGCONV-1231">
+         <ns0:Layout>Vertical</ns0:Layout>
+         <ns0:FixedWidth>1.0</ns0:FixedWidth>
+         <ns0:IgnoreThemeProps>true</ns0:IgnoreThemeProps>
+         <ns0:Action Name="GetDraftRecommendationReport(NGDraft) + &quot;\n \n&quot; + GetDraftReviewReport(NGDraft)" Sym="NGCONV-1232">
+          <ns0:Text Name="" Sym="NGCONV-1233">
+           <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+           <ns0:Theme Name="NGReportFontTheme" Sym="NGCONV-1234">
+            <ns0:TileBackgroundImage>false</ns0:TileBackgroundImage>
+            <ns0:StretchBackgroundImage>false</ns0:StretchBackgroundImage>
+            <ns0:FontSize>=gFontSizeGeneral-6</ns0:FontSize>
+           </ns0:Theme>
+          </ns0:Text>
+         </ns0:Action>
+        </ns0:Panel>
+       </ns0:Branch>
+       <ns0:Branch Name="&quot;xNgPurpose&quot;" Sym="NGCONV-1235">
+        <ns0:Panel Name="AreaItems" Sym="NGCONV-1236">
+         <ns0:Layout>Vertical</ns0:Layout>
+         <ns0:FixedWidth>1.0</ns0:FixedWidth>
+         <ns0:PadY>0.015</ns0:PadY>
+         <ns0:Scrolling>1</ns0:Scrolling>
+         <ns0:IgnoreThemeProps>true</ns0:IgnoreThemeProps>
+         <ns0:Panel Name="Row" Sym="NGCONV-1237">
+          <ns0:Text Name="Purpose" Sym="NGCONV-1238" />
+          <ns0:Item Name="" Sym="NGCONV-1239">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1240">
+            <ns0:Value>&quot;What this file is for.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="GetDraftIntentLabel(NGDraft)" Sym="NGCONV-1241">
+            <ns0:Text Name="" Sym="NGCONV-1242" />
+           </ns0:Action>
+           <ns0:OptionsMenu Name="NG Purpose" Sym="NGCONV-1243">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Action Name="&quot;Currently: &quot; + GetDraftIntentLabel(NGDraft)" Sym="NGCONV-1244">
+             <ns0:Text Name="" Sym="NGCONV-1245" />
+            </ns0:Action>
+            <ns0:Item Name="USB TV playback" Sym="NGCONV-1246">
+             <ns0:Action Name="SetDraftIntent(NGDraft, &quot;USB_TV_PLAYBACK&quot;)" Sym="NGCONV-1247">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1248">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1249" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Phone (offline)" Sym="NGCONV-1250">
+             <ns0:Action Name="SetDraftIntent(NGDraft, &quot;PHONE_OFFLINE&quot;)" Sym="NGCONV-1251">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1252">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1253" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Tablet (offline)" Sym="NGCONV-1254">
+             <ns0:Action Name="SetDraftIntent(NGDraft, &quot;TABLET_OFFLINE&quot;)" Sym="NGCONV-1255">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1256">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1257" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Travel download" Sym="NGCONV-1258">
+             <ns0:Action Name="SetDraftIntent(NGDraft, &quot;WAN_SMALLER&quot;)" Sym="NGCONV-1259">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1260">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1261" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Reusable favorite" Sym="NGCONV-1262">
+             <ns0:Action Name="SetDraftIntent(NGDraft, &quot;REUSABLE_FAVORITE&quot;)" Sym="NGCONV-1263">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1264">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1265" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Custom" Sym="NGCONV-1266">
+             <ns0:Action Name="SetDraftIntent(NGDraft, &quot;custom&quot;)" Sym="NGCONV-1267">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1268">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1269" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Back" Sym="NGCONV-1270">
+             <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1271">
+              <ns0:Action Name="Refresh()" Sym="NGCONV-1272" />
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+           </ns0:OptionsMenu>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+         <ns0:Panel Name="Row" Sym="NGCONV-1273">
+          <ns0:Text Name="Plays on" Sym="NGCONV-1274" />
+          <ns0:Item Name="" Sym="NGCONV-1275">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1276">
+            <ns0:Value>&quot;The device this will play on.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="GetDraftSelection(NGDraft, &quot;device&quot;)" Sym="NGCONV-1277">
+            <ns0:Text Name="" Sym="NGCONV-1278" />
+           </ns0:Action>
+           <ns0:OptionsMenu Name="NG Play Device" Sym="NGCONV-1279">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Action Name="&quot;Current: &quot; + GetDraftSelection(NGDraft, &quot;device&quot;)" Sym="NGCONV-1280">
+             <ns0:Text Name="" Sym="NGCONV-1281" />
+            </ns0:Action>
+            <ns0:Item Name="Phone" Sym="NGCONV-1282">
+             <ns0:Action Name="SetDraftDevice(NGDraft, &quot;phone&quot;)" Sym="NGCONV-1283">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1284">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1285" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Tablet" Sym="NGCONV-1286">
+             <ns0:Action Name="SetDraftDevice(NGDraft, &quot;tablet&quot;)" Sym="NGCONV-1287">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1288">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1289" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Computer" Sym="NGCONV-1290">
+             <ns0:Action Name="SetDraftDevice(NGDraft, &quot;computer&quot;)" Sym="NGCONV-1291">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1292">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1293" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Modern 4K TV" Sym="NGCONV-1294">
+             <ns0:Action Name="SetDraftDevice(NGDraft, &quot;tv&quot;)" Sym="NGCONV-1295">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1296">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1297" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Any device" Sym="NGCONV-1298">
+             <ns0:Action Name="SetDraftDevice(NGDraft, &quot;unrestricted&quot;)" Sym="NGCONV-1299">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1300">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1301" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Not sure" Sym="NGCONV-1302">
+             <ns0:Action Name="SetDraftDevice(NGDraft, &quot;unknown&quot;)" Sym="NGCONV-1303">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1304">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1305" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Back" Sym="NGCONV-1306">
+             <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1307">
+              <ns0:Action Name="Refresh()" Sym="NGCONV-1308" />
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+           </ns0:OptionsMenu>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+         <ns0:Panel Name="Row" Sym="NGCONV-1309">
+          <ns0:Text Name="Reduce storage" Sym="NGCONV-1310" />
+          <ns0:Item Name="" Sym="NGCONV-1311">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1312">
+            <ns0:Value>&quot;Toggle this optimization goal.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="If(GetDraftGoalEnabled(NGDraft, &quot;REDUCE_STORAGE&quot;), &quot;On&quot;, &quot;Off&quot;)" Sym="NGCONV-1313">
+            <ns0:Text Name="" Sym="NGCONV-1314" />
+           </ns0:Action>
+           <ns0:Action Name="SetDraftGoal(NGDraft, &quot;REDUCE_STORAGE&quot;, !GetDraftGoalEnabled(NGDraft, &quot;REDUCE_STORAGE&quot;))" Sym="NGCONV-1315">
+            <ns0:Action Name="Refresh()" Sym="NGCONV-1316" />
+           </ns0:Action>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+         <ns0:Panel Name="Row" Sym="NGCONV-1317">
+          <ns0:Text Name="Improve / upscale picture" Sym="NGCONV-1318" />
+          <ns0:Item Name="" Sym="NGCONV-1319">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1320">
+            <ns0:Value>&quot;Toggle this optimization goal.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="If(GetDraftGoalEnabled(NGDraft, &quot;IMPROVE_UPSCALE&quot;), &quot;On&quot;, &quot;Off&quot;)" Sym="NGCONV-1321">
+            <ns0:Text Name="" Sym="NGCONV-1322" />
+           </ns0:Action>
+           <ns0:Action Name="SetDraftGoal(NGDraft, &quot;IMPROVE_UPSCALE&quot;, !GetDraftGoalEnabled(NGDraft, &quot;IMPROVE_UPSCALE&quot;))" Sym="NGCONV-1323">
+            <ns0:Action Name="Refresh()" Sym="NGCONV-1324" />
+           </ns0:Action>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+         <ns0:Panel Name="Row" Sym="NGCONV-1325">
+          <ns0:Text Name="Preserve resolution &amp; fps" Sym="NGCONV-1326" />
+          <ns0:Item Name="" Sym="NGCONV-1327">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1328">
+            <ns0:Value>&quot;Toggle this optimization goal.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="If(GetDraftGoalEnabled(NGDraft, &quot;PRESERVE_RES_FPS&quot;), &quot;On&quot;, &quot;Off&quot;)" Sym="NGCONV-1329">
+            <ns0:Text Name="" Sym="NGCONV-1330" />
+           </ns0:Action>
+           <ns0:Action Name="SetDraftGoal(NGDraft, &quot;PRESERVE_RES_FPS&quot;, !GetDraftGoalEnabled(NGDraft, &quot;PRESERVE_RES_FPS&quot;))" Sym="NGCONV-1331">
+            <ns0:Action Name="Refresh()" Sym="NGCONV-1332" />
+           </ns0:Action>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+         <ns0:Panel Name="Row" Sym="NGCONV-1333">
+          <ns0:Text Name="Preserve surround audio" Sym="NGCONV-1334" />
+          <ns0:Item Name="" Sym="NGCONV-1335">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1336">
+            <ns0:Value>&quot;Toggle this optimization goal.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="If(GetDraftGoalEnabled(NGDraft, &quot;PRESERVE_SURROUND&quot;), &quot;On&quot;, &quot;Off&quot;)" Sym="NGCONV-1337">
+            <ns0:Text Name="" Sym="NGCONV-1338" />
+           </ns0:Action>
+           <ns0:Action Name="SetDraftGoal(NGDraft, &quot;PRESERVE_SURROUND&quot;, !GetDraftGoalEnabled(NGDraft, &quot;PRESERVE_SURROUND&quot;))" Sym="NGCONV-1339">
+            <ns0:Action Name="Refresh()" Sym="NGCONV-1340" />
+           </ns0:Action>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+         <ns0:Panel Name="Row" Sym="NGCONV-1341">
+          <ns0:Text Name="Exact lossless backup" Sym="NGCONV-1342" />
+          <ns0:Item Name="" Sym="NGCONV-1343">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1344">
+            <ns0:Value>&quot;Toggle this optimization goal.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="If(GetDraftGoalEnabled(NGDraft, &quot;EXACT_BACKUP&quot;), &quot;On&quot;, &quot;Off&quot;)" Sym="NGCONV-1345">
+            <ns0:Text Name="" Sym="NGCONV-1346" />
+           </ns0:Action>
+           <ns0:Action Name="SetDraftGoal(NGDraft, &quot;EXACT_BACKUP&quot;, !GetDraftGoalEnabled(NGDraft, &quot;EXACT_BACKUP&quot;))" Sym="NGCONV-1347">
+            <ns0:Action Name="Refresh()" Sym="NGCONV-1348" />
+           </ns0:Action>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+        </ns0:Panel>
+       </ns0:Branch>
+       <ns0:Branch Name="&quot;xNgTransfer&quot;" Sym="NGCONV-1349">
+        <ns0:Panel Name="AreaItems" Sym="NGCONV-1350">
+         <ns0:Layout>Vertical</ns0:Layout>
+         <ns0:FixedWidth>1.0</ns0:FixedWidth>
+         <ns0:PadY>0.015</ns0:PadY>
+         <ns0:Scrolling>1</ns0:Scrolling>
+         <ns0:IgnoreThemeProps>true</ns0:IgnoreThemeProps>
+         <ns0:Panel Name="Row" Sym="NGCONV-1351">
+          <ns0:Text Name="Move it by" Sym="NGCONV-1352" />
+          <ns0:Item Name="" Sym="NGCONV-1353">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1354">
+            <ns0:Value>&quot;How you will move the file.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="GetDraftSelection(NGDraft, &quot;transfer&quot;)" Sym="NGCONV-1355">
+            <ns0:Text Name="" Sym="NGCONV-1356" />
+           </ns0:Action>
+           <ns0:OptionsMenu Name="NG Transfer" Sym="NGCONV-1357">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Action Name="&quot;Current: &quot; + GetDraftSelection(NGDraft, &quot;transfer&quot;)" Sym="NGCONV-1358">
+             <ns0:Text Name="" Sym="NGCONV-1359" />
+            </ns0:Action>
+            <ns0:Item Name="USB / local copy" Sym="NGCONV-1360">
+             <ns0:Action Name="SetDraftTransfer(NGDraft, &quot;LOCAL_USB&quot;)" Sym="NGCONV-1361">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1362">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1363" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Fast internet" Sym="NGCONV-1364">
+             <ns0:Action Name="SetDraftTransfer(NGDraft, &quot;FAST_WAN&quot;)" Sym="NGCONV-1365">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1366">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1367" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Limited / cellular" Sym="NGCONV-1368">
+             <ns0:Action Name="SetDraftTransfer(NGDraft, &quot;LIMITED_WAN&quot;)" Sym="NGCONV-1369">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1370">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1371" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="No limit (home LAN)" Sym="NGCONV-1372">
+             <ns0:Action Name="SetDraftTransfer(NGDraft, &quot;UNRESTRICTED&quot;)" Sym="NGCONV-1373">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1374">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1375" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Back" Sym="NGCONV-1376">
+             <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1377">
+              <ns0:Action Name="Refresh()" Sym="NGCONV-1378" />
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+           </ns0:OptionsMenu>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+         <ns0:Panel Name="Row" Sym="NGCONV-1379">
+          <ns0:Text Name="Priority" Sym="NGCONV-1380" />
+          <ns0:Item Name="" Sym="NGCONV-1381">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1382">
+            <ns0:Value>&quot;What matters most for this file.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="GetDraftSelection(NGDraft, &quot;priority&quot;)" Sym="NGCONV-1383">
+            <ns0:Text Name="" Sym="NGCONV-1384" />
+           </ns0:Action>
+           <ns0:OptionsMenu Name="NG Priority" Sym="NGCONV-1385">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Action Name="&quot;Current: &quot; + GetDraftSelection(NGDraft, &quot;priority&quot;)" Sym="NGCONV-1386">
+             <ns0:Text Name="" Sym="NGCONV-1387" />
+            </ns0:Action>
+            <ns0:Item Name="Best picture" Sym="NGCONV-1388">
+             <ns0:Action Name="SetDraftPriority(NGDraft, &quot;BEST_PICTURE&quot;)" Sym="NGCONV-1389">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1390">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1391" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Balanced" Sym="NGCONV-1392">
+             <ns0:Action Name="SetDraftPriority(NGDraft, &quot;BALANCED&quot;)" Sym="NGCONV-1393">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1394">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1395" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Smaller file" Sym="NGCONV-1396">
+             <ns0:Action Name="SetDraftPriority(NGDraft, &quot;SMALLER&quot;)" Sym="NGCONV-1397">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1398">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1399" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Fastest" Sym="NGCONV-1400">
+             <ns0:Action Name="SetDraftPriority(NGDraft, &quot;FASTEST&quot;)" Sym="NGCONV-1401">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1402">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1403" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Max compatibility" Sym="NGCONV-1404">
+             <ns0:Action Name="SetDraftPriority(NGDraft, &quot;MAX_COMPAT&quot;)" Sym="NGCONV-1405">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1406">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1407" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Preserve source" Sym="NGCONV-1408">
+             <ns0:Action Name="SetDraftPriority(NGDraft, &quot;PRESERVE_SOURCE&quot;)" Sym="NGCONV-1409">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1410">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1411" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Back" Sym="NGCONV-1412">
+             <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1413">
+              <ns0:Action Name="Refresh()" Sym="NGCONV-1414" />
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+           </ns0:OptionsMenu>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+         <ns0:Panel Name="Row" Sym="NGCONV-1415">
+          <ns0:Text Name="Target size" Sym="NGCONV-1416" />
+          <ns0:Item Name="" Sym="NGCONV-1417">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1418">
+            <ns0:Value>&quot;Target resolution / quality.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="GetDraftSelection(NGDraft, &quot;width&quot;) + &quot; x &quot; + GetDraftSelection(NGDraft, &quot;height&quot;)" Sym="NGCONV-1419">
+            <ns0:Text Name="" Sym="NGCONV-1420" />
+           </ns0:Action>
+           <ns0:OptionsMenu Name="NG Target Size" Sym="NGCONV-1421">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Action Name="&quot;Current: &quot; + GetDraftSelection(NGDraft, &quot;width&quot;) + &quot; x &quot; + GetDraftSelection(NGDraft, &quot;height&quot;)" Sym="NGCONV-1422">
+             <ns0:Text Name="" Sym="NGCONV-1423" />
+            </ns0:Action>
+            <ns0:Item Name="Recommended (auto)" Sym="NGCONV-1424">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;width&quot;, &quot;auto&quot;)" Sym="NGCONV-1425">
+              <ns0:Action Name="SetDraftOverride(NGDraft, &quot;height&quot;, &quot;auto&quot;)" Sym="NGCONV-1426">
+               <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1427">
+                <ns0:Action Name="Refresh()" Sym="NGCONV-1428" />
+               </ns0:Action>
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="4K UHD (3840 x 2160)" Sym="NGCONV-1429">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;width&quot;, &quot;3840&quot;)" Sym="NGCONV-1430">
+              <ns0:Action Name="SetDraftOverride(NGDraft, &quot;height&quot;, &quot;2160&quot;)" Sym="NGCONV-1431">
+               <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1432">
+                <ns0:Action Name="Refresh()" Sym="NGCONV-1433" />
+               </ns0:Action>
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="1440p (2560 x 1440)" Sym="NGCONV-1434">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;width&quot;, &quot;2560&quot;)" Sym="NGCONV-1435">
+              <ns0:Action Name="SetDraftOverride(NGDraft, &quot;height&quot;, &quot;1440&quot;)" Sym="NGCONV-1436">
+               <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1437">
+                <ns0:Action Name="Refresh()" Sym="NGCONV-1438" />
+               </ns0:Action>
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="1080p (1920 x 1080)" Sym="NGCONV-1439">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;width&quot;, &quot;1920&quot;)" Sym="NGCONV-1440">
+              <ns0:Action Name="SetDraftOverride(NGDraft, &quot;height&quot;, &quot;1080&quot;)" Sym="NGCONV-1441">
+               <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1442">
+                <ns0:Action Name="Refresh()" Sym="NGCONV-1443" />
+               </ns0:Action>
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="720p (1280 x 720)" Sym="NGCONV-1444">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;width&quot;, &quot;1280&quot;)" Sym="NGCONV-1445">
+              <ns0:Action Name="SetDraftOverride(NGDraft, &quot;height&quot;, &quot;720&quot;)" Sym="NGCONV-1446">
+               <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1447">
+                <ns0:Action Name="Refresh()" Sym="NGCONV-1448" />
+               </ns0:Action>
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Back" Sym="NGCONV-1449">
+             <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1450">
+              <ns0:Action Name="Refresh()" Sym="NGCONV-1451" />
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+           </ns0:OptionsMenu>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+        </ns0:Panel>
+       </ns0:Branch>
+       <ns0:Branch Name="&quot;xNgPicture&quot;" Sym="NGCONV-1452">
+        <ns0:Panel Name="AreaItems" Sym="NGCONV-1453">
+         <ns0:Layout>Vertical</ns0:Layout>
+         <ns0:FixedWidth>1.0</ns0:FixedWidth>
+         <ns0:PadY>0.015</ns0:PadY>
+         <ns0:Scrolling>1</ns0:Scrolling>
+         <ns0:IgnoreThemeProps>true</ns0:IgnoreThemeProps>
+         <ns0:Panel Name="Row" Sym="NGCONV-1454">
+          <ns0:Text Name="Upscale" Sym="NGCONV-1455" />
+          <ns0:Item Name="" Sym="NGCONV-1456">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1457">
+            <ns0:Value>&quot;How to scale the picture up.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="GetDraftSelection(NGDraft, &quot;scaling&quot;)" Sym="NGCONV-1458">
+            <ns0:Text Name="" Sym="NGCONV-1459" />
+           </ns0:Action>
+           <ns0:OptionsMenu Name="NG Upscale" Sym="NGCONV-1460">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Action Name="&quot;Current: &quot; + GetDraftSelection(NGDraft, &quot;scaling&quot;)" Sym="NGCONV-1461">
+             <ns0:Text Name="" Sym="NGCONV-1462" />
+            </ns0:Action>
+            <ns0:Item Name="Recommended" Sym="NGCONV-1463">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;scaling&quot;, &quot;auto&quot;)" Sym="NGCONV-1464">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1465">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1466" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="None (keep size)" Sym="NGCONV-1467">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;scaling&quot;, &quot;NONE&quot;)" Sym="NGCONV-1468">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1469">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1470" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Lanczos (sharpen scale)" Sym="NGCONV-1471">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;scaling&quot;, &quot;LANCZOS&quot;)" Sym="NGCONV-1472">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1473">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1474" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="AI upscale" Sym="NGCONV-1475">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;scaling&quot;, &quot;AI&quot;)" Sym="NGCONV-1476">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1477">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1478" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Back" Sym="NGCONV-1479">
+             <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1480">
+              <ns0:Action Name="Refresh()" Sym="NGCONV-1481" />
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+           </ns0:OptionsMenu>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+         <ns0:Panel Name="Row" Sym="NGCONV-1482">
+          <ns0:Text Name="Dynamic range" Sym="NGCONV-1483" />
+          <ns0:Item Name="" Sym="NGCONV-1484">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1485">
+            <ns0:Value>&quot;HDR / dynamic-range handling.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="GetDraftSelection(NGDraft, &quot;dynamicrange&quot;)" Sym="NGCONV-1486">
+            <ns0:Text Name="" Sym="NGCONV-1487" />
+           </ns0:Action>
+           <ns0:OptionsMenu Name="NG Dynamic Range" Sym="NGCONV-1488">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Action Name="&quot;Current: &quot; + GetDraftSelection(NGDraft, &quot;dynamicrange&quot;)" Sym="NGCONV-1489">
+             <ns0:Text Name="" Sym="NGCONV-1490" />
+            </ns0:Action>
+            <ns0:Item Name="Recommended" Sym="NGCONV-1491">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;dynamicrange&quot;, &quot;auto&quot;)" Sym="NGCONV-1492">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1493">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1494" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Keep source" Sym="NGCONV-1495">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;dynamicrange&quot;, &quot;KEEP&quot;)" Sym="NGCONV-1496">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1497">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1498" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Preserve HDR10" Sym="NGCONV-1499">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;dynamicrange&quot;, &quot;PRESERVE_HDR10&quot;)" Sym="NGCONV-1500">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1501">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1502" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Tone-map to SDR" Sym="NGCONV-1503">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;dynamicrange&quot;, &quot;TONEMAP_SDR&quot;)" Sym="NGCONV-1504">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1505">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1506" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Back" Sym="NGCONV-1507">
+             <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1508">
+              <ns0:Action Name="Refresh()" Sym="NGCONV-1509" />
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+           </ns0:OptionsMenu>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+        </ns0:Panel>
+       </ns0:Branch>
+       <ns0:Branch Name="&quot;xNgFormat&quot;" Sym="NGCONV-1510">
+        <ns0:Panel Name="AreaItems" Sym="NGCONV-1511">
+         <ns0:Layout>Vertical</ns0:Layout>
+         <ns0:FixedWidth>1.0</ns0:FixedWidth>
+         <ns0:PadY>0.015</ns0:PadY>
+         <ns0:Scrolling>1</ns0:Scrolling>
+         <ns0:IgnoreThemeProps>true</ns0:IgnoreThemeProps>
+         <ns0:Panel Name="Row" Sym="NGCONV-1512">
+          <ns0:Text Name="Container" Sym="NGCONV-1513" />
+          <ns0:Item Name="" Sym="NGCONV-1514">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1515">
+            <ns0:Value>&quot;Output container format.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="GetDraftSelection(NGDraft, &quot;container&quot;)" Sym="NGCONV-1516">
+            <ns0:Text Name="" Sym="NGCONV-1517" />
+           </ns0:Action>
+           <ns0:OptionsMenu Name="NG Container" Sym="NGCONV-1518">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Action Name="&quot;Current: &quot; + GetDraftSelection(NGDraft, &quot;container&quot;)" Sym="NGCONV-1519">
+             <ns0:Text Name="" Sym="NGCONV-1520" />
+            </ns0:Action>
+            <ns0:Item Name="Recommended" Sym="NGCONV-1521">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;container&quot;, &quot;auto&quot;)" Sym="NGCONV-1522">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1523">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1524" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="MP4" Sym="NGCONV-1525">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;container&quot;, &quot;MP4&quot;)" Sym="NGCONV-1526">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1527">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1528" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="MKV" Sym="NGCONV-1529">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;container&quot;, &quot;MKV&quot;)" Sym="NGCONV-1530">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1531">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1532" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Back" Sym="NGCONV-1533">
+             <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1534">
+              <ns0:Action Name="Refresh()" Sym="NGCONV-1535" />
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+           </ns0:OptionsMenu>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+         <ns0:Panel Name="Row" Sym="NGCONV-1536">
+          <ns0:Text Name="Video codec" Sym="NGCONV-1537" />
+          <ns0:Item Name="" Sym="NGCONV-1538">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1539">
+            <ns0:Value>&quot;Output video codec.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="GetDraftSelection(NGDraft, &quot;videocodec&quot;)" Sym="NGCONV-1540">
+            <ns0:Text Name="" Sym="NGCONV-1541" />
+           </ns0:Action>
+           <ns0:OptionsMenu Name="NG Video Codec" Sym="NGCONV-1542">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Action Name="&quot;Current: &quot; + GetDraftSelection(NGDraft, &quot;videocodec&quot;)" Sym="NGCONV-1543">
+             <ns0:Text Name="" Sym="NGCONV-1544" />
+            </ns0:Action>
+            <ns0:Item Name="Recommended" Sym="NGCONV-1545">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;videocodec&quot;, &quot;auto&quot;)" Sym="NGCONV-1546">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1547">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1548" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="H.264" Sym="NGCONV-1549">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;videocodec&quot;, &quot;H264&quot;)" Sym="NGCONV-1550">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1551">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1552" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="HEVC" Sym="NGCONV-1553">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;videocodec&quot;, &quot;HEVC&quot;)" Sym="NGCONV-1554">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1555">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1556" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="AV1" Sym="NGCONV-1557">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;videocodec&quot;, &quot;AV1&quot;)" Sym="NGCONV-1558">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1559">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1560" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Back" Sym="NGCONV-1561">
+             <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1562">
+              <ns0:Action Name="Refresh()" Sym="NGCONV-1563" />
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+           </ns0:OptionsMenu>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+         <ns0:Panel Name="Row" Sym="NGCONV-1564">
+          <ns0:Text Name="Frame rate" Sym="NGCONV-1565" />
+          <ns0:Item Name="" Sym="NGCONV-1566">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1567">
+            <ns0:Value>&quot;Output frame-rate handling.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="GetDraftSelection(NGDraft, &quot;framerate&quot;)" Sym="NGCONV-1568">
+            <ns0:Text Name="" Sym="NGCONV-1569" />
+           </ns0:Action>
+           <ns0:OptionsMenu Name="NG Frame Rate" Sym="NGCONV-1570">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Action Name="&quot;Current: &quot; + GetDraftSelection(NGDraft, &quot;framerate&quot;)" Sym="NGCONV-1571">
+             <ns0:Text Name="" Sym="NGCONV-1572" />
+            </ns0:Action>
+            <ns0:Item Name="Recommended" Sym="NGCONV-1573">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;framerate&quot;, &quot;auto&quot;)" Sym="NGCONV-1574">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1575">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1576" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Keep source" Sym="NGCONV-1577">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;framerate&quot;, &quot;KEEP&quot;)" Sym="NGCONV-1578">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1579">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1580" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Cap at 30" Sym="NGCONV-1581">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;framerate&quot;, &quot;CAP_30&quot;)" Sym="NGCONV-1582">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1583">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1584" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Cap at 24" Sym="NGCONV-1585">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;framerate&quot;, &quot;CAP_24&quot;)" Sym="NGCONV-1586">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1587">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1588" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Allow 60" Sym="NGCONV-1589">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;framerate&quot;, &quot;ALLOW_60&quot;)" Sym="NGCONV-1590">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1591">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1592" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Back" Sym="NGCONV-1593">
+             <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1594">
+              <ns0:Action Name="Refresh()" Sym="NGCONV-1595" />
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+           </ns0:OptionsMenu>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+        </ns0:Panel>
+       </ns0:Branch>
+       <ns0:Branch Name="&quot;xNgAudio&quot;" Sym="NGCONV-1596">
+        <ns0:Panel Name="AreaItems" Sym="NGCONV-1597">
+         <ns0:Layout>Vertical</ns0:Layout>
+         <ns0:FixedWidth>1.0</ns0:FixedWidth>
+         <ns0:PadY>0.015</ns0:PadY>
+         <ns0:Scrolling>1</ns0:Scrolling>
+         <ns0:IgnoreThemeProps>true</ns0:IgnoreThemeProps>
+         <ns0:Panel Name="Row" Sym="NGCONV-1598">
+          <ns0:Text Name="Audio layout" Sym="NGCONV-1599" />
+          <ns0:Item Name="" Sym="NGCONV-1600">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1601">
+            <ns0:Value>&quot;Channel layout for audio.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="GetDraftSelection(NGDraft, &quot;audiolayout&quot;)" Sym="NGCONV-1602">
+            <ns0:Text Name="" Sym="NGCONV-1603" />
+           </ns0:Action>
+           <ns0:OptionsMenu Name="NG Audio Layout" Sym="NGCONV-1604">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Action Name="&quot;Current: &quot; + GetDraftSelection(NGDraft, &quot;audiolayout&quot;)" Sym="NGCONV-1605">
+             <ns0:Text Name="" Sym="NGCONV-1606" />
+            </ns0:Action>
+            <ns0:Item Name="Recommended" Sym="NGCONV-1607">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;audiolayout&quot;, &quot;auto&quot;)" Sym="NGCONV-1608">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1609">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1610" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Keep source" Sym="NGCONV-1611">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;audiolayout&quot;, &quot;KEEP&quot;)" Sym="NGCONV-1612">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1613">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1614" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Stereo" Sym="NGCONV-1615">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;audiolayout&quot;, &quot;STEREO&quot;)" Sym="NGCONV-1616">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1617">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1618" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Surround 5.1" Sym="NGCONV-1619">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;audiolayout&quot;, &quot;SURROUND_51&quot;)" Sym="NGCONV-1620">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1621">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1622" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Back" Sym="NGCONV-1623">
+             <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1624">
+              <ns0:Action Name="Refresh()" Sym="NGCONV-1625" />
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+           </ns0:OptionsMenu>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+         <ns0:Panel Name="Row" Sym="NGCONV-1626">
+          <ns0:Text Name="Audio codec" Sym="NGCONV-1627" />
+          <ns0:Item Name="" Sym="NGCONV-1628">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1629">
+            <ns0:Value>&quot;Output audio codec.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="GetDraftSelection(NGDraft, &quot;audiocodec&quot;)" Sym="NGCONV-1630">
+            <ns0:Text Name="" Sym="NGCONV-1631" />
+           </ns0:Action>
+           <ns0:OptionsMenu Name="NG Audio Codec" Sym="NGCONV-1632">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Action Name="&quot;Current: &quot; + GetDraftSelection(NGDraft, &quot;audiocodec&quot;)" Sym="NGCONV-1633">
+             <ns0:Text Name="" Sym="NGCONV-1634" />
+            </ns0:Action>
+            <ns0:Item Name="Recommended" Sym="NGCONV-1635">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;audiocodec&quot;, &quot;auto&quot;)" Sym="NGCONV-1636">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1637">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1638" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Keep / copy" Sym="NGCONV-1639">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;audiocodec&quot;, &quot;COPY&quot;)" Sym="NGCONV-1640">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1641">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1642" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="AAC" Sym="NGCONV-1643">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;audiocodec&quot;, &quot;AAC&quot;)" Sym="NGCONV-1644">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1645">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1646" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="AC-3" Sym="NGCONV-1647">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;audiocodec&quot;, &quot;AC3&quot;)" Sym="NGCONV-1648">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1649">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1650" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="E-AC-3" Sym="NGCONV-1651">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;audiocodec&quot;, &quot;EAC3&quot;)" Sym="NGCONV-1652">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1653">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1654" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Back" Sym="NGCONV-1655">
+             <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1656">
+              <ns0:Action Name="Refresh()" Sym="NGCONV-1657" />
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+           </ns0:OptionsMenu>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+         <ns0:Panel Name="Row" Sym="NGCONV-1658">
+          <ns0:Text Name="Subtitles" Sym="NGCONV-1659" />
+          <ns0:Item Name="" Sym="NGCONV-1660">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1661">
+            <ns0:Value>&quot;Subtitle handling.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="GetDraftSelection(NGDraft, &quot;subtitles&quot;)" Sym="NGCONV-1662">
+            <ns0:Text Name="" Sym="NGCONV-1663" />
+           </ns0:Action>
+           <ns0:OptionsMenu Name="NG Subtitles" Sym="NGCONV-1664">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Action Name="&quot;Current: &quot; + GetDraftSelection(NGDraft, &quot;subtitles&quot;)" Sym="NGCONV-1665">
+             <ns0:Text Name="" Sym="NGCONV-1666" />
+            </ns0:Action>
+            <ns0:Item Name="Recommended" Sym="NGCONV-1667">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;subtitles&quot;, &quot;auto&quot;)" Sym="NGCONV-1668">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1669">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1670" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="None" Sym="NGCONV-1671">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;subtitles&quot;, &quot;NONE&quot;)" Sym="NGCONV-1672">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1673">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1674" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Copy" Sym="NGCONV-1675">
+             <ns0:Action Name="SetDraftOverride(NGDraft, &quot;subtitles&quot;, &quot;COPY&quot;)" Sym="NGCONV-1676">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1677">
+               <ns0:Action Name="Refresh()" Sym="NGCONV-1678" />
+              </ns0:Action>
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Item Name="Back" Sym="NGCONV-1679">
+             <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1680">
+              <ns0:Action Name="Refresh()" Sym="NGCONV-1681" />
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+           </ns0:OptionsMenu>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+        </ns0:Panel>
+       </ns0:Branch>
+       <ns0:Branch Name="&quot;xNgAdvanced&quot;" Sym="NGCONV-1682">
+        <ns0:Panel Name="AreaItems" Sym="NGCONV-1683">
+         <ns0:Layout>Vertical</ns0:Layout>
+         <ns0:FixedWidth>1.0</ns0:FixedWidth>
+         <ns0:PadY>0.015</ns0:PadY>
+         <ns0:Scrolling>1</ns0:Scrolling>
+         <ns0:IgnoreThemeProps>true</ns0:IgnoreThemeProps>
+         <ns0:Panel Name="Row" Sym="NGCONV-1684">
+          <ns0:Text Name="Prefer compatibility" Sym="NGCONV-1685" />
+          <ns0:Item Name="" Sym="NGCONV-1686">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1687">
+            <ns0:Value>&quot;Toggle this encoding preference.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="If(GetDraftGoalEnabled(NGDraft, &quot;PREFER_COMPAT&quot;), &quot;On&quot;, &quot;Off&quot;)" Sym="NGCONV-1688">
+            <ns0:Text Name="" Sym="NGCONV-1689" />
+           </ns0:Action>
+           <ns0:Action Name="SetDraftGoal(NGDraft, &quot;PREFER_COMPAT&quot;, !GetDraftGoalEnabled(NGDraft, &quot;PREFER_COMPAT&quot;))" Sym="NGCONV-1690">
+            <ns0:Action Name="Refresh()" Sym="NGCONV-1691" />
+           </ns0:Action>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+         <ns0:Panel Name="Row" Sym="NGCONV-1692">
+          <ns0:Text Name="Prefer smallest size" Sym="NGCONV-1693" />
+          <ns0:Item Name="" Sym="NGCONV-1694">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1695">
+            <ns0:Value>&quot;Toggle this encoding preference.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="If(GetDraftGoalEnabled(NGDraft, &quot;PREFER_SMALLEST&quot;), &quot;On&quot;, &quot;Off&quot;)" Sym="NGCONV-1696">
+            <ns0:Text Name="" Sym="NGCONV-1697" />
+           </ns0:Action>
+           <ns0:Action Name="SetDraftGoal(NGDraft, &quot;PREFER_SMALLEST&quot;, !GetDraftGoalEnabled(NGDraft, &quot;PREFER_SMALLEST&quot;))" Sym="NGCONV-1698">
+            <ns0:Action Name="Refresh()" Sym="NGCONV-1699" />
+           </ns0:Action>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+         <ns0:Panel Name="Row" Sym="NGCONV-1700">
+          <ns0:Text Name="Prefer HDR" Sym="NGCONV-1701" />
+          <ns0:Item Name="" Sym="NGCONV-1702">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1703">
+            <ns0:Value>&quot;Toggle this encoding preference.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="If(GetDraftGoalEnabled(NGDraft, &quot;PRESERVE_HDR&quot;), &quot;On&quot;, &quot;Off&quot;)" Sym="NGCONV-1704">
+            <ns0:Text Name="" Sym="NGCONV-1705" />
+           </ns0:Action>
+           <ns0:Action Name="SetDraftGoal(NGDraft, &quot;PRESERVE_HDR&quot;, !GetDraftGoalEnabled(NGDraft, &quot;PRESERVE_HDR&quot;))" Sym="NGCONV-1706">
+            <ns0:Action Name="Refresh()" Sym="NGCONV-1707" />
+           </ns0:Action>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+         <ns0:Panel Name="Row" Sym="NGCONV-1708">
+          <ns0:Text Name="Prefer fast encoding" Sym="NGCONV-1709" />
+          <ns0:Item Name="" Sym="NGCONV-1710">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1711">
+            <ns0:Value>&quot;Toggle this encoding preference.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="If(GetDraftPreferenceEnabled(NGDraft, &quot;avoidreencode&quot;), &quot;On&quot;, &quot;Off&quot;)" Sym="NGCONV-1712">
+            <ns0:Text Name="" Sym="NGCONV-1713" />
+           </ns0:Action>
+           <ns0:Action Name="SetDraftPreference(NGDraft, &quot;avoidreencode&quot;, !GetDraftPreferenceEnabled(NGDraft, &quot;avoidreencode&quot;))" Sym="NGCONV-1714">
+            <ns0:Action Name="Refresh()" Sym="NGCONV-1715" />
+           </ns0:Action>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+         <ns0:Panel Name="Row" Sym="NGCONV-1716">
+          <ns0:Text Name="Compatibility notes" Sym="NGCONV-1717" />
+          <ns0:Item Name="" Sym="NGCONV-1718">
+           <ns0:Attribute Name="HelpText" Sym="NGCONV-1719">
+            <ns0:Value>&quot;Player-compatibility warnings for the current choices.&quot;</ns0:Value>
+           </ns0:Attribute>
+           <ns0:Action Name="&quot;View notes&quot;" Sym="NGCONV-1720">
+            <ns0:Text Name="" Sym="NGCONV-1721" />
+           </ns0:Action>
+           <ns0:OptionsMenu Name="NG Compatibility Notes" Sym="NGCONV-1722">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Action Name="GetDraftConflictReport(NGDraft)" Sym="NGCONV-1723">
+             <ns0:Text Name="" Sym="NGCONV-1724" />
+            </ns0:Action>
+            <ns0:Item Name="Back" Sym="NGCONV-1725">
+             <ns0:Action Name="CloseOptionsMenu()" Sym="NGCONV-1726">
+              <ns0:Action Name="Refresh()" Sym="NGCONV-1727" />
+             </ns0:Action>
+            </ns0:Item>
+            <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+           </ns0:OptionsMenu>
+          </ns0:Item>
+          <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
+         </ns0:Panel>
+        </ns0:Panel>
+       </ns0:Branch>
+       <ns0:Branch Name="&quot;xNgCreate&quot;" Sym="NGCONV-1728">
+        <ns0:Panel Name="AreaItems" Sym="NGCONV-1729">
+         <ns0:Layout>Vertical</ns0:Layout>
+         <ns0:FixedWidth>1.0</ns0:FixedWidth>
+         <ns0:IgnoreThemeProps>true</ns0:IgnoreThemeProps>
+         <ns0:Action Name="&quot;Press OK to name the file and start.\n \n&quot; + GetDraftReviewReport(NGDraft)" Sym="NGCONV-1730">
+          <ns0:Text Name="" Sym="NGCONV-1731">
+           <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+           <ns0:Theme Name="NGReportFontTheme" Sym="NGCONV-1732">
+            <ns0:TileBackgroundImage>false</ns0:TileBackgroundImage>
+            <ns0:StretchBackgroundImage>false</ns0:StretchBackgroundImage>
+            <ns0:FontSize>=gFontSizeGeneral-6</ns0:FontSize>
+           </ns0:Theme>
+          </ns0:Text>
+         </ns0:Action>
+        </ns0:Panel>
+       </ns0:Branch>
+      </ns0:Conditional>
+     </ns0:Branch>
+    </ns0:Conditional>
+   </ns0:Panel>
+  </ns0:Panel>
+ </ns0:Menu>
  <ns0:Menu ID="863" Name="Detailed Setup" Sym="BASE-52048">
   <ns0:Theme Ref="7168" Name="Free Menu Layout with ..." />
   <ns0:Panel Name="MenuContainer" Sym="BASE-72603">
@@ -107200,6 +108712,17 @@
                                       <ns0:Branch Name="else" Sym="OPUS4A-117782">
                                        <ns0:Action ID="38862" Name="&quot;REM Start question process for video conversion; close current dialog first.&quot;" Sym="BASE-50377">
                                         <ns0:Action Name="CloseOptionsMenu()" Sym="BASE-50375">
+                                         <ns0:Conditional Name="!IsFavoriteConversion &amp;&amp; !IsMultipleConversion" Sym="NGCONV-0100">
+                                          <ns0:Branch Name="true" Sym="NGCONV-0101">
+                                           <ns0:Action Name="NGDraft = NewConversionDraft(MediaFile)" Sym="NGCONV-0110">
+                                            <ns0:Action Name="AddGlobalContext(&quot;NGDraft&quot;, NGDraft)" Sym="NGCONV-0111">
+                                             <ns0:Action Name="AddGlobalContext(&quot;CurrSetupArea&quot;, &quot;xNgOverview&quot;)" Sym="NGCONV-0112">
+                                              <ns0:Menu Ref="970001" Name="NG Guided Conversion" />
+                                             </ns0:Action>
+                                            </ns0:Action>
+                                           </ns0:Action>
+                                          </ns0:Branch>
+                                          <ns0:Branch Name="else" Sym="NGCONV-0102">
                                          <ns0:Action ID="38871" Name="&quot;REM Open Conversion option dialog.&quot;" Sym="OPUS4A-125049">
                                           <ns0:OptionsMenu Name="Configure Video Conversion Options" Sym="BASE-50378">
                                            <ns0:Layout>Vertical</ns0:Layout>
@@ -107352,6 +108875,15 @@
                                               </ns0:Item>
                                              </ns0:Branch>
                                              <ns0:Branch Name="else" Sym="OPUS4A-125072">
+                                               <ns0:Item Name="Export, Enhance &amp; Archive" Sym="NGCONV-0001">
+                                                <ns0:Action Name="NGDraft = NewConversionDraft(MediaFile)" Sym="NGCONV-1001">
+                                                 <ns0:Action Name="AddGlobalContext(&quot;NGDraft&quot;, NGDraft)" Sym="NGCONV-1002">
+                                                  <ns0:Action Name="AddGlobalContext(&quot;CurrSetupArea&quot;, &quot;xNgOverview&quot;)" Sym="NGCONV-1003">
+                                                   <ns0:Menu Ref="970001" Name="NG Guided Conversion" />
+                                                  </ns0:Action>
+                                                 </ns0:Action>
+                                                </ns0:Action>
+                                               </ns0:Item>
                                               <ns0:Item Name="Convert" Sym="BASE-50396">
                                                <ns0:Conditional Name="IsMultipleConversion" Sym="BASE-50397">
                                                 <ns0:Branch Name="true" Sym="BASE-50398">
@@ -109272,6 +110804,8 @@
                                            </ns0:Hook>
                                           </ns0:OptionsMenu>
                                          </ns0:Action>
+                                          </ns0:Branch>
+                                         </ns0:Conditional>
                                         </ns0:Action>
                                        </ns0:Action>
                                       </ns0:Branch>

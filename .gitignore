@@ -1138,3 +1138,11 @@ __pycache__/
 /build-native.sh
 /stvs/**/*_cached_ac*.xml
 /stvs/**/phase3_expression_analysis*.json
+
+# PRD Word copies withheld pending author-metadata scrub (kept locally, untracked)
+docs/SageTV_STV_Optimization_PRD.docx
+docs/STV_Cleanup/SageTV_STV_Optimization_PRD.docx
+
+# Wizard generator working artifacts (local only, not for publication)
+/build/stv-backups/
+/build/stv-frag-ngconv.txt

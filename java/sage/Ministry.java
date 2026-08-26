@@ -114,8 +114,8 @@ public class Ministry implements Runnable
   //   2. <Sage.installPath>/presets/transcoder/*.properties  (shipped baseline)
   //
   // STATE_DIR is the per-install state directory used by the state-managed
-  // container layout (see sagetv-deploy entrypoint-state.sh, e.g.
-  // "/opt/sagetv/state/mine"). If unset, only the baseline path is consulted.
+  // container layout (see the deploy entrypoint-state.sh, e.g.
+  // "${STATE_DIR}/transcoder/presets/"). If unset, only the baseline path is consulted.
   //
   // Each .properties file describes one preset:
   //   name=PHONE_STD                            ← display name (becomes the

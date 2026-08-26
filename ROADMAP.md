@@ -145,6 +145,24 @@ work plus a Ministry resolver that builds the cartesian product from
 a preset spec like `args_nv=` / `args_sw=` / `args_vaapi=`. Cleaner
 mental model than Option A once we have >1 GPU vendor in the mix.
 
+### Export, Enhance & Archive — guided offline conversion redesign  *(planned)*
+
+Replaces the legacy "Convert Recording" dialog + 11 static presets with a
+guided, purpose-driven workflow over a client-agnostic conversion engine
+(`sage.convert.ConversionPlan`) and a managed **derivative** model (outputs
+linked to their source `MediaFile` via a `Wiz.bin` derivatives relation, with
+validation states and a retention policy). Engine gains: HDR10 preserve /
+HDR→SDR tone-map, AV1, deinterlace-before-scale, Lanczos vs AI enhancement,
+`-fpsmax` frame-rate control, audio channel/codec separation (5.1 retention),
+subtitle + CEA-608/708 CC migration, and size/quality/data-budget targeting.
+
+**Batch / travel-budget optimizer  *(deferred — fast-follow after v1)*.**
+Fit N recordings into a single byte/data budget (e.g. a trip allowance),
+choosing per-recording resolution / frame rate / codec by a stated priority
+(quality vs frame rate vs resolution vs most-hours). Ships after the core
+single-file engine + derivative model + guided UI land, since it depends on the
+per-file size estimator and derivative reuse being in place.
+
 ### Non-NVIDIA hardware encoder support — VAAPI / QSV / AMF  *(Option B; recommended next step after sub-point (1))*
 
 **Where this fits.** Sub-point (1) of the *No-GPU graceful degradation*
@@ -231,7 +249,7 @@ metal users.
 **Container / device requirements.**
 
 - VAAPI/QSV need a DRI render node: bind `/dev/dri` (already mounted by
-  `run_mine.sh`) and add the container user to the `render`/`video`
+  the container run script) and add the container user to the `render`/`video`
   groups. Verify inside the container with `vainfo` (add `vainfo` +
   `intel-media-va-driver-non-free` **only** in the opt-in Intel image
   layer; do **not** bloat the base).
@@ -282,7 +300,7 @@ Defer until there is enough such content to justify the GPU-hours.
 - Single static binary, no Python / TF / Torch runtime.
 - Vulkan path works inside the existing container; needs
   `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility,graphics` (current
-  value lacks `graphics`; one-line `run_mine.sh` change).
+  value lacks `graphics`; one-line container run-script change).
 - Models worth shipping:
   - `realesr-general-x4v3` — balanced, decompression-noise removal,
     **best default for OTA TV**.
@@ -360,7 +378,7 @@ shell `|`. `FFMPEGTranscoder` cannot model this with its current
    `transcoder/pipeline_max_concurrent=1` (hardcoded ceiling at 1
    until we add the recording/playback contention gate listed in the
    "Stability / data" backlog below).
-6. Container fix — `run_mine.sh`: add `graphics` to
+6. Container fix — container run script: add `graphics` to
    `NVIDIA_DRIVER_CAPABILITIES`; mount `realesrgan-ncnn-vulkan`
    binary + `models/` dir into `/opt/sagetv/server/ai/`. Document the
    one-line `Sage.properties` knob `transcoder/ai_upscaler_bin=`.
@@ -659,7 +677,7 @@ RTX VSR) — the items below are the ones not previously captured.
   cost) to locate keyframes, and the SageTV `MediaFile` layer has no
   cheap `seek-to-nearest-keyframe(ptsMs)` primitive. Add a small on-disk
   sidecar per recording:
-  `/opt/sagetv/state/mine/keyframe_index/<mediaFileId>.kf` — a compact
+  `${STATE_DIR}/keyframe_index/<mediaFileId>.kf` — a compact
   binary array of `(ptsMs int64, byteOffset int64, streamIndex int8)`
   entries built once by a background `Ministry`-style task after the
   recording completes (and incrementally for in-progress recordings,
@@ -773,6 +791,33 @@ for native MiniClients, not just PWA/bridge token clients),
 `sage/enhance/EnhancementAdvisor.java` (make the LAN-trust assumption an
 explicit documented policy rather than the current accidental fail-open on
 `availableBandwidthKbps<=0`).
+
+#### Sub-item — DIRECT_PLAY must honor "upscale enabled" when the source is upscalable
+
+**The gap.** Even on a trusted/gigabit LAN where promotion is allowed, a
+`DIRECT_PLAY` decision currently passes the source through untouched. When a
+client has **upscaling enabled** *and* the source resolution is **below the
+device's configured scale target** (i.e. the frame is genuinely upscalable —
+e.g. a 720p recording to a 4K panel), the server never engages the GPU upscale
+path; the panel does a naive scale and the RTX stays idle. This is the
+enabled-and-upscalable case, distinct from the "client can't self-enhance"
+case above: here the upscale is explicitly *wanted*, the link is trusted, and
+the only thing missing is the trigger.
+
+**Trigger condition.** Promote `DIRECT_PLAY` → server upscale remux
+(`pull-xcode:mpeg2tsremux` + `;enhance=<tier>`) when **all** hold:
+- the client's per-client `upscale` flag is on;
+- `sourceHeight < deviceScaleTargetHeight` (source is below the device's scale
+  value → upscalable; equal/higher never upscales — downscale/passthrough as
+  today);
+- the link is trusted/measured per the gating above (never on an unproven WAN
+  link);
+- the tier is an active upscale tier (deinterlace-only is exempt).
+Otherwise leave `DIRECT_PLAY` intact.
+
+**Files likely touched.** Same seam as the parent item, plus wherever the
+device scale target is resolved so `sourceHeight < scaleTarget` can be compared
+at decision time.
 
 ---
 

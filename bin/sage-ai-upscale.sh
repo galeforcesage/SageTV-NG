@@ -47,10 +47,10 @@ WIDTH=0
 HEIGHT=0
 MODEL="${SAGE_AI_UPSCALE_MODEL:-realesr-general-x4v3}"
 CHUNK_FRAMES="${SAGE_AI_UPSCALE_CHUNK_FRAMES:-500}"
-# Default to the bind-mounted realesrgan location used by our deploy
-# (run_mine.sh mounts the host realesrgan dir at /opt/realesrgan:ro). SageTV
-# normally passes the path explicitly via transcoder/ai_upscale_binary, but a
-# sane default keeps `--probe` and manual invocation working out of the box.
+# Default to a common bind-mounted realesrgan location (the container mounts the
+# host realesrgan dir at /opt/realesrgan:ro). SageTV normally passes the path
+# explicitly via transcoder/ai_upscale_binary, but a sane default keeps
+# `--probe` and manual invocation working out of the box.
 REALESRGAN_BIN="${SAGE_AI_UPSCALE_BINARY:-/opt/realesrgan/realesrgan-ncnn-vulkan}"
 FFMPEG_BIN="${SAGE_FFMPEG:-/usr/bin/ffmpeg}"
 FFPROBE_BIN="${SAGE_FFPROBE:-/usr/bin/ffprobe}"
@@ -166,16 +166,34 @@ FPS_DEN="${FPS_RAT#*/}"
 [ -z "$FPS_DEN" ] && FPS_DEN=1
 FPS_FLOAT=$(awk "BEGIN { printf \"%.6f\", $FPS_NUM / $FPS_DEN }")
 
-# Use nb_frames if container reports it; otherwise estimate from duration.
+# Estimate total frame count for the progress percentage. Try, in order:
+#   1) the container's declared nb_frames,
+#   2) format duration x fps,
+#   3) a demux-only packet count (fast; no decode).
+# Real .ts recordings routinely report nb_frames=N/A and sometimes an N/A
+# duration, so each step is validated and we fall through on anything
+# non-numeric. This value is used ONLY for the reported percentage; the
+# authoritative loop stop condition is a chunk that yields zero frames (EOF),
+# so an inaccurate estimate can never truncate or over-run the output.
+is_pos_int() { case "${1:-}" in ''|*[!0-9]*) return 1;; *) [ "$1" -gt 0 ];; esac; }
+
 TOTAL_FRAMES=$("$FFPROBE_BIN" -v error -select_streams v:0 \
     -show_entries stream=nb_frames -of default=nokey=1:noprint_wrappers=1 \
     "$INPUT" 2>/dev/null || true)
-if [ -z "$TOTAL_FRAMES" ] || [ "$TOTAL_FRAMES" = "N/A" ] || [ "$TOTAL_FRAMES" = "0" ]; then
+if ! is_pos_int "$TOTAL_FRAMES"; then
     DURATION=$("$FFPROBE_BIN" -v error -show_entries format=duration \
-        -of default=nokey=1:noprint_wrappers=1 "$INPUT" 2>/dev/null || echo 0)
-    TOTAL_FRAMES=$(awk "BEGIN { printf \"%d\", $DURATION * $FPS_FLOAT }")
+        -of default=nokey=1:noprint_wrappers=1 "$INPUT" 2>/dev/null || true)
+    case "$DURATION" in
+        ''|N/A) TOTAL_FRAMES="" ;;
+        *)      TOTAL_FRAMES=$(awk "BEGIN { printf \"%d\", $DURATION * $FPS_FLOAT }") ;;
+    esac
 fi
-[ "$TOTAL_FRAMES" -le 0 ] && TOTAL_FRAMES=1
+if ! is_pos_int "$TOTAL_FRAMES"; then
+    TOTAL_FRAMES=$("$FFPROBE_BIN" -v error -select_streams v:0 \
+        -count_packets -show_entries stream=nb_read_packets \
+        -of default=nokey=1:noprint_wrappers=1 "$INPUT" 2>/dev/null || true)
+fi
+is_pos_int "$TOTAL_FRAMES" || TOTAL_FRAMES=1
 
 echo "sage-ai-upscale: fps=$FPS_RAT (~$FPS_FLOAT) totalFrames~=$TOTAL_FRAMES" >&2
 
@@ -201,19 +219,38 @@ CONCAT="$WORKDIR/concat.txt"
 
 CHUNK_IDX=0
 PROCESSED=0
-while [ "$PROCESSED" -lt "$TOTAL_FRAMES" ]; do
+# Loop until a chunk comes back empty (EOF). The frame-count estimate above is
+# only for the progress percentage and is deliberately NOT the stop condition,
+# so it can never truncate the output when metadata is missing.
+while true; do
     START_FRAME=$PROCESSED
-    END_FRAME=$((PROCESSED + CHUNK_FRAMES - 1))
     IN_DIR="$WORKDIR/in_$CHUNK_IDX"
     OUT_DIR="$WORKDIR/out_$CHUNK_IDX"
     rm -rf "$IN_DIR" "$OUT_DIR"
     mkdir -p "$IN_DIR" "$OUT_DIR"
 
-    # Extract this chunk's frames. -vsync 0 keeps original timing; select=
-    # filter picks the right frame range.
-    if ! "$FFMPEG_BIN" -hide_banner -loglevel error -y -i "$INPUT" \
-            -map 0:v:0 \
-            -vf "select=between(n\\,$START_FRAME\\,$END_FRAME),setpts=N/FRAME_RATE/TB" \
+    # Extract this chunk's frames by SEEKING to the chunk start on the input
+    # side and decoding only CHUNK_FRAMES frames.
+    #
+    # This is deliberately NOT a `select=between(n,START,END)` filter. select
+    # never signals end-of-stream early, so ffmpeg keeps decoding the source all
+    # the way to EOF on *every* chunk (verified: extracting frames 0..499 and
+    # 100000..100499 from the same file both cost a full-file decode). That makes
+    # phase 1 cost O(chunks x fullFileDecode) instead of O(totalFrames): even
+    # chunk 0 pays for one complete decode of the source before it returns, which
+    # is what stalled a long, damaged MPEG-2 recording at progress=0% until the
+    # chained job's watchdog killed it (SIGTERM / exit 143).
+    #
+    # Input-side -ss is a fast keyframe seek (it decodes back at most one GOP and
+    # discards), so each chunk's decode is bounded to ~CHUNK_FRAMES regardless of
+    # where it sits in the source or how long the source is. START_TIME is
+    # derived from the running PROCESSED count (actual frames emitted so far), so
+    # chunks stay contiguous and total frame count is preserved for A/V sync.
+    START_TIME=$(awk "BEGIN { printf \"%.6f\", $START_FRAME / $FPS_FLOAT }")
+    if ! "$FFMPEG_BIN" -hide_banner -loglevel error -y \
+            -ss "$START_TIME" -i "$INPUT" \
+            -map 0:v:0 -an -sn -dn \
+            -frames:v "$CHUNK_FRAMES" \
             -vsync 0 -f image2 \
             "$IN_DIR/f_%08d.png"; then
         echo "sage-ai-upscale: chunk $CHUNK_IDX extraction failed" >&2
@@ -257,6 +294,7 @@ while [ "$PROCESSED" -lt "$TOTAL_FRAMES" ]; do
 
     # ffmpeg-style progress for Sage's stderr scraper.
     PCT=$((PROCESSED * 100 / TOTAL_FRAMES))
+    [ "$PCT" -gt 99 ] && PCT=99
     echo "frame=${PROCESSED} fps=0.0 q=-0.0 size=N/A time=N/A bitrate=N/A speed=N/A progress=${PCT}%" >&2
 done
 

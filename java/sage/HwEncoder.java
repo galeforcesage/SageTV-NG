@@ -138,22 +138,22 @@ public final class HwEncoder
   {
     Map<Kind, Map<String, String>> m = new EnumMap<Kind, Map<String, String>>(Kind.class);
     Map<String, String> nv = new HashMap<String, String>();
-    nv.put("h264", "h264_nvenc"); nv.put("hevc", "hevc_nvenc");
+    nv.put("h264", "h264_nvenc"); nv.put("hevc", "hevc_nvenc"); nv.put("av1", "av1_nvenc");
     m.put(Kind.NVENC, nv);
     Map<String, String> va = new HashMap<String, String>();
-    va.put("h264", "h264_vaapi"); va.put("hevc", "hevc_vaapi");
+    va.put("h264", "h264_vaapi"); va.put("hevc", "hevc_vaapi"); va.put("av1", "av1_vaapi");
     m.put(Kind.VAAPI, va);
     Map<String, String> qs = new HashMap<String, String>();
-    qs.put("h264", "h264_qsv");   qs.put("hevc", "hevc_qsv");
+    qs.put("h264", "h264_qsv");   qs.put("hevc", "hevc_qsv");   qs.put("av1", "av1_qsv");
     m.put(Kind.QSV, qs);
     Map<String, String> af = new HashMap<String, String>();
-    af.put("h264", "h264_amf");   af.put("hevc", "hevc_amf");
+    af.put("h264", "h264_amf");   af.put("hevc", "hevc_amf");   af.put("av1", "av1_amf");
     m.put(Kind.AMF, af);
     Map<String, String> vt = new HashMap<String, String>();
     vt.put("h264", "h264_videotoolbox"); vt.put("hevc", "hevc_videotoolbox");
     m.put(Kind.VIDEOTOOLBOX, vt);
     Map<String, String> sw = new HashMap<String, String>();
-    sw.put("h264", "libx264"); sw.put("hevc", "libx265");
+    sw.put("h264", "libx264"); sw.put("hevc", "libx265"); sw.put("av1", "libsvtav1");
     m.put(Kind.NONE, sw);
     return Collections.unmodifiableMap(m);
   }
@@ -168,6 +168,8 @@ public final class HwEncoder
     if (c.length() == 0) return "h264";
     if (c.equals("h.264") || c.equals("avc")) return "h264";
     if (c.equals("h.265") || c.equals("h265")) return "hevc";
+    if (c.equals("av1") || c.startsWith("av1") || c.equals("libsvtav1") || c.equals("libaom-av1"))
+      return "av1";
     if (c.equals("hevc_nvenc") || c.equals("hevc_vaapi") || c.equals("hevc_qsv")
         || c.equals("hevc_amf") || c.equals("hevc_videotoolbox") || c.equals("libx265"))
       return "hevc";
