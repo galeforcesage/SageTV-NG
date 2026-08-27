@@ -571,33 +571,64 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
   public void seekToPosition(long offset) throws java.io.IOException
   {
-    if (!isTranscoding())
+    // A live ffmpeg child is the ground truth for "are we transcoding" here --
+    // NOT isTranscoding(). isTranscoding() also consults xcodeDone, which the
+    // stderr consumer thread's finally-block can flip to true (see startTranscode)
+    // while the process is very much alive and still producing on stdout. Using
+    // isTranscoding() to gate a (re)start therefore mistakes a healthy stream for
+    // a dead one and relaunches ffmpeg on every read -- the orphaned-NVENC / thrash
+    // bug. Gate on the process itself instead.
+    boolean liveChild = (xcodeProcess != null && xcodeProcess.isAlive());
+
+    if (!bufferOutput)
+    {
+      // ===== Live, non-seekable fragmented-MP4 streaming (pull-xcode / browserhd /
+      // MSE). The output is a forward-only pipe. The client's HTTP Range byte
+      // offsets are NOT source seeks and cannot be honoured by repositioning a live
+      // pipe. The inline streaming read (sendTranscodeOutputToChannel) always drains
+      // the next available bytes from the pipe regardless of the requested offset,
+      // so the ONLY job here is: make sure a transcode is running, then let reads
+      // flow forward. We must NEVER tear down and relaunch ffmpeg for an in-session
+      // byte-offset change -- doing so spawns a fresh NVENC transcode per Range
+      // request (leaking orphaned GPU sessions) and re-serves the stream from the
+      // top, so resume/seek plays ~1s then thrashes and freezes. A genuine time seek
+      // (FF/REW/resume) rebuilds the transcode via a fresh XCODE_SETUP ss=, not
+      // through this byte path. =====
+      if (!liveChild)
+      {
+        if (offset != 0)
+        {
+          // Cold start (first read, or the child genuinely exited). Adopt this
+          // offset as the virtual origin of the fresh stream and start from the
+          // already-configured seek time (transcodeStartSeekTime, e.g. the resume
+          // position). The fMP4 pipe emits a complete ftyp+moov + fragments from the
+          // top, so the reader still gets a valid init segment regardless of the
+          // byte label it asked for. Previously this threw, which tore down the
+          // MediaServerConnection and popped the STV "delete recording?" prompt.
+          if (XCODE_DEBUG) System.out.println("seekToPosition cold non-zero offset=" + offset +
+              " seekTime=" + transcodeStartSeekTime + "; starting transcode instead of failing");
+          xcodeBufferVirtualReadPos = xcodeBufferVirtualOffset = xcodeBufferVirtualSize = offset;
+        }
+        startTranscode();
+      }
+      else
+      {
+        // Already streaming: just realign the read cursor and serve forward.
+        xcodeBufferVirtualReadPos = offset;
+      }
+      return;
+    }
+
+    // ===== Buffered ring-buffer mode: byte offsets are real ring positions. =====
+    if (!liveChild)
     {
       if (offset != 0)
-      {
-        // The reader wants output starting at a non-zero byte offset but the
-        // transcoder isn't running yet. This happens on resume-from-position and
-        // when a client streams a live (non-seekable, fragmented-MP4) xcode through
-        // a proxy that issues its first request at a non-zero byte offset, or when a
-        // seek races the transcoder start/restart. Historically this threw an
-        // IOException, which tore down the whole MediaServerConnection: the client
-        // then saw an immediate end-of-stream (and the STV popped the end-of-show
-        // "delete this recording?" prompt) and resume-from-position never worked.
-        // Recover instead: treat this offset as the virtual start of the stream we
-        // are about to produce and start the transcode from the already-configured
-        // seek time (transcodeStartSeekTime, e.g. the resume position). In streaming
-        // mode the pipe always emits a fresh, valid stream from the top, so the
-        // reader still receives a complete init segment + fragments regardless of
-        // the byte label it asked for.
-        if (XCODE_DEBUG) System.out.println("seekToPosition cold non-zero offset=" + offset +
-            " seekTime=" + transcodeStartSeekTime + "; starting transcode instead of failing");
         xcodeBufferVirtualReadPos = xcodeBufferVirtualOffset = xcodeBufferVirtualSize = offset;
-      }
       startTranscode();
       return;
     }
-    if ((!bufferOutput && offset != xcodeBufferVirtualOffset) || (bufferOutput && (offset < xcodeBufferVirtualOffset ||
-        offset >= xcodeBufferVirtualOffset + xcodeBuffer.length*xcodeBuffer[0].length)))
+    if (offset < xcodeBufferVirtualOffset ||
+        offset >= xcodeBufferVirtualOffset + xcodeBuffer.length*xcodeBuffer[0].length)
     {
       long seekTime = estimateTranscodeSeekTimeFromOffset(offset);
       stopTranscode();
@@ -1865,6 +1896,15 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
   public void startTranscode() throws java.io.IOException
   {
+    // Never orphan a still-running child by overwriting xcodeProcess below. The
+    // normal restart path calls stopTranscode() first (which nulls xcodeProcess),
+    // so this is a no-op there. But any path that reaches here with a live child
+    // still attached (e.g. a repeated cold-start that mis-read xcodeDone) would
+    // otherwise leak an ffmpeg/NVENC session to the process table -- exactly the
+    // orphaned-transcode pileup that starves the GPU. Reap it first.
+    if (xcodeProcess != null)
+      stopTranscode();
+
     xcodeBufferBaseNum = 0;
     lastExitCode = -1;
     clearPreparedEmbeddedCcSubtitleFile();

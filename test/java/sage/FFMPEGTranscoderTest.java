@@ -190,6 +190,38 @@ public class FFMPEGTranscoderTest
         "a zero-offset cold start must remain at the top of the stream");
   }
 
+  // --- Live streaming (non-seekable fMP4 pipe) must NOT relaunch ffmpeg on an
+  // in-session byte-offset change. The PWA/MSE client issues HTTP Range requests
+  // against a forward-only transcode pipe; those byte offsets are not source seeks.
+  // The old code gated on isTranscoding() (which xcodeDone can spuriously flip to
+  // false while the child is alive) and, for streaming, restarted the transcode on
+  // any offset != xcodeBufferVirtualOffset -- spawning a fresh NVENC session per
+  // Range request (orphaned-GPU leak) and re-serving from the top, so resume/seek
+  // played ~1s then thrashed and froze. With a live child we must just realign the
+  // read cursor and serve forward: no stopTranscode(), no startTranscode().
+  @Test
+  public void testSeekToPositionStreamingLiveChildDoesNotRelaunch() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder transcoder = spy(new FFMPEGTranscoder());
+    org.mockito.Mockito.doNothing().when(transcoder).startTranscode();
+
+    // Streaming (non-buffered) mode with a live ffmpeg child already running.
+    transcoder.setEnableOutputBuffering(false);
+    Process liveChild = org.mockito.Mockito.mock(Process.class);
+    org.mockito.Mockito.when(liveChild.isAlive()).thenReturn(true);
+    transcoder.xcodeProcess = liveChild;
+    transcoder.xcodeBufferVirtualOffset = 0L;
+
+    transcoder.seekToPosition(1_048_576L);
+
+    // Must serve forward, not relaunch.
+    verify(transcoder, org.mockito.Mockito.never()).startTranscode();
+    verify(transcoder, org.mockito.Mockito.never()).stopTranscode();
+    assertEquals(transcoder.xcodeBufferVirtualReadPos, 1_048_576L,
+        "streaming seek must realign the read cursor to serve forward");
+  }
+
   // --- Fix A: yadif auto-add must never collide with a copy-video stage. ---
   // Modern ffmpeg hard-errors "Filtergraph 'yadif' was specified, but codec
   // copy was selected" -> "Error opening output file", killing the process
