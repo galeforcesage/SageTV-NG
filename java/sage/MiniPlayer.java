@@ -1029,6 +1029,7 @@ public class MiniPlayer implements DVDMediaPlayer
     CaptureDevice capDev = currMF.guessCaptureDeviceFromEncoding();
     // Reset per-tune server-enhancement state; the decision below re-derives it.
     this.currentTuneEnhanceTier = sage.enhance.EnhancementTier.NONE;
+    this.currentTunePushEnhanceMode = null;
     if (capDev != null && mcsr != null)
     {
       // Enable the special mode for when we are using Qian's HDHRPrime support along w/ a Bruno client.
@@ -2078,6 +2079,96 @@ public class MiniPlayer implements DVDMediaPlayer
             if (Sage.DBG) System.out.println("MiniPlayer failed to send CAP_EFFECTIVE_SURFACE="
                 + chosenSurfaceId + ": " + ioe);
           }
+          // GPU-enhance PULL upgrade — the pull analogue of the push mpeg2tsremux
+          // promotion below (~line 2807). A source the client can DIRECT_PLAY wins
+          // the surface ranking as a bare "pull". A raw direct pull has NO server
+          // transcoder (the bridge maps pull:direct -> /msproxy?mode=direct, a
+          // SIZE/READ passthrough), so an active enhancement tier would be silently
+          // dropped: the ":enhance;tier=" suffix would ride a passthrough that never
+          // re-encodes, and the requested upscale simply would not run. Promote such
+          // a tune to pull-xcode over the surface's copy-family REMUX mode
+          // (browserhd_remux for fMP4/browser, mpeg2tsremux for MPEG-TS/AVPlay TV)
+          // so MediaServer builds a video-copy transcoder the enhancement pass then
+          // rewrites into the NVENC HEVC upscale. Audio is copied untouched.
+          //
+          // Safety mirrors the push upgrade: never a recording / active-file source
+          // (!timeshifted; Invariant 0 is also re-checked in maybeApplyGpuEnhancement),
+          // NG video sessions only, and only when the WINNING surface actually
+          // advertises BOTH HEVC decode (the enhanced copy path emits HEVC) AND
+          // pull-xcode delivery. That delivery guard is load-bearing: a client
+          // whose surface offers only raw [push, pull] (e.g. the android_media3 /
+          // android_ijk ExoPlayer surfaces) has no transport that can carry a
+          // server transcode, so forcing pull-xcode would strand it with a mode
+          // it never requests. Such clients simply keep DIRECT_PLAY (no upscale)
+          // rather than break -- delivering enhancement to them is a client-side
+          // capability change (advertise pull-xcode), not a server reroute.
+          // Flag-guarded for instant rollback. When the tier is NONE (the default and the dry-run
+          // state) enhanceTier.isActive() is false, so this never fires and delivery
+          // is byte-identical to today.
+          if ("pull".equals(chosenSurfaceDelivery)
+              && (chosenSurfaceXcodeMode == null || chosenSurfaceXcodeMode.length() == 0)
+              && chosenSurface != null
+              && !timeshifted && ngSession
+              && majorTypeHint == MediaFile.MEDIATYPE_VIDEO
+              && enhanceTier != null && enhanceTier.isActive()
+              && Sage.getBoolean("miniplayer/enhance_pull_upgrade", true)
+              && chosenSurface.supportsVideoCodec(sage.media.format.MediaFormat.HEVC)
+              && chosenSurface.supportsDeliveryMode("pull-xcode"))
+          {
+            String enhanceMode =
+                sage.client.PlaybackDecisionEngine.enhanceCopyFamilyXcodeMode(chosenSurface);
+            if (enhanceMode != null && enhanceMode.length() > 0)
+            {
+              if (Sage.DBG) System.out.println("MiniPlayer: GPU-enhance pull upgrade — DIRECT_PLAY "
+                  + "source promoted to pull-xcode:" + enhanceMode + " for tier="
+                  + enhanceTier.token() + " (surface " + chosenSurfaceId
+                  + " advertises HEVC decode) so the enhancement pass has a transcoder to rewrite");
+              chosenSurfaceDelivery = "pull-xcode";
+              chosenSurfaceXcodeMode = enhanceMode;
+            }
+          }
+          // GPU enhancement PULL->PUSH upgrade for Android-class NG clients.
+          // An ExoPlayer/IJK client (android_media3 / android_ijk) that would
+          // DIRECT_PLAY the source advertises delivery=[push, pull] with HEVC in
+          // MATROSKA/MP4 but NO pull-xcode — so the pull-xcode branch above
+          // cannot fire and raw pull carries no transcoder. Its native transcode
+          // transport is a video-copy MATROSKA PUSH (the same "generic push
+          // container" the profile-override path already uses). Promote the tune
+          // to that push so a copy-family transcoder exists; the enhancement pass
+          // then rewrites the video copy into the NVENC HEVC upscale (audio is
+          // copied untouched — the client was already direct-playing it, so it is
+          // guaranteed decodable). We flip the surface delivery AND ngEarlyDelivery
+          // to "push" here, BEFORE CAP_EFFECTIVE_DELIVERY is published and before
+          // NG Gate #6 selects pushMode, so the whole session is consistently a
+          // push session end to end (the client is told "push", never a pull URL
+          // it would then be pushed over). The concrete copy mode is carried to
+          // the PUSH-upgrade block below via currentTunePushEnhanceMode. The token
+          // stays clean ("push:enhance;tier=") — push clients do not request a
+          // server xcode mode, so chosenSurfaceXcodeMode is intentionally left
+          // empty. Flag-guarded; inert whenever the tier is NONE.
+          else if ("pull".equals(chosenSurfaceDelivery)
+              && (chosenSurfaceXcodeMode == null || chosenSurfaceXcodeMode.length() == 0)
+              && chosenSurface != null
+              && !timeshifted && ngSession
+              && majorTypeHint == MediaFile.MEDIATYPE_VIDEO
+              && enhanceTier != null && enhanceTier.isActive()
+              && Sage.getBoolean("miniplayer/enhance_push_mkv_upgrade", true)
+              && chosenSurface.supportsVideoCodec(sage.media.format.MediaFormat.HEVC)
+              && chosenSurface.supportsDeliveryMode("push")
+              && chosenSurface.supportsContainer("MATROSKA"))
+          {
+            // Video copy (rewritten to HEVC by the enhancement pass) + audio copy
+            // (playable: the client was direct-playing it) in a MATROSKA push.
+            String enhanceMode = "container=matroska;videocodec=COPY;audiocodec=COPY";
+            if (Sage.DBG) System.out.println("MiniPlayer: GPU-enhance push(MKV) upgrade — DIRECT_PLAY "
+                + "source promoted to a MATROSKA video-copy PUSH transcode (mode=" + enhanceMode
+                + ") for tier=" + enhanceTier.token() + " (surface " + chosenSurfaceId
+                + " advertises HEVC decode + push + MATROSKA, no pull-xcode) so the enhancement "
+                + "pass has a transcoder to rewrite");
+            chosenSurfaceDelivery = "push";
+            ngEarlyDelivery = "push";
+            this.currentTunePushEnhanceMode = enhanceMode;
+          }
           // Protocol 2.1: publish the effective delivery mode (and, for
           // pull-xcode, the concrete server-native XCODE_SETUP mode) so the
           // bridge maps CAP_EFFECTIVE_DELIVERY=pull-xcode:<mode> 1:1 to its
@@ -2804,7 +2895,26 @@ public class MiniPlayer implements DVDMediaPlayer
       // advertises BOTH HEVC decode AND MPEG2-TS push so it can receive HEVC-in-TS.
       // Flag-guarded for instant rollback. When the tier is NONE (the default and the
       // dry-run state) this never fires and delivery is byte-identical to today.
-      if (pushMode && !transcoded && !timeshifted && ngSession && mcsr != null
+      // Android-class route (decided at the post-rank surface block above): the
+      // client advertises push + HEVC + MATROSKA but no pull-xcode and no
+      // MPEG2-TS push, so the enhanced stream is delivered as a video-copy
+      // MATROSKA push. currentTunePushEnhanceMode carries the concrete copy mode;
+      // when set, pushMode was already forced true (via ngEarlyDelivery="push" ->
+      // NG Gate #6) and the surface transport override cleared clientDoesPull.
+      if (pushMode && !transcoded && !timeshifted && ngSession
+          && majorTypeHint == MediaFile.MEDIATYPE_VIDEO
+          && currentTuneEnhanceTier != null && currentTuneEnhanceTier.isActive()
+          && currentTunePushEnhanceMode != null)
+      {
+        transcoded = true;
+        prefTranscodeMode = currentTunePushEnhanceMode;
+        useOriginalAudioTrack = false; // audiocodec=COPY in the mode governs audio
+        dynamicRateAdjust = false;
+        if (Sage.DBG) System.out.println("MiniPlayer: GPU-enhance push(MKV) upgrade — direct-play client "
+            + "promoted to " + prefTranscodeMode + " copy-family transcode for tier="
+            + currentTuneEnhanceTier.token() + " (client advertises HEVC decode + MATROSKA push)");
+      }
+      else if (pushMode && !transcoded && !timeshifted && ngSession && mcsr != null
           && majorTypeHint == MediaFile.MEDIATYPE_VIDEO
           && currentTuneEnhanceTier != null && currentTuneEnhanceTier.isActive()
           && Sage.getBoolean("miniplayer/enhance_push_upgrade", true)
@@ -7190,6 +7300,17 @@ public class MiniPlayer implements DVDMediaPlayer
   // in a different lexical scope). NONE = no enhancement, behavior unchanged.
   private volatile sage.enhance.EnhancementTier currentTuneEnhanceTier =
       sage.enhance.EnhancementTier.NONE;
+
+  // When an Android-class NG client that would DIRECT_PLAY (bare pull) has an
+  // active enhancement tier but advertises NO pull-xcode delivery (only raw
+  // push/pull) — e.g. android_media3 / android_ijk ExoPlayer — the enhancement
+  // is delivered by promoting the tune to a video-copy MATROSKA PUSH transcode
+  // (its native transcode transport, per the profile-override MKV path) so a
+  // transcoder exists for maybeApplyGpuEnhancement to rewrite copy -> HEVC. The
+  // concrete copy-family mode string is decided at the post-rank surface block
+  // and consumed by the PUSH-upgrade block far below (different lexical scope),
+  // so it is carried here. null = not on this route; delivery is unchanged.
+  private String currentTunePushEnhanceMode;
 
   private boolean firstSeek;
 

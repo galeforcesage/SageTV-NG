@@ -314,6 +314,51 @@ public class FFMPEGTranscoderTest
     assertFalse(t.shouldApplyVodProbeTuning());
   }
 
+  // --- Android-class push MKV video-copy enhancement mode recognition. ---
+  @Test
+  public void testIsEnhanceableCopyContainerMode_TrueForInlineVideoCopyPushMode() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.xcodeModeName = "container=matroska;videocodec=COPY;audiocodec=COPY";
+    assertTrue(t.isEnhanceableCopyContainerMode());
+    // Case-insensitive.
+    t.xcodeModeName = "CONTAINER=MATROSKA;VIDEOCODEC=COPY;AUDIOCODEC=COPY";
+    assertTrue(t.isEnhanceableCopyContainerMode());
+  }
+
+  @Test
+  public void testIsEnhanceableCopyContainerMode_FalseForNamedAndReencodeModes() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    // Named legacy modes carry no "container=" token -> must not match.
+    for (String legacy : new String[] { "mpeg2tsremux", "browserhd_remux", "audioonly",
+        "mpeg2psremux", "dynamic", null })
+    {
+      t.xcodeModeName = legacy;
+      assertFalse(t.isEnhanceableCopyContainerMode(), "should not match: " + legacy);
+    }
+    // Inline mode that re-encodes video (not a copy family) must not match.
+    t.xcodeModeName = "container=matroska;videocodec=H264;audiocodec=COPY";
+    assertFalse(t.isEnhanceableCopyContainerMode());
+  }
+
+  @Test
+  public void testIsEnhanceableCopyContainerMode_NotCoupledToVodProbeTuning() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.activeFile = false;
+    t.sourceFormat = dummySourceFormat();
+    // The push MKV copy mode is an enhancement rewrite base but must NOT pull
+    // itself into the name-scoped VOD probesize/analyzeduration tuning set.
+    t.xcodeModeName = "container=matroska;videocodec=COPY;audiocodec=COPY";
+    assertTrue(t.isEnhanceableCopyContainerMode());
+    assertFalse(t.isModernCopyFamilyXcodeMode());
+    assertFalse(t.shouldApplyVodProbeTuning());
+  }
+
   // --- EQ copy-flip must still fire correctly after yadif suppression. ---
   // The audio-side EQ stage (isServerAudioEqActive / maybeDisqualifyAudioCopyForServerEq)
   // is entirely independent of the video-side yadif guard -- confirms Fix A

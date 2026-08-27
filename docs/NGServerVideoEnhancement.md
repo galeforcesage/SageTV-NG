@@ -833,25 +833,52 @@ Implemented and merged (behavior-neutral until both switches are cleared):
   are separate services, deliberately: "a spare NVENC session exists" is not a
   reason to re-encode a stream that already looked fine.
 - The §3 token suffix is emitted.
+- The enhancement pipeline is attached to both live transcode branches. On the
+  push path the tier flows `MiniPlayer` → `FastMpeg2Reader.setEnhancementTier()`
+  → `FFMPEGTranscoder.setEnhancementRequest()`; on the pull-xcode path it rides
+  the §3 token, is parsed from `XCODE_SETUP` by `MediaServer`, and is handed to
+  the same `FFMPEGTranscoder.setEnhancementRequest()`. In both cases
+  `FFMPEGTranscoder.maybeApplyGpuEnhancement()` performs the final argv rewrite
+  (deinterlace + CUDA upscale + NVENC HEVC) as the last edit before ffmpeg is
+  spawned, behind the `GpuGovernor` admission and `RecordingGuard` veto.
+- Direct-play reroute: a source the client can play natively wins the surface
+  ranking as a raw pull/push with **no transcoder**, so an active tier would have
+  nothing to rewrite. Both branches promote such a tune into a video-copy
+  transcode purely so the enhancement pass has an argv to edit. On the push path
+  `MiniPlayer` flips a raw push to a copy-family `mpeg2tsremux`
+  (`miniplayer/enhance_push_upgrade`); on the pull path it promotes a bare
+  `pull`/DIRECT_PLAY to `pull-xcode` over the surface-correct copy-family mode —
+  `browserhd_remux` for fMP4/browser surfaces, `mpeg2tsremux` for MPEG-TS/AVPlay
+  surfaces (`miniplayer/enhance_pull_upgrade`). A third case covers Android-class
+  NG clients (ExoPlayer/IJK, e.g. `android_media3` / `android_ijk`) that would
+  DIRECT_PLAY: they advertise `push` + HEVC + MATROSKA but **no `pull-xcode`**, so
+  neither branch above can reach them. `MiniPlayer` instead promotes the bare
+  `pull` DIRECT_PLAY into a video-copy **MATROSKA push** — the same "generic push
+  container" transcode these clients already accept — flipping the effective
+  delivery to `push:enhance;tier=<t>` and giving the enhancement pass a
+  `container=matroska;videocodec=COPY;audiocodec=COPY` argv to rewrite the video
+  copy into NVENC HEVC (`miniplayer/enhance_push_mkv_upgrade`). Audio is always
+  copied untouched, all three promotions require the winning surface to advertise
+  HEVC decode, and none fires for a recording/active-file source or when the tier
+  is `NONE`
+  (dry-run) — so delivery is byte-identical until enhancement actually engages.
 
-Not yet wired: the enhancement pipeline is not attached to the push and
-pull-xcode transcode branches, so the server currently logs its decisions and
-sends today's stream. Client work in §2 is safe to start now — it is read by the
-server immediately and simply improves the quality of what gets logged.
-
-**A phase interlock enforces that.** Because the tier travels to the client in the
-§3 token, going live before the pipeline can apply it would make the server
-advertise an enhancement it never performed. So until the pipeline is wired,
-clearing `playback/gpu_enhance/dry_run` is *not* sufficient: dry-run stays on, and
-the server logs
+Live activation: because the pipeline is wired, the phase interlock is cleared
+(`EnhancementDryRun.PIPELINE_WIRED` is true), so `playback/gpu_enhance/dry_run`
+is now honored directly. Enhancement stays **behavior-neutral until both**
+`playback/gpu_enhance/enabled=true` **and** `playback/gpu_enhance/dry_run=false`
+are set; with dry-run still on (the default) the server logs its decision and
+sends today's stream, exactly as before. Only once dry-run is cleared does
+`enhance;tier=` appear on the wire and a stream actually get re-encoded. When
+enhancement is applied to a live tune the server logs, once per session:
 
 ```
-GPU_ENHANCE INTERLOCK playback/gpu_enhance/dry_run is false, but the enhancement
-pipeline is not wired to the transcode branches yet, so dry-run stays on.
+GPU_ENHANCE LIVE applied <plan> session=<id> mode=<xcodeMode> ...
 ```
 
-once, so the setting is never silently ignored. `enhance;tier=` therefore cannot
-appear on the wire yet, and any client seeing it is talking to a newer server.
+The HLS/`httpls` delivery path is intentionally **not** enhanced yet (it needs a
+`hwupload` filter-graph rework); enhancement there is a no-op regardless of the
+switches.
 
 ### What a client team can test today
 

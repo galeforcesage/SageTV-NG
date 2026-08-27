@@ -1489,6 +1489,29 @@ public class FFMPEGTranscoder implements TranscodeEngine
   }
 
   /**
+   * True for an <b>inline custom</b> copy-family push mode of the shape
+   * {@code container=<c>;videocodec=COPY;audiocodec=...} — the "generic push
+   * container" transcode an Android-class NG client (ExoPlayer/IJK) receives.
+   * This is the PUSH analogue of the named copy-family modes above: the video is
+   * stream-copied (so {@link sage.enhance.GpuEnhancePipeline#rewriteArgv} can
+   * swap the {@code -vcodec copy} for the NVENC HEVC upscale), and enhancement
+   * is delivered over the client's native MATROSKA push rather than pull-xcode
+   * (which these clients do not advertise). Deliberately kept SEPARATE from
+   * {@link #isModernCopyFamilyXcodeMode} so it gates <b>only</b> the enhancement
+   * rewrite (below), never the VOD probesize/analyzeduration tuning, whose
+   * name-scoped set must stay unchanged. Matches only an explicit
+   * {@code videocodec=copy} in the inline {@code key=value;...} form, so the
+   * named legacy modes {@code audioonly} / {@code mpeg2psremux} (no {@code
+   * container=} token) never match.
+   */
+  boolean isEnhanceableCopyContainerMode()
+  {
+    if (xcodeModeName == null) return false;
+    String m = xcodeModeName.toLowerCase(java.util.Locale.ROOT);
+    return m.indexOf("container=") >= 0 && m.indexOf("videocodec=copy") >= 0;
+  }
+
+  /**
    * True for a non-copy re-encode PLAYBACK mode that can still be enhanced in
    * place because it already decodes and re-encodes on the GPU. Currently only
    * {@code browserhd} — the H.264 fMP4 re-encode the browser/PWA negotiates for
@@ -1548,7 +1571,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // source. Enhancement applies to the confirmed modern copy-family playback
       // modes (remux/copy) and to the browserhd re-encode path (H.264 for browser
       // MSE, chosen when the source can't be stream-copied to fMP4, e.g. MPEG-2).
-      boolean copyFamily = isModernCopyFamilyXcodeMode();
+      boolean copyFamily = isModernCopyFamilyXcodeMode() || isEnhanceableCopyContainerMode();
       boolean reencodeEnhanceable = isEnhanceableReencodeMode();
       if (activeFile || (!copyFamily && !reencodeEnhanceable)) return;
 

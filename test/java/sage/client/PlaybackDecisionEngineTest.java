@@ -472,4 +472,63 @@ public class PlaybackDecisionEngineTest
     assertEquals(d.decision, PlaybackDecisionEngine.Decision.AUDIO_TRANSCODE,
         "Base 9-arg overload must preserve pre-Item-3 behavior (no passthrough)");
   }
+
+  // =======================================================================
+  // GPU-enhance pull upgrade: enhanceCopyFamilyXcodeMode must resolve the
+  // surface-correct copy-family REMUX mode so a DIRECT_PLAY source can be
+  // rerouted into an enhanceable transcode (mirror of xcodeModeForDecision's
+  // REMUX row). Browser/MSE (fMP4) -> browserhd_remux; TV/AVPlay (TS) ->
+  // mpeg2tsremux. Both are modern copy-family modes the enhancement pass
+  // recognises, so the rewrite applies for either surface family.
+  // =======================================================================
+  private static PlaybackSurface surfaceWith(String route, String... containers)
+  {
+    return new PlaybackSurface("s", route, 10,
+        java.util.Arrays.asList("pull-xcode"),
+        java.util.Arrays.asList("H264", "HEVC"),
+        java.util.Arrays.asList("AAC"),
+        java.util.Arrays.asList(containers));
+  }
+
+  @Test
+  public void enhanceCopyFamilyXcodeMode_fmp4Surface_browserhdRemux()
+  {
+    // MP4 container declared, no TS -> fMP4 family -> browserhd_remux.
+    assertEquals(PlaybackDecisionEngine.enhanceCopyFamilyXcodeMode(surfaceWith("mse", "MP4")),
+        "browserhd_remux",
+        "A browser/fMP4 surface must enhance over the browserhd_remux copy-family mode");
+  }
+
+  @Test
+  public void enhanceCopyFamilyXcodeMode_tsSurface_mpeg2tsremux()
+  {
+    // MPEG2-TS container declared, no MP4 -> TS family -> mpeg2tsremux.
+    assertEquals(PlaybackDecisionEngine.enhanceCopyFamilyXcodeMode(surfaceWith("avplay", "MPEG2-TS")),
+        "mpeg2tsremux",
+        "A TV/AVPlay TS surface must enhance over the mpeg2tsremux copy-family mode");
+  }
+
+  @Test
+  public void enhanceCopyFamilyXcodeMode_routeDecidesWhenContainersAmbiguous()
+  {
+    // Both containers declared -> route heuristic decides. native/avplay -> TS.
+    assertEquals(PlaybackDecisionEngine.enhanceCopyFamilyXcodeMode(
+            surfaceWith("native", "MP4", "MPEG2-TS")),
+        "mpeg2tsremux",
+        "A native/AVPlay route must resolve to the TS copy-family mode when containers are ambiguous");
+    // mse route -> fMP4.
+    assertEquals(PlaybackDecisionEngine.enhanceCopyFamilyXcodeMode(
+            surfaceWith("mse", "MP4", "MPEG2-TS")),
+        "browserhd_remux",
+        "An MSE route must resolve to the fMP4 copy-family mode when containers are ambiguous");
+  }
+
+  @Test
+  public void enhanceCopyFamilyXcodeMode_defaultsToFmp4WhenUnknown()
+  {
+    // No container, unknown route -> default to fMP4 (browser is the primary user).
+    assertEquals(PlaybackDecisionEngine.enhanceCopyFamilyXcodeMode(surfaceWith("unknown")),
+        "browserhd_remux",
+        "An ambiguous surface must default to the fMP4 copy-family mode");
+  }
 }

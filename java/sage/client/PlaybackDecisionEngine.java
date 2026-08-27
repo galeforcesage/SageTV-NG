@@ -1800,6 +1800,25 @@ public class PlaybackDecisionEngine
   }
 
   /**
+   * The copy-family REMUX xcode mode this surface would consume over
+   * {@code pull-xcode} -- {@code browserhd_remux} for fMP4/browser (MSE)
+   * surfaces, {@code mpeg2tsremux} for MPEG-TS (native/AVPlay TV) surfaces.
+   *
+   * <p>Exposed for the GPU-enhance pull upgrade in {@code MiniPlayer}: a source
+   * the client can DIRECT_PLAY wins the surface ranking as a bare {@code pull},
+   * which has no server transcoder, so an active enhancement tier would be
+   * silently dropped. Rerouting that tune to the surface-correct copy-family
+   * mode gives the enhancement pass a video-copy transcode to rewrite into the
+   * NVENC HEVC upscale, without hardcoding one container family. Both returned
+   * modes are recognised by {@code FFMPEGTranscoder.isModernCopyFamilyXcodeMode},
+   * so the enhancement rewrite applies to either.
+   */
+  public static String enhanceCopyFamilyXcodeMode(PlaybackSurface s)
+  {
+    return xcodeModeForDecision(s, Decision.REMUX);
+  }
+
+  /**
    * True when the surface consumes fragmented MP4 (browser MSE), false when it
    * takes MPEG-TS (native/AVPlay TV). Route wins ({@code mse} vs
    * {@code native}/{@code avplay}); otherwise infer from container caps;
