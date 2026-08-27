@@ -150,6 +150,46 @@ public class FFMPEGTranscoderTest
     assertFalse(transcoder.isVideoCopyToFmp4());
   }
 
+  // --- Resume/seek robustness: a non-zero seek before the transcoder is running
+  // must NOT throw and tear down the session. Historically seekToPosition() threw
+  // "Cannot do seekToPosition ... hasn't been started yet!" for any non-zero
+  // offset while not transcoding, which killed the MediaServerConnection -> the
+  // client saw an instant end-of-stream (STV popped the "delete this recording?"
+  // prompt) and resume-from-position never worked (observed on the PWA browserhd
+  // pull-xcode path). It must instead start the transcode aligned to the offset.
+  @Test
+  public void testSeekToPositionColdNonZeroStartsInsteadOfThrowing() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder transcoder = spy(new FFMPEGTranscoder());
+    org.mockito.Mockito.doNothing().when(transcoder).startTranscode();
+
+    assertFalse(transcoder.isTranscoding(), "a fresh transcoder must not report transcoding");
+
+    // Must not throw the legacy "hasn't been started yet" IOException.
+    transcoder.seekToPosition(5_000_000L);
+
+    verify(transcoder).startTranscode();
+    assertEquals(transcoder.xcodeBufferVirtualOffset, 5_000_000L,
+        "virtual offset must align to the requested resume offset");
+    assertEquals(transcoder.xcodeBufferVirtualReadPos, 5_000_000L);
+    assertEquals(transcoder.xcodeBufferVirtualSize, 5_000_000L);
+  }
+
+  @Test
+  public void testSeekToPositionColdZeroStartsFromTop() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder transcoder = spy(new FFMPEGTranscoder());
+    org.mockito.Mockito.doNothing().when(transcoder).startTranscode();
+
+    transcoder.seekToPosition(0L);
+
+    verify(transcoder).startTranscode();
+    assertEquals(transcoder.xcodeBufferVirtualOffset, 0L,
+        "a zero-offset cold start must remain at the top of the stream");
+  }
+
   // --- Fix A: yadif auto-add must never collide with a copy-video stage. ---
   // Modern ffmpeg hard-errors "Filtergraph 'yadif' was specified, but codec
   // copy was selected" -> "Error opening output file", killing the process

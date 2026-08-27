@@ -459,12 +459,30 @@ public final class GpuEnhancePipeline
     // (1) GPU-resident decode.
     ensureGpuGlobals(argv, iIdx);
 
-    // (2) Replace the base CPU -vf (or insert one if absent). Re-anchor first.
+    // (2) Collapse the base CPU -vf chain(s) to a single GPU chain. Re-anchor first.
+    // The browserhd base command can carry MORE THAN ONE -vf for an interlaced
+    // source: the base pixel-format filter ("-vf format=yuv420p") PLUS an
+    // auto-added deinterlacer ("-vf yadif"). ffmpeg honours only the LAST -vf, so
+    // replacing just the first would leave a trailing CPU "-vf yadif" that then
+    // receives CUDA (VRAM) frames -- an unconvertible format the encode can never
+    // start on, so no bytes are ever produced and the PWA/MSE client sits forever
+    // on "Loading...". Remove EVERY existing -vf in the output section and install
+    // exactly one CUDA-resident chain in the earliest -vf slot.
     iIdx = argv.indexOf("-i");
-    int vfIdx = indexOfAfter(argv, iIdx, "-vf");
-    if (vfIdx >= 0 && vfIdx + 1 < argv.size())
+    int firstVf = -1;
+    for (int i = argv.size() - 2; i > iIdx; i--)
     {
-      argv.set(vfIdx + 1, enhanceVf);
+      if ("-vf".equals(argv.get(i)))
+      {
+        firstVf = i;
+        argv.remove(i + 1);
+        argv.remove(i);
+      }
+    }
+    if (firstVf >= 0)
+    {
+      argv.add(firstVf, enhanceVf);
+      argv.add(firstVf, "-vf");
     }
     else
     {

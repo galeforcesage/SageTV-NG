@@ -604,4 +604,51 @@ public class GpuEnhancePipelineTest
     assertFalse(GpuEnhancePipeline.rewriteReencodeArgv(argv, EnhancementPlan.NONE, 60));
     assertEquals(argv, before, "inactive plan must leave the command byte-identical");
   }
+
+  /** The interlaced browserhd command shape: the base "-vf format=yuv420p" PLUS an
+   *  auto-added "-vf yadif" (the server injects the deinterlacer for an interlaced
+   *  source). Two -vf tokens; ffmpeg honours only the last. */
+  private static java.util.List<String> browserhdInterlacedArgv()
+  {
+    return new java.util.ArrayList<String>(java.util.Arrays.asList(
+        "ffmpeg", "-v", "info", "-y", "-hwaccel", "cuda", "-threads", "2",
+        "-i", "/media/rec.mpg",
+        "-f", "mp4", "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
+        "-vf", "format=yuv420p",
+        "-c:v", "h264_nvenc", "-preset", "p4", "-profile:v", "high",
+        "-g", "60", "-forced-idr", "1",
+        "-acodec", "aac", "-ac", "6", "-ar", "48000", "-b:a", "384k",
+        "-aspect", "16:9", "-vf", "yadif", "-map", "0:2", "-map", "0:0",
+        "-fps_mode", "cfr", "-af", "aresample=async=1", "-"));
+  }
+
+  /**
+   * Regression: an interlaced browserhd source arrives with TWO -vf tokens
+   * (format=yuv420p + a trailing CPU "yadif"). The GPU rewrite must collapse them
+   * to exactly ONE CUDA-resident chain -- if the trailing "-vf yadif" survives,
+   * ffmpeg (honouring the last -vf) feeds VRAM frames to a CPU filter and never
+   * produces output, hanging the PWA on "Loading...".
+   */
+  @Test
+  public void testReencodeCollapsesDuplicateVfOnInterlacedSource()
+  {
+    java.util.List<String> argv = browserhdInterlacedArgv();
+    assertTrue(GpuEnhancePipeline.rewriteReencodeArgv(
+        argv, plan(EnhancementTier.DEINTERLACE_ONLY, true, null), 30));
+
+    // Exactly one -vf survives.
+    assertEquals(argv.indexOf("-vf"), argv.lastIndexOf("-vf"),
+        "must leave a single -vf chain: " + argv);
+    // And it is the CUDA deinterlacer, not the CPU one.
+    int vf = argv.indexOf("-vf");
+    assertTrue(vf > argv.indexOf("-i"), "filter stays in the output section: " + argv);
+    assertEquals(argv.get(vf + 1), "yadif_cuda=0:-1:1", argv.toString());
+    // No leftover bare CPU "yadif" filter token anywhere.
+    assertFalse(argv.contains("yadif"), "trailing CPU yadif must be removed: " + argv);
+    assertFalse(argv.contains("format=yuv420p"), "CPU format filter must be gone: " + argv);
+    // Audio/maps preserved.
+    assertTrue(argv.contains("0:2") && argv.contains("0:0"), "stream maps preserved: " + argv);
+    int ba = argv.indexOf("-b:a");
+    assertEquals(argv.get(ba + 1), "384k", argv.toString());
+  }
 }

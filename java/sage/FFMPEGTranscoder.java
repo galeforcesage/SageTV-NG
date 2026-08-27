@@ -573,10 +573,27 @@ public class FFMPEGTranscoder implements TranscodeEngine
   {
     if (!isTranscoding())
     {
-      if (offset == 0)
-        startTranscode();
-      else
-        throw new java.io.IOException("Cannot do seekToPosition in transcoder because it hasn't been started yet!");
+      if (offset != 0)
+      {
+        // The reader wants output starting at a non-zero byte offset but the
+        // transcoder isn't running yet. This happens on resume-from-position and
+        // when a client streams a live (non-seekable, fragmented-MP4) xcode through
+        // a proxy that issues its first request at a non-zero byte offset, or when a
+        // seek races the transcoder start/restart. Historically this threw an
+        // IOException, which tore down the whole MediaServerConnection: the client
+        // then saw an immediate end-of-stream (and the STV popped the end-of-show
+        // "delete this recording?" prompt) and resume-from-position never worked.
+        // Recover instead: treat this offset as the virtual start of the stream we
+        // are about to produce and start the transcode from the already-configured
+        // seek time (transcodeStartSeekTime, e.g. the resume position). In streaming
+        // mode the pipe always emits a fresh, valid stream from the top, so the
+        // reader still receives a complete init segment + fragments regardless of
+        // the byte label it asked for.
+        if (XCODE_DEBUG) System.out.println("seekToPosition cold non-zero offset=" + offset +
+            " seekTime=" + transcodeStartSeekTime + "; starting transcode instead of failing");
+        xcodeBufferVirtualReadPos = xcodeBufferVirtualOffset = xcodeBufferVirtualSize = offset;
+      }
+      startTranscode();
       return;
     }
     if ((!bufferOutput && offset != xcodeBufferVirtualOffset) || (bufferOutput && (offset < xcodeBufferVirtualOffset ||
