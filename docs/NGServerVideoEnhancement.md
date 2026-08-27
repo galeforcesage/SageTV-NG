@@ -841,6 +841,16 @@ Implemented and merged (behavior-neutral until both switches are cleared):
   `FFMPEGTranscoder.maybeApplyGpuEnhancement()` performs the final argv rewrite
   (deinterlace + CUDA upscale + NVENC HEVC) as the last edit before ffmpeg is
   spawned, behind the `GpuGovernor` admission and `RecordingGuard` veto.
+- Session teardown (Invariant 1, zero idle GPU footprint): a session's GPU
+  reservation is returned by `FFMPEGTranscoder.stopTranscode()` →
+  `GpuGovernor.release()`, which every session-end path funnels through (client
+  disconnect / stop / channel-change / mode-change / error). Two backstops guard
+  against a leaked reservation silently shrinking capacity until a restart: the
+  transcoder releases immediately if its ffmpeg child exits on its own, and a
+  lazily-started `GpuGovernor` reaper drops any reservation that stops
+  heart-beating (the heartbeat is refreshed from live ffmpeg progress, so a
+  running session is never reaped). The reaper exits the moment the box is idle,
+  so an idle server runs no enhancement thread at all.
 - Direct-play reroute: a source the client can play natively wins the surface
   ranking as a raw pull/push with **no transcoder**, so an active tier would have
   nothing to rewrite. Both branches promote such a tune into a video-copy

@@ -3227,6 +3227,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
             }
             else if (c == '\r')
             {
+              // Live ffmpeg progress line: the child is alive and producing, so
+              // refresh the governor heartbeat that keeps this session out of the
+              // idle reaper. No-op when this is not an enhanced session.
+              sage.enhance.GpuGovernor.getInstance().heartbeat(FFMPEGTranscoder.this.enhanceSessionId);
               // Parse to get the byte position for the specified time
               if (XCODE_DEBUG) System.out.println(sb.toString().trim());
               int frameIdx = sb.indexOf("frame=");
@@ -3341,6 +3345,22 @@ public class FFMPEGTranscoder implements TranscodeEngine
         finally
         {
           xcodeDone = true;
+          // If the ffmpeg child has exited on its own (clean EOF or a crash) and
+          // this was an enhanced session, return its GPU reservation immediately
+          // instead of waiting for the client to notice and disconnect. This is
+          // the self-exit backstop to stopTranscode() (which the connection-close
+          // path calls); both are idempotent, and the !isAlive() guard means a
+          // still-running child is never touched.
+          try
+          {
+            String esid = FFMPEGTranscoder.this.enhanceSessionId;
+            if (esid != null && (xcodeProcess == null || !xcodeProcess.isAlive()))
+            {
+              sage.enhance.GpuGovernor.getInstance().release(esid);
+              FFMPEGTranscoder.this.enhanceSessionId = null;
+            }
+          }
+          catch (Throwable ignore) {}
         }
       }
     };

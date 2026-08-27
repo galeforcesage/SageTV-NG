@@ -14,6 +14,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import sage.HwEncoder;
@@ -63,6 +64,7 @@ public final class GpuGovernor
   private static final String PROP_VRAM_RESERVE   = "playback/gpu_enhance/vram_reserve_mb";
   private static final String PROP_GPU_INDEX      = "playback/gpu_enhance/gpu_index";
   private static final String PROP_STALE_MS       = "playback/gpu_enhance/session_stale_ms";
+  private static final String PROP_REAP_INTERVAL_MS = "playback/gpu_enhance/reap_interval_ms";
 
   private static final int  DEFAULT_SOFT_CAP     = 70;
   private static final int  DEFAULT_HARD_CAP     = 85;
@@ -76,6 +78,7 @@ public final class GpuGovernor
   private static final long DEFAULT_DISK_BUDGET  = 120000L; // ~120 Mbps aggregate
   private static final long DEFAULT_VRAM_RESERVE = 512L;
   private static final long DEFAULT_STALE_MS     = 5L * 60L * 1000L;
+  private static final long DEFAULT_REAP_INTERVAL_MS = 30L * 1000L;
 
   /** Verdict of an admission request. */
   public static final class Admission
@@ -139,6 +142,7 @@ public final class GpuGovernor
   private final Map<String, Session> sessions = new ConcurrentHashMap<String, Session>();
   private final AtomicLong denials = new AtomicLong();
   private final AtomicLong grants = new AtomicLong();
+  private final AtomicBoolean reaperRunning = new AtomicBoolean(false);
 
   private GpuGovernor() { }
 
@@ -204,7 +208,7 @@ public final class GpuGovernor
       {
         Session s = new Session(sessionId, tier, gpuIndex,
             effectiveBitrateKbps(tier, estBitrateKbps), offline);
-        sessions.put(sessionId, s);
+        trackSession(s);
         grants.incrementAndGet();
         String reason = (tier == desired)
             ? "admitted " + tier.token()
@@ -318,6 +322,63 @@ public final class GpuGovernor
   {
     Session s = sessions.get(sessionId);
     if (s != null && kbps > 0) s.estBitrateKbps = kbps;
+  }
+
+  /**
+   * Register a granted session and make sure the idle-reaper backstop is
+   * running. Package-private so the admission path and tests share one seam.
+   */
+  void trackSession(Session s)
+  {
+    if (s == null) return;
+    sessions.put(s.id, s);
+    startReaperIfNeeded();
+  }
+
+  /**
+   * Lazily start a daemon that periodically drops leaked reservations
+   * ({@link #reapStale()}) and then <b>exits the moment the box is idle</b>, so a
+   * server with no enhanced sessions runs no enhancement thread at all
+   * (Invariant 1: zero idle footprint). It is re-armed on the next admission.
+   *
+   * <p>This is the backstop for the primary teardown ({@code stopTranscode() ->
+   * release()}): if any session-end path fails to release — an exception between
+   * admission and teardown, or a self-exited child whose client never
+   * disconnects — the reservation would otherwise silently shrink capacity until
+   * a JVM restart. The reaper keys off {@link Session#lastHeartbeat}, which the
+   * transcoder refreshes from live ffmpeg progress, so a genuinely running
+   * session is never reaped while its child is alive.
+   */
+  private void startReaperIfNeeded()
+  {
+    if (sessions.isEmpty()) return;
+    if (!reaperRunning.compareAndSet(false, true)) return;
+    Thread t = new Thread("GpuGovernor-Reaper")
+    {
+      public void run()
+      {
+        try
+        {
+          while (!sessions.isEmpty())
+          {
+            long interval = Sage.getLong(PROP_REAP_INTERVAL_MS, DEFAULT_REAP_INTERVAL_MS);
+            if (interval <= 0) interval = DEFAULT_REAP_INTERVAL_MS;
+            try { Thread.sleep(interval); }
+            catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+            reapStale();
+          }
+        }
+        finally
+        {
+          reaperRunning.set(false);
+          // A session admitted between the loop's isEmpty() check and clearing
+          // the flag must not be left with no reaper; re-arm if so.
+          if (!sessions.isEmpty()) startReaperIfNeeded();
+        }
+      }
+    };
+    t.setDaemon(true);
+    t.start();
   }
 
   /**
