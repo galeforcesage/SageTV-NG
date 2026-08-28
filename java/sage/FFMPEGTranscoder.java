@@ -413,7 +413,18 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
   public boolean isTranscodeDone()
   {
-    return xcodeDone;
+    // A transcode is only "done" once the ffmpeg child has actually exited.
+    // xcodeDone is set by the stdout/stderr consumer threads' finally-blocks the
+    // instant either pipe hits EOF or a transient read exception fires -- which can
+    // happen while the process is still very much alive (e.g. under the flood of
+    // non-fatal "[dvd] buffer underflow" stderr the 4K->1080p MPEG-4 camera path
+    // emits). Reporting "done" then makes didTranscodeCompleteOK() return false
+    // (exitValue() throws on a live process -> -1), and MiniPlayer's server-side
+    // playback watchdog reacts by tearing the transcoder down and restarting it --
+    // the ~2s camera restart / green-frame loop, on a perfectly healthy stream.
+    // Gate on real liveness so a running child is never declared finished; genuine
+    // exits (clean or crash) still report done because isAlive() is then false.
+    return xcodeDone && (xcodeProcess == null || !xcodeProcess.isAlive());
   }
 
   public boolean didTranscodeCompleteOK()
@@ -2826,7 +2837,19 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (isMpeg4Codec && outputFile == null && !httplsMode) // don't do rate control opts if we're not streaming
     {
       xcodeParamsVec.add("-muxrate");
-      xcodeParamsVec.add("2000000"); // really high to prevent underflow errors TESTING
+      // The DVD/MPEG-PS muxrate is the multiplex ceiling (bits/sec) the pack layer
+      // can carry. It MUST exceed the peak payload = the video -maxrate (== the
+      // target video bitrate set below) + the audio bitrate + pack/PES overhead, or
+      // the muxer underflows continuously: it emits an endless "[dvd] buffer
+      // underflow" stderr flood and stalls its SCR pacing. The old value was a flat
+      // 2 Mbit/s, which is BELOW the video bitrate for any HD/4K-sourced 1080p
+      // MPEG-4 stream (e.g. a 2.93 Mbit/s Arlo-camera transcode), so it underflowed
+      // on every pack -- flooding the stderr the status thread parses and feeding
+      // the server-side playback restart loop. Derive it from the real payload with
+      // ~15% headroom, floored so low-bitrate SD stays comfortably above its peak.
+      long muxrateBits = Math.round((currVideoBitrateKbps + currAudioBitrateKbps) * 1000L * 1.15);
+      muxrateBits = Math.max(muxrateBits, 2000000L);
+      xcodeParamsVec.add(Long.toString(muxrateBits));
       xcodeParamsVec.add("-rc_init_cplx");
       // Guard against bad/missing source format (currFps==0 or targetW/H==0 from
       // unparsed dimensions) — fall back to sane defaults so we don't crash with

@@ -222,6 +222,39 @@ public class FFMPEGTranscoderTest
         "streaming seek must realign the read cursor to serve forward");
   }
 
+  // --- Camera crash-loop guard: a LIVE ffmpeg child must never be reported as a
+  // finished-but-failed transcode. The consumer threads set xcodeDone=true the
+  // instant a pipe hiccups (EOF/read exception) even while the process is still
+  // running; the old isTranscodeDone() returned xcodeDone directly, so the
+  // MiniPlayer watchdog saw done + !completeOK (exitValue() throws on a live
+  // process -> -1) and tore down/restarted a healthy transcode -- the ~2s Arlo
+  // 4K->1080p MPEG-4 restart / green-frame loop. isTranscodeDone() must stay
+  // false while the child is alive, so the watchdog cannot fire.
+  @Test
+  public void testAliveTranscodeWithDoneFlagIsNotReportedDone() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder transcoder = spy(new FFMPEGTranscoder());
+
+    Process liveChild = org.mockito.Mockito.mock(Process.class);
+    org.mockito.Mockito.when(liveChild.isAlive()).thenReturn(true);
+    org.mockito.Mockito.when(liveChild.exitValue())
+        .thenThrow(new IllegalThreadStateException());
+    transcoder.xcodeProcess = liveChild;
+
+    // A transient pipe hiccup flips the done flag while the child is still alive.
+    transcoder.xcodeDone = true;
+
+    assertFalse(transcoder.isTranscodeDone(),
+        "a live ffmpeg child must never be reported as a finished transcode");
+
+    // Once the child actually exits, isTranscodeDone() must report true again so
+    // genuine failures still restart.
+    org.mockito.Mockito.when(liveChild.isAlive()).thenReturn(false);
+    assertTrue(transcoder.isTranscodeDone(),
+        "an exited child with the done flag set must report done");
+  }
+
   // --- Fix A: yadif auto-add must never collide with a copy-video stage. ---
   // Modern ffmpeg hard-errors "Filtergraph 'yadif' was specified, but codec
   // copy was selected" -> "Error opening output file", killing the process

@@ -4116,6 +4116,7 @@ public class MiniPlayer implements DVDMediaPlayer
                     if (!((FFMPEGTranscoder) (mpegSrc.getTranscoder())).didTranscodeCompleteOK())
                     {
                       if (Sage.DBG) System.out.println("Detected failure in the transcoder attempt to restart it...");
+                      noteServerTranscodeRestart(mpegSrc.getTranscoder());
                       try
                       {
                         mpegSrc.seek(mpegSrc.getLastParsedTimeMillis());
@@ -4150,6 +4151,7 @@ public class MiniPlayer implements DVDMediaPlayer
                     !((FFMPEGTranscoder) (mpegSrc.getTranscoder())).didTranscodeCompleteOK())
                 {
                   if (Sage.DBG) System.out.println("Detected failure in the transcoder attempt to restart it...");
+                  noteServerTranscodeRestart(mpegSrc.getTranscoder());
                   try
                   {
                     mpegSrc.seek(mpegSrc.getLastParsedTimeMillis());
@@ -4492,6 +4494,7 @@ public class MiniPlayer implements DVDMediaPlayer
                       if (!((FFMPEGTranscoder) (mpegSrc.getTranscoder())).didTranscodeCompleteOK())
                       {
                         if (Sage.DBG) System.out.println("Detected failure in the transcoder attempt to restart it...");
+                        noteServerTranscodeRestart(mpegSrc.getTranscoder());
                         try
                         {
                           mpegSrc.seek(mpegSrc.getLastParsedTimeMillis());
@@ -7278,6 +7281,28 @@ public class MiniPlayer implements DVDMediaPlayer
   final boolean debugPush = Sage.getBoolean("miniclient/debug_push", false);
   boolean sentDiscardPtsFlag = false;
   boolean sentTrickmodeFlag = false;
+
+  // Server-side transcode restart watchdog visibility. Always-on (NOT Sage.DBG-
+  // gated) so a restart loop -- e.g. the 4K->1080p MPEG-4 camera path thrashing
+  // roughly every ~2s -- is measurable straight from the server log without
+  // enabling full debug. Static so the running count and inter-restart cadence
+  // aggregate across concurrent playback sessions.
+  private static final java.util.concurrent.atomic.AtomicLong sTranscodeRestartCount =
+      new java.util.concurrent.atomic.AtomicLong();
+  private static volatile long sLastTranscodeRestartMs = 0;
+
+  private void noteServerTranscodeRestart(Object transcoder)
+  {
+    long now = Sage.eventTime();
+    long prev = sLastTranscodeRestartMs;
+    sLastTranscodeRestartMs = now;
+    long n = sTranscodeRestartCount.incrementAndGet();
+    long sinceMs = (prev == 0) ? -1 : (now - prev);
+    int exitCode = (transcoder instanceof FFMPEGTranscoder) ? ((FFMPEGTranscoder) transcoder).lastExitCode : -999;
+    System.out.println("SERVER-XCODE-RESTART #" + n + " sinceLastMs=" + sinceMs + " ffmpegExit=" + exitCode
+        + " (server-side transcode reported done-but-failed; restarting at last parsed position)");
+  }
+
 
   private long lastMediaTime;
   private long lastMediaTimeBase;
