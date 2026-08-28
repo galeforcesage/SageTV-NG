@@ -227,8 +227,8 @@ public class FFMPEGTranscoderTest
   // instant a pipe hiccups (EOF/read exception) even while the process is still
   // running; the old isTranscodeDone() returned xcodeDone directly, so the
   // MiniPlayer watchdog saw done + !completeOK (exitValue() throws on a live
-  // process -> -1) and tore down/restarted a healthy transcode -- the ~2s Arlo
-  // 4K->1080p MPEG-4 restart / green-frame loop. isTranscodeDone() must stay
+  // process -> -1) and tore down/restarted a healthy transcode -- the ~2s
+  // 4K->1080p MPEG-4 IP-camera restart / green-frame loop. isTranscodeDone() must stay
   // false while the child is alive, so the watchdog cannot fire.
   @Test
   public void testAliveTranscodeWithDoneFlagIsNotReportedDone() throws Throwable
@@ -253,6 +253,36 @@ public class FFMPEGTranscoderTest
     org.mockito.Mockito.when(liveChild.isAlive()).thenReturn(false);
     assertTrue(transcoder.isTranscodeDone(),
         "an exited child with the done flag set must report done");
+  }
+
+  // --- Companion to the above for the FastMpeg2Reader lazy-start guard. That
+  // guard (start the transcode when !isTranscoding() && !isTranscodeDone()) must
+  // never fire on a live child. isTranscoding() reads !xcodeDone, which a
+  // consumer thread can spuriously flip false on a live process, so the guard
+  // now also checks hasLiveProcess(). A live child -- even with xcodeDone set --
+  // must report hasLiveProcess()==true so the reader leaves it alone instead of
+  // stopTranscode()/startTranscode() churning it (the camera black-screen loop).
+  @Test
+  public void testHasLiveProcessTrueForAliveChildEvenWhenDoneFlagSet() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder transcoder = spy(new FFMPEGTranscoder());
+
+    assertFalse(transcoder.hasLiveProcess(), "no child yet -> not live");
+
+    Process liveChild = org.mockito.Mockito.mock(Process.class);
+    org.mockito.Mockito.when(liveChild.isAlive()).thenReturn(true);
+    transcoder.xcodeProcess = liveChild;
+    transcoder.xcodeDone = true; // spurious done-flag on a still-running child
+
+    assertTrue(transcoder.hasLiveProcess(),
+        "a live child must report hasLiveProcess() even with xcodeDone set");
+    assertFalse(transcoder.isTranscoding(),
+        "isTranscoding() reads !xcodeDone, so the spurious flag makes it false -- "
+        + "which is exactly why the reader must consult hasLiveProcess() instead");
+
+    org.mockito.Mockito.when(liveChild.isAlive()).thenReturn(false);
+    assertFalse(transcoder.hasLiveProcess(), "an exited child is not live");
   }
 
   // --- Fix A: yadif auto-add must never collide with a copy-video stage. ---

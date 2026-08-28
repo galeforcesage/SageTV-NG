@@ -934,7 +934,7 @@ public final class FastMpeg2Reader
       }
       return rv;
     }
-    if (inxs != null && !inxs.isTranscoding() && !inxs.isTranscodeDone())
+    if (inxs != null && !inxs.hasLiveProcess() && !inxs.isTranscoding() && !inxs.isTranscodeDone())
       inxs.startTranscode();
     // internal backup arrays checking
     if (len > peeks.length)
@@ -963,7 +963,7 @@ public final class FastMpeg2Reader
   }
   public int read(java.nio.ByteBuffer buf, int len) throws IOException
   {
-    if (inxs != null && !inxs.isTranscoding() && !inxs.isTranscodeDone())
+    if (inxs != null && !inxs.hasLiveProcess() && !inxs.isTranscoding() && !inxs.isTranscodeDone())
       inxs.startTranscode();
     // Bounds checking
     len = Math.max(0, Math.min(buf.remaining(), len));

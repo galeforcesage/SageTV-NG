@@ -2843,7 +2843,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // the muxer underflows continuously: it emits an endless "[dvd] buffer
       // underflow" stderr flood and stalls its SCR pacing. The old value was a flat
       // 2 Mbit/s, which is BELOW the video bitrate for any HD/4K-sourced 1080p
-      // MPEG-4 stream (e.g. a 2.93 Mbit/s Arlo-camera transcode), so it underflowed
+      // MPEG-4 stream (e.g. a 2.93 Mbit/s IP-camera transcode), so it underflowed
       // on every pack -- flooding the stderr the status thread parses and feeding
       // the server-side playback restart loop. Derive it from the real payload with
       // ~15% headroom, floored so low-bitrate SD stays comfortably above its peak.
@@ -4265,6 +4265,23 @@ public class FFMPEGTranscoder implements TranscodeEngine
   public boolean isTranscoding()
   {
     return !xcodeDone && xcodeProcess != null;
+  }
+
+  /**
+   * True when a real ffmpeg child is currently alive, regardless of the {@code
+   * xcodeDone} flag. {@link #isTranscoding()} reads {@code !xcodeDone}, which a
+   * consumer thread can spuriously flip to true on a transient pipe read while
+   * the process is still running -- making isTranscoding() briefly report false
+   * on a perfectly healthy transcode. Callers that must NOT relaunch a live
+   * transcode (e.g. FastMpeg2Reader's lazy-start guard) check this instead, so a
+   * spurious done-flag can no longer trigger a stopTranscode()/startTranscode()
+   * churn -- the 4K->1080p MPEG-4 camera "Destroying old transcode process" /
+   * black-screen restart loop.
+   */
+  public boolean hasLiveProcess()
+  {
+    Process p = xcodeProcess;
+    return p != null && p.isAlive();
   }
 
   public void setEstimatedBandwidth(long bps)

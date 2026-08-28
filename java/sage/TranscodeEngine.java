@@ -31,6 +31,14 @@ public interface TranscodeEngine
   public void setTranscodeFormat(sage.media.format.ContainerFormat sourceFormat, sage.media.format.ContainerFormat destFormat);
   public boolean isTranscodeDone();
   public boolean isTranscoding();
+  /**
+   * True when the engine currently has a live child process. Engines whose
+   * "transcoding" state can lag reality (e.g. a done-flag flipped by a transient
+   * pipe read while ffmpeg is still alive) override this to report real process
+   * liveness so callers never relaunch a running transcode. Defaults to
+   * {@link #isTranscoding()} for engines with no separate process notion.
+   */
+  default boolean hasLiveProcess() { return isTranscoding(); }
   public long getVirtualTranscodeSize(); // the length of the transcoded source in bytes
   public long getVirtualReadPosition();
   public long getAvailableTranscodeBytes();
