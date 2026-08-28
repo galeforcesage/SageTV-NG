@@ -1469,6 +1469,39 @@ public class PlaybackDecisionEngine
       sage.media.format.ContainerFormat cf,
       String clientLang)
   {
+    return evaluateSurfaces(surfaces, mediaContainer, mediaVideoCodec, mediaAudioCodec,
+        mediaWidth, mediaHeight, sourceBitrateKbps, availableBandwidthKbps, sourceInterlaced,
+        cf, clientLang, null);
+  }
+
+  /**
+   * Interlaced-capability overload. Threads the client's honest, per-codec
+   * capability declaration ({@link ClientConstraints}, folded from the canonical
+   * {@code VIDEO_CODECS} attribute rows) into the surface evaluator so an
+   * interlaced source is never video-copied to a surface whose codec row
+   * explicitly declares {@code interlaced=false} (e.g. any browser/MSE decode
+   * path -- MSE cannot decode interlaced H.264). Such a tune is escalated from a
+   * copy tier (DIRECT_PLAY/REMUX/AUDIO_TRANSCODE) to a full TRANSCODE so the
+   * server deinterlaces.
+   *
+   * <p>Capability-driven, Option A (permissive default): the gate fires ONLY on
+   * an explicit {@code interlaced=false} row for the source codec. An absent or
+   * {@code UNKNOWN} declaration changes nothing, so a client that hardware-decodes
+   * interlaced (Android/Shield/Tizen-native) and does not declare the field keeps
+   * its current video-copy behavior. {@code constraints == null} (all legacy
+   * clients; NG clients that report no constraints) is a complete no-op -- this is
+   * exactly the pre-existing surface-path behavior.
+   */
+  public static java.util.List<SurfaceDecision> evaluateSurfaces(
+      PlaybackSurfaceSet surfaces,
+      String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
+      int mediaWidth, int mediaHeight,
+      int sourceBitrateKbps, int availableBandwidthKbps,
+      boolean sourceInterlaced,
+      sage.media.format.ContainerFormat cf,
+      String clientLang,
+      ClientConstraints constraints)
+  {
     if (surfaces == null || surfaces.isEmpty())
       return java.util.Collections.<SurfaceDecision>emptyList();
 
@@ -1507,6 +1540,20 @@ public class PlaybackDecisionEngine
             mediaWidth, mediaHeight, sourceBitrateKbps, availableBandwidthKbps, sourceInterlaced);
       }
 
+      // Interlaced-capability gate (capability-driven, Option A). A video-copy
+      // decision (DIRECT_PLAY/REMUX/AUDIO_TRANSCODE all copy the video stream)
+      // would ship interlaced frames untouched. If the client's honest per-codec
+      // declaration for THIS surface's decode path says it cannot decode
+      // interlaced for the source codec (interlaced=false -- e.g. any browser/MSE
+      // path: MSE has no interlaced H.264 decoder), escalate to a full TRANSCODE
+      // so the server deinterlaces (the browserhd/dynamic full-encode templates
+      // add yadif). Fires ONLY on an explicit false; absent/UNKNOWN is a no-op, so
+      // a surface that hardware-decodes interlaced and doesn't declare the field is
+      // untouched. Mirrors the legacy decide() gate; constraints==null (legacy) is
+      // inert. The row is keyed by the SOURCE codec, matching the legacy path.
+      d = escalateForInterlacedIfDeclaredUndecodable(d, s, constraints,
+          mediaVideoCodec, sourceInterlaced);
+
       String mode = pickDeliveryModeForDecision(s, d.decision);
       if (mode == null)
       {
@@ -1523,6 +1570,73 @@ public class PlaybackDecisionEngine
     java.util.Collections.sort(results, SURFACE_DECISION_COMPARATOR);
     return results;
   }
+
+  /**
+   * If {@code d} copies the video stream (DIRECT_PLAY / REMUX / AUDIO_TRANSCODE)
+   * but the source is interlaced and the client declared its decode path cannot
+   * handle interlaced for the source codec, return an equivalent full-TRANSCODE
+   * decision (server deinterlaces) targeting a codec the surface can decode. In
+   * every other case {@code d} is returned unchanged.
+   *
+   * <p>Two capability channels are honored, both fail-open:
+   * <ul>
+   *   <li>The per-surface declaration -- an {@code interlaced=false} /
+   *   {@code scan=progressive} attribute on
+   *   {@code PLAYBACK_SURFACE_<id>_VIDEO_CODECS}. This is the honest per-decode-path
+   *   channel a browser/MSE surface uses (no browser MSE decodes interlaced
+   *   H.264), and it is per-surface because the SAME client can expose a
+   *   progressive-only MSE surface alongside an interlaced-capable native one.</li>
+   *   <li>The client-level per-codec {@link ClientConstraints} row -- where
+   *   Android ExoPlayer/IJK fold their {@code interlaced=false} declaration
+   *   (via {@code EXO_/IJK_VIDEO_CODECS}). Consulted only as a fallback.</li>
+   * </ul>
+   *
+   * <p>No surface/constraint declaration, or an {@code UNKNOWN}/{@code true}
+   * value, leaves {@code d} intact, so this only ever ESCALATES quality-safety
+   * when the client itself declared it cannot decode interlaced. The lookup is
+   * by the source codec, exactly as the legacy {@link #decide} gate does.
+   */
+  static PlaybackDecision escalateForInterlacedIfDeclaredUndecodable(
+      PlaybackDecision d, PlaybackSurface surface, ClientConstraints constraints,
+      String sourceVideoCodec, boolean sourceInterlaced)
+  {
+    if (d == null || !sourceInterlaced) return d;
+    if (d.decision == Decision.TRANSCODE) return d; // already a full re-encode
+
+    boolean declaredCannotDecodeInterlaced = false;
+    String signalSource = null;
+    // Primary: the per-surface declaration (browser/MSE, Tizen MSE, etc.).
+    if (surface != null && surface.declaresInterlacedUnsupported(sourceVideoCodec))
+    {
+      declaredCannotDecodeInterlaced = true;
+      signalSource = "surface " + surface.getId() + " VIDEO_CODECS";
+    }
+    // Fallback: the client-level per-codec constraints (Android ExoPlayer/IJK).
+    if (!declaredCannotDecodeInterlaced && constraints != null)
+    {
+      ClientConstraints.VideoConstraint vrow = constraints.getVideo(sourceVideoCodec);
+      if (vrow != null && vrow.interlaced == ClientConstraints.Tri.FALSE)
+      {
+        declaredCannotDecodeInterlaced = true;
+        signalSource = "player=" + constraints.getPlayer() + " constraints";
+      }
+    }
+    if (!declaredCannotDecodeInterlaced) return d;
+
+    String tgtContainer = selectBestContainerForSurface(surface);
+    String tgtVideo = selectBestVideoCodecForSurface(surface, sourceVideoCodec);
+    // Keep the audio target the copy-tier decision already resolved (it is a
+    // surface-decodable codec); the full-encode template re-muxes/re-encodes as
+    // its mode dictates.
+    String tgtAudio = d.targetAudioCodec;
+    String reason = "interlaced source + " + signalSource + " declares "
+        + sourceVideoCodec + " interlaced=false -> full transcode to deinterlace (was "
+        + d.decision + ")";
+    if (sage.Sage.DBG) System.out.println("PlaybackDecisionEngine.evaluateSurfaces: " + reason);
+    return new PlaybackDecision(Decision.TRANSCODE, reason,
+        tgtContainer, tgtVideo, tgtAudio, d.targetBitrateKbps);
+  }
+
 
   /**
    * Server-side Audio Equalizer / AudioProcessing (v1) extension: the

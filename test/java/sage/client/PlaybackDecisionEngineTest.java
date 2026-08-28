@@ -531,4 +531,141 @@ public class PlaybackDecisionEngineTest
         "browserhd_remux",
         "An ambiguous surface must default to the fMP4 copy-family mode");
   }
+
+  // =======================================================================
+  // Interlaced-capability gate (capability-driven, Option A): a video-copy
+  // decision to a surface whose client-declared row says interlaced=false is
+  // escalated to a full TRANSCODE so the server deinterlaces. Only an explicit
+  // interlaced=false fires it; UNKNOWN/absent and null constraints are no-ops.
+  // =======================================================================
+  private static PlaybackDecisionEngine.PlaybackDecision copyDecision(
+      PlaybackDecisionEngine.Decision d)
+  {
+    // Video-copy tier: target video codec is the (copied) source codec.
+    return new PlaybackDecisionEngine.PlaybackDecision(d, "test", "MP4", "H264", "AAC");
+  }
+
+  @Test
+  public void interlacedGate_directPlay_interlacedFalse_escalatesToTranscode()
+  {
+    ClientConstraints c = ClientConstraints.parse("pwa_mse", "H264;interlaced=false", null, null);
+    PlaybackDecisionEngine.PlaybackDecision out =
+        PlaybackDecisionEngine.escalateForInterlacedIfDeclaredUndecodable(
+            copyDecision(PlaybackDecisionEngine.Decision.DIRECT_PLAY),
+            surfaceWith("mse", "MP4"), c, "H264", /*sourceInterlaced=*/true);
+    assertEquals(out.decision, PlaybackDecisionEngine.Decision.TRANSCODE,
+        "Interlaced source + client H264 interlaced=false must escalate a video-copy DIRECT_PLAY to full TRANSCODE");
+  }
+
+  @Test
+  public void interlacedGate_remux_interlacedFalse_escalatesToTranscode()
+  {
+    ClientConstraints c = ClientConstraints.parse("pwa_mse", "H264;interlaced=false", null, null);
+    PlaybackDecisionEngine.PlaybackDecision out =
+        PlaybackDecisionEngine.escalateForInterlacedIfDeclaredUndecodable(
+            copyDecision(PlaybackDecisionEngine.Decision.REMUX),
+            surfaceWith("mse", "MP4"), c, "H264", true);
+    assertEquals(out.decision, PlaybackDecisionEngine.Decision.TRANSCODE,
+        "A REMUX (video-copy) decision must also escalate when the client declares interlaced=false");
+  }
+
+  @Test
+  public void interlacedGate_unknownDeclaration_leavesDecisionUnchanged()
+  {
+    // Row present but interlaced attribute absent -> Tri.UNKNOWN -> permissive (Option A).
+    ClientConstraints c = ClientConstraints.parse("android_media3", "H264;decoder=hw", null, null);
+    PlaybackDecisionEngine.PlaybackDecision in = copyDecision(PlaybackDecisionEngine.Decision.DIRECT_PLAY);
+    PlaybackDecisionEngine.PlaybackDecision out =
+        PlaybackDecisionEngine.escalateForInterlacedIfDeclaredUndecodable(
+            in, surfaceWith("native", "MP4"), c, "H264", true);
+    assertEquals(out.decision, PlaybackDecisionEngine.Decision.DIRECT_PLAY,
+        "An UNKNOWN/absent interlaced declaration must not change the decision (permissive default)");
+  }
+
+  @Test
+  public void interlacedGate_nullConstraints_isNoOp()
+  {
+    PlaybackDecisionEngine.PlaybackDecision in = copyDecision(PlaybackDecisionEngine.Decision.DIRECT_PLAY);
+    PlaybackDecisionEngine.PlaybackDecision out =
+        PlaybackDecisionEngine.escalateForInterlacedIfDeclaredUndecodable(
+            in, surfaceWith("mse", "MP4"), null, "H264", true);
+    assertEquals(out.decision, PlaybackDecisionEngine.Decision.DIRECT_PLAY,
+        "Null constraints (legacy client) must be a complete no-op on the surface interlaced gate");
+  }
+
+  @Test
+  public void interlacedGate_progressiveSource_isNoOp()
+  {
+    ClientConstraints c = ClientConstraints.parse("pwa_mse", "H264;interlaced=false", null, null);
+    PlaybackDecisionEngine.PlaybackDecision in = copyDecision(PlaybackDecisionEngine.Decision.DIRECT_PLAY);
+    PlaybackDecisionEngine.PlaybackDecision out =
+        PlaybackDecisionEngine.escalateForInterlacedIfDeclaredUndecodable(
+            in, surfaceWith("mse", "MP4"), c, "H264", /*sourceInterlaced=*/false);
+    assertEquals(out.decision, PlaybackDecisionEngine.Decision.DIRECT_PLAY,
+        "A progressive source must never be escalated regardless of the interlaced declaration");
+  }
+
+  @Test
+  public void interlacedGate_alreadyTranscode_isUnchanged()
+  {
+    ClientConstraints c = ClientConstraints.parse("pwa_mse", "H264;interlaced=false", null, null);
+    PlaybackDecisionEngine.PlaybackDecision in = copyDecision(PlaybackDecisionEngine.Decision.TRANSCODE);
+    PlaybackDecisionEngine.PlaybackDecision out =
+        PlaybackDecisionEngine.escalateForInterlacedIfDeclaredUndecodable(
+            in, surfaceWith("mse", "MP4"), c, "H264", true);
+    assertSame(out, in,
+        "A decision that is already a full TRANSCODE must be returned unchanged (no double work)");
+  }
+
+  // A surface that declares interlaced=false on its own VIDEO_CODECS channel
+  // (H264;scan=progressive;interlaced=false) with H264 + AAC + MP4 decodable.
+  private static PlaybackSurface surfaceProgressiveOnly()
+  {
+    java.util.Set<String> progOnly = new java.util.HashSet<String>();
+    progOnly.add("H264");
+    return new PlaybackSurface("pwa_mse", "mse", 10,
+        java.util.Arrays.asList("pull-xcode"),
+        java.util.Arrays.asList("H264"),
+        java.util.Arrays.asList("AAC"),
+        java.util.Arrays.asList("MP4"),
+        null, null, null, 0, 0, 0, progOnly);
+  }
+
+  @Test
+  public void interlacedGate_surfaceDeclaresProgressive_nullConstraints_escalates()
+  {
+    // The real browser case: a PWA/MSE client declares interlaced=false on the
+    // per-surface VIDEO_CODECS channel and has NO client-level ClientConstraints
+    // (those are Android EXO/IJK only). The gate must still fire off the surface.
+    PlaybackDecisionEngine.PlaybackDecision out =
+        PlaybackDecisionEngine.escalateForInterlacedIfDeclaredUndecodable(
+            copyDecision(PlaybackDecisionEngine.Decision.DIRECT_PLAY),
+            surfaceProgressiveOnly(), /*constraints=*/null, "H264", /*sourceInterlaced=*/true);
+    assertEquals(out.decision, PlaybackDecisionEngine.Decision.TRANSCODE,
+        "A surface-declared interlaced=false must escalate a video-copy decision even with null client constraints");
+  }
+
+  @Test
+  public void interlacedGate_surfaceDeclaresProgressive_remux_escalates()
+  {
+    PlaybackDecisionEngine.PlaybackDecision out =
+        PlaybackDecisionEngine.escalateForInterlacedIfDeclaredUndecodable(
+            copyDecision(PlaybackDecisionEngine.Decision.REMUX),
+            surfaceProgressiveOnly(), null, "H264", true);
+    assertEquals(out.decision, PlaybackDecisionEngine.Decision.TRANSCODE,
+        "A REMUX to a progressive-only surface must escalate to full TRANSCODE");
+  }
+
+  @Test
+  public void interlacedGate_surfaceProgressive_differentCodec_isNoOp()
+  {
+    // Surface declares only H264 as progressive-only; an interlaced HEVC source
+    // is a different codec -> no declaration -> no escalation.
+    PlaybackDecisionEngine.PlaybackDecision in = copyDecision(PlaybackDecisionEngine.Decision.DIRECT_PLAY);
+    PlaybackDecisionEngine.PlaybackDecision out =
+        PlaybackDecisionEngine.escalateForInterlacedIfDeclaredUndecodable(
+            in, surfaceProgressiveOnly(), null, "HEVC", true);
+    assertEquals(out.decision, PlaybackDecisionEngine.Decision.DIRECT_PLAY,
+        "The interlaced gate is per-codec: a codec the surface did not flag must be left unchanged");
+  }
 }

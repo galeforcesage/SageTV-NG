@@ -388,6 +388,42 @@ public class FFMPEGTranscoder implements TranscodeEngine
         && autoDeinterlaceEnabled && !isVideoCopySelected(xcodeParamsVec);
   }
 
+  /**
+   * Add a {@code yadif} deinterlacer to the output filtergraph WITHOUT creating a
+   * second {@code -vf}. ffmpeg accepts only one {@code -vf} per output stream and
+   * silently honours the LAST one, so a template that already carries a filter
+   * (e.g. the {@code browserhd} full-encode command's {@code -vf format=yuv420p},
+   * or a QSV {@code -vf format=nv12,hwupload}) would lose that filter if a bare
+   * {@code -vf yadif} were appended -- dropping the encoder's required pixel-format
+   * upload and, for GPU encoders, breaking the encode entirely. Instead, when an
+   * existing {@code -vf} is present its value is rewritten to {@code yadif,<existing>}
+   * so deinterlace runs FIRST (on CPU frames) and then the original chain
+   * (format/hwupload) runs -- a single valid filtergraph. When no {@code -vf}
+   * exists a fresh {@code -vf yadif} is appended.
+   */
+  @SuppressWarnings({"rawtypes","unchecked"})
+  static void addOrComposeYadif(java.util.ArrayList xcodeParamsVec)
+  {
+    int vfIdx = -1;
+    for (int i = 0; i < xcodeParamsVec.size() - 1; i++)
+    {
+      Object o = xcodeParamsVec.get(i);
+      if (o instanceof String && "-vf".equals(o)) vfIdx = i; // last -vf wins
+    }
+    if (vfIdx >= 0 && (vfIdx + 1) < xcodeParamsVec.size())
+    {
+      Object v = xcodeParamsVec.get(vfIdx + 1);
+      String existing = (v instanceof String) ? (String) v : "";
+      if (existing.indexOf("yadif") >= 0) return; // already deinterlacing
+      xcodeParamsVec.set(vfIdx + 1, existing.length() > 0 ? "yadif," + existing : "yadif");
+    }
+    else
+    {
+      xcodeParamsVec.add("-vf");
+      xcodeParamsVec.add("yadif");
+    }
+  }
+
   public long getAvailableTranscodeBytes()
   {
     if (bufferOutput)
@@ -2419,8 +2455,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
           Sage.getBoolean("xcode_auto_deinterlace", true)))
       {
         if (Sage.DBG) System.out.println("Automatically adding yadif deinterlace filter to transcoding process");
-        xcodeParamsVec.add("-vf");
-        xcodeParamsVec.add("yadif");
+        addOrComposeYadif(xcodeParamsVec);
       }
 
       // Preserve aspect ratio properly
@@ -2793,8 +2828,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
           Sage.getBoolean("xcode_auto_deinterlace", true)))
       {
         if (Sage.DBG) System.out.println("Automatically adding yadif deinterlace filter to transcoding process");
-        xcodeParamsVec.add("-vf");
-        xcodeParamsVec.add("yadif");
+        addOrComposeYadif(xcodeParamsVec);
       }
       else if (Sage.DBG && srcVideo != null && srcVideo.isInterlaced() && targetHeight > srcVideo.getHeight()/2
           && isVideoCopySelected(xcodeParamsVec))

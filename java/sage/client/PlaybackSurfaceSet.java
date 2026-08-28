@@ -290,6 +290,63 @@ public final class PlaybackSurfaceSet
   }
 
   /**
+   * A surface {@code VIDEO_CODECS} token may carry per-codec attributes as
+   * {@code CODEC;key=value;key=value} (e.g. {@code H264;scan=progressive;interlaced=false}).
+   * Returns the bare codec part (before the first {@code ';'}) of each token so
+   * canonical validation sees {@code H264}, not the whole attribute string --
+   * which would otherwise be rejected as non-canonical and DROP the codec (and,
+   * if it were the surface's only video codec, the whole surface). Bare tokens
+   * with no {@code ';'} pass through unchanged, so stock clients are unaffected.
+   */
+  static List<String> stripCodecAttributes(List<String> tokens)
+  {
+    if (tokens.isEmpty()) return tokens;
+    List<String> out = new ArrayList<String>(tokens.size());
+    for (String t : tokens)
+    {
+      if (t == null) continue;
+      int semi = t.indexOf(';');
+      String codec = (semi < 0 ? t : t.substring(0, semi)).trim();
+      if (codec.length() > 0) out.add(codec);
+    }
+    return out;
+  }
+
+  /**
+   * Parse the per-codec interlaced-decode declaration from a surface
+   * {@code VIDEO_CODECS} token list. A codec is added to the returned set when
+   * its token carries {@code interlaced=false} or {@code scan=progressive},
+   * i.e. the client declared THIS decode path is progressive-only for THAT
+   * codec. Anything else (no attribute, {@code interlaced=true},
+   * {@code scan=interlaced}, or an unrecognized attribute) declares nothing and
+   * is omitted -- fail-open. Codec names are canonicalized so lookups match.
+   */
+  static Set<String> parseInterlacedUnsupported(String surfaceId, List<String> tokens)
+  {
+    if (tokens.isEmpty()) return Collections.<String>emptySet();
+    Set<String> out = new HashSet<String>();
+    for (String t : tokens)
+    {
+      if (t == null) continue;
+      int semi = t.indexOf(';');
+      if (semi < 0) continue; // bare codec, no attributes
+      String codec = canonicalVideoCodec(t.substring(0, semi).trim());
+      if (!CANONICAL_VIDEO_CODECS.contains(codec)) continue;
+      String[] attrs = t.substring(semi + 1).split(";");
+      for (String a : attrs)
+      {
+        String attr = a.trim().toLowerCase(java.util.Locale.ROOT);
+        if (attr.equals("interlaced=false") || attr.equals("scan=progressive"))
+        {
+          out.add(codec);
+          break;
+        }
+      }
+    }
+    return out.isEmpty() ? Collections.<String>emptySet() : out;
+  }
+
+  /**
    * Build a set from the raw {@code PLAYBACK_SURFACES} list plus a lookup
    * function that returns the per-surface property strings for a given id.
    * The array is read positionally:
@@ -344,8 +401,10 @@ public final class PlaybackSurfaceSet
       }
       List<String> deliveryModes = validateAndFilter(id, "DELIVERY_MODES",
           split(props[2]), CANONICAL_DELIVERY_MODES);
+      List<String> rawVideoTokens = split(props[3]);
       List<String> videoCodecs = validateAndFilter(id, "VIDEO_CODECS",
-          split(props[3]), CANONICAL_VIDEO_CODECS);
+          stripCodecAttributes(rawVideoTokens), CANONICAL_VIDEO_CODECS);
+      Set<String> interlacedUnsupported = parseInterlacedUnsupported(id, rawVideoTokens);
       List<String> audioCodecs = validateAndFilter(id, "AUDIO_CODECS",
           split(props[4]), CANONICAL_AUDIO_CODECS);
       List<String> containers = validateAndFilter(id, "CONTAINERS",
@@ -370,7 +429,7 @@ public final class PlaybackSurfaceSet
       out.put(id, new PlaybackSurface(id, route, priority,
           deliveryModes, videoCodecs, audioCodecs, containers,
           audioTrackAccess, audioTrackSelectionMode, audioContainerRules,
-          maxOutW, maxOutH, maxFps));
+          maxOutW, maxOutH, maxFps, interlacedUnsupported));
     }
     return out.isEmpty() ? empty() : new PlaybackSurfaceSet(out);
   }

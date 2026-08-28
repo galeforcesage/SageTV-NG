@@ -16,8 +16,10 @@
 package sage.client;
 
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * A single concrete playback path exposed by a client -- one honest set of
@@ -72,6 +74,15 @@ public final class PlaybackSurface
   private final int maxOutputWidth;
   private final int maxOutputHeight;
   private final int maxFps;
+  // --- Interlaced-decode dimension (Protocol 2.1) ---
+  // Canonical video codecs this surface declared it CANNOT decode interlaced
+  // (via a per-codec {@code interlaced=false} or {@code scan=progressive}
+  // attribute on PLAYBACK_SURFACE_<id>_VIDEO_CODECS). Empty means "the client
+  // said nothing", which -- fail-open -- leaves an interlaced source copied
+  // exactly as before. Only an EXPLICIT declaration escalates to a
+  // server-side deinterlacing transcode. Browser/MSE decode paths populate
+  // this because no browser MSE implementation decodes interlaced H.264.
+  private final Set<String> interlacedUnsupportedCodecs;
 
   /**
    * Backward-compatible constructor (pre-2.1.0006). Applies the conservative
@@ -118,6 +129,26 @@ public final class PlaybackSurface
       Map<String, List<String>> audioContainerRules,
       int maxOutputWidth, int maxOutputHeight, int maxFps)
   {
+    this(id, route, priority, deliveryModes, videoCodecs, audioCodecs, containers,
+        audioTrackAccess, audioTrackSelectionMode, audioContainerRules,
+        maxOutputWidth, maxOutputHeight, maxFps, null);
+  }
+
+  /**
+   * Full constructor including the interlaced-decode dimension (Protocol 2.1).
+   *
+   * @param interlacedUnsupportedCodecs canonical video codecs this surface
+   *   declared it cannot decode interlaced; null/empty => none declared, which
+   *   fail-open leaves interlaced sources copied unchanged.
+   */
+  public PlaybackSurface(String id, String route, int priority,
+      List<String> deliveryModes, List<String> videoCodecs,
+      List<String> audioCodecs, List<String> containers,
+      String audioTrackAccess, String audioTrackSelectionMode,
+      Map<String, List<String>> audioContainerRules,
+      int maxOutputWidth, int maxOutputHeight, int maxFps,
+      Set<String> interlacedUnsupportedCodecs)
+  {
     if (id == null || id.length() == 0)
       throw new IllegalArgumentException("PlaybackSurface id must be non-empty");
     this.id = id;
@@ -147,6 +178,16 @@ public final class PlaybackSurface
     this.maxOutputWidth  = Math.max(0, maxOutputWidth);
     this.maxOutputHeight = Math.max(0, maxOutputHeight);
     this.maxFps          = Math.max(0, maxFps);
+    if (interlacedUnsupportedCodecs == null || interlacedUnsupportedCodecs.isEmpty())
+      this.interlacedUnsupportedCodecs = Collections.<String>emptySet();
+    else
+    {
+      Set<String> norm = new HashSet<String>(interlacedUnsupportedCodecs.size());
+      for (String c : interlacedUnsupportedCodecs)
+        if (c != null && c.length() > 0)
+          norm.add(PlaybackSurfaceSet.canonicalVideoCodec(c));
+      this.interlacedUnsupportedCodecs = Collections.unmodifiableSet(norm);
+    }
   }
 
   public String getId() { return id; }
@@ -166,6 +207,23 @@ public final class PlaybackSurface
   public int getMaxOutputHeight() { return maxOutputHeight; }
   /** Declared decoder frame-rate limit, or 0 when the client didn't say. */
   public int getMaxFps() { return maxFps; }
+
+  /**
+   * True when this surface EXPLICITLY declared it cannot decode interlaced
+   * content for the given codec (a per-codec {@code interlaced=false} or
+   * {@code scan=progressive} attribute on {@code PLAYBACK_SURFACE_<id>_VIDEO_CODECS}).
+   *
+   * <p>Fail-open: a surface that never declared the attribute returns false, so
+   * an interlaced source keeps whatever copy/transcode decision it would have
+   * had. This only ever ESCALATES to a server-side deinterlace when the client
+   * itself said its decode path is progressive-only -- the honest signal a
+   * browser/MSE surface sends because no browser MSE decodes interlaced H.264.
+   */
+  public boolean declaresInterlacedUnsupported(String codec)
+  {
+    return codec != null
+        && interlacedUnsupportedCodecs.contains(PlaybackSurfaceSet.canonicalVideoCodec(codec));
+  }
 
   /** True when this surface declared any output limit at all. */
   public boolean hasDeclaredOutputLimits()
@@ -305,6 +363,7 @@ public final class PlaybackSurface
         + " audioTrackSelectionMode=" + audioTrackSelectionMode
         + " audioContainerRules=" + audioContainerRules
         + " maxOutput=" + maxOutputWidth + "x" + maxOutputHeight
-        + " maxFps=" + maxFps + "]";
+        + " maxFps=" + maxFps
+        + " interlacedUnsupported=" + interlacedUnsupportedCodecs + "]";
   }
 }

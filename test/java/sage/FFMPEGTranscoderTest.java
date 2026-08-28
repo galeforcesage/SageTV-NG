@@ -378,6 +378,53 @@ public class FFMPEGTranscoderTest
     assertFalse(FFMPEGTranscoder.isVideoCopySelected(new java.util.ArrayList<>()));
   }
 
+  // --- browserhd deinterlace: yadif must COMPOSE into an existing -vf, not ---
+  // create a second -vf. ffmpeg honours only the last -vf, so a bare append
+  // would silently drop the browserhd template's "-vf format=yuv420p" (or a
+  // QSV "format=nv12,hwupload"), breaking the encoder's pixel-format upload.
+  @Test
+  public void testAddOrComposeYadif_mergesIntoExistingVf() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    // Mirrors the browserhd full-encode template: an existing -vf format=yuv420p.
+    java.util.ArrayList<String> vec = new java.util.ArrayList<>(
+        java.util.Arrays.asList("-c:v", "h264_nvenc", "-vf", "format=yuv420p", "-b:v", "4M"));
+    FFMPEGTranscoder.addOrComposeYadif(vec);
+    // Exactly ONE -vf, deinterlace first then the original chain.
+    assertEquals(java.util.Collections.frequency(vec, "-vf"), 1,
+        "There must be exactly one -vf after composing yadif");
+    int vf = vec.indexOf("-vf");
+    assertEquals(vec.get(vf + 1), "yadif,format=yuv420p",
+        "yadif must be prepended into the existing filtergraph so upload/format survives");
+  }
+
+  @Test
+  public void testAddOrComposeYadif_appendsWhenNoExistingVf() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    java.util.ArrayList<String> vec = new java.util.ArrayList<>(
+        java.util.Arrays.asList("-c:v", "h264_nvenc", "-b:v", "4M"));
+    FFMPEGTranscoder.addOrComposeYadif(vec);
+    assertEquals(java.util.Collections.frequency(vec, "-vf"), 1,
+        "A lone -vf yadif must be appended when the command has no existing filtergraph");
+    int vf = vec.indexOf("-vf");
+    assertEquals(vec.get(vf + 1), "yadif");
+  }
+
+  @Test
+  public void testAddOrComposeYadif_idempotentWhenAlreadyDeinterlacing() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    java.util.ArrayList<String> vec = new java.util.ArrayList<>(
+        java.util.Arrays.asList("-c:v", "h264_nvenc", "-vf", "yadif,format=yuv420p"));
+    FFMPEGTranscoder.addOrComposeYadif(vec);
+    assertEquals(java.util.Collections.frequency(vec, "-vf"), 1,
+        "Composing yadif twice must not add a second -vf");
+    int vf = vec.indexOf("-vf");
+    assertEquals(vec.get(vf + 1), "yadif,format=yuv420p",
+        "An existing yadif filtergraph must be left untouched");
+  }
+
   // --- Fix B: extend probesize/analyzeduration tuning to VOD playback, ---
   // scoped explicitly to the confirmed modern NG copy-family xcodeModes by
   // name (mpeg2tsremux / browserhd_remux / browserhd_copyv) so legacy
