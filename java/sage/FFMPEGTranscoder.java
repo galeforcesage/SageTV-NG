@@ -761,18 +761,38 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // deadlocks. This mirrors readFullyTranscodedData(), which frees by the
       // advanced read position rather than the read's start.
       long ringServed = leftToRead;
-      while (leftToRead > 0)
-      {
-        int currRead = Math.min((int)leftToRead, xcodeBuffer[buffNum].length - buffOffset);
-        chan.write(java.nio.ByteBuffer.wrap(xcodeBuffer[buffNum], buffOffset, currRead));
-        leftToRead -= currRead;
-        buffNum = (buffNum + 1) % xcodeBuffer.length;
-        buffOffset = 0;
-      }
-      if (XCODE_DEBUG) System.out.println("Xcode transferData complete overage=" + overage);
+      // Snapshot-under-lock hardening. Previously the ring slots were written
+      // straight to the socket outside xcodeSyncLock, and only afterwards were
+      // the consumed slots freed. That left a window: once a slot fell behind
+      // the read frontier the XcodeDataConsumer writer could recycle it (fill a
+      // new virtual offset into the same physical slot) while a slow/blocking
+      // socket write was still copying the OLD contents out of it — producing a
+      // torn fMP4 fragment (a lost/overwritten moof header) that the browser MSE
+      // demuxer rejects. Enlarging the ring only made this rarer, not impossible.
+      //
+      // Fix: copy the served span into a private local buffer AND free the
+      // consumed slots inside a single xcodeSyncLock block. The writer picks its
+      // fill slot under the same lock and cannot advance onto a freed slot until
+      // we release it, so the snapshot is a consistent, immutable view. The
+      // (potentially blocking) socket write then runs on the local copy outside
+      // the lock, so a physical slot can never be read here and refilled by the
+      // writer at the same time. arraycopy of <= one client read (a few hundred
+      // KB) under the lock is microseconds and never blocks.
+      byte[] ringSnapshot = new byte[(int) ringServed];
       long ringReadEnd = offset + ringServed;
       synchronized (xcodeSyncLock)
       {
+        int snapPos = 0;
+        long copyLeft = ringServed;
+        while (copyLeft > 0)
+        {
+          int currRead = Math.min((int)copyLeft, xcodeBuffer[buffNum].length - buffOffset);
+          System.arraycopy(xcodeBuffer[buffNum], buffOffset, ringSnapshot, snapPos, currRead);
+          snapPos += currRead;
+          copyLeft -= currRead;
+          buffNum = (buffNum + 1) % xcodeBuffer.length;
+          buffOffset = 0;
+        }
         while (ringReadEnd - xcodeBufferVirtualOffset >= xcodeBuffer[0].length)
         {
           // Kill the buffers we've consumed
@@ -784,6 +804,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
           xcodeSyncLock.notifyAll();
         }
       }
+      leftToRead = 0;
+      if (ringServed > 0)
+        chan.write(java.nio.ByteBuffer.wrap(ringSnapshot, 0, (int) ringServed));
+      if (XCODE_DEBUG) System.out.println("Xcode transferData complete overage=" + overage);
       while (overage > 0)
       {
         initOverageBuffer();
@@ -3311,8 +3335,30 @@ public class FFMPEGTranscoder implements TranscodeEngine
         if (Sage.DBG) System.out.println("GPU_ENHANCE ring sized for " + kbps + " kbps: "
             + count + " x " + chunk + " = " + (count * (long) chunk) + " bytes");
       }
-      else if (currVideoBitrateKbps >= 1000)
-        xcodeBuffer = new byte[16][32768];
+      else if (bufferOutput)
+      {
+        // MediaServer HTTP pull path (e.g. browserhd MSE delivery). The client
+        // issues large random-access READs against this ring (msproxy reads up to
+        // 524288 bytes per request) while the XcodeDataConsumer thread concurrently
+        // fills it. currVideoBitrateKbps is left at the ffmpeg default (~200) on the
+        // browserhd path, so it previously fell through to the 32 x 4096 = 128 KB
+        // ring below -- far SMALLER than a single client READ. A 512 KB read then
+        // laps the 128 KB ring ~4x, reading slots the consumer is actively
+        // recycling, so the bytes placed on the wire are shifted/torn fMP4 (a lost
+        // moof header) and the browser MSE stack rejects them
+        // (CHUNK_DEMUXER_ERROR_APPEND_FAILED / decode freeze). Proven on the wire by
+        // a server-side tcpdump: corruption began exactly at a fragment boundary
+        // inside the oversized read. The ring MUST be several times larger than the
+        // largest single client read so the reader can never lap it and there is
+        // always free margin between reader and writer. Use a fixed, generous 4 MB
+        // ring (64 x 64 KB); the enhance path above is sized separately for its much
+        // higher bitrate.
+        final int chunk = 65536;
+        final int count = 64; // 64 * 64 KB = 4 MB, >> max client READ (512 KB)
+        xcodeBuffer = new byte[count][chunk];
+        if (Sage.DBG) System.out.println("browserhd/pull ring sized: "
+            + count + " x " + chunk + " = " + (count * chunk) + " bytes");
+      }
       else
         xcodeBuffer = new byte[32][currVideoBitrateKbps >= 300 ? 16384 : 4096];
     }
