@@ -257,29 +257,13 @@ public final class NgLiveWindowCalculator
 
   private NgLiveWindowUpdate computeCurrentWindow()
   {
-    long safeSeekStartMs = 0;
-
-    // safeSeekEndMs: the furthest point we're confident the server can serve
-    // Conservative: use serverMediaTimeMs minus a trailing margin
-    long safeSeekEndMs;
-    if (serverMediaTimeMs > SAFE_SEEK_TRAILING_MARGIN_MS)
-      safeSeekEndMs = serverMediaTimeMs - SAFE_SEEK_TRAILING_MARGIN_MS;
-    else if (serverMediaTimeMs > 0)
-      safeSeekEndMs = serverMediaTimeMs;
-    else if (knownDurationMs > 0)
-      safeSeekEndMs = knownDurationMs;
-    else
-      safeSeekEndMs = 0;
-
-    // playableEndMs: the actual media extent (slightly ahead of safe seek end)
-    // This is what the player could reach if it was already buffered
-    long playableEndMs;
-    if (serverMediaTimeMs > 0)
-      playableEndMs = serverMediaTimeMs;
-    else if (knownDurationMs > 0)
-      playableEndMs = knownDurationMs;
-    else
-      playableEndMs = safeSeekEndMs;
+    // Single authority (sage.SeekWindow) so this per-tick delta and the initial
+    // snapshot in NgPlaybackContextBuilder cannot advertise different windows.
+    long[] w = sage.SeekWindow.resolveLiveWindowMs(
+        serverMediaTimeMs, knownDurationMs, SAFE_SEEK_TRAILING_MARGIN_MS);
+    long safeSeekStartMs = w[0];
+    long safeSeekEndMs = w[1];
+    long playableEndMs = w[2];
 
     return new NgLiveWindowUpdate(
         true,

@@ -3925,8 +3925,10 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       if (edge <= floor)
         return fileEpochTarget;
       long guard = uiMgr.getLong(prefs + TIME_BEHIND_LIVE_TO_DISABLE_SKIP_FORWARD, 4000);
-      long hi = Math.max(floor, edge - guard);
-      long clamped = Math.min(Math.max(fileEpochTarget, floor), hi);
+      // Shared clamp math (SeekWindow) so this trick-play skip and the push DVR
+      // clamp cannot drift apart. Units are file-epoch ms here (target/floor/edge
+      // all epoch); the helper is unit-agnostic.
+      long clamped = SeekWindow.clampToWindow(fileEpochTarget, floor, edge, guard);
       if (Sage.DBG && clamped != fileEpochTarget)
         System.out.println("NG-TRICKDIAG clamp target=" + fileEpochTarget + " -> " + clamped +
             " floor=" + floor + " edge=" + edge + " guard=" + guard);

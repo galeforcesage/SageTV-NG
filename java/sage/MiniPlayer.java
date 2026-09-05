@@ -4861,7 +4861,10 @@ public class MiniPlayer implements DVDMediaPlayer
               ? clampMF.getDuration(clampVf.getCurrSegment()) : 0;
           if (availEnd > 0)
           {
-            long clamped = Math.max(0, Math.min(seekTimeMillis, availEnd));
+            // Shared clamp math (SeekWindow) -- one authority for the min/max/floor
+            // discipline across every seek path. Media-relative ms here; floor 0,
+            // no tail margin (preserves the exact prior [0, availEnd] behavior).
+            long clamped = SeekWindow.clampToWindow(seekTimeMillis, 0L, availEnd, 0L);
             if (clamped != seekTimeMillis)
             {
               if (Sage.DBG) System.out.println("NG-SEEKDIAG dvr-clamp target=" + seekTimeMillis +

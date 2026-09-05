@@ -178,19 +178,13 @@ public final class NgPlaybackContextBuilder
     if (!snap.timeshifted && !snap.isLiveStream)
       return NgLiveContext.EMPTY;
 
-    long safeSeekStartMs = 0;
-
-    // playableEndMs: the furthest media-relative point the server can serve
-    long playableEndMs;
-    if (durationMs > 0)
-      playableEndMs = durationMs;
-    else if (snap.serverMediaTimeMs > 0)
-      playableEndMs = snap.serverMediaTimeMs;
-    else
-      playableEndMs = 0;
-
-    // safeSeekEndMs: conservatively behind playableEndMs by the safety margin
-    long safeSeekEndMs = Math.max(safeSeekStartMs, playableEndMs - LIVE_EDGE_SAFETY_MARGIN_MS);
+    // Single authority (sage.SeekWindow) shared with NgLiveWindowCalculator so
+    // the initial snapshot and per-tick deltas advertise the same window.
+    long[] w = sage.SeekWindow.resolveLiveWindowMs(
+        snap.serverMediaTimeMs, durationMs, LIVE_EDGE_SAFETY_MARGIN_MS);
+    long safeSeekStartMs = w[0];
+    long safeSeekEndMs = w[1];
+    long playableEndMs = w[2];
 
     return new NgLiveContext(
         true,
