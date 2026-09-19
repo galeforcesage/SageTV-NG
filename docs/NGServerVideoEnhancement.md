@@ -200,6 +200,33 @@ Exact gate semantics, because "partly declared" is the case client teams get wro
   after the 2.1.0006 track-access fields. A client that stops at index 8 still
   parses cleanly; it just never gets enhancement.
 
+### 2.6a Per-surface audio channels (5.1 vs stereo)
+
+When an enhanced live stream carries Dolby AC-4 audio (ATSC 3.0), the server
+runs a sidecar that transcodes AC-4 to the client's negotiated codec
+(EAC3/AC3/AAC/MP2). The sidecar must decide **5.1 vs stereo downmix** per client:
+an enhanced matroska carrying a 5.1 track to a stereo-only decoder can stall the
+mux, while blanket-downmixing to stereo needlessly strips surround from a client
+that would have played it. This decision is now a per-surface capability, not a
+SageTV-global setting:
+
+```
+PLAYBACK_SURFACE_<id>_AUDIO_MAX_CHANNELS  ->  "6"
+```
+
+- Positional field **12** on the per-surface reply, after `MAX_FPS`. Optional and
+  additive: a client that stops at index 11 still parses cleanly.
+- Report the real max channel count your audio path can decode/render for the
+  surround-capable codecs it advertises (6 for 5.1, 8 for 7.1).
+- **Gate semantics (fail-closed to stereo):**
+  - An explicit value **≥ 6** opts the surface into preserved surround.
+  - An explicit value **< 6** forces the stereo downmix even for an EAC3/AC3
+    client.
+  - **Absent / empty / non-numeric / negative → 0 = undeclared.** The server then
+    resolves it from the *negotiated audio codec*, mirroring the non-enhance
+    path: a passthrough **EAC3 or AC3** pick keeps 5.1; **AAC/MP2** downmixes to
+    stereo. This keeps legacy EAC3 clients at 5.1 without any client change.
+
 ### 2.7 Per-codec decode ceilings — the portable alternative to §2.6
 
 **You do not have to implement §2.6.** Android `MediaCodec` and the browser's
@@ -281,11 +308,16 @@ panel — never a fabricated 4K.
 
 Two consequences the server honours **given the behaviour above**:
 
-**Auto and Always are indistinguishable on the wire.** Both simply produce a
-sink. So the server cannot apply different policy to them: *a sink that arrives
-at all is a request to upscale, up to that size.* Under Auto the client has
-already applied its own eligibility test, so second-guessing it server-side would
-override a decision made with better information.
+**Auto and Always are indistinguishable *on the sink alone*.** Both simply
+produce a sink, so nothing in `DISPLAY_SINK_RESOLUTION` separates them. But they
+are **not** indistinguishable on the wire: `LOCAL_ENHANCEMENT` (§2.14) carries
+`pref=auto|local|server` as a field of its own, and the server now reads it. When
+a sink *is* present the server still treats "a sink that arrives at all is a
+request to upscale, up to that size" — under Auto the client has already applied
+its own eligibility test, so second-guessing it server-side would override a
+decision made with better information. Where `pref` now matters is the *empty*
+sink: `pref=server` ("Always") upscales anyway (§2.9.1), while `pref=auto` with no
+sink refuses. See the implemented-behaviour note in §2.9.1.
 
 **The setting can never talk past the decode gate.** The per-codec rows of §2.7
 report real MediaCodec limits and are sent unconditionally, unaffected by the
@@ -413,18 +445,34 @@ empty sink looks like it should mean "deliberate opt-out". It fails twice:
    become unreachable**. It also means every client team reimplements the
    12-inch heuristic independently, and they will drift.
 
-**Implemented behaviour, as of this revision.** An empty sink is treated as an
-abstention: the panel clamp is skipped and the tier is settled by the decode
-ceilings, source floor, admin ceiling, GPU admission and network. The log line
-reports `sinkKind=inferred` for this case, distinguishing it from a real panel
-report (`builtin`/`external`). An installation that wants the older
-read-silence-as-no behaviour sets
-`playback/gpu_enhance/unknown_sink=refuse`, which restores
-`verdict=UNKNOWN_SINK` and logs `sinkKind=none`.
+**Implemented behaviour, as of this revision.** The default is now **fail-closed**:
+an empty sink under `pref=auto` **refuses upscaling** and drops to the deinterlace
+floor (`verdict=UNKNOWN_SINK`, `sinkKind=none`). This reverses the earlier
+abstention default described above, and is a deliberate installation decision: the
+clients seen in the field — the PWA in particular — omit the sink precisely to
+signal a display too small to benefit (a browser window whose `screen.width` is
+under the enhance threshold), so under the old infer default they drew spurious 4K
+upscales. Silence is therefore read as "not now" for Auto, not as consent.
 
-Note this does **not** resolve items 2–4. The four meanings of an empty sink are
-still indistinguishable; the server has simply stopped pretending that treating
-them all as refusals was a decision rather than an accident.
+Two escape hatches preserve the abstention semantics where they are wanted:
+
+- **`playback/gpu_enhance/unknown_sink=infer`** restores the old behaviour for the
+  whole installation: an empty sink skips the panel clamp and settles the tier
+  from the decode ceilings, source floor, admin ceiling, GPU admission and
+  network, logging `sinkKind=inferred`.
+- **An explicit "Always" (`LOCAL_ENHANCEMENT pref=server`) overrides the refusal,
+  per client.** That is the user *requesting* a server upscale — the opposite of
+  silence — so it is honoured even with no sink: it upscales to the maximum the
+  decode gate, admin ceiling and network allow (`verdict=OFFERED`). Crucially this
+  reads intent from the dedicated `LOCAL_ENHANCEMENT` preference field, **not** from
+  the overloaded sink — which is exactly the disambiguation item 2 asks for, for the
+  one case (Always) where the intent can be carried cleanly on a field of its own.
+
+Note this still does **not** fully resolve items 2–4. The remaining meanings of an
+empty sink under `auto` — "unknown", "client policy declined", "legacy" — are still
+indistinguishable, and the fail-closed default now treats them all as "no". What has
+changed is that the explicit *Always* intent no longer has to ride the sink, and that
+the safe default is refusal rather than inference.
 
 #### Why deinterlace is offered regardless of the sink
 
@@ -829,6 +877,9 @@ Implemented and merged (behavior-neutral until both switches are cleared):
 - All §2 fields are queried in the NG capability round and parsed fail-closed.
 - Per-surface indices 9–11 carry `MAX_OUTPUT_WIDTH`, `MAX_OUTPUT_HEIGHT`,
   `MAX_FPS`. Missing or unparseable values become 0 = undeclared = no upscale.
+- Per-surface index 12 carries `AUDIO_MAX_CHANNELS` (§2.6a): explicit ≥6 preserves
+  5.1 on the enhance AC-4 sidecar, explicit <6 forces stereo, and 0/undeclared is
+  resolved from the negotiated codec (EAC3/AC3 → 5.1, AAC/MP2 → stereo).
 - The benefit gate (`EnhancementAdvisor`) and the capacity gate (`GpuGovernor`)
   are separate services, deliberately: "a spare NVENC session exists" is not a
   reason to re-encode a stream that already looked fine.

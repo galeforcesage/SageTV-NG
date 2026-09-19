@@ -276,6 +276,34 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
    */
   public static List<CaptionEvent> coalesce(List<CaptionEvent> events)
   {
+    return coalesce(events, 0.0);
+  }
+
+  /**
+   * Behaves exactly like {@link #coalesce(List)}, but additionally holds each
+   * cue on screen until (just before) the next same-track cue begins
+   * ("hold until next"). A cue whose natural TTML {@code end} leaves a blank
+   * gap before the following caption otherwise clears early; with a positive
+   * {@code holdUntilNextMaxSeconds} its end is instead extended forward to fill
+   * that gap, so the last line stays up until the next one appears — the
+   * behaviour broadcast pop-on/roll-up captions have on a TV. The hold is
+   * bounded two ways so it can never misbehave: it never overlaps the next cue
+   * (the end is still capped at the next cue's begin, preserving the hard
+   * no-overlap invariant) and it never extends more than
+   * {@code holdUntilNextMaxSeconds} past the cue's own begin, so a trailing
+   * caption cannot linger indefinitely through a long silence. The last cue on
+   * each track (no following cue) is unaffected. Pass
+   * {@code holdUntilNextMaxSeconds <= 0} for the exact legacy behaviour (no gap
+   * filling) — this is what {@link #coalesce(List)} does.
+   *
+   * @param events input events, assumed sorted by begin time
+   * @param holdUntilNextMaxSeconds max seconds to hold a cue past its begin to
+   *        fill the gap to the next cue; {@code <= 0} disables hold-until-next
+   * @return a new, coalesced list of events (input list is left untouched),
+   *         sorted by begin time
+   */
+  public static List<CaptionEvent> coalesce(List<CaptionEvent> events, double holdUntilNextMaxSeconds)
+  {
     List<CaptionEvent> grouped = new ArrayList<>();
     if (events == null || events.isEmpty()) return grouped;
 
@@ -305,7 +333,7 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
     }
     if (current != null) grouped.add(current.build());
 
-    return clampOverlapsAndEnforceMinDuration(grouped);
+    return clampOverlapsAndEnforceMinDuration(grouped, holdUntilNextMaxSeconds);
   }
 
   private static boolean sameLanguageRegionAndService(Builder current, CaptionEvent e)
@@ -361,7 +389,7 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
    * </ol>
    * Returns the result merged back into a single begin-time-sorted list.
    */
-  private static List<CaptionEvent> clampOverlapsAndEnforceMinDuration(List<CaptionEvent> grouped)
+  private static List<CaptionEvent> clampOverlapsAndEnforceMinDuration(List<CaptionEvent> grouped, double holdUntilNextMaxSeconds)
   {
     Map<String, List<CaptionEvent>> byTrack = new LinkedHashMap<>();
     for (CaptionEvent e : grouped)
@@ -386,6 +414,17 @@ public final class CaptionEvent implements Comparable<CaptionEvent>
         if (next != null && end > next.beginSeconds)
         {
           end = next.beginSeconds;
+        }
+        // Hold-until-next: fill any blank gap before the next cue so the
+        // caption stays on screen until (just before) the next one appears.
+        // Bounded by the next cue's begin (preserves the hard no-overlap
+        // invariant above) and by holdUntilNextMaxSeconds past this cue's
+        // begin (so a trailing caption can't linger through a long silence).
+        // Only ever pushes end later, never earlier. Disabled when <= 0.
+        if (holdUntilNextMaxSeconds > 0.0 && next != null)
+        {
+          double held = Math.min(next.beginSeconds, begin + holdUntilNextMaxSeconds);
+          if (held > end) end = held;
         }
         // Try forward slack first (unchanged from the original behavior).
         if (end - begin < floorSeconds)

@@ -51,8 +51,19 @@ public class HDHomeRunLineup
 {
   private static final String PROP_TTL_MIN = "hdhr/lineup_cache_ttl_minutes";
   private static final int    DEFAULT_TTL_MINUTES = 60;
-  private static final int    HTTP_CONNECT_TIMEOUT_MS = 5000;
+  // Fail fast on a dead/powered-off HDHR: a LAN device answers in well under a
+  // second, so a short connect timeout bounds the stall a missing device can
+  // impose on the (synchronous) live-tune encoder-selection path.
+  private static final int    HTTP_CONNECT_TIMEOUT_MS = 2000;
   private static final int    HTTP_READ_TIMEOUT_MS    = 10000;
+  // Negative-cache backoff: after an unreachable/errored probe, suppress
+  // further network probes for this long. Without it a powered-off HDHR is
+  // re-probed on EVERY lookup (lastFetchMs is not advanced on failure), so a
+  // single live tune that does several lookups stalls multiple times on the
+  // connect/route timeout, which manifests as intermittent tune failures and
+  // client push-watchdog trips for channels on OTHER, healthy tuners.
+  private static final String PROP_FAIL_BACKOFF_SEC = "hdhr/lineup_unreachable_backoff_seconds";
+  private static final int    DEFAULT_FAIL_BACKOFF_SEC = 30;
 
   /** host:port -> instance */
   private static final Map<String, HDHomeRunLineup> INSTANCES = new HashMap<String, HDHomeRunLineup>();
@@ -70,6 +81,7 @@ public class HDHomeRunLineup
 
   private final String host;
   private volatile long lastFetchMs = 0L;
+  private volatile long lastFailMs = 0L;
   private volatile Map<String, Entry> byChannel = Collections.emptyMap();
 
   private HDHomeRunLineup(String host)
@@ -87,6 +99,7 @@ public class HDHomeRunLineup
       {
         byChannel = parsed;
         lastFetchMs = System.currentTimeMillis();
+        lastFailMs = 0L;
         if (Sage.DBG) System.out.println("HDHomeRunLineup: " + host
             + " cached " + parsed.size() + " channels");
         if (Sage.getBoolean("hdhr/atsc3_variant_pairing_enabled", true))
@@ -108,6 +121,7 @@ public class HDHomeRunLineup
     }
     catch (Throwable t)
     {
+      lastFailMs = System.currentTimeMillis();
       if (Sage.DBG) System.out.println("HDHomeRunLineup: refresh failed for "
           + host + ": " + t);
     }
@@ -123,8 +137,19 @@ public class HDHomeRunLineup
 
   private void maybeRefresh()
   {
+    long now = System.currentTimeMillis();
+    // Negative cache: if the last probe failed (device unreachable/errored),
+    // don't hammer it again until a short backoff elapses. This is what stops a
+    // powered-off HDHR from re-stalling the caller on every lookup, since a
+    // failed refresh does not advance lastFetchMs and would otherwise re-probe
+    // (and block on the connect/route timeout) on each call.
+    if (lastFailMs != 0L)
+    {
+      long backoff = (long) Sage.getInt(PROP_FAIL_BACKOFF_SEC, DEFAULT_FAIL_BACKOFF_SEC) * 1000L;
+      if (now - lastFailMs < backoff) return;
+    }
     long ttl = (long) Sage.getInt(PROP_TTL_MIN, DEFAULT_TTL_MINUTES) * 60_000L;
-    if (System.currentTimeMillis() - lastFetchMs > ttl) refresh();
+    if (now - lastFetchMs > ttl) refresh();
   }
 
   public Entry lookup(String channelNumber)

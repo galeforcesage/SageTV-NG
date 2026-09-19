@@ -412,6 +412,64 @@ public abstract class CaptureDevice
 
   public abstract void loadDevice() throws EncodingException;
   public abstract boolean isLoaded();
+
+  // ---- device load-failure health / quarantine (tuner resilience) --------
+
+  /**
+   * Load-failure cooldown window in ms. Configurable via
+   * {@code mmc/device_load_failure_cooldown_seconds} (default 60). A value
+   * {@code <= 0} disables the cooldown (a failed device is retried immediately,
+   * legacy behavior).
+   */
+  private static long loadFailureCooldownMs()
+  {
+    return Sage.getLong("mmc/device_load_failure_cooldown_seconds", 60L) * 1000L;
+  }
+
+  /** True if this device recently failed to load and is still cooling down. */
+  public boolean isInLoadCooldown()
+  {
+    long until = loadFailureCooldownUntil;
+    return until > 0 && Sage.time() < until;
+  }
+
+  public int getConsecutiveLoadFailures() { return consecutiveLoadFailures; }
+
+  /** Record a failed {@link #loadDevice()} and arm the cooldown. */
+  public void noteLoadFailure()
+  {
+    consecutiveLoadFailures++;
+    long window = loadFailureCooldownMs();
+    loadFailureCooldownUntil = (window > 0) ? (Sage.time() + window) : 0L;
+  }
+
+  /** Record a successful load (functioning device) and clear the cooldown. */
+  public void noteLoadSuccess()
+  {
+    consecutiveLoadFailures = 0;
+    loadFailureCooldownUntil = 0L;
+  }
+
+  /**
+   * Load the device while tracking success/failure for tuner-resilience health.
+   * Callers that want the scheduler / Seeker to route around a dead tuner
+   * should use this instead of calling {@link #loadDevice()} directly. Behaves
+   * identically to {@link #loadDevice()} otherwise (same exception on failure).
+   */
+  public final void loadDeviceTracked() throws EncodingException
+  {
+    try
+    {
+      loadDevice();
+      noteLoadSuccess();
+    }
+    catch (EncodingException e)
+    {
+      noteLoadFailure();
+      throw e;
+    }
+  }
+
   public abstract void startEncoding(CaptureDeviceInput cdi, String encodeFile, String channel) throws EncodingException;
   public abstract void switchEncoding(String switchFile, String channel) throws EncodingException;
   public abstract void stopEncoding();
@@ -858,6 +916,15 @@ public abstract class CaptureDevice
   protected int lastCrossIndex = 0;
   protected int encoderMerit;
   protected boolean encoderDisabled;
+
+  // ---- device load-failure health / quarantine (tuner resilience) --------
+  // Tracks consecutive loadDevice() failures so the scheduler (recordings) and
+  // the Seeker (live watch) can prefer a healthy tuner over one that is
+  // currently unreachable, and stop hammering a dead device every cycle. A
+  // successful load clears the state. Purely advisory: a device in cooldown is
+  // still used as a last resort when no healthy tuner can serve the request.
+  private volatile long loadFailureCooldownUntil = 0L;
+  private volatile int consecutiveLoadFailures = 0;
 
   protected int captureFeatureBits;
 

@@ -32,7 +32,7 @@ package sage.enhance.spi;
  */
 public interface ScaleProvider
 {
-  /** Stable, unique identifier, e.g. {@code builtin-lanczos}. */
+  /** Stable, unique identifier, e.g. {@code builtin-passthrough}. */
   String id();
 
   /** Static self-description, including whether admission is specialized. */
@@ -43,4 +43,64 @@ public interface ScaleProvider
 
   /** Produce the immutable scale stage for this request. */
   ScaleExecutionPlan plan(ScaleRequest request);
+
+  /**
+   * Pre-warm this provider for an anticipated playback session.
+   *
+   * <p>Called by the core during the advisory phase, before play-start, on a
+   * background thread. A provider with an expensive cold start (model load,
+   * shader compile, process spawn) should begin that work here and return a
+   * {@link WarmContext} the core holds and passes back to
+   * {@link #plan(ScaleRequest, WarmContext)} at pipeline-build time. This method
+   * may block for the duration of the warmup; it should return only once the
+   * provider is ready to process frames, or throw / return {@code null} if
+   * warmup fails.
+   *
+   * <p>Unlike {@link #probe}, this method is expressly permitted to acquire
+   * runtime resources (spawn the worker, load the model). Anything it throws is
+   * treated by the core as "warmup failed" &mdash; the context is discarded and
+   * the session cold-starts through {@link #plan(ScaleRequest)} as usual.
+   *
+   * <p>Default: returns {@code null} (no warmup). Providers that start quickly
+   * (&lt; 500&nbsp;ms), and every filter-form provider, should not override this.
+   *
+   * @param request the anticipated scale request. The actual request at play
+   *        time may differ slightly (e.g. aspect-ratio correction), but the
+   *        dimensions will be the same or very close.
+   * @return a warm context, or {@code null} if warmup is not needed or not
+   *         possible for this request
+   */
+  default WarmContext warmup(ScaleRequest request)
+  {
+    return null;
+  }
+
+  /**
+   * Build an execution plan using a pre-warmed context, produced by a prior
+   * {@link #warmup(ScaleRequest)} call and still valid.
+   *
+   * <p>The provider should incorporate the warm resource into its plan. For an
+   * {@link ExecutionForm#EXTERNAL_PROCESS} provider this typically means
+   * returning a plan whose worker handle
+   * ({@link ScaleExecutionPlan#getWarmProcess()}) points at the already-running
+   * worker so the core skips the spawn. If the provider cannot use the warm
+   * context (dimensions changed, context invalid), it should {@code warm.close()},
+   * fall back to {@link #plan(ScaleRequest)}, and let the core cold-start.
+   *
+   * <p>Default: closes {@code warm} and delegates to the cold
+   * {@link #plan(ScaleRequest)}, so a provider that overrides only
+   * {@link #warmup} still behaves correctly.
+   *
+   * @param request the actual scale request (may differ slightly from the one
+   *        passed to {@link #warmup})
+   * @param warm    the pre-warmed context; never {@code null} when the core calls
+   *        this. Ownership transfers to the provider: it must be closed by the
+   *        provider (on the fallback path) or consumed into the returned plan.
+   * @return the execution plan
+   */
+  default ScaleExecutionPlan plan(ScaleRequest request, WarmContext warm)
+  {
+    if (warm != null) { try { warm.close(); } catch (Throwable ignore) {} }
+    return plan(request);
+  }
 }

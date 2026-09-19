@@ -43,5 +43,14 @@ public class LinuxUtilsTest
 
     // null should not fail with NPE but return null
     assertNull(LinuxUtils.getIPAddressFromInetInfo(null));
+
+    // Modern net-tools / iproute2 form: "inet 192.0.2.5" with NO "addr:".
+    // This is what current Linux prints and is exactly what the legacy
+    // "inet addr:" regex missed, causing the "IP Address: 0.0.0.0" display bug.
+    String inetinfoModern = "eno1: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500\n" +
+      "        inet 192.0.2.75  netmask 255.255.255.0  broadcast 192.0.2.255\n" +
+      "        inet6 fe80::211:22ff:fe33:4455  prefixlen 64  scopeid 0x20<link>\n" +
+      "        ether 00:11:22:33:44:55  txqueuelen 1000  (Ethernet)\n";
+    assertEquals("192.0.2.75", LinuxUtils.getIPAddressFromInetInfo(inetinfoModern));
   }
 }

@@ -101,6 +101,19 @@ public class MediaServer implements Runnable
     if (preset != null && preset.length() > 0)
       sb.append(' ').append(sage.HwEncoder.presetFlag(k)).append(' ').append(preset);
     sb.append(" -profile:v high");
+    // Browser MSE (fragmented-MP4 SourceBuffer) rejects the negative
+    // composition-time offsets that B-frame reordering produces on this path.
+    // nvenc emits B-frames by default and movenc writes them with
+    // baseMediaDecodeTime=0 and NO edit list, so the first fragment carries
+    // samples whose PTS < DTS; Chrome/Edge fire a SourceBuffer 'error' on the
+    // very first append (observed: NFL 720p60 High@3.2 fails outright; the
+    // byte-identical stream re-encoded with -bf 0 plays). browserhd exists
+    // solely to feed browser MSE, so zero-reorder (IPPP, no B-frames) output is
+    // a correctness invariant of the profile, not a per-deployment tuning knob
+    // -- force it for every encoder here. The httpls/HLS encode path already
+    // does the same for the same reason. Compression cost at live bitrates is
+    // negligible and it also lowers decode/startup latency.
+    sb.append(" -bf 0");
     // Keyframe interval (GOP). With +frag_keyframe, an fMP4 fragment is only
     // flushed at a keyframe, so the client cannot start (or resume after a
     // seek/FF/REW) until the FIRST full GOP is encoded. The encoder default
@@ -122,6 +135,28 @@ public class MediaServer implements Runnable
     // hardware encoders auto-select an appropriate level.
     if (k == sage.HwEncoder.Kind.NONE)
       sb.append(" -level 4.1");
+    // Fallback video-bitrate cap. Without any cap the hardware encoder's default
+    // rate control lets high-detail 60fps content spike far above the link budget
+    // (observed ~78 Mbps on 720p60 sports), overrunning the PWA/MSE client's
+    // buffer and stuttering. By default the per-session sage.media.BitratePolicy
+    // (applied in FFMPEGTranscoder.applyBrowserHdRateCap) STRIPS and replaces
+    // these tokens with a resolution/bandwidth-aware envelope, so this static
+    // value is only the ceiling when that policy is disabled
+    // (media_server/browserhd_policy_cap=false) or when a GPU enhancement plan
+    // owns the bitrate instead. A VBR target + hard maxrate + VBV bufsize keeps
+    // the plain browserhd stream sane. Tunable via
+    // media_server/browserhd_{bitrate,maxrate,bufsize}; blank bitrate disables.
+    String bv = Sage.get("media_server/browserhd_bitrate", "8M");
+    if (bv != null && bv.length() > 0)
+    {
+      // NVENC honours -maxrate only under an explicit VBR rate-control mode.
+      if (k == sage.HwEncoder.Kind.NVENC) sb.append(" -rc vbr");
+      sb.append(" -b:v ").append(bv);
+      String mr = Sage.get("media_server/browserhd_maxrate", "12M");
+      if (mr != null && mr.length() > 0) sb.append(" -maxrate ").append(mr);
+      String bs = Sage.get("media_server/browserhd_bufsize", "16M");
+      if (bs != null && bs.length() > 0) sb.append(" -bufsize ").append(bs);
+    }
     sb.append(' ').append(audio);
     String out = sb.toString();
     if (Sage.DBG) System.out.println("MediaServer.browserhd params (" + k + "/" + enc + "): " + out);
@@ -235,8 +270,23 @@ public class MediaServer implements Runnable
         "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof -frag_duration 500000 -c:v copy -c:a copy");
     // mpeg2tsremux -- TV/AVPlay REMUX: copy video + audio into MPEG-TS (Chromium MSE cannot
     //   demux TS, so this is the TV surface's remux, never the browser's). Server-native now.
+    //
+    // TIMESTAMP HANDLING: the legacy default used -copyts, which tells ffmpeg to copy source
+    // timestamps VERBATIM and disables its monotonic-DTS enforcement. SageTV recordings are
+    // concatenations of capture segments whose PTS are independent, so -copyts leaks
+    // segment-boundary discontinuities (forward step-jumps and, fatally, BACKWARD steps)
+    // onto the wire. The legacy native MiniClient's custom decoder tolerated that; conforming
+    // NG players (ExoPlayer / IJK) cannot render a non-monotonic TS and stutter/tear.
+    //
+    // Default now DROPS -copyts and adds -avoid_negative_ts make_zero, so ffmpeg re-bases the
+    // output to a monotonic, zero-based timeline (its DTS clamp collapses backward jumps).
+    // Operators who depend on the old absolute-timestamp behaviour (e.g. a client that maps
+    // wire PTS to absolute media time for placeshifted seek) can restore it by setting
+    //   media_server/transcode_quality/mpeg2tsremux_copyts=true
+    boolean tsRemuxCopyts = Sage.getBoolean("media_server/transcode_quality/mpeg2tsremux_copyts", false);
     Sage.put(XCODE_QUALITIES_PROPERTY_ROOT + "mpeg2tsremux",
-        "-f mpegts -muxdelay 0 -muxpreload 0 -c:v copy -c:a copy -copyts");
+        "-f mpegts -muxdelay 0 -muxpreload 0 -c:v copy -c:a copy"
+        + (tsRemuxCopyts ? " -copyts" : " -avoid_negative_ts make_zero"));
     extraFileSet = new java.util.HashSet();
     String extraFilesProp = Sage.get("media_server/extra_allowed_files", "miniclient");
     java.util.StringTokenizer toker = new java.util.StringTokenizer(extraFilesProp, ";");
@@ -706,6 +756,28 @@ public class MediaServer implements Runnable
           if (currMF != null)
             xcoder.setSourceFormat(currMF.getFileFormat());
           xcoder.setSourceFile(null, currFile);
+          // Clamp a pull-xcode seek (ss=) that would land at/after the demuxable
+          // end of a COMPLETED segment. Such a seek makes ffmpeg emit an empty
+          // fMP4 (moov header, no media) that a pull client cannot tell from
+          // success, so it retries forever ("stuck at Loading..."). XCODE_SETUP
+          // set the seek before this OPENFILE named the file, so this is the
+          // first point both are known. SeekWindow is per-physical-file and
+          // state-derived: a growing/live segment is left untouched, only a
+          // completed file is clamped -- which is exactly right for a gapped
+          // multi-segment recording where each opened file is clamped against
+          // its OWN end, not the whole-recording duration.
+          long pendingSs = (xcoder instanceof FFMPEGTranscoder)
+              ? ((FFMPEGTranscoder) xcoder).getTranscodeStartSeekTime() : 0;
+          if (pendingSs > 0)
+          {
+            long clampedSs = SeekWindow.clampFileRelativeMs(currMF, currFile, pendingSs);
+            if (clampedSs != pendingSs)
+            {
+              if (Sage.DBG) System.out.println("SeekWindow: clamped pull-xcode ss "
+                  + pendingSs + " -> " + clampedSs + " for " + currFile);
+              ((FFMPEGTranscoder) xcoder).setTranscodeStartSeekTime(clampedSs);
+            }
+          }
           xcoder.startTranscode();
         }
         else
@@ -1570,6 +1642,14 @@ public class MediaServer implements Runnable
                 int targetKbps = Integer.parseInt(tempString.substring(13).trim());
                 int minKbps = Sage.getInt("media_server/xcode_adjust_min_kbps", 300);
                 int maxKbps = Sage.getInt("media_server/xcode_adjust_max_kbps", 8000);
+                // Standardize the live-adjust ceiling on THIS session's shared
+                // BitratePolicy envelope. The flat 8 Mbps default predates the
+                // policy and would throttle any high-resolution session (a 2160p
+                // enhance launches near 40 Mbps, a 1080p browserhd near 14 Mbps)
+                // the instant the pull proxy sent its first adjust. When the
+                // session carries a policy ceiling, allow adjustment up to it.
+                int sessionCeil = fftc.getPolicyCeilingKbps();
+                if (sessionCeil > 0) maxKbps = Math.max(maxKbps, sessionCeil);
                 targetKbps = Math.max(minKbps, Math.min(maxKbps, targetKbps));
                 int delta = targetKbps - fftc.getCurrentVideoBitrateKbps();
                 if (delta != 0)

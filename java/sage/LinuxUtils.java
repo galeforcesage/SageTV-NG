@@ -170,10 +170,16 @@ public class LinuxUtils
 
   public static String getIPAddress()
   {
-    // We can't enumerate the network interfaces because it also includes interfaces
-    // that are down. So this might not be are actual IP. The only way we can do it
-    // is using ifconfig or native code. This can't be done correctly in Java.
+    // Preferred: enumerate interfaces via Java's NetworkInterface API. This is
+    // OS-agnostic and, unlike the legacy "ifconfig eth0" + "inet addr:" parse
+    // below, is not defeated by modern iproute2 output (which prints "inet " with
+    // no "addr:") or by the real interface not being one of the hardcoded names.
+    String primary = IOUtils.getPrimaryLocalIPv4();
+    if (primary != null)
+      return primary;
 
+    // Legacy fallback: shell ifconfig for a known device list. Kept for odd
+    // environments where NetworkInterface enumeration comes back empty.
     // List of "known" linux network addresses
     // adding the "configured" one first, may result is 2 hits on that one if it's wrong, and it's
     // in the extended list
@@ -189,17 +195,20 @@ public class LinuxUtils
     return "0.0.0.0";
   }
 
+  // Matches both the legacy net-tools form ("inet addr:192.0.2.5") and the
+  // modern iproute2/net-tools form ("inet 192.0.2.5").
   static java.util.regex.Pattern INETINFO_IP_PATTERN = java.util.regex.Pattern.compile(
-    "inet addr\\:(\\p{Digit}\\p{Digit}?\\p{Digit}?\\.\\p{Digit}\\p{Digit}?\\p{Digit}?\\.\\p{Digit}\\p{Digit}?\\p{Digit}?\\.\\p{Digit}\\p{Digit}?\\p{Digit}?) ");
+    "inet (?:addr\\:)?(\\p{Digit}\\p{Digit}?\\p{Digit}?\\.\\p{Digit}\\p{Digit}?\\p{Digit}?\\.\\p{Digit}\\p{Digit}?\\p{Digit}?\\.\\p{Digit}\\p{Digit}?\\p{Digit}?)");
 
   static String getIPAddressFromInetInfo(String inetInfo) {
     if (inetInfo!=null && inetInfo.contains("UP"))
     {
       java.util.regex.Matcher mat = INETINFO_IP_PATTERN.matcher(inetInfo);
-      // Go with eth1
-      if (mat.find())
+      while (mat.find())
       {
-        return mat.group(1);
+        String ip = mat.group(1);
+        if (!"127.0.0.1".equals(ip))  // skip loopback if it appears first
+          return ip;
       }
     }
     return null;

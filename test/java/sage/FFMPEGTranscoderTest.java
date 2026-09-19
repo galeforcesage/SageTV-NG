@@ -42,6 +42,81 @@ public class FFMPEGTranscoderTest
     expectSize(transcoder.parseFrameSize("original", 1280, 720), 640, 480);
   }
 
+  private static FFMPEGTranscoder transcoderWithSourceChannels(int channels) throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.sourceFormat = new ContainerFormat();
+    AudioFormat af = new AudioFormat();
+    af.setChannels(channels);
+    t.sourceFormat.setStreamFormats(new BitstreamFormat[] { af });
+    return t;
+  }
+
+  @Test
+  public void maxChannelsForAudioCodec_ac3FamilyCapsAt6()
+  {
+    assertEquals(FFMPEGTranscoder.maxChannelsForAudioCodec("eac3"), 6);
+    assertEquals(FFMPEGTranscoder.maxChannelsForAudioCodec("ac3"), 6);
+    assertEquals(FFMPEGTranscoder.maxChannelsForAudioCodec("mp2"), 2);
+    assertEquals(FFMPEGTranscoder.maxChannelsForAudioCodec("aac"), 0, "aac handles >=8 -> no clamp");
+    assertEquals(FFMPEGTranscoder.maxChannelsForAudioCodec("copy"), 0);
+    assertEquals(FFMPEGTranscoder.maxChannelsForAudioCodec(null), 0);
+  }
+
+  @Test
+  public void clampAudioChannels_71SourceToEac3_injectsAc6() throws Throwable
+  {
+    FFMPEGTranscoder t = transcoderWithSourceChannels(8);
+    java.util.ArrayList args = new java.util.ArrayList(java.util.Arrays.asList(
+        "-c:a", "eac3", "-b:a", "640k", "-"));
+    t.clampAudioChannelsToEncoder(args);
+    int ac = args.indexOf("-ac");
+    assertTrue(ac >= 0, "a 7.1 source to eac3 must get an explicit -ac clamp");
+    assertEquals(args.get(ac + 1), "6", "eac3 must be clamped to 5.1 (6ch)");
+    assertTrue(ac < args.indexOf("-"), "-ac must be inserted before the stdout sentinel");
+  }
+
+  @Test
+  public void clampAudioChannels_existingAc8Rewritten() throws Throwable
+  {
+    FFMPEGTranscoder t = transcoderWithSourceChannels(8);
+    java.util.ArrayList args = new java.util.ArrayList(java.util.Arrays.asList(
+        "-c:a", "ac3", "-ac", "8", "-b:a", "448k", "-"));
+    t.clampAudioChannelsToEncoder(args);
+    assertEquals(args.get(args.indexOf("-ac") + 1), "6", "ac3 -ac 8 must be rewritten to 6");
+  }
+
+  @Test
+  public void clampAudioChannels_51SourceUnchanged() throws Throwable
+  {
+    FFMPEGTranscoder t = transcoderWithSourceChannels(6);
+    java.util.ArrayList args = new java.util.ArrayList(java.util.Arrays.asList(
+        "-c:a", "eac3", "-b:a", "640k", "-"));
+    t.clampAudioChannelsToEncoder(args);
+    assertEquals(args.indexOf("-ac"), -1, "a 5.1 source needs no -ac clamp");
+  }
+
+  @Test
+  public void clampAudioChannels_aac8Unchanged() throws Throwable
+  {
+    FFMPEGTranscoder t = transcoderWithSourceChannels(8);
+    java.util.ArrayList args = new java.util.ArrayList(java.util.Arrays.asList(
+        "-c:a", "aac", "-ac", "8", "-b:a", "512k", "-"));
+    t.clampAudioChannelsToEncoder(args);
+    assertEquals(args.get(args.indexOf("-ac") + 1), "8", "aac supports 7.1 -> must not clamp");
+  }
+
+  @Test
+  public void clampAudioChannels_copyUntouched() throws Throwable
+  {
+    FFMPEGTranscoder t = transcoderWithSourceChannels(8);
+    java.util.ArrayList args = new java.util.ArrayList(java.util.Arrays.asList(
+        "-c:a", "copy", "-"));
+    t.clampAudioChannelsToEncoder(args);
+    assertEquals(args.indexOf("-ac"), -1, "stream-copy must never get a channel clamp");
+  }
+
   @Test
   public void testTranscoderUsesOptionsFromProperties() throws Throwable
   {

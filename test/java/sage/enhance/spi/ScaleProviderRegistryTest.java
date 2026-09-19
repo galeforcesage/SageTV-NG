@@ -18,6 +18,8 @@ public class ScaleProviderRegistryTest
   private static final String PROP_PROVIDER = "playback/gpu_enhance/scale_provider";
   private static final String PROP_MAX =
       "playback/gpu_enhance/scale/max_specialized_sessions";
+  private static final String PROP_CUDA_LANCZOS =
+      "playback/gpu_enhance/scale_cuda_lanczos_provider";
 
   private ScaleProviderRegistry reg;
 
@@ -27,6 +29,7 @@ public class ScaleProviderRegistryTest
     TestUtils.initializeSageTVForTesting();
     Sage.remove(PROP_PROVIDER);
     Sage.remove(PROP_MAX);
+    Sage.remove(PROP_CUDA_LANCZOS);
     reg = ScaleProviderRegistry.getInstance();
     reg.resetForTest();
     ScaleGovernor.getInstance().resetForTest();
@@ -39,6 +42,7 @@ public class ScaleProviderRegistryTest
     ScaleGovernor.getInstance().resetForTest();
     Sage.remove(PROP_PROVIDER);
     Sage.remove(PROP_MAX);
+    Sage.remove(PROP_CUDA_LANCZOS);
   }
 
   private static ScaleRequest live()
@@ -90,32 +94,79 @@ public class ScaleProviderRegistryTest
   // ---- Selection & fallback ----------------------------------------------
 
   @Test
-  public void defaultSelectsBuiltin()
+  public void defaultUsesCudaLanczosWhenScalerAvailable()
   {
+    // No plugin provider registered; the request advertises a CUDA scaler (as the
+    // live plan path does via HwEncoder.cudaScaler()). The always-present
+    // CUDA-Lanczos fallback renders it, so the deployment upscales in real time
+    // rather than delivering source.
     ScaleSelection sel = reg.select(live());
-    assertEquals(sel.getProviderId(), BuiltinScaleProvider.ID);
-    assertNull(sel.getLease(), "built-in path holds no permit");
-    assertFalse(sel.fellBackToBuiltin(), "choosing the default built-in is not a fallback");
+    assertEquals(sel.getProviderId(), CudaLanczosScaleProvider.ID);
+    assertNull(sel.getLease(), "CUDA-Lanczos is not specialized, so it holds no permit");
+    assertFalse(sel.fellBackToBuiltin(), "choosing CUDA-Lanczos is a real selection, not a fallback");
     assertEquals(sel.getExecutionPlan().getFfmpegFilter(),
         "scale_npp=3840:2160:interp_algo=lanczos");
+    assertTrue(sel.getExecutionPlan().isRenderable());
   }
 
   @Test
-  public void unknownIdFallsBackToBuiltin()
+  public void deliversSourceWhenNoUpscalerUsable()
   {
-    Sage.put(PROP_PROVIDER, "does-not-exist");
+    // CUDA-Lanczos disabled and nothing registered: the chain is empty, so the
+    // built-in passthrough delivers the source and the client scales.
+    Sage.put(PROP_CUDA_LANCZOS, "off");
     ScaleSelection sel = reg.select(live());
     assertEquals(sel.getProviderId(), BuiltinScaleProvider.ID);
-    assertTrue(sel.fellBackToBuiltin());
+    assertNull(sel.getLease(), "built-in path holds no permit");
+    assertTrue(sel.fellBackToBuiltin(), "an exhausted chain resolves to the source-delivering built-in");
+    assertFalse(sel.getExecutionPlan().isRenderable(),
+        "an upscale via the passthrough is non-renderable, so the pipeline skips it");
+  }
+
+  @Test
+  public void deinterlaceOnlyUsesBuiltin()
+  {
+    // A non-upscaling request goes straight to the built-in; the chain governs
+    // the scale stage only and never spawns an upscaler to do nothing.
+    ScaleRequest deint = new ScaleRequest(EnhancementTier.DEINTERLACE_ONLY, 1920, 1080,
+        1080, true, "scale_npp", ScaleRequest.Purpose.LIVE);
+    ScaleSelection sel = reg.select(deint);
+    assertEquals(sel.getProviderId(), BuiltinScaleProvider.ID);
+    assertFalse(sel.fellBackToBuiltin(), "the built-in is the correct choice for a deinterlace-only request");
+  }
+
+  @Test
+  public void selectedProviderCanUpscaleReflectsChain()
+  {
+    // With CUDA-Lanczos disabled and nothing registered, no server upscaling.
+    Sage.put(PROP_CUDA_LANCZOS, "off");
+    assertFalse(reg.selectedProviderCanUpscale());
+    // A registered specialized upscaler flips it on regardless of CUDA-Lanczos.
+    ScaleProviderRegistration r = reg.register(new FakeSpecialized("nvidia-vsr"));
+    assertTrue(reg.selectedProviderCanUpscale());
+    r.close();
+    assertFalse(reg.selectedProviderCanUpscale(),
+        "after the specialized provider unregisters and CUDA-Lanczos is off, upscaling is unavailable");
+  }
+
+  @Test
+  public void unknownPreferenceHeadIsIgnored()
+  {
+    // An unknown soft-preference head neither pins nor breaks selection; the
+    // chain still resolves to the CUDA-Lanczos fallback.
+    Sage.put(PROP_PROVIDER, "does-not-exist");
+    ScaleSelection sel = reg.select(live());
+    assertEquals(sel.getProviderId(), CudaLanczosScaleProvider.ID);
+    assertFalse(sel.fellBackToBuiltin());
   }
 
   @Test
   public void specializedProviderIsSelectedAndHoldsPermit()
   {
     ScaleProviderRegistration r = reg.register(new FakeSpecialized("nvidia-vsr"));
-    Sage.put(PROP_PROVIDER, "nvidia-vsr");
     ScaleSelection sel = reg.select(live());
-    assertEquals(sel.getProviderId(), "nvidia-vsr");
+    assertEquals(sel.getProviderId(), "nvidia-vsr",
+        "a registered specialized upscaler is the head of the chain");
     assertEquals(sel.getExecutionPlan().getFfmpegFilter(), "fakevsr=3840:2160");
     assertNotNull(sel.getLease(), "a specialized provider holds a permit");
     assertEquals(ScaleGovernor.getInstance().activeCount(), 1);
@@ -125,18 +176,17 @@ public class ScaleProviderRegistryTest
   }
 
   @Test
-  public void budgetExhaustedFallsBackWithoutPermit()
+  public void budgetExhaustedFallsThroughToCudaLanczos()
   {
     Sage.putInt(PROP_MAX, 1);
     ScaleProviderRegistration r = reg.register(new FakeSpecialized("nvidia-vsr"));
-    Sage.put(PROP_PROVIDER, "nvidia-vsr");
     ScaleSelection first = reg.select(live());
     assertEquals(first.getProviderId(), "nvidia-vsr");
     ScaleSelection second = reg.select(live());
-    assertEquals(second.getProviderId(), BuiltinScaleProvider.ID,
-        "with the budget exhausted the second request falls back");
-    assertTrue(second.fellBackToBuiltin());
-    assertNull(second.getLease(), "a fallback must not retain a specialized permit");
+    assertEquals(second.getProviderId(), CudaLanczosScaleProvider.ID,
+        "with the specialized budget exhausted, selection falls through to CUDA-Lanczos, not source");
+    assertFalse(second.fellBackToBuiltin());
+    assertNull(second.getLease(), "the CUDA-Lanczos fallback holds no specialized permit");
     assertEquals(ScaleGovernor.getInstance().activeCount(), 1,
         "only the first, granted session holds capacity");
     first.getLease().close();
@@ -144,28 +194,27 @@ public class ScaleProviderRegistryTest
   }
 
   @Test
-  public void probeThrowFallsBackAndLeaksNoPermit()
+  public void probeThrowFallsThroughAndLeaksNoPermit()
   {
     ScaleProviderRegistration r = reg.register(throwingProbe("nvidia-vsr"));
-    Sage.put(PROP_PROVIDER, "nvidia-vsr");
     ScaleSelection sel = reg.select(live());
-    assertEquals(sel.getProviderId(), BuiltinScaleProvider.ID);
-    assertTrue(sel.fellBackToBuiltin());
+    assertEquals(sel.getProviderId(), CudaLanczosScaleProvider.ID,
+        "a specialized provider that throws falls through to CUDA-Lanczos");
+    assertFalse(sel.fellBackToBuiltin());
     assertEquals(ScaleGovernor.getInstance().activeCount(), 0,
         "a provider that throws must not leak a permit");
     r.close();
   }
 
   @Test
-  public void unrenderablePlanFallsBackAndReleasesPermit()
+  public void unrenderablePlanFallsThroughAndReleasesPermit()
   {
     ScaleProviderRegistration r = reg.register(unrenderable("nvidia-vsr"));
-    Sage.put(PROP_PROVIDER, "nvidia-vsr");
     ScaleSelection sel = reg.select(live());
-    assertEquals(sel.getProviderId(), BuiltinScaleProvider.ID,
-        "a not-yet-renderable execution form falls back in Phase 0");
+    assertEquals(sel.getProviderId(), CudaLanczosScaleProvider.ID,
+        "a not-yet-renderable specialized plan falls through to CUDA-Lanczos");
     assertEquals(ScaleGovernor.getInstance().activeCount(), 0,
-        "the acquired permit must be released on fallback");
+        "the acquired permit must be released on fall-through");
     r.close();
   }
 
@@ -184,16 +233,21 @@ public class ScaleProviderRegistryTest
     reg.register(new FakeSpecialized(BuiltinScaleProvider.ID));
   }
 
+  @Test(expectedExceptions = IllegalStateException.class)
+  public void cannotShadowCudaLanczosId()
+  {
+    reg.register(new FakeSpecialized(CudaLanczosScaleProvider.ID));
+  }
+
   @Test
   public void unregisterPreventsNewUse()
   {
     ScaleProviderRegistration r = reg.register(new FakeSpecialized("nvidia-vsr"));
-    Sage.put(PROP_PROVIDER, "nvidia-vsr");
     assertEquals(reg.select(live()).getProviderId(), "nvidia-vsr");
     r.close();
     assertFalse(reg.isRegistered("nvidia-vsr"));
-    assertEquals(reg.select(live()).getProviderId(), BuiltinScaleProvider.ID,
-        "after unregister, new selections fall back to built-in");
+    assertEquals(reg.select(live()).getProviderId(), CudaLanczosScaleProvider.ID,
+        "after unregister, new selections fall through to CUDA-Lanczos");
   }
 
   @Test

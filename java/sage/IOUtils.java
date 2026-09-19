@@ -888,6 +888,193 @@ public class IOUtils
         (remoteIP[0] == localIP[0] && remoteIP[1] == localIP[1] && remoteIP[2] == localIP[2] && remoteIP[3] == localIP[3]));
   }
 
+  // Interface name fragments for virtual/bridge/container adapters we don't want
+  // to advertise as "the machine's IP" (docker bridges, veth pairs, libvirt, etc).
+  private static boolean isVirtualIfaceName(String name)
+  {
+    if (name == null) return false;
+    String n = name.toLowerCase();
+    return n.startsWith("docker") || n.startsWith("veth") || n.startsWith("br-") ||
+        n.startsWith("virbr") || n.startsWith("vmnet") || n.startsWith("vboxnet") ||
+        n.startsWith("kube") || n.startsWith("cni") || n.startsWith("flannel") ||
+        n.startsWith("zt") || n.startsWith("tun") || n.startsWith("tap");
+  }
+
+  // Enumerates every up, non-loopback IPv4 address on the machine using Java's
+  // NetworkInterface API -- this works uniformly across Windows/Mac/Linux and,
+  // unlike the legacy net-tools "ifconfig eth0" + "inet addr:" regex, does not
+  // break on modern iproute2 output or non-default interface names. Ordering is
+  // deterministic and useful: real site-local LAN addresses (192.168/10/172.16)
+  // first, then everything else (e.g. Tailscale 100.64/10). Virtual/bridge
+  // adapters (docker, veth, ...) are pushed to the end but still included when
+  // includeVirtual is true.
+  //
+  // Addresses are classified purely by GENERIC, structural properties -- never
+  // by hardcoded IP literals -- so this is safe to ship and reveals nothing
+  // about any particular LAN:
+  //   * loopback / link-local / any-local  -> skipped (not a usable identity)
+  //   * a /32 host address that falls INSIDE another interface's real subnet
+  //     -> skipped: that is the signature of a point-to-point / macvlan "shim"
+  //     (e.g. the host side of a container's macvlan, which parks a single /32
+  //     in the host's own LAN subnet to reach the container). A genuine NIC
+  //     address owns a real subnet mask (/24, /16, ...); a remote-access /32
+  //     that is NOT contained by any local subnet (e.g. a Tailscale 100.64/10
+  //     address) is deliberately KEPT, since it is a real machine identity.
+  // Returns an empty list only when nothing qualifies.
+  public static java.util.List<String> getAllLocalIPv4Addresses(boolean includeVirtual)
+  {
+    java.util.List<String> siteLocal = new java.util.ArrayList<String>();
+    java.util.List<String> otherReal = new java.util.ArrayList<String>();
+    java.util.List<String> virtual = new java.util.ArrayList<String>();
+    try
+    {
+      // First pass: collect the real subnets the machine actually belongs to
+      // (every non-/32 IPv4 interface address), as (network, mask, ownerIface)
+      // triples. A /32 contained by a subnet owned by a DIFFERENT interface is a
+      // shim (macvlan/point-to-point child) and is dropped. A /32 that is merely
+      // a secondary address on the SAME interface that owns the enclosing subnet
+      // is a legitimate extra identity (e.g. a keepalived/VRRP virtual IP) and is
+      // kept -- so a floating VIP shows up with no configuration.
+      java.util.List<Object[]> realSubnets = new java.util.ArrayList<Object[]>();
+      java.util.Enumeration<java.net.NetworkInterface> pass1 =
+          java.net.NetworkInterface.getNetworkInterfaces();
+      while (pass1 != null && pass1.hasMoreElements())
+      {
+        java.net.NetworkInterface ni = pass1.nextElement();
+        try { if (!ni.isUp() || ni.isLoopback()) continue; }
+        catch (Throwable t) { continue; }
+        for (java.net.InterfaceAddress ifAddr : ni.getInterfaceAddresses())
+        {
+          java.net.InetAddress a = ifAddr.getAddress();
+          if (!(a instanceof java.net.Inet4Address)) continue;
+          if (a.isLoopbackAddress() || a.isLinkLocalAddress() || a.isAnyLocalAddress()) continue;
+          int prefix = ifAddr.getNetworkPrefixLength();
+          if (prefix <= 0 || prefix >= 32) continue; // /32 owns no subnet
+          int ipInt = ipv4ToInt(a.getAddress());
+          int mask = (prefix == 0) ? 0 : (int)(0xFFFFFFFFL << (32 - prefix));
+          realSubnets.add(new Object[] { Integer.valueOf(ipInt & mask), Integer.valueOf(mask), ni.getName() });
+        }
+      }
+
+      // Second pass: classify each usable address, dropping contained /32 shims.
+      java.util.Enumeration<java.net.NetworkInterface> ifaces =
+          java.net.NetworkInterface.getNetworkInterfaces();
+      while (ifaces != null && ifaces.hasMoreElements())
+      {
+        java.net.NetworkInterface ni = ifaces.nextElement();
+        try
+        {
+          if (!ni.isUp() || ni.isLoopback())
+            continue;
+        }
+        catch (Throwable t) { continue; }
+        boolean virtualIface = isVirtualIfaceName(ni.getName());
+        for (java.net.InterfaceAddress ifAddr : ni.getInterfaceAddresses())
+        {
+          java.net.InetAddress addr = ifAddr.getAddress();
+          if (!(addr instanceof java.net.Inet4Address))
+            continue;
+          if (addr.isLoopbackAddress() || addr.isLinkLocalAddress() || addr.isAnyLocalAddress())
+            continue;
+          if (ifAddr.getNetworkPrefixLength() >= 32
+              && isForeignShim(ipv4ToInt(addr.getAddress()), realSubnets, ni.getName()))
+            continue; // /32 shim owned by a DIFFERENT iface (macvlan/point-to-point)
+          String ip = addr.getHostAddress();
+          if (virtualIface)
+          {
+            if (includeVirtual && !virtual.contains(ip)) virtual.add(ip);
+          }
+          else if (addr.isSiteLocalAddress())
+          {
+            if (!siteLocal.contains(ip)) siteLocal.add(ip);
+          }
+          else
+          {
+            if (!otherReal.contains(ip)) otherReal.add(ip);
+          }
+        }
+      }
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("getAllLocalIPv4Addresses failed: " + t);
+    }
+    java.util.List<String> rv = new java.util.ArrayList<String>();
+    rv.addAll(siteLocal);
+    rv.addAll(otherReal);
+    rv.addAll(virtual);
+    return rv;
+  }
+
+  private static int ipv4ToInt(byte[] b)
+  {
+    return ((b[0] & 0xFF) << 24) | ((b[1] & 0xFF) << 16) | ((b[2] & 0xFF) << 8) | (b[3] & 0xFF);
+  }
+
+  // True when a /32 host address falls inside a real subnet owned by a DIFFERENT
+  // interface -- the macvlan/point-to-point "shim" signature. A /32 contained
+  // only by a subnet on its OWN interface (a secondary address, e.g. a VRRP VIP)
+  // returns false and is kept.
+  private static boolean isForeignShim(int ipInt, java.util.List<Object[]> subnets, String ownIface)
+  {
+    for (Object[] sn : subnets)
+    {
+      int network = ((Integer) sn[0]).intValue();
+      int mask = ((Integer) sn[1]).intValue();
+      String owner = (String) sn[2];
+      if ((ipInt & mask) == network && !safeEquals(owner, ownIface))
+        return true;
+    }
+    return false;
+  }
+
+  // The single IPv4 address of the DEFAULT-ROUTE interface -- the source IP the
+  // OS would use to reach the outside world. This is exactly what the single-IP
+  // consumers need and must NOT be a list:
+  //   * UPnP addPortMapping's internal-client IP (the NIC the IGD/router can
+  //     actually reach; a wrong NIC or a comma-list yields a dead mapping),
+  //   * the UPnPIP / MappedIP idempotency compares (must be one stable value),
+  //   * the MyIP / address-update path.
+  // These do NOT want multi-interface awareness -- they want the one address on
+  // the interface that faces the gateway. On a multi-NIC host, "first site-local
+  // that enumerates" can wrongly pick a secondary NIC; the routing table is the
+  // authority, so ask it directly.
+  //
+  // "connect" on a DatagramSocket sends NO packets: it only asks the kernel to
+  // pick+bind a local source address per the routing table for that destination.
+  // So this needs no reachable network and no knowledge of the gateway address,
+  // and works cross-platform. The literal below is a well-known public address
+  // used purely as a routing target; nothing is ever transmitted to it.
+  // Returns null when nothing qualifies so callers can keep their old fallback.
+  public static String getPrimaryLocalIPv4()
+  {
+    try
+    {
+      java.net.DatagramSocket sock = new java.net.DatagramSocket();
+      try
+      {
+        sock.connect(java.net.InetAddress.getByName("8.8.8.8"), 9);
+        java.net.InetAddress local = sock.getLocalAddress();
+        if (local instanceof java.net.Inet4Address
+            && !local.isAnyLocalAddress() && !local.isLoopbackAddress()
+            && !local.isLinkLocalAddress())
+          return local.getHostAddress();
+      }
+      finally
+      {
+        sock.close();
+      }
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("default-route IP probe failed: " + t);
+    }
+    // Fallback: ordered enumeration (site-local first, virtual excluded) when
+    // there is no default route (e.g. an isolated LAN with no gateway).
+    java.util.List<String> all = getAllLocalIPv4Addresses(false);
+    return all.isEmpty() ? null : all.get(0);
+  }
+
   public static boolean safeEquals(Object o1, Object o2)
   {
     return (o1 == o2) || (o1 != null && o2 != null && o1.equals(o2));

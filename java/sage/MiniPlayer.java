@@ -165,6 +165,262 @@ public class MiniPlayer implements DVDMediaPlayer
   }
 
   /**
+   * Resolves the true OUTPUT (post-transcode) video+audio wire codec NAMES
+   * ({@link sage.media.format.MediaFormat} constants) for the fMP4/CMAF
+   * (browserhd family) delivery, as {@code {videoName, audioName}}, or null for
+   * a non-browserhd mode.
+   *
+   * <p>This is the single decision behind the native NG format channel:
+   * STREAMINFO (MEDIACMD 40) consumes these names to describe the wire
+   * {@code ContainerFormat} so the client pre-configures its decoder up front
+   * instead of probing. The source codecs name the <em>pre-transcode</em> codec,
+   * which for a {@code browserhd} TRANSCODE is simply wrong (e.g. MPEG2-Video/AC3
+   * while the wire carries H.264/AAC).
+   *
+   * <p>Output codecs by mode:
+   * <ul>
+   *   <li>{@code browserhd} &rarr; H.264 video + AAC audio (or the surface-
+   *       resolved target audio codec)</li>
+   *   <li>{@code browserhd_copyv} &rarr; stream-copies the source video,
+   *       transcodes audio</li>
+   *   <li>{@code browserhd_remux} &rarr; stream-copies both source streams</li>
+   * </ul>
+   * When enhancement is active the video is HEVC. Takes plain codec-name strings
+   * (not format objects) so it stays a pure, unit-testable function.
+   *
+   * <p>The browser/CMAF path no longer needs a server-side codec side-channel:
+   * hls.js / native Safari / AVPlay read the codecs from the fMP4 {@code
+   * init.mp4} referenced by {@code #EXT-X-MAP} (standard HLS). The legacy
+   * {@code ng_fmt}/{@code ng_out} hints this decision used to feed have been
+   * retired; STREAMINFO is now the sole native format channel.
+   *
+   * @param xcodeMode        the winning surface's XCODE_SETUP mode
+   * @param enhanceTier      the active enhancement tier, or null/NONE
+   * @param srcVideoCodec    the source video codec name, or null
+   * @param srcAudioCodec    the source audio codec name, or null
+   * @param targetAudioCodec the surface-resolved target audio codec name, or null
+   * @return {@code {videoName, audioName}}, or null when the mode is not browserhd
+   */
+  static String[] resolveNgOutputCodecNames(String xcodeMode,
+      sage.enhance.EnhancementTier enhanceTier,
+      String srcVideoCodec, String srcAudioCodec, String targetAudioCodec)
+  {
+    if (xcodeMode == null || !xcodeMode.startsWith("browserhd")) return null;
+    boolean copyVideo = "browserhd_copyv".equals(xcodeMode) || "browserhd_remux".equals(xcodeMode);
+    boolean copyAudio = "browserhd_remux".equals(xcodeMode)
+        && (targetAudioCodec == null || targetAudioCodec.length() == 0);
+
+    // Video: enhancement re-encodes to HEVC; browserhd transcodes to H.264;
+    // the copy modes pass the (already browser-decodable) source video through.
+    String vName;
+    if (enhanceTier != null && enhanceTier.isActive())
+      vName = sage.media.format.MediaFormat.HEVC;
+    else if (copyVideo && srcVideoCodec != null && srcVideoCodec.length() > 0)
+      vName = srcVideoCodec;
+    else
+      vName = sage.media.format.MediaFormat.H264;
+
+    // Audio: remux copies the source audio through; otherwise the surface-
+    // resolved target codec, defaulting to the browserhd AAC floor.
+    String aName;
+    if (copyAudio && srcAudioCodec != null && srcAudioCodec.length() > 0)
+      aName = srcAudioCodec;
+    else if (targetAudioCodec != null && targetAudioCodec.length() > 0)
+      aName = targetAudioCodec;
+    else
+      aName = sage.media.format.MediaFormat.AAC;
+
+    return new String[] { vName, aName };
+  }
+
+  /**
+   * Resolves the true OUTPUT (post-transcode) wire CONTAINER name
+   * ({@link sage.media.format.MediaFormat} constant) for a pull/pull-xcode
+   * delivery from the winning surface's XCODE_SETUP mode, or {@code null} when
+   * the wire container is the source container (DIRECT_PLAY / bare pull) and no
+   * override is needed.
+   *
+   * <p>The companion to {@link #resolveNgOutputCodecNames}: STREAMINFO must
+   * report the container the client will ACTUALLY receive (matching
+   * {@code CAP_EFFECTIVE_DELIVERY}), not the source asset's container. A
+   * {@code mpeg2tsremux} of a PS recording delivers MPEG2-TS; a browserhd-family
+   * fMP4 transcode delivers a QuickTime/MP4 (fMP4) container.
+   *
+   * <p>Enhancement never changes the container (it only re-encodes video to
+   * HEVC), so this keys solely on the transcode mode. Takes a plain string so it
+   * stays a pure, unit-testable function.
+   *
+   * @param xcodeMode the winning surface's XCODE_SETUP mode (e.g.
+   *                  {@code mpeg2tsremux}, {@code browserhd}, {@code browserhd_remux})
+   * @return the wire container name, or {@code null} to keep the source container
+   */
+  static String resolveNgOutputContainerName(String xcodeMode)
+  {
+    if (xcodeMode == null || xcodeMode.length() == 0) return null;
+    if (xcodeMode.startsWith("browserhd")) return sage.media.format.MediaFormat.QUICKTIME; // fMP4
+    if ("mpeg2tsremux".equals(xcodeMode)) return sage.media.format.MediaFormat.MPEG2_TS;
+    if ("mpeg2psremux".equals(xcodeMode)) return sage.media.format.MediaFormat.MPEG2_PS;
+    return null;
+  }
+
+  /**
+   * Choose the container for a codec-clean REMUX push instead of assuming
+   * MPEG2-PS. The legacy paths hardcoded {@code mpeg2psremux} for every REMUX
+   * verdict, which (a) ignored a client that dropped PS and explicitly requested
+   * {@code FIXED_PUSH_REMUX_FORMAT=container=mpegts;...} and (b) forced an active
+   * GPU-enhance tier onto a PS remux — but enhancement can only ride a
+   * copy-family MPEG2-TS remux ({@link FFMPEGTranscoder#isModernCopyFamilyXcodeMode}),
+   * and HEVC-in-MPEG2-PS is unplayable and freezes the client. Priority:
+   *
+   * <ol>
+   *   <li>Active enhance tier + client supports MPEG2-TS push &rarr;
+   *       {@code mpeg2tsremux} (the enhance-capable copy-family remux).</li>
+   *   <li>Client-declared {@code FIXED_PUSH_REMUX_FORMAT} &rarr; honor it verbatim
+   *       (the client named the wire container it wants, e.g. mpegts copy/copy).</li>
+   *   <li>Client supports MPEG2-TS push but NOT MPEG2-PS push &rarr;
+   *       {@code mpeg2tsremux} (never hand a TS-only client a PS remux).</li>
+   *   <li>Otherwise &rarr; {@code mpeg2psremux} (legacy PS-capable client, unchanged).</li>
+   * </ol>
+   *
+   * @param mcsr                  the client renderer (may be null &rarr; PS default)
+   * @param fixedPushRemuxFormat  the client's FIXED_PUSH_REMUX_FORMAT, or null/empty
+   * @param enhanceActive         true when an active GPU-enhance tier is in play
+   * @return the remux transcode mode string to use
+   */
+  static String chooseRemuxPushMode(MiniClientSageRenderer mcsr,
+      String fixedPushRemuxFormat, boolean enhanceActive)
+  {
+    boolean tsPushOK = mcsr != null
+        && mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_TS);
+    boolean psPushOK = mcsr != null
+        && mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS);
+    return chooseRemuxPushMode(tsPushOK, psPushOK, fixedPushRemuxFormat, enhanceActive);
+  }
+
+  /**
+   * Pure decision core for {@link #chooseRemuxPushMode(MiniClientSageRenderer, String, boolean)},
+   * expressed over the client's push-container capabilities so it can be unit
+   * tested without a live renderer. See that method for the priority rationale.
+   *
+   * @param tsPushOK              client advertises MPEG2-TS push
+   * @param psPushOK              client advertises MPEG2-PS push
+   * @param fixedPushRemuxFormat  the client's FIXED_PUSH_REMUX_FORMAT, or null/empty
+   * @param enhanceActive         true when an active GPU-enhance tier is in play
+   * @return the remux transcode mode string to use
+   */
+  static String chooseRemuxPushMode(boolean tsPushOK, boolean psPushOK,
+      String fixedPushRemuxFormat, boolean enhanceActive)
+  {
+    if (enhanceActive && tsPushOK) return "mpeg2tsremux";
+    if (fixedPushRemuxFormat != null && fixedPushRemuxFormat.length() > 0)
+      return fixedPushRemuxFormat;
+    if (tsPushOK && !psPushOK) return "mpeg2tsremux";
+    return "mpeg2psremux";
+  }
+
+  /**
+   * True when {@code mode} is a codec-clean copy-family remux
+   * ({@code mpeg2tsremux} / {@code mpeg2psremux}) — the source video bytes are
+   * copied through unchanged rather than re-encoded.
+   *
+   * @param mode a transcode mode string
+   * @return true for a copy-family MPEG-2 remux mode
+   */
+  static boolean isCopyFamilyRemuxMode(String mode)
+  {
+    return "mpeg2tsremux".equals(mode) || "mpeg2psremux".equals(mode);
+  }
+
+  /**
+   * Decide whether a codec-clean REMUX of a high-frame-rate MPEG-2 source
+   * should be re-encoded to H.264 for delivery instead of copied through.
+   *
+   * <p>A raw MPEG-2 copy of a 720p59.94 (or bobbed-1080i 59.94) stream leans on
+   * the client's weakest push decoder. On the observed Shield / android_media3
+   * clients such a copy plays clean only until the client's initial push buffer
+   * drains (~10&nbsp;s) and then tears/judders, because the client's MPEG-2 push
+   * decoder cannot sustain the 59.94&nbsp;fps rate. H.264 is the client's
+   * strongest, hardware-accelerated push decoder. When enhancement is NOT riding
+   * the remux and the client advertises H.264 push, re-encoding to H.264-in-TS
+   * ({@code dynamich264}) is far more robust than a copy-family MPEG-2 remux.
+   *
+   * <p>Pure and side-effect free for unit testing.
+   *
+   * @param srcVideoCodec source video codec name (e.g. {@code MPEG2-Video})
+   * @param srcFps        source frame rate; {@code <=0} means unknown
+   * @param h264PushOK    client advertises an H.264 push decoder
+   * @param enhanceActive an active GPU-enhance tier is riding this remux
+   * @return true to substitute {@code dynamich264} for the copy-family remux
+   */
+  static boolean preferH264ReencodeOverMpeg2Copy(String srcVideoCodec, double srcFps,
+      boolean h264PushOK, boolean enhanceActive)
+  {
+    if (enhanceActive) return false;   // enhancement can only ride a copy-family TS remux
+    if (!h264PushOK) return false;     // client has no stronger decoder to offer
+    if (srcVideoCodec == null) return false;
+    boolean isMpeg2 = sage.media.format.MediaFormat.MPEG2_VIDEO.equalsIgnoreCase(srcVideoCodec)
+        || "MPEG-2".equalsIgnoreCase(srcVideoCodec)
+        || "MPEG2".equalsIgnoreCase(srcVideoCodec);
+    if (!isMpeg2) return false;
+    // High frame rate: anything meaningfully above 30 fps (covers 50/59.94/60
+    // progressive and bobbed-1080i field-rate output). Unknown fps (<=0) is
+    // treated as not-high so an ordinary 25/29.97 remux is never diverted.
+    return srcFps > 33.0;
+  }
+
+  /**
+   * Apply {@link #preferH264ReencodeOverMpeg2Copy} to a chosen remux mode,
+   * substituting {@code dynamich264} when a high-fps MPEG-2 source would
+   * otherwise be delivered as a copy-family MPEG-2 remux. Returns {@code mode}
+   * unchanged in every other case.
+   *
+   * @param mode          the remux mode chosen by {@link #chooseRemuxPushMode}
+   * @param srcVideoCodec source video codec name
+   * @param srcFps        source frame rate; {@code <=0} means unknown
+   * @param h264PushOK    client advertises an H.264 push decoder
+   * @param enhanceActive an active GPU-enhance tier is riding this remux
+   * @return {@code dynamich264} to re-encode, otherwise {@code mode}
+   */
+  static String maybeReencodeHighFpsMpeg2Remux(String mode, String srcVideoCodec,
+      double srcFps, boolean h264PushOK, boolean enhanceActive)
+  {
+    if (!isCopyFamilyRemuxMode(mode)) return mode;
+    if (preferH264ReencodeOverMpeg2Copy(srcVideoCodec, srcFps, h264PushOK, enhanceActive))
+      return "dynamich264";
+    return mode;
+  }
+
+  /**
+   * Source video codec name for {@code mf}, or {@code null} when unavailable.
+   *
+   * @param mf the media file being played (may be null)
+   * @return the source video format name, or null
+   */
+  static String srcVideoCodecName(MediaFile mf)
+  {
+    if (mf == null) return null;
+    sage.media.format.ContainerFormat cf = mf.getFileFormat();
+    if (cf == null) return null;
+    sage.media.format.VideoFormat vf = cf.getVideoFormat();
+    return (vf != null) ? vf.getFormatName() : null;
+  }
+
+  /**
+   * Source video frame rate for {@code mf}, or {@code 0} when unavailable.
+   *
+   * @param mf the media file being played (may be null)
+   * @return the source frame rate, or 0 when unknown
+   */
+  static double srcVideoFps(MediaFile mf)
+  {
+    if (mf == null) return 0;
+    sage.media.format.ContainerFormat cf = mf.getFileFormat();
+    if (cf == null) return 0;
+    sage.media.format.VideoFormat vf = cf.getVideoFormat();
+    return (vf != null) ? vf.getFps() : 0;
+  }
+
+  /**
    * Collaborator seam for {@link #acquirePlayerSocketChannel(PlayerSocketProvider)}.
    * Decouples the bounded self-heal retry policy from the real
    * {@code MiniClientSageRenderer}/{@code SocketChannel} plumbing so the
@@ -176,6 +432,25 @@ public class MiniPlayer implements DVDMediaPlayer
     java.nio.channels.SocketChannel getChannel();
     /** Ask the client to (re)establish its player-socket-channel, if supported. */
     void requestReconnect();
+  }
+
+  /**
+   * A {@link PlayerSocketProvider} whose acquisition can be bounded by the
+   * caller's unified playback deadline.
+   *
+   * <p>Kept as a separate sub-interface rather than a new method on
+   * {@code PlayerSocketProvider} so existing implementors (including the unit
+   * tests that exercise the retry policy in isolation) continue to compile and
+   * behave identically; {@link #acquirePlayerSocketChannel} uses the bounded
+   * form only when the provider actually offers it.
+   */
+  interface DeadlinePlayerSocketProvider extends PlayerSocketProvider
+  {
+    /**
+     * @param deadline the unified budget for this playback attempt; inactive
+     *                 deadlines must behave exactly like {@link #getChannel()}
+     */
+    java.nio.channels.SocketChannel getChannel(PlayerTimeoutPolicy.PlaybackDeadline deadline);
   }
 
   private static boolean isUsablePlayerSocketChannel(java.nio.channels.SocketChannel sc)
@@ -244,9 +519,16 @@ public class MiniPlayer implements DVDMediaPlayer
       ctx = PlayerTimeoutPolicy.LEGACY;
     int maxAttempts = PlayerTimeoutPolicy.attempts(ctx);
     long backoffMs = PlayerTimeoutPolicy.backoffMs(ctx);
+    // One budget for the whole acquisition. Inactive (legacy) deadlines impose no
+    // cap, so the historical attempts x expireWait stacking is preserved exactly.
+    PlayerTimeoutPolicy.PlaybackDeadline deadline =
+        PlayerTimeoutPolicy.PlaybackDeadline.forContext(ctx, Sage.eventTime());
+    boolean deadlineAware = (provider instanceof DeadlinePlayerSocketProvider);
     for (int attempt = 0; attempt < maxAttempts; attempt++)
     {
-      java.nio.channels.SocketChannel sc = provider.getChannel();
+      java.nio.channels.SocketChannel sc = deadlineAware
+          ? ((DeadlinePlayerSocketProvider) provider).getChannel(deadline)
+          : provider.getChannel();
       if (isUsablePlayerSocketChannel(sc))
         return sc;
       if (sc != null)
@@ -257,13 +539,24 @@ public class MiniPlayer implements DVDMediaPlayer
       boolean attemptsRemain = attempt < maxAttempts - 1;
       if (!attemptsRemain)
         break;
+      if (deadline.expired(Sage.eventTime()))
+      {
+        // Spending another full acquisition window here is what turns a client
+        // that simply never reopened its media channel into a minute-long UI
+        // freeze. Stop at the budget and let the caller report a real error.
+        if (Sage.DBG)
+          System.out.println("MiniPlayer: playback deadline (" +
+              PlayerTimeoutPolicy.playbackDeadlineMs(ctx) + "ms) reached after attempt " +
+              (attempt + 1) + "/" + maxAttempts + "; giving up on the player-socket-channel");
+        break;
+      }
       if (Sage.DBG)
         System.out.println("MiniPlayer: player-socket-channel unavailable (attempt " +
             (attempt + 1) + "/" + maxAttempts + "); requesting client reconnect and retrying");
       provider.requestReconnect();
       if (backoffMs > 0)
       {
-        try { Thread.sleep(backoffMs); }
+        try { Thread.sleep(deadline.effectiveWait(backoffMs, Sage.eventTime())); }
         catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
       }
     }
@@ -1029,7 +1322,11 @@ public class MiniPlayer implements DVDMediaPlayer
     CaptureDevice capDev = currMF.guessCaptureDeviceFromEncoding();
     // Reset per-tune server-enhancement state; the decision below re-derives it.
     this.currentTuneEnhanceTier = sage.enhance.EnhancementTier.NONE;
+    this.enhanceLiveStartPending = false;
     this.currentTunePushEnhanceMode = null;
+    this.ngOutVideoCodec = null;
+    this.ngOutAudioCodec = null;
+    this.ngOutContainer = null;
     if (capDev != null && mcsr != null)
     {
       // Enable the special mode for when we are using Qian's HDHRPrime support along w/ a Bruno client.
@@ -1954,12 +2251,44 @@ public class MiniPlayer implements DVDMediaPlayer
         String chosenPlayer = (profileDecision != null && profileDecision.preferredPlayer != null)
             ? profileDecision.preferredPlayer
             : defaultPlayerTag;
+        // Surface/player coherence: when the modern surface path selected a
+        // winning surface, the per-stream stream plan (container/codec/delivery)
+        // was computed FOR that surface. The legacy player pick above, however,
+        // falls back to the client's connect-time default player when the engine
+        // returns no explicit preferredPlayer — and on Android that default is
+        // ijkplayer even when the winning surface is android_media3 (native
+        // Media3/HW). Emitting CAP_EFFECTIVE_SURFACE=android_media3 alongside
+        // CAP_EFFECTIVE_PLAYER=ijkplayer hands a stream tailored for Media3
+        // (e.g. HEVC Main10 video-copy + EAC3 in Matroska) to the IJK software
+        // player, which fails to decode/play it ("failed to play Matroska HEVC
+        // EAC3", or plays with no audio). Align the per-stream player to the
+        // chosen surface for the well-known Android surfaces so the two OPENURL
+        // signals agree. Only overrides when the engine did not explicitly
+        // switch players and the surface id unambiguously identifies its player.
+        if (Sage.getBoolean("miniplayer/align_player_to_surface", true)
+            && chosenSurfaceId != null && chosenSurfaceId.length() > 0
+            && (profileDecision == null || profileDecision.preferredPlayer == null))
+        {
+          String surfLc = chosenSurfaceId.toLowerCase(java.util.Locale.ROOT);
+          String surfacePlayer = null;
+          if (surfLc.contains("media3") || surfLc.contains("exo"))
+            surfacePlayer = "exoplayer";
+          else if (surfLc.contains("ijk"))
+            surfacePlayer = "ijkplayer";
+          if (surfacePlayer != null && !surfacePlayer.equalsIgnoreCase(chosenPlayer))
+          {
+            if (Sage.DBG) System.out.println("MiniPlayer: aligning per-stream player to winning surface "
+                + chosenSurfaceId + ": player " + chosenPlayer + " -> " + surfacePlayer
+                + " (stream plan was computed for this surface)");
+            chosenPlayer = surfacePlayer;
+          }
+        }
         if (mcsr != null && chosenPlayer != null && chosenPlayer.length() > 0)
         {
           if (Sage.DBG)
           {
-            String switchTag = (profileDecision != null && profileDecision.preferredPlayer != null
-                && !profileDecision.preferredPlayer.equalsIgnoreCase(defaultPlayerTag))
+            String switchTag = (chosenPlayer != null && defaultPlayerTag != null
+                && !chosenPlayer.equalsIgnoreCase(defaultPlayerTag))
                 ? " (SWITCHED from default=" + defaultPlayerTag + ")"
                 : " (kept default)";
             System.out.println("MiniPlayer OPENURL stream-plan locked: player=" + chosenPlayer
@@ -1999,11 +2328,62 @@ public class MiniPlayer implements DVDMediaPlayer
         // token built below stays byte-identical to today.
         try
         {
-          if (sage.enhance.EnhancementAdvisor.isEnabled())
+          // Keep negotiation consistent with the apply-time active-file gate
+          // (FFMPEGTranscoder.maybeApplyGpuEnhancement). "timeshifted" is exactly
+          // what feeds setActiveFile(...) on the transcoder, so when this is an
+          // in-progress / timeshifted source AND active-file enhancement is
+          // disabled, do NOT advertise an upscale the apply layer will refuse:
+          // that mismatch is what promised the client tier=2160p and then served
+          // a plain copy. Default (allow_active_file=true) leaves live TV offered
+          // and applied. Any other un-enhanceable case is already reported
+          // honestly by the advisor's own verdict ladder below.
+          boolean activeFileEnhanceBlocked = timeshifted
+              && !Sage.getBoolean("playback/gpu_enhance/allow_active_file", true);
+          if (activeFileEnhanceBlocked)
+          {
+            enhanceTier = sage.enhance.EnhancementTier.NONE;
+            if (Sage.DBG) System.out.println("GPU_ENHANCE negotiation: not offering -- active-file"
+                + " (live/timeshifted) enhancement disabled via"
+                + " playback/gpu_enhance/allow_active_file=false");
+          }
+          else if (sage.enhance.EnhancementAdvisor.isEnabled())
           {
             int srcFps = 0;
             if (cf != null && cf.getVideoFormat() != null)
               srcFps = Math.round(cf.getVideoFormat().getFps());
+            // NG live 4K upscaling: an in-progress live recording is frequently
+            // not format-scanned yet at tune time, so currMF.getFileFormat()
+            // yields 0x0 video -- the advisor then short-circuits to
+            // UNKNOWN_SOURCE and never OFFERS an upscale for LIVE, even though
+            // the source bytes (e.g. 1080p HEVC) are already on disk (the
+            // recording runs ahead of the ~6-8s-behind playback edge). Recover
+            // the real geometry with a bounded header probe, scoped to the
+            // ENHANCEMENT inputs ONLY so the transcode/profile decision above is
+            // byte-identical (mediaW/mediaH stay 0 there, preserving today's
+            // behavior). The probe runs in a daemon worker with a hard timeout,
+            // so a slow or actively-growing file can never stall a tune; on
+            // timeout/error we keep today's behavior (no offer). Precedent: the
+            // VARIED_FORMAT reprobe near line 3751. Property-gated, reversible.
+            int enhSrcW = mediaW, enhSrcH = mediaH;
+            boolean enhSrcInterlaced = srcInterlaced;
+            int enhSrcFps = srcFps;
+            if ((enhSrcW <= 0 || enhSrcH <= 0) && file != null
+                && Sage.getBoolean("playback/gpu_enhance/live_source_probe", true))
+            {
+              sage.media.format.VideoFormat pvf = probeSourceVideoFormatBounded(file,
+                  Sage.getInt("playback/gpu_enhance/live_source_probe_ms", 750));
+              if (pvf != null && pvf.getWidth() > 0 && pvf.getHeight() > 0)
+              {
+                enhSrcW = pvf.getWidth();
+                enhSrcH = pvf.getHeight();
+                enhSrcInterlaced = pvf.isInterlaced();
+                int pfps = Math.round(pvf.getFps());
+                if (pfps > 0) enhSrcFps = pfps;
+                if (Sage.DBG) System.out.println("GPU_ENHANCE live-source probe recovered geometry "
+                    + enhSrcW + "x" + enhSrcH + (enhSrcInterlaced ? "i" : "p") + "@" + enhSrcFps
+                    + " from " + file);
+              }
+            }
             // Consult the per-codec decode ceilings of the player that will
             // ACTUALLY decode -- which is the locked chosenPlayer, not the
             // client's default -- so a player switch above can't leave us
@@ -2025,10 +2405,44 @@ public class MiniPlayer implements DVDMediaPlayer
                     ? chosenSurfaceDelivery
                     : ("legacy:" + (profileDecision != null && profileDecision.decision != null
                         ? profileDecision.decision.toString() : "unknown")));
+            // --- Enhancement-only bandwidth gate input ---
+            // The passive availableBwKbps (render-socket byte accounting) badly
+            // under-reads a fast link: a lightly-loaded UI channel on an 87 Mbps
+            // LAN measured ~6 Mbps, which wrongly vetoed enhancement. The legacy
+            // transcode ladder still uses availableBwKbps (unchanged, no
+            // regression); only the ENHANCE decision gets a better number here:
+            //   1. LAN client (real subnet/origin-IP compare) -> 0 = unmetered.
+            //      A local viewer's link is not the bottleneck for a stream that
+            //      tops out at a few tens of Mbps; treat it as a capability class.
+            //   2. else a FRESH client-reported active probe (bulk-transfer
+            //      throughput, correct over VPN) within the max-age window.
+            //   3. else fall back to availableBwKbps (never worse than today).
+            int enhanceBwKbps = availableBwKbps;
+            String enhanceBwSource = "passive";
+            if (mcsr != null)
+            {
+              long maxAgeMs = (long) Sage.getInt(
+                  "playback/gpu_enhance/probe_max_age_secs", 86400) * 1000L;
+              sage.enhance.EnhancementAdvisor.BandwidthChoice bwc =
+                  sage.enhance.EnhancementAdvisor.selectEnhanceBandwidthKbps(
+                      mcsr.isLocalConnection(),
+                      mcsr.getProbedBandwidthKbps(),
+                      mcsr.getProbedBandwidthAgeMs(),
+                      maxAgeMs,
+                      availableBwKbps);
+              enhanceBwKbps = bwc.kbps;
+              enhanceBwSource = bwc.source;
+            }
+            if (Sage.DBG) System.out.println("GPU_ENHANCE bw-gate source=" + enhanceBwSource
+                + " enhanceBwKbps=" + enhanceBwKbps
+                + " (passiveBwKbps=" + availableBwKbps
+                + " local=" + (mcsr != null && mcsr.isLocalConnection())
+                + " probeKbps=" + (mcsr != null ? mcsr.getProbedBandwidthKbps() : 0)
+                + " probeAgeMs=" + (mcsr != null ? mcsr.getProbedBandwidthAgeMs() : -1) + ")");
             enhanceTier = sage.enhance.EnhancementDryRun.evaluateAndLog(
                 (mcsr != null ? mcsr.getClientIdForLogging() : null),
                 enhanceMediaDesc,
-                mediaW, mediaH, srcInterlaced, srcFps,
+                enhSrcW, enhSrcH, enhSrcInterlaced, enhSrcFps,
                 (mcsr != null ? mcsr.getSinkWidth() : 0),
                 (mcsr != null ? mcsr.getSinkHeight() : 0),
                 chosenSurface,
@@ -2037,12 +2451,11 @@ public class MiniPlayer implements DVDMediaPlayer
                 (mcsr != null ? mcsr.getLocalEnhancementPref() : "auto"),
                 (mcsr != null ? mcsr.getLocalEnhancementStatus() : "none"),
                 sage.HwEncoder.gpuEnhanceSupported(),
-                // The network gate (§4 rule 6a). These are the SAME numbers
-                // the bandwidth-aware ranking above already used, so
-                // enhancement is measured against the budget that sized the
-                // stream rather than spending headroom nothing accounted
-                // for. Both are 0 when unknown, which imposes no cap.
-                sourceBitrateKbps, availableBwKbps);
+                // The network gate (§4 rule 6a). Enhancement is measured against
+                // enhanceBwKbps (LAN-unmetered / fresh active probe / passive
+                // fallback) rather than the passive estimate that sized the
+                // legacy stream. 0 imposes no cap.
+                sourceBitrateKbps, enhanceBwKbps);
           }
         }
         catch (Throwable t)
@@ -2052,12 +2465,24 @@ public class MiniPlayer implements DVDMediaPlayer
           enhanceTier = sage.enhance.EnhancementTier.NONE;
           if (Sage.DBG) System.out.println("GPU_ENHANCE evaluation failed (ignored): " + t);
         }
-        // Carry the decided tier to the STREAMINFO / ng_fmt hint sites further
-        // below, which live outside this block's lexical scope. Reset per tune
+        // Carry the decided tier to the STREAMINFO hint site further below,
+        // which lives outside this block's lexical scope. Reset per tune
         // at the top of load() so a prior enhanced tune can't leak into a plain
         // one on a reused MiniPlayer.
         this.currentTuneEnhanceTier =
             (enhanceTier != null) ? enhanceTier : sage.enhance.EnhancementTier.NONE;
+        // Arm the live-edge start floor for an enhance-active tune. Consumed once by
+        // the first push prime seek, and only actually applied there for a RECORDING
+        // (live) source -- a completed-recording (VOD) enhance still starts at 0 as
+        // the user intends. Liveness is decided in seek() via isRecording(), NOT here:
+        // timeshifted is true for every server-transcoded push (VOD included) and so
+        // cannot distinguish a live source.
+        this.enhanceLiveStartPending = this.currentTuneEnhanceTier.isActive();
+        // Capture the winning surface's declared audio multichannel capability
+        // (0 = legacy/undeclared) so the enhance AC-4 sidecar can decide 5.1-vs-
+        // stereo per client instead of a SageTV-global setting. Reset each tune.
+        this.currentTuneSurfaceMaxAudioChannels =
+            (chosenSurface != null) ? chosenSurface.getAudioMaxChannels() : 0;
         // --- Playback Surface capability model (Protocol v2.1) — Phase 2 ---
         // If a surface won the ranking above, emit CAP_EFFECTIVE_SURFACE
         // exactly once per OPENURL. Same session-stickiness contract as
@@ -2168,6 +2593,39 @@ public class MiniPlayer implements DVDMediaPlayer
             chosenSurfaceDelivery = "push";
             ngEarlyDelivery = "push";
             this.currentTunePushEnhanceMode = enhanceMode;
+          }
+
+          // ===== Phase 1 Step 3: CMAF/fMP4 delivery reroute =====
+          // A client that advertised the HLS_FMP4 capability and whose surface
+          // ranked a browserhd-family fMP4 transcode is delivered as
+          // finalized-segment fMP4/CMAF over HLS (server writes init.mp4 +
+          // seg%d.m4s, HTTPLSServer serves them, OPENURL carries the _fmp4
+          // iosstream URL) INSTEAD of the browserhd mutable msproxy ring --
+          // structurally eliminating the CHUNK_DEMUXER_ERROR_APPEND_FAILED
+          // class. Gated on enhanceTier being inactive: the dynamicfmp4 CMAF
+          // path does not yet run the GPU VSR upscale, so an active enhancement
+          // stays on the pull ring (scope R1). Overriding here -- after
+          // enhanceTier is decided and before CAP_EFFECTIVE_DELIVERY is built --
+          // keeps the wire token (=hls) and the OPENURL form (ngEarlyDelivery=hls
+          // -> hlsPlaylistSuffix() emits _fmp4.m3u8) consistent, and matches the
+          // proven iOS HLS session shape (clientDoesPull=httpls=true, no push).
+          // Flag-guarded for instant rollback; inert for any client that did not
+          // advertise HLS_FMP4.
+          else if (mcsr != null && mcsr.supportsHlsFmp4()
+              && (enhanceTier == null || !enhanceTier.isActive())
+              && chosenSurfaceXcodeMode != null
+              && chosenSurfaceXcodeMode.startsWith("browserhd")
+              && Sage.getBoolean("miniplayer/cmaf_delivery_reroute", true))
+          {
+            if (Sage.DBG) System.out.println("MiniPlayer: CMAF delivery reroute -> hls"
+                + " (client advertised HLS_FMP4, ranked mode=" + chosenSurfaceXcodeMode
+                + ", enhancement inactive) -> server-side finalized-segment fMP4/CMAF"
+                + " instead of the browserhd msproxy ring");
+            chosenSurfaceDelivery = "hls";
+            chosenSurfaceXcodeMode = null;
+            ngEarlyDelivery = "hls";
+            httpls = true;
+            clientDoesPull = true;
           }
           // Protocol 2.1: publish the effective delivery mode (and, for
           // pull-xcode, the concrete server-native XCODE_SETUP mode) so the
@@ -2280,6 +2738,31 @@ public class MiniPlayer implements DVDMediaPlayer
                 }
               }
             }
+            // Resolve the true OUTPUT (post-transcode) wire codecs and stash
+            // them so the native STREAMINFO channel (below) describes what the
+            // client will ACTUALLY receive instead of the source codecs -- for a
+            // browserhd TRANSCODE the source names the pre-transcode codec (e.g.
+            // MPEG2-Video/AC3 while the wire carries H.264/AAC). The browser/CMAF
+            // path needs no side-channel here: hls.js / native Safari / AVPlay
+            // read codecs from the fMP4 init.mp4 referenced by #EXT-X-MAP
+            // (standard HLS). The retired ng_fmt/ng_out hints used to be emitted
+            // from this same resolved pair.
+            String srcVName = null, srcAName = null;
+            if (currMF != null && currMF.getFileFormat() != null)
+            {
+              if (currMF.getFileFormat().getVideoFormat() != null)
+                srcVName = currMF.getFileFormat().getVideoFormat().getFormatName();
+              if (currMF.getFileFormat().getAudioFormat() != null)
+                srcAName = currMF.getFileFormat().getAudioFormat().getFormatName();
+            }
+            String targetAName = (profileDecision != null) ? profileDecision.targetAudioCodec : null;
+            String[] ngOutNames = resolveNgOutputCodecNames(chosenSurfaceXcodeMode, enhanceTier,
+                srcVName, srcAName, targetAName);
+            this.ngOutVideoCodec = (ngOutNames != null) ? ngOutNames[0] : null;
+            this.ngOutAudioCodec = (ngOutNames != null) ? ngOutNames[1] : null;
+            // Companion container decision so the pull STREAMINFO site reports the
+            // delivery container (matching CAP_EFFECTIVE_DELIVERY), not the source.
+            this.ngOutContainer = resolveNgOutputContainerName(chosenSurfaceXcodeMode);
             if (Sage.DBG) System.out.println("MiniPlayer OPENURL emit CAP_EFFECTIVE_DELIVERY=" + effDelivery);
             try
             {
@@ -2708,7 +3191,24 @@ public class MiniPlayer implements DVDMediaPlayer
               else if (!containerOK)
               {
                 transcoded = true;
-                prefTranscodeMode = "mpeg2psremux";
+                // Do not assume MPEG2-PS: honor a TS-only client's remux request
+                // and keep an active enhance tier on a copy-family TS remux.
+                boolean _enhLegacyRemux =
+                    currentTuneEnhanceTier != null && currentTuneEnhanceTier.isActive();
+                prefTranscodeMode = chooseRemuxPushMode(mcsr, fixedPushRemuxFormat, _enhLegacyRemux);
+                // High-fps MPEG-2 (720p59.94 / bobbed-1080i): a copy-family remux
+                // hands the client its weakest push decoder and tears once the
+                // start buffer drains — re-encode to H.264-in-TS instead.
+                String _h264Remux = maybeReencodeHighFpsMpeg2Remux(prefTranscodeMode,
+                    srcVideoCodecName(currMF), srcVideoFps(currMF), h264PushOK, _enhLegacyRemux);
+                if (!_h264Remux.equals(prefTranscodeMode))
+                {
+                  prefTranscodeMode = _h264Remux;
+                  dynamicRateAdjust = true;
+                  useOriginalAudioTrack = false;
+                  if (Sage.DBG) System.out.println("MiniPlayer: high-fps MPEG-2 remux re-routed to "
+                      + prefTranscodeMode + " (H.264 re-encode) — src fps=" + srcVideoFps(currMF));
+                }
               }
             }
           }
@@ -2770,19 +3270,56 @@ public class MiniPlayer implements DVDMediaPlayer
         {
           if (profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.REMUX)
           {
-            // Container-only fix: codecs are fine, just rewrap. mpeg2psremux
-            // does an in-process TS->PS rewrap (RemuxTranscodeEngine) without
-            // re-encoding video or audio.
+            // Container-only fix: codecs are fine, just rewrap. Pick the remux
+            // container the CLIENT can actually receive (and that an active
+            // GPU-enhance tier can ride) rather than assuming MPEG2-PS — see
+            // chooseRemuxPushMode. A PS remux here both ignored a TS-only client's
+            // FIXED_PUSH_REMUX_FORMAT and blocked enhancement (HEVC-in-PS freezes).
+            boolean _enhanceActiveRemux =
+                currentTuneEnhanceTier != null && currentTuneEnhanceTier.isActive();
             transcoded = true;
-            useOriginalAudioTrack = true;
-            prefTranscodeMode = "mpeg2psremux";
-            dynamicRateAdjust = false;
+            prefTranscodeMode = chooseRemuxPushMode(mcsr, fixedPushRemuxFormat, _enhanceActiveRemux);
+            // High-fps MPEG-2 (720p59.94 / bobbed-1080i): a copy-family remux
+            // hands the client its weakest push decoder and tears once the start
+            // buffer drains — re-encode to H.264-in-TS (the client's strongest
+            // decoder) instead. Enhance-active remuxes are left untouched.
+            String _h264Remux = maybeReencodeHighFpsMpeg2Remux(prefTranscodeMode,
+                srcVideoCodecName(currMF), srcVideoFps(currMF), h264PushOK, _enhanceActiveRemux);
+            if (!_h264Remux.equals(prefTranscodeMode))
+            {
+              prefTranscodeMode = _h264Remux;
+              dynamicRateAdjust = true;
+              useOriginalAudioTrack = false;
+              if (Sage.DBG) System.out.println("MiniPlayer: high-fps MPEG-2 remux re-routed to "
+                  + prefTranscodeMode + " (H.264 re-encode) — src fps=" + srcVideoFps(currMF));
+            }
+            else
+            {
+              // Named remux (mpeg2tsremux/mpeg2psremux) keeps the original audio
+              // track; a custom container= mode carries its own audiocodec.
+              useOriginalAudioTrack = (prefTranscodeMode.indexOf('=') < 0);
+              dynamicRateAdjust = false;
+            }
             if (Sage.DBG) System.out.println("MiniPlayer: profile-authoritative override forces REMUX (legacy missed it) mode="
-                + prefTranscodeMode + " reason=" + profileDecision.reason);
+                + prefTranscodeMode + " enhanceActive=" + _enhanceActiveRemux
+                + " reason=" + profileDecision.reason);
           }
-          else if (profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.TRANSCODE)
+          else if (profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.TRANSCODE
+              || profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.AUDIO_TRANSCODE)
           {
-            // Last-resort full transcode. When the legacy client supplied a
+            // Last-resort full transcode, OR an AUDIO_TRANSCODE (video codec is
+            // fine, only the audio codec mismatches — e.g. ATSC 3.0 HEVC + Dolby
+            // AC-4 to an android_media3 surface that decodes HEVC but not AC-4).
+            // AUDIO_TRANSCODE always carries targetVideoCodec == the source video
+            // codec (a copy) and a concrete targetAudioCodec, so it naturally
+            // takes the videoCopyOk (video-copy + audio-transcode) path below and
+            // produces the same proven container=matroska;videocodec=COPY;
+            // audiocodec=eac3 mode the legacy REMUX clients get. Without this
+            // branch an NG-session AUDIO_TRANSCODE fell through with
+            // transcoded=false and the source was pushed raw (MPEG2-TS/HEVC/AC-4)
+            // to a surface that supports neither TS push nor AC-4 -> black screen
+            // + no audio.
+            // When the legacy client supplied a
             // FIXED_PUSH_MEDIA_FORMAT (per docs/ClientSettings.md), honor it
             // as the transcode target — it already names a valid FFmpeg-side
             // output spec the client knows how to decode. Otherwise pick
@@ -3038,6 +3575,30 @@ public class MiniPlayer implements DVDMediaPlayer
             {
               System.out.println("MiniPlayer: keeping audio-only transcode (skipping client fixedPushFormat override)");
             }
+            // Live-copy push transport hardening: a video-copy push muxed into
+            // Matroska is fragile for live ATSC 3.0 (HEVC/AC-4) — the client's
+            // media clock periodically rebuffers (~3s stalls) because Matroska's
+            // cluster-based timing has no frequent, self-describing clock the way
+            // MPEG-TS does (PCR + PAT/PMT resent at every keyframe). MPEG-TS is
+            // the proven-robust live push container (the non-freezing hevc_nvenc
+            // path already uses -f mpegts), and this client advertises MPEG2-TS
+            // push, so switch the container matroska->mpegts for the copy push.
+            // Video stays copy and AC-4 still transcodes to E-AC-3 (both are
+            // standard in TS); the FFMPEGTranscoder mpegts+COPY path then adds
+            // the live mux-timing hints automatically. Config-gated (revert =
+            // false) and only when the client actually advertises TS push.
+            {
+              boolean _tsPushOK = mcsr != null
+                  && mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_TS);
+              String _tsNorm = preferTsContainerForLiveCopyPush(prefTranscodeMode, _tsPushOK);
+              if (_tsNorm != null && !_tsNorm.equals(prefTranscodeMode))
+              {
+                if (Sage.DBG) System.out.println("MiniPlayer: live copy push — switching container "
+                    + "matroska->mpegts (more robust live transport; client advertises MPEG2-TS push): "
+                    + prefTranscodeMode + " -> " + _tsNorm);
+                prefTranscodeMode = _tsNorm;
+              }
+            }
             mpegSrc.setStreamTranscodeMode(prefTranscodeMode, currFileFormat);
             // Carry the GPU-enhance tier (if any) into the push-mode transcoder
             // that FastMpeg2Reader.init() constructs. NONE is a no-op, so plain
@@ -3045,29 +3606,61 @@ public class MiniPlayer implements DVDMediaPlayer
             // that maybeApplyGpuEnhancement honors (after its own live/recording/
             // copy-family/governor re-checks) to rewrite the copy into the upscale.
             mpegSrc.setEnhancementTier(currentTuneEnhanceTier);
+            // Per-client 5.1-vs-stereo capability for the enhance AC-4 sidecar
+            // (0 = legacy/undeclared -> resolved from the chosen codec below).
+            mpegSrc.setSidecarMaxAudioChannels(currentTuneSurfaceMaxAudioChannels);
             // If the source has Dolby AC-4 audio (ATSC 3.0), prefer E-AC-3 for
             // any client that advertises EAC3 (higher quality / 5.1 preserved).
             // Otherwise fall back to AC-3 (universal among legacy SageTV clients).
             if (currFileFormat != null
                 && sage.media.format.MediaFormat.AC4.equals(currFileFormat.getPrimaryAudioFormat()))
             {
-              // Audio fallback ladder (best -> worst preserving surround where possible):
+              // Prefer a true AC-4 stream-copy (no transcode) ONLY when BOTH hold:
+              //   (1) the client decodes AC-4 natively (its surface advertised it), and
+              //   (2) the resolved ffmpeg can actually mux AC-4 into the negotiated
+              //       push container — verified by a real, cached stream-copy self
+              //       test (HwEncoder.ac4StreamCopyOk), NOT by trusting -codecs /
+              //       -muxers listings, which lie: this build lists an `ac4` decoder
+              //       and the mpegts/mp4/matroska muxers yet cannot signal AC-4 in
+              //       any of them (MP4/MKV reject the header, TS mis-signals to
+              //       bin_data). Fail-closed to the transcode ladder whenever the
+              //       container is unknown or the self-test says no.
+              // Otherwise fall back through the ladder (best -> worst, preserving
+              // surround where possible):
               //   1. EAC3  — 5.1, 640k, HDMI passthrough capable, ExoPlayer >= 1.x
               //   2. AC3   — 5.1, 384k, HDMI passthrough capable, universal
               //   3. AAC   — 2.0/5.1, 256k, decoder always present, no passthrough
               //   4. MP2   — stereo only, 192k, last-resort universal floor
-              String pick;
-              if (mcsr != null && mcsr.isSupportedAudioCodec(sage.media.format.MediaFormat.EAC3))
-                pick = "eac3";
-              else if (mcsr != null && mcsr.isSupportedAudioCodec(sage.media.format.MediaFormat.AC3))
-                pick = "ac3";
-              else if (mcsr != null && mcsr.isSupportedAudioCodec(sage.media.format.MediaFormat.AAC))
-                pick = "aac";
+              boolean copyAc4 = false;
+              if (mcsr != null && mcsr.isSupportedAudioCodec(sage.media.format.MediaFormat.AC4))
+              {
+                String muxName = ffmpegMuxNameForTranscodeMode(prefTranscodeMode);
+                if (muxName != null)
+                  copyAc4 = sage.HwEncoder.ac4StreamCopyOk(muxName,
+                      sage.FFMPEGTranscoder.getTranscoderPath(currFileFormat), file);
+              }
+              if (copyAc4)
+              {
+                if (Sage.DBG) System.out.println("MiniPlayer: AC-4 source + client decodes AC-4 natively"
+                    + " AND ffmpeg can mux AC-4 into the push container — copying AC-4 (no transcode)");
+                // Leave audiocodec=COPY intact; do NOT call setAc4SourceAudioCodec.
+                // The wire-format hint synthesis will then honestly advertise AC-4.
+              }
               else
-                pick = "mp2";
-              if (Sage.DBG) System.out.println("MiniPlayer: AC-4 source detected — selecting "
-                  + pick + " (fallback ladder: eac3 -> ac3 -> aac -> mp2)");
-              mpegSrc.setAc4SourceAudioCodec(pick);
+              {
+                String pick;
+                if (mcsr != null && mcsr.isSupportedAudioCodec(sage.media.format.MediaFormat.EAC3))
+                  pick = "eac3";
+                else if (mcsr != null && mcsr.isSupportedAudioCodec(sage.media.format.MediaFormat.AC3))
+                  pick = "ac3";
+                else if (mcsr != null && mcsr.isSupportedAudioCodec(sage.media.format.MediaFormat.AAC))
+                  pick = "aac";
+                else
+                  pick = "mp2";
+                if (Sage.DBG) System.out.println("MiniPlayer: AC-4 source detected — selecting "
+                    + pick + " (fallback ladder: eac3 -> ac3 -> aac -> mp2)");
+                mpegSrc.setAc4SourceAudioCodec(pick);
+              }
             }
             transcoded = false;
             serverSideTranscoding = true;
@@ -3187,8 +3780,9 @@ public class MiniPlayer implements DVDMediaPlayer
         // ── NG STREAMINFO for RemotePusher path ──
         if (ngSession && mcsr != null && mcsr.hasClientCapability("STREAMINFO") && currFileFormat != null)
         {
+          boolean rpLive = streamInfoIsLive(timeshifted, currMF);
           sendStreamInfo0(currFileFormat, null,
-              timeshifted ? 0 : currFileFormat.getDuration(), timeshifted);
+              rpLive ? 0 : currFileFormat.getDuration(), rpLive);
         }
         if (!openURL0("push://" + hostname + (Sage.getBoolean("use_alternate_streaming_ports", false) ?
             ":31098" : "") + "/session/" + rpSrc.getSessionID() + "?" +
@@ -3400,6 +3994,28 @@ public class MiniPlayer implements DVDMediaPlayer
                 sage.media.format.AudioFormat _sa = (_sc != null) ? _sc.getAudioFormat() : null;
                 if (_sa != null && _sa.getFormatName() != null)
                   wireACodec = _sa.getFormatName();
+                // An AC-4 source with audiocodec=COPY is NOT actually copied: this
+                // ffmpeg cannot mux AC-4 into MKV/MP4/TS, so FFMPEGTranscoder
+                // transcodes it to the client-friendly codec chosen by the
+                // AC-4 fallback ladder above (setAc4SourceAudioCodec). Reflect
+                // that ACTUAL delivered codec in the wire hint — otherwise the
+                // client is told f=AC-4, sets up an AC-4 renderer, and is then
+                // fed E-AC-3, which stalls/freezes playback.
+                String _ac4Pick = (mpegSrc != null) ? mpegSrc.getAc4SourceAudioCodec() : null;
+                if (_ac4Pick != null && _ac4Pick.length() > 0
+                    && sage.media.format.MediaFormat.AC4.equals(wireACodec))
+                {
+                  if ("eac3".equalsIgnoreCase(_ac4Pick))
+                    wireACodec = sage.media.format.MediaFormat.EAC3;
+                  else if ("ac3".equalsIgnoreCase(_ac4Pick))
+                    wireACodec = sage.media.format.MediaFormat.AC3;
+                  else if (_ac4Pick.toLowerCase().startsWith("aac"))
+                    wireACodec = sage.media.format.MediaFormat.AAC;
+                  else if ("mp2".equalsIgnoreCase(_ac4Pick))
+                    wireACodec = sage.media.format.MediaFormat.MP2;
+                  if (Sage.DBG) System.out.println("MiniPlayer: AC-4 source transcoded to "
+                      + _ac4Pick + " (un-muxable AC-4) — wire hint audio corrected to " + wireACodec);
+                }
               }
               else if (_modeACodec != null)
               {
@@ -3545,55 +4161,6 @@ public class MiniPlayer implements DVDMediaPlayer
             }
           }
         }
-        // NG push-mode format hint: append MIME triplet parsed from the wire-format descriptor
-        if (ngSession && formatString != null && formatString.length() > 0)
-        {
-          String cMime = null;
-          String vMime = null;
-          String aMime = null;
-          // Container: first "f=XXX;" not inside a bf= block
-          int fIdx = formatString.indexOf("f=");
-          if (fIdx >= 0)
-          {
-            int fEnd = formatString.indexOf(';', fIdx);
-            if (fEnd > fIdx) cMime = toMimeType(formatString.substring(fIdx + 2, fEnd));
-          }
-          // Video: "bf=vid;f=XXX;"
-          int vIdx = formatString.indexOf("bf=vid;f=");
-          if (vIdx >= 0)
-          {
-            int vStart = vIdx + 9; // length of "bf=vid;f="
-            int vEnd = formatString.indexOf(';', vStart);
-            if (vEnd > vStart) vMime = toMimeType(formatString.substring(vStart, vEnd));
-          }
-          // Audio: "bf=aud;f=XXX;"
-          int aIdx = formatString.indexOf("bf=aud;f=");
-          if (aIdx >= 0)
-          {
-            int aStart = aIdx + 9; // length of "bf=aud;f="
-            int aEnd = formatString.indexOf(';', aStart);
-            if (aEnd > aStart) aMime = toMimeType(formatString.substring(aStart, aEnd));
-          }
-          // Enhancement re-encodes video to HEVC on the wire; advertise the
-          // real wire codec so the client sets up the right decoder.
-          if (currentTuneEnhanceTier != null && currentTuneEnhanceTier.isActive())
-          {
-            vMime = toMimeType(sage.media.format.MediaFormat.HEVC);
-            // The GPU-enhance push stream is carried in MPEG2-TS (mpeg2tsremux
-            // output) regardless of the source container. Advertise TS so the
-            // client's demuxer expects the bytes it will actually receive — the
-            // same wire-container honesty the mpeg2psremux/STREAMINFO paths use.
-            if ("mpeg2tsremux".equals(prefTranscodeMode))
-              cMime = toMimeType(sage.media.format.MediaFormat.MPEG2_TS);
-          }
-          if (cMime != null || vMime != null || aMime != null)
-          {
-            formatString += "|ng_fmt=" + (cMime != null ? cMime : "") + ","
-                + (vMime != null ? vMime : "") + ","
-                + (aMime != null ? aMime : "");
-            if (Sage.DBG) System.out.println("MiniPlayer: NG push-mode format hint -> " + formatString);
-          }
-        }
         // ── NG STREAMINFO: send full metadata BEFORE openURL so the client can
         // pre-configure its pipeline. Only sent to NG clients that advertise the
         // "STREAMINFO" capability. Legacy clients skip this entirely — their path
@@ -3601,42 +4168,47 @@ public class MiniPlayer implements DVDMediaPlayer
         // then openURL arrives and the client connects immediately (no probing).
         if (ngSession && mcsr != null && mcsr.hasClientCapability("STREAMINFO"))
         {
+          // SINGLE SOURCE OF TRUTH: describe the STREAMINFO wire format from the
+          // SAME push descriptor (formatString) handed to openURL0("push:"+...)
+          // below. Building both from one string guarantees the container AND the
+          // video/audio codec names the client is TOLD exactly match the bytes we
+          // actually push. The push descriptor already encodes every transcode
+          // mode's true wire format (mpeg2psremux/mpeg2tsremux, audioonly, the
+          // xcode_qualities- and property-string-parsed modes, dynamic*, the
+          // DIRECT_PLAY synth). Deriving STREAMINFO independently from the source
+          // (the old code) let container AND codecs drift whenever wire != source.
           sage.media.format.ContainerFormat streamInfoCf = null;
-          String streamInfoWireContainer = null;
+          if (formatString != null && formatString.length() > 0)
+            streamInfoCf = sage.media.format.ContainerFormat.buildFormatFromString(formatString);
+          // Fallback: no descriptor was synthesized (e.g. DIRECT_PLAY of a known
+          // source) -- the wire IS the source, so describe the source format.
+          if (streamInfoCf == null && currMF != null)
+          {
+            streamInfoCf = currMF.getFileFormat();
+            if (streamInfoCf != null && "true".equals(streamInfoCf.getMetadataProperty("VARIED_FORMAT")))
+              streamInfoCf = sage.media.format.FormatParser.getFileFormat(file);
+          }
           long streamInfoDuration = 0;
-          boolean streamInfoLive = timeshifted;
-          // Determine the ContainerFormat that describes the WIRE bytes
-          if (currMF != null)
+          // STREAMINFO liveness must reflect the ACTUAL asset, not the internal
+          // (forced) timeshifted seek-model flag — see streamInfoIsLive(). A
+          // completed recording pushed via transcode/remux has timeshifted=true
+          // but is not growing, so report live=false + a real duration.
+          boolean streamInfoLive = streamInfoIsLive(timeshifted, currMF);
+          if (streamInfoCf != null && !streamInfoLive)
           {
-           streamInfoCf = currMF.getFileFormat();
-           if (streamInfoCf != null && "true".equals(streamInfoCf.getMetadataProperty("VARIED_FORMAT")))
-             streamInfoCf = sage.media.format.FormatParser.getFileFormat(file);
+            // The push descriptor rarely carries duration; fall back to the
+            // source asset's known duration for the client's seek bar.
+            streamInfoDuration = streamInfoCf.getDuration();
+            if (streamInfoDuration <= 0 && currMF != null && currMF.getFileFormat() != null)
+              streamInfoDuration = currMF.getFileFormat().getDuration();
           }
-          // If we're remuxing/transcoding, the wire format differs from source
-          if (usingRemuxer && mpegSrc != null && mpegSrc.getTranscoder() instanceof RemuxTranscodeEngine)
-          {
-           streamInfoCf = ((RemuxTranscodeEngine) mpegSrc.getTranscoder()).getTargetFormat();
-          }
-          else if (serverSideTranscoding && "mpeg2psremux".equals(prefTranscodeMode))
-          {
-           // Wire is PS even though source may be TS
-           streamInfoWireContainer = sage.media.format.MediaFormat.MPEG2_PS;
-          }
-          else if (serverSideTranscoding && "mpeg2tsremux".equals(prefTranscodeMode))
-          {
-           // Wire is TS even though the source may be PS (video-copy TS remux;
-           // this is also the GPU-enhance push path, whose HEVC output rides TS).
-           streamInfoWireContainer = sage.media.format.MediaFormat.MPEG2_TS;
-          }
-          // Duration from the format (0 for live)
-          if (streamInfoCf != null && !timeshifted)
-           streamInfoDuration = streamInfoCf.getDuration();
           if (streamInfoCf != null)
           {
            // Enhancement rewrites the wire video stream to HEVC (and rescales
-           // for upscaling tiers); describe those bytes, not the source.
+           // for upscaling tiers); the copy-family remux descriptor doesn't carry
+           // the post-enhance geometry, so layer it on (idempotent for the codec).
            streamInfoCf = describeEnhancedWireFormat(streamInfoCf, currentTuneEnhanceTier);
-           int siAck = sendStreamInfo0(streamInfoCf, streamInfoWireContainer,
+           int siAck = sendStreamInfo0(streamInfoCf, null,
                streamInfoDuration, streamInfoLive);
            // If client requested WAIT_READY, the openURL below serves as
            // the implicit "stream is ready" signal (transcoder already inited above).
@@ -3667,7 +4239,7 @@ public class MiniPlayer implements DVDMediaPlayer
             String forced = Sage.get("forced_external_httpls_addr_port", "");
             if (forced != null && forced.length() > 0)
               ipPort = forced;
-            theURL = "http://" + ipPort + "/iosstream_" + uiMgr.getLocalUIClientName() + "_" + currMF.id + "_" + VideoFrame.getVideoFrameForPlayer(this).getCurrSegment() + "_list.m3u8";
+            theURL = "http://" + ipPort + "/iosstream_" + uiMgr.getLocalUIClientName() + "_" + currMF.id + "_" + VideoFrame.getVideoFrameForPlayer(this).getCurrSegment() + hlsPlaylistSuffix();
           }
           else if (pureLocal)
           {
@@ -3713,7 +4285,7 @@ public class MiniPlayer implements DVDMediaPlayer
           if (forced != null && forced.length() > 0)
             ipPort = forced;
 
-          theURL = "http://" + ipPort + "/iosstream_" + uiMgr.getLocalUIClientName() + "_" + currMF.id + "_" + VideoFrame.getVideoFrameForPlayer(this).getCurrSegment() + "_list.m3u8";
+          theURL = "http://" + ipPort + "/iosstream_" + uiMgr.getLocalUIClientName() + "_" + currMF.id + "_" + VideoFrame.getVideoFrameForPlayer(this).getCurrSegment() + hlsPlaylistSuffix();
         }
         else if (pureLocal)
         {
@@ -3727,33 +4299,6 @@ public class MiniPlayer implements DVDMediaPlayer
         else
           theURL = file.getAbsolutePath();
         } // end Gate #8 else (legacy URL construction)
-        // NG pull-mode format hint: append MIME triplet so client skips probing
-        if (ngSession && theURL != null && !theURL.startsWith("dvd") && currMF != null)
-        {
-          sage.media.format.ContainerFormat ngCf = currMF.getFileFormat();
-          if (ngCf != null)
-          {
-            String cMime = toMimeType(ngCf.getFormatName());
-            String vMime = null;
-            String aMime = null;
-            sage.media.format.VideoFormat ngVf = ngCf.getVideoFormat();
-            if (ngVf != null) vMime = toMimeType(ngVf.getFormatName());
-            sage.media.format.AudioFormat ngAf = ngCf.getAudioFormat();
-            if (ngAf != null) aMime = toMimeType(ngAf.getFormatName());
-            // Enhancement re-encodes video to HEVC on the wire; advertise the
-            // real wire codec so the client sets up the right decoder.
-            if (currentTuneEnhanceTier != null && currentTuneEnhanceTier.isActive())
-              vMime = toMimeType(sage.media.format.MediaFormat.HEVC);
-            if (cMime != null || vMime != null || aMime != null)
-            {
-              String sep = theURL.contains("?") ? "&" : "?";
-              theURL += sep + "ng_fmt=" + (cMime != null ? cMime : "") + ","
-                  + (vMime != null ? vMime : "") + ","
-                  + (aMime != null ? aMime : "");
-              if (Sage.DBG) System.out.println("MiniPlayer: NG pull-mode format hint -> " + theURL);
-            }
-          }
-        }
         // ── NG STREAMINFO for pull/direct-play (same logic, different path) ──
         if (ngSession && mcsr != null && mcsr.hasClientCapability("STREAMINFO"))
         {
@@ -3762,12 +4307,14 @@ public class MiniPlayer implements DVDMediaPlayer
             pullCf = sage.media.format.FormatParser.getFileFormat(file);
           if (pullCf != null)
           {
-            long pullDur = timeshifted ? 0 : pullCf.getDuration();
+            boolean pullLive = streamInfoIsLive(timeshifted, currMF);
+            long pullDur = pullLive ? 0 : pullCf.getDuration();
             // Enhancement rewrites the wire video stream to HEVC (and rescales
-            // for upscaling tiers); describe those bytes, not the source, or the
+            // for upscaling tiers); a browserhd TRANSCODE rewrites to its output
+            // codecs (H.264/AAC). Describe those bytes, not the source, or the
             // client pre-configures the wrong decoder and freezes after one frame.
-            pullCf = describeEnhancedWireFormat(pullCf, currentTuneEnhanceTier);
-            sendStreamInfo0(pullCf, null, pullDur, timeshifted);
+            pullCf = describeWireFormat(pullCf, currentTuneEnhanceTier);
+            sendStreamInfo0(pullCf, null, pullDur, pullLive);
           }
         }
         if (!openURL0(theURL))
@@ -4015,7 +4562,28 @@ public class MiniPlayer implements DVDMediaPlayer
           }
         }
         pushBufferSize = (lowBandwidth || currHintMajorType == MediaFile.MEDIATYPE_AUDIO) ? 16384 : Math.min(maxPushBufferSize, 131072);
-        if (Sage.DBG) System.out.println("Miniplayer pusher using buffer size of " + pushBufferSize);
+        // NG live-edge cadence (Bug B, live-edge starvation): for a LIVE server-side-transcoded push the
+        // loop otherwise waits to accumulate a full pushBufferSize (~128KB) before delivering anything, then
+        // polls on a 50ms granularity. At the live edge the client ring is chronically near-empty (it can
+        // never get ahead of real-time), so that per-chunk accumulation gap is enough to micro-starve the
+        // decoder each cycle -- what the client team measured as a ~5%/s buffer bleed. Delivering the live
+        // stream in smaller chunks tops the ring up more frequently. This adds NO latency (it moves bytes
+        // sooner, not later); it only trades a few extra pushBuffer calls for smoother delivery. Scoped to
+        // the live server-side-transcode video path only; VOD / completed-recording transcode pushes keep
+        // the large efficient buffer. Both knobs are property-gated and reversible.
+        boolean ngLiveEdge = serverSideTranscoding && timeshifted && !lowBandwidth &&
+            currHintMajorType != MediaFile.MEDIATYPE_AUDIO &&
+            (SeekerSelector.getInstance().getCurrRecordFileForClient(uiMgr, false) != null);
+        int ngLivePollMs = 50;
+        if (ngLiveEdge)
+        {
+          int liveChunk = Sage.getInt("miniplayer/live_push_buffer_size", 32768);
+          if (liveChunk > 0 && liveChunk < pushBufferSize)
+            pushBufferSize = liveChunk;
+          ngLivePollMs = Math.max(1, Sage.getInt("miniplayer/live_push_poll_ms", 12));
+        }
+        if (Sage.DBG) System.out.println("Miniplayer pusher using buffer size of " + pushBufferSize +
+            (ngLiveEdge ? (" (NG live-edge cadence: pollMs=" + ngLivePollMs + ")") : ""));
         if (hdMediaPlayer && !lowBandwidth && currHintMajorType != MediaFile.MEDIATYPE_AUDIO && !transcoded && !serverSideTranscoding)
         {
           // Check if this is a transport stream, and if so modulus the buffer size with the TS packet size. This
@@ -4195,7 +4763,7 @@ public class MiniPlayer implements DVDMediaPlayer
                   break;
                 }
               }
-              try{decoderLock.wait((lowBandwidth && dynamicRateAdjust) ? 500 : 50);}catch(Exception e){}
+              try{decoderLock.wait((lowBandwidth && dynamicRateAdjust) ? 500 : (ngLiveEdge ? ngLivePollMs : 50));}catch(Exception e){}
               continue;
             }
             if (!(transcoded || timeshifted) && eos && ((rpSrc != null && rpSrc.isServerEOS() && myRate >= 1.0) ||
@@ -4850,8 +5418,7 @@ public class MiniPlayer implements DVDMediaPlayer
       // (file-timeline seekTimeMillis vs getDuration(currSegment)) is independent of whether
       // the server transcodes, so gating it on sst=true confined it to a path that never
       // runs. Applying it to any push seek lets it actually protect the live edge.
-      if (pushMode &&
-          Sage.getBoolean("miniplayer/push_seek_dvr_clamp", false))
+      if (pushMode)
       {
         try
         {
@@ -4861,15 +5428,85 @@ public class MiniPlayer implements DVDMediaPlayer
               ? clampMF.getDuration(clampVf.getCurrSegment()) : 0;
           if (availEnd > 0)
           {
-            // Shared clamp math (SeekWindow) -- one authority for the min/max/floor
-            // discipline across every seek path. Media-relative ms here; floor 0,
-            // no tail margin (preserves the exact prior [0, availEnd] behavior).
-            long clamped = SeekWindow.clampToWindow(seekTimeMillis, 0L, availEnd, 0L);
-            if (clamped != seekTimeMillis)
+            // (1) Optional full DVR clamp to [0, availEnd] (default OFF). Shared clamp
+            // math (SeekWindow) -- one authority for the min/max/floor discipline across
+            // every seek path. Media-relative ms here; floor 0, no tail margin (preserves
+            // the exact prior [0, availEnd] behavior).
+            if (Sage.getBoolean("miniplayer/push_seek_dvr_clamp", false))
             {
-              if (Sage.DBG) System.out.println("NG-SEEKDIAG dvr-clamp target=" + seekTimeMillis +
-                  " -> " + clamped + " availEnd=" + availEnd + " epoch=" + seekEpoch);
-              seekTimeMillis = clamped;
+              long clamped = SeekWindow.clampToWindow(seekTimeMillis, 0L, availEnd, 0L);
+              if (clamped != seekTimeMillis)
+              {
+                if (Sage.DBG) System.out.println("NG-SEEKDIAG dvr-clamp target=" + seekTimeMillis +
+                    " -> " + clamped + " availEnd=" + availEnd + " epoch=" + seekEpoch);
+                seekTimeMillis = clamped;
+              }
+            }
+
+            // (2) Live-edge / end-of-file keyframe-safe ceiling (default ON for push). A push
+            // reprime turns seekTimeMillis into the transcoder's ffmpeg "-ss". If the target is
+            // at or beyond the available end of the input, ffmpeg seeks past EOF and emits
+            // "Output file is empty, nothing was encoded" -> the client receives zero bytes and
+            // shows a black screen with no audio (no parse error, because nothing arrives). This
+            // happens in two observed ways: (a) joining an in-progress recording at/after its
+            // MOVING live edge, and (b) resuming a stale/short buffer at a remembered client
+            // position past its actual recorded content (the Shield resuming an 8.3s orphan
+            // buffer at 8812ms). Back the target off by a keyframe-safe margin so the video copy
+            // restarts on real, already-recorded content preceded by an IDR (ATSC3 HEVC carries
+            // a keyframe roughly every 1s). Only near-/past-end targets are touched; interior
+            // seeks are untouched, so normal seeking is unaffected except within the last
+            // <margin> ms of a file.
+            long edgeMarginMs = Sage.getLong("miniplayer/push_seek_live_edge_margin_ms", 2000L);
+            if (edgeMarginMs > 0)
+            {
+              long liveCeil = Math.max(0L, availEnd - edgeMarginMs);
+              if (seekTimeMillis > liveCeil)
+              {
+                if (Sage.DBG) System.out.println("NG-SEEKDIAG live-edge clamp target=" + seekTimeMillis +
+                    " -> " + liveCeil + " availEnd=" + availEnd + " marginMs=" + edgeMarginMs +
+                    " recording=" + clampMF.isRecording() + " epoch=" + seekEpoch);
+                seekTimeMillis = liveCeil;
+              }
+            }
+
+            // (3) Live-edge START floor for an enhance-active LIVE tune-in (one-shot,
+            // initial prime only). Runs AFTER the ceiling above so it is the final word
+            // and lands exactly at (availEnd - backoff). A live enhanced session that
+            // primes at seekTimeMillis=0 restarts the transcoder at the BACK of the
+            // channel's timeshift buffer; the enhance stream is rate-limited to the
+            // encoder's ~realtime output (a plain push delivers the same backlog at disk
+            // speed and hides it), so the client spends minutes catching up to live
+            // before it renders. Float the initial prime up to ~1.5s behind the live
+            // edge instead -- real, already-recorded content preceded by an IDR -- so
+            // playback starts in seconds. One-shot (enhanceLiveStartPending): a later
+            // deliberate rewind into the buffer is untouched. Recording sources only, so
+            // a completed-recording (VOD) enhance still starts at 0.
+            if (enhanceLiveStartPending)
+            {
+              enhanceLiveStartPending = false;
+              // DISABLED BY DEFAULT. Empirically this floor breaks live enhanced
+              // playback on the android_media3 client: seeding the initial prime at a
+              // nonzero position makes the push carry a nonzero timestampOffset (tsOff),
+              // which the client's live-push timestamp model cannot handle -- it reports
+              // "IO unsupported" and never renders a frame (crmt stays 0). A known-good
+              // enhanced 2160p matroska render (18:30 NASCAR) had tsOff=0 and played;
+              // every floored play (tsOff=3126/3362) failed. Keep the code but require an
+              // explicit opt-in so the default restores the working tsOff=0 start. The
+              // startup-latency problem this targeted must be solved without perturbing
+              // the client's live timestamp base.
+              if (Sage.getBoolean("playback/gpu_enhance/live_edge_start_floor_enabled", false)
+                  && clampMF.isRecording())
+              {
+                long backoffMs = Sage.getLong("playback/gpu_enhance/live_edge_start_backoff_ms", 1500L);
+                long liveStart = Math.max(0L, availEnd - backoffMs);
+                if (liveStart > seekTimeMillis)
+                {
+                  System.out.println("GPU_ENHANCE live-edge start floor: seek " + seekTimeMillis +
+                      " -> " + liveStart + " availEnd=" + availEnd + " backoffMs=" + backoffMs +
+                      " epoch=" + seekEpoch);
+                  seekTimeMillis = liveStart;
+                }
+              }
             }
           }
         }
@@ -5715,11 +6352,16 @@ public class MiniPlayer implements DVDMediaPlayer
   protected long initDriver0(int videoFormat)
   {
     if (Sage.DBG) System.out.println("initDriver0()");
-    clientSocket = acquirePlayerSocketChannel(new PlayerSocketProvider()
+    clientSocket = acquirePlayerSocketChannel(new DeadlinePlayerSocketProvider()
     {
       public java.nio.channels.SocketChannel getChannel()
       {
         return (mcsr == null) ? MiniClientSageRenderer.getPlayerSocketChannel(null, null) : mcsr.getPlayerSocketChannel();
+      }
+      public java.nio.channels.SocketChannel getChannel(PlayerTimeoutPolicy.PlaybackDeadline deadline)
+      {
+        return (mcsr == null) ? MiniClientSageRenderer.getPlayerSocketChannel(null, null)
+            : mcsr.getPlayerSocketChannel(deadline);
       }
       public void requestReconnect()
       {
@@ -5788,6 +6430,22 @@ public class MiniPlayer implements DVDMediaPlayer
     }
   }
 
+  /**
+   * HLS OPENURL playlist suffix. Emits the Phase 1 CMAF/fMP4 media-playlist
+   * form ({@code _<bw>_fmp4.m3u8}, which HTTPLSServer serves alongside
+   * {@code _init.mp4} + {@code .m4s} parts) when the client advertised the
+   * {@code HLS_FMP4} capability, otherwise the legacy MPEG-TS master playlist
+   * ({@code _list.m3u8}). The bitrate ceiling for the single-variant fMP4
+   * playlist is the durable {@code httpls_fmp4_bwkbps} property (default 6000).
+   * Gating is a real client capability, so no per-test URL surgery is needed.
+   */
+  private String hlsPlaylistSuffix()
+  {
+    if (mcsr != null && mcsr.supportsHlsFmp4())
+      return "_" + Sage.getInt("httpls_fmp4_bwkbps", 6000) + "_fmp4.m3u8";
+    return "_list.m3u8";
+  }
+
   protected boolean openURL0(String url)
   {
     if (Sage.DBG) System.out.println("openURL0(" + url + ")");
@@ -5845,7 +6503,7 @@ public class MiniPlayer implements DVDMediaPlayer
    * actually receives are the ENHANCED output, not the source: the video stream
    * is re-encoded to HEVC (by {@code hevc_nvenc}, for every active tier
    * including {@code DEINTERLACE_ONLY}), rescaled to the tier's target geometry
-   * for upscaling tiers, and deinterlaced. STREAMINFO / ng_fmt hints must
+   * for upscaling tiers, and deinterlaced. The STREAMINFO hint must
    * describe those bytes — a client that pre-configures its decoder for the
    * source codec/resolution and then receives HEVC 2160p paints one frame and
    * then stalls (the "one frame then freeze" symptom).
@@ -5863,6 +6521,90 @@ public class MiniPlayer implements DVDMediaPlayer
       sage.media.format.ContainerFormat src, sage.enhance.EnhancementTier tier)
   {
     return describeEnhancedWireFormat0(src, tier);
+  }
+
+  /**
+   * Rewrites {@code src} to describe the actual WIRE {@link
+   * sage.media.format.ContainerFormat} the client will receive, so STREAMINFO
+   * pre-configures the right decoder instead of the source one (which for a
+   * browserhd TRANSCODE freezes after one frame). This is the STREAMINFO
+   * serializer of the output decision from {@link #resolveNgOutputCodecNames}:
+   * enhancement (HEVC + rescale) takes precedence; otherwise, when the
+   * browserhd output codec names are resolved, the video/audio stream names are
+   * rewritten to them. The container format name is rewritten to the resolved
+   * wire container ({@link #ngOutContainer}) so STREAMINFO never reports the
+   * source container for a transcode that changes it. Geometry is left to the
+   * enhance path (the only one that changes frame size here) and to the actual
+   * segments. Returns {@code src} unchanged when nothing applies (direct play).
+   */
+  private sage.media.format.ContainerFormat describeWireFormat(
+      sage.media.format.ContainerFormat src, sage.enhance.EnhancementTier tier)
+  {
+    if (src == null) return src;
+    sage.media.format.ContainerFormat cf;
+    if (tier != null && tier.isActive())
+      cf = describeEnhancedWireFormat0(src, tier);
+    else
+      cf = describeBrowserhdWireFormat0(src, this.ngOutVideoCodec, this.ngOutAudioCodec);
+    // Container consistency: rewrite to the delivery/wire container so STREAMINFO
+    // reports what CAP_EFFECTIVE_DELIVERY promises, never the source container of
+    // a transcode that changes it (e.g. a PS recording remuxed to MPEG2-TS, or a
+    // browserhd fMP4). Clone first when the describe* helpers returned src as-is,
+    // so we never mutate the shared source ContainerFormat.
+    String wireContainer = this.ngOutContainer;
+    if (wireContainer != null && wireContainer.length() > 0
+        && !wireContainer.equals(cf.getFormatName()))
+    {
+      if (cf == src)
+      {
+        sage.media.format.ContainerFormat clone =
+            sage.media.format.ContainerFormat.buildFormatFromString(src.getFullPropertyString());
+        if (clone != null) cf = clone;
+      }
+      if (cf != src) cf.setFormatName(wireContainer);
+    }
+    return cf;
+  }
+
+  /**
+   * Package-private worker for the browserhd branch of {@link
+   * #describeWireFormat}; exposed for tests. Clones {@code src} and replaces the
+   * video/audio stream codec names with the resolved output names (each applied
+   * only when non-null). Returns {@code src} unchanged when both are null or the
+   * clone fails.
+   */
+  static sage.media.format.ContainerFormat describeBrowserhdWireFormat0(
+      sage.media.format.ContainerFormat src, String outVideoCodec, String outAudioCodec)
+  {
+    if (src == null || (outVideoCodec == null && outAudioCodec == null)) return src;
+    try
+    {
+      sage.media.format.ContainerFormat copy =
+          sage.media.format.ContainerFormat.buildFormatFromString(src.getFullPropertyString());
+      if (copy == null) return src;
+      sage.media.format.BitstreamFormat[] streams = copy.getStreamFormats();
+      if (streams == null) return src;
+      boolean rewrote = false;
+      for (int i = 0; i < streams.length; i++)
+      {
+        if (outVideoCodec != null && streams[i] instanceof sage.media.format.VideoFormat)
+        {
+          ((sage.media.format.VideoFormat) streams[i]).setFormatName(outVideoCodec);
+          rewrote = true;
+        }
+        else if (outAudioCodec != null && streams[i] instanceof sage.media.format.AudioFormat)
+        {
+          ((sage.media.format.AudioFormat) streams[i]).setFormatName(outAudioCodec);
+          rewrote = true;
+        }
+      }
+      return rewrote ? copy : src;
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("MiniPlayer: could not build browserhd STREAMINFO format: " + t);
+      return src;
+    }
   }
 
   /** Package-private worker for {@link #describeEnhancedWireFormat}; exposed for tests. */
@@ -5903,6 +6645,71 @@ public class MiniPlayer implements DVDMediaPlayer
       if (Sage.DBG) System.out.println("MiniPlayer: could not build enhanced STREAMINFO format: " + t);
       return src;
     }
+  }
+
+  /**
+   * Client-facing liveness for the STREAMINFO channel.
+   * <p>
+   * The internal {@link #timeshifted} flag is overloaded: it is forced {@code true}
+   * for every server-side transcode/remux push (see the {@code mpeg2tsremux}/TS&rarr;PS
+   * remux branches in the watch path) so that seeks route through the server rather
+   * than by byte offset — even for a COMPLETED, non-growing recording. Deriving the
+   * STREAMINFO {@code live} flag straight from {@code timeshifted} therefore mislabels
+   * a finished recording as {@code live=true, duration=0}, which makes conforming
+   * players (ExoPlayer, IJK) treat it as a live edge: no seek bar, and aggressive
+   * low-latency buffering that amplifies any source timestamp jitter into stutter.
+   * <p>
+   * Report {@code live=true} only when the asset is genuinely still growing
+   * ({@link MediaFile#isRecording()} — live TV / live buffered stream with an open
+   * final segment). This never turns liveness ON where {@code timeshifted} was false,
+   * so live-TV and placeshifted seek behaviour are unchanged; it only stops a
+   * completed recording from being announced as live.
+   *
+   * @param timeshifted the internal (possibly forced) seek-model flag
+   * @param mf          the media file being played, or {@code null}
+   * @return whether the client should be told the stream is live
+   */
+  private boolean streamInfoIsLive(boolean timeshifted, MediaFile mf)
+  {
+    return timeshifted && mf != null && mf.isRecording();
+  }
+
+  /**
+   * Bounded source-format probe for the LIVE 4K-upscaling decision. An
+   * in-progress live recording is frequently not format-scanned yet at tune
+   * time, so {@link MediaFile#getFileFormat()} reports 0x0 for the video and the
+   * {@link sage.enhance.EnhancementAdvisor} short-circuits to UNKNOWN_SOURCE --
+   * never offering an upscale for live even though the source bytes (e.g. 1080p
+   * HEVC) are already on disk. This recovers the real {@link
+   * sage.media.format.VideoFormat} by probing the file header, but runs the
+   * probe in a daemon worker with a hard timeout so a slow or actively-growing
+   * file can NEVER stall a tune: on timeout (or any error) it returns null and
+   * the caller keeps today's behavior (no offer). Scoped to the enhancement
+   * decision only -- the transcode/profile path never consults it.
+   *
+   * @param f         the file being played
+   * @param timeoutMs hard cap in ms; {@code <=0} disables the probe
+   * @return the probed video format, or null if unavailable within the budget
+   */
+  private static sage.media.format.VideoFormat probeSourceVideoFormatBounded(
+      final java.io.File f, int timeoutMs)
+  {
+    if (f == null || timeoutMs <= 0) return null;
+    final sage.media.format.ContainerFormat[] out = new sage.media.format.ContainerFormat[1];
+    Thread worker = new Thread("GpuEnhanceSourceProbe")
+    {
+      public void run()
+      {
+        try { out[0] = sage.media.format.FormatParser.getFileFormat(f); }
+        catch (Throwable t) { /* best-effort probe; ignore and yield null */ }
+      }
+    };
+    worker.setDaemon(true);
+    worker.start();
+    try { worker.join(timeoutMs); }
+    catch (InterruptedException ie) { Thread.currentThread().interrupt(); return null; }
+    sage.media.format.ContainerFormat cf = out[0];
+    return (cf != null) ? cf.getVideoFormat() : null;
   }
 
   /**
@@ -7210,6 +8017,81 @@ public class MiniPlayer implements DVDMediaPlayer
   protected volatile Mpeg2Transcoder tcSrc;
   protected volatile RemotePusherClient rpSrc;
 
+  /**
+   * Map the {@code container=} token of a property-string transcode mode
+   * (e.g. {@code "container=matroska;videocodec=COPY;audiocodec=COPY;"}) to the
+   * ffmpeg output-format name used by {@link sage.HwEncoder#ac4StreamCopyOk}.
+   * Returns {@code null} for a legacy fixed mode (no {@code container=}) or an
+   * unrecognized container, so the caller fails closed to the transcode ladder.
+   */
+  /**
+   * Rewrite the container token of an inline {@code container=...;videocodec=copy;...}
+   * live PUSH remux mode from Matroska to MPEG-TS when the client advertises
+   * MPEG2-TS push, so the more robust live transport is used. Returns the
+   * (possibly rewritten) mode, or the input unchanged when it does not apply.
+   *
+   * <p>Scope guards (all must hold, else returned unchanged):
+   * <ul>
+   *   <li>the config escape hatch
+   *       {@code miniplayer/prefer_mpegts_for_live_copy_push} is on (default true);</li>
+   *   <li>the mode is an inline custom mode carrying {@code videocodec=copy}
+   *       (a copy-family push — never a re-encode ladder mode);</li>
+   *   <li>the current container token is {@code matroska}/{@code mkv};</li>
+   *   <li>the client advertises MPEG2-TS push ({@code tsPushOK}).</li>
+   * </ul>
+   * Pure and side-effect free for unit testing.
+   *
+   * @param mode      the transcode mode string (may be null)
+   * @param tsPushOK  true when the client advertises an MPEG2-TS push container
+   * @return the rewritten mode, or {@code mode} unchanged when the switch does not apply
+   */
+  static String preferTsContainerForLiveCopyPush(String mode, boolean tsPushOK)
+  {
+    if (mode == null) return mode;
+    if (!tsPushOK) return mode;
+    // Default OFF: tsPushOK here is the *aggregate* client capability
+    // (isSupportedPushContainerFormat merges all advertised players). On the
+    // real android_media3 client the ACTIVE exoplayer surface only supports
+    // MATROSKA for push (MP4 is pull-only, MPEG2-TS is advertised solely by the
+    // fallback ijk software surface). Pushing HEVC+E-AC-3 in TS to media3
+    // yielded video but NO AUDIO (media3's TS extractor dropped the E-AC-3
+    // track). Until this is gated on the *active surface's* container set (not
+    // the aggregate), keep the proven Matroska+E-AC-3 push path — which
+    // delivers audio — as the default. Opt in per-deployment only for clients
+    // whose active surface genuinely supports MPEG2-TS push.
+    if (!Sage.getBoolean("miniplayer/prefer_mpegts_for_live_copy_push", false)) return mode;
+    String low = mode.toLowerCase(java.util.Locale.ROOT);
+    if (low.indexOf("videocodec=copy") < 0) return mode;
+    if (!(low.contains("container=matroska") || low.contains("container=mkv"))) return mode;
+    return mode.replaceAll("(?i)container=matroska", "container=mpegts")
+               .replaceAll("(?i)container=mkv", "container=mpegts");
+  }
+
+  private static String ffmpegMuxNameForTranscodeMode(String prefTranscodeMode)
+  {
+    if (prefTranscodeMode == null || prefTranscodeMode.indexOf('=') < 0) return null;
+    String container = null;
+    java.util.StringTokenizer mt = new java.util.StringTokenizer(prefTranscodeMode, ";");
+    while (mt.hasMoreTokens())
+    {
+      String t = mt.nextToken();
+      int eq = t.indexOf('=');
+      if (eq < 0) continue;
+      if ("container".equalsIgnoreCase(t.substring(0, eq).trim()))
+      {
+        container = t.substring(eq + 1).trim();
+        break;
+      }
+    }
+    if (container == null) return null;
+    String c = container.toLowerCase(java.util.Locale.ROOT);
+    if ("matroska".equals(c) || "mkv".equals(c) || "webm".equals(c)) return "matroska";
+    if ("mp4".equals(c) || "ismv".equals(c) || "mov".equals(c)) return "mp4";
+    if ("mpegts".equals(c) || "ts".equals(c)) return "mpegts";
+    return null;
+  }
+
+
   protected final Object decoderLock = new Object();
 
   protected java.awt.Dimension videoDimensions;
@@ -7324,10 +8206,44 @@ public class MiniPlayer implements DVDMediaPlayer
   private int pushBufferSize;
 
   // Server video enhancement tier decided for the CURRENT tune, carried from the
-  // post-rank decision block to the STREAMINFO / ng_fmt hint sites (which live
-  // in a different lexical scope). NONE = no enhancement, behavior unchanged.
+  // post-rank decision block to the STREAMINFO hint site (which lives in a
+  // different lexical scope). NONE = no enhancement, behavior unchanged.
   private volatile sage.enhance.EnhancementTier currentTuneEnhanceTier =
       sage.enhance.EnhancementTier.NONE;
+
+  // Winning surface's declared AUDIO_MAX_CHANNELS for the CURRENT tune (0 =
+  // legacy/undeclared). Carried from the post-rank decision block to the AC-4
+  // sidecar wiring so the enhance path preserves 5.1 only for a client that
+  // advertised it (or, when undeclared, a passthrough EAC3/AC3 codec pick).
+  private volatile int currentTuneSurfaceMaxAudioChannels;
+
+  // One-shot latch: true from the moment an enhance-active tune is negotiated
+  // until the FIRST push prime seek consumes it. A live enhanced tune-in
+  // otherwise reprimes the transcoder at seekTimeMillis=0 -- the BACK of the
+  // channel's timeshift buffer -- and, because the enhance stream is capped at
+  // the encoder's ~realtime rate (a plain push delivers the same backlog at disk
+  // speed), the client grinds through minutes of buffered content before it
+  // reaches live. seek() floors that initial prime to ~1.5s behind the live edge
+  // for recording sources only. One-shot so a later DELIBERATE rewind into the
+  // buffer is still honored. See seek()'s live-edge start-floor clause.
+  private volatile boolean enhanceLiveStartPending = false;
+
+  // True OUTPUT (post-transcode) wire codec NAMES (MediaFormat constants) for
+  // the CURRENT tune's browserhd/fMP4 delivery, resolved once at the
+  // CAP_EFFECTIVE_DELIVERY block (where the xcode mode is in scope) and consumed
+  // at the pull STREAMINFO site (a different lexical scope). null = source
+  // codecs are already the wire codecs (direct play / copy) so no override is
+  // applied. STREAMINFO is the sole native format channel; the browser/CMAF path
+  // reads codecs from the fMP4 init.mp4 (#EXT-X-MAP), so no side-channel here.
+  private volatile String ngOutVideoCodec;
+  private volatile String ngOutAudioCodec;
+
+  // Companion to ngOutVideoCodec/ngOutAudioCodec: the OUTPUT (post-transcode)
+  // wire CONTAINER name for the CURRENT tune's pull/pull-xcode delivery,
+  // resolved at the CAP_EFFECTIVE_DELIVERY block and consumed at the pull
+  // STREAMINFO site. null = the wire container is the source container (direct
+  // play) so no override is applied.
+  private volatile String ngOutContainer;
 
   // When an Android-class NG client that would DIRECT_PLAY (bare pull) has an
   // active enhancement tier but advertises NO pull-xcode delivery (only raw

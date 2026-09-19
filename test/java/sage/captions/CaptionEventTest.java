@@ -163,4 +163,84 @@ public class CaptionEventTest
     assertEquals(CaptionEvent.readingSpeedFloorSeconds(""), CaptionEvent.MIN_CUE_DURATION_SECONDS, EPS);
     assertEquals(CaptionEvent.readingSpeedFloorSeconds(null), CaptionEvent.MIN_CUE_DURATION_SECONDS, EPS);
   }
+
+  // ── Hold-until-next (gap filling) ────────────────────────────────────────
+
+  /**
+   * With hold-until-next enabled, a cue whose natural end leaves a blank gap
+   * before the next cue is extended forward to fill that gap (up to the next
+   * cue's begin), so the caption stays on screen until the next one appears
+   * instead of clearing early. The legacy overload leaves the gap.
+   */
+  @Test
+  public void holdUntilNextFillsGapToNextCue()
+  {
+    List<CaptionEvent> input = new ArrayList<>();
+    input.add(cue(10.0, 11.0, "First line"));   // natural end 11.0, next at 15.0 -> 4s gap
+    input.add(cue(15.0, 16.0, "Second line"));
+
+    // Legacy behavior: gap preserved, end stays at the reading floor (11.0).
+    List<CaptionEvent> legacy = CaptionEvent.coalesce(input);
+    assertEquals(legacy.get(0).getEndSeconds(), 11.0, EPS, "legacy overload must not fill the gap");
+
+    // Hold enabled with an 8s cap: end extends to the next cue's begin (15.0).
+    List<CaptionEvent> held = CaptionEvent.coalesce(input, 8.0);
+    assertEquals(held.get(0).getBeginSeconds(), 10.0, EPS, "begin is untouched");
+    assertEquals(held.get(0).getEndSeconds(), 15.0, EPS, "end should hold until the next cue begins");
+    assertEquals(held.get(1).getBeginSeconds(), 15.0, EPS);
+  }
+
+  /**
+   * The hold is capped: when the gap to the next cue exceeds the max-hold, the
+   * cue clears after max-hold rather than lingering the entire silence.
+   */
+  @Test
+  public void holdUntilNextIsCappedByMaxHold()
+  {
+    List<CaptionEvent> input = new ArrayList<>();
+    input.add(cue(10.0, 11.0, "Talks then long silence"));
+    input.add(cue(40.0, 41.0, "Much later"));   // 29s gap
+
+    List<CaptionEvent> held = CaptionEvent.coalesce(input, 8.0);
+    assertEquals(held.get(0).getEndSeconds(), 18.0, EPS,
+        "end should be capped at begin + maxHold (10.0 + 8.0), not stretched to the next cue");
+  }
+
+  /** Hold never overlaps the next cue: the end is still capped at the next begin. */
+  @Test
+  public void holdUntilNextNeverOverlaps()
+  {
+    List<CaptionEvent> input = new ArrayList<>();
+    input.add(cue(10.0, 12.0, "First"));
+    input.add(cue(11.0, 13.0, "Overlapping next"));   // starts before first's natural end
+
+    List<CaptionEvent> held = CaptionEvent.coalesce(input, 8.0);
+    assertTrue(held.get(0).getEndSeconds() <= held.get(1).getBeginSeconds() + EPS,
+        "held cue must not overlap the next cue's begin");
+  }
+
+  /** The last cue on a track (no following cue) is unaffected by hold-until-next. */
+  @Test
+  public void holdUntilNextLeavesLastCueUntouched()
+  {
+    List<CaptionEvent> input = new ArrayList<>();
+    input.add(cue(10.0, 11.0, "First"));
+    input.add(cue(15.0, 16.0, "Last line"));
+
+    List<CaptionEvent> held = CaptionEvent.coalesce(input, 8.0);
+    CaptionEvent last = held.get(held.size() - 1);
+    assertEquals(last.getEndSeconds(), 16.0, EPS, "last cue keeps its natural (floored) end");
+  }
+
+  /** A non-positive cap disables hold entirely (identical to the legacy overload). */
+  @Test
+  public void holdUntilNextDisabledWhenCapNonPositive()
+  {
+    List<CaptionEvent> input = new ArrayList<>();
+    input.add(cue(10.0, 11.0, "First line"));
+    input.add(cue(15.0, 16.0, "Second line"));
+
+    List<CaptionEvent> zero = CaptionEvent.coalesce(input, 0.0);
+    assertEquals(zero.get(0).getEndSeconds(), 11.0, EPS, "cap <= 0 must preserve the gap");
+  }
 }

@@ -1,5 +1,17 @@
 # NG Stream Format Hint (`ng_fmt`)
 
+> **⚠️ RETIRED (NG standardization).** The server no longer emits `ng_fmt` in either push or
+> pull mode, nor the related `;ng_out=` suffix on `CAP_EFFECTIVE_DELIVERY`. The NG format channel
+> is now **one per transport**:
+> - **Native NG clients** (push and pull) get codecs from **STREAMINFO** (`MEDIACMD 40`) — a
+>   strict superset of `ng_fmt` that also carries resolution/fps/tracks. See
+>   `docs/NG_STREAMINFO_PROTOCOL.md`.
+> - **Browser / CMAF (hls.js / native Safari / Tizen AVPlay)** get codecs from the standard fMP4
+>   `init.mp4` referenced by `#EXT-X-MAP` in the HLS media playlist — no custom field.
+>
+> This document is retained for historical reference and to help client teams diff what they are
+> removing. Do not implement new `ng_fmt` parsing. Migration guide: `NG-Format-Channel-Migration.md`.
+
 ## Protocol Change Summary
 
 The SageTV server now appends an `ng_fmt` MIME format hint to `openURL` messages for NG-capable sessions in **both** push and pull modes. This provides container, video, and audio MIME type information so the client can configure its decoder pipeline immediately without probing/sniffing the stream (which previously added 15-20 seconds of latency).

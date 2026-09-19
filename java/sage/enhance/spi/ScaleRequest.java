@@ -30,18 +30,35 @@ public final class ScaleRequest
   private final EnhancementTier tier;
   private final int targetWidth;
   private final int targetHeight;
+  private final int sourceWidth;
   private final int sourceHeight;
   private final boolean sourceInterlaced;
   private final String builtinScalerHint;
   private final Purpose purpose;
 
+  /**
+   * Legacy constructor without a source width. Retained for callers (probe
+   * sites, tests, and out-of-tree providers) that only know the source height;
+   * {@link #getSourceWidth()} then reports {@code 0} (unknown). Prefer the
+   * {@code sourceWidth}-carrying constructor on the live plan path so a provider
+   * can frame the headerless decode pipe from an explicit source geometry.
+   */
   public ScaleRequest(EnhancementTier tier, int targetWidth, int targetHeight,
                       int sourceHeight, boolean sourceInterlaced,
+                      String builtinScalerHint, Purpose purpose)
+  {
+    this(tier, targetWidth, targetHeight, 0, sourceHeight, sourceInterlaced,
+        builtinScalerHint, purpose);
+  }
+
+  public ScaleRequest(EnhancementTier tier, int targetWidth, int targetHeight,
+                      int sourceWidth, int sourceHeight, boolean sourceInterlaced,
                       String builtinScalerHint, Purpose purpose)
   {
     this.tier = (tier == null) ? EnhancementTier.NONE : tier;
     this.targetWidth = targetWidth;
     this.targetHeight = targetHeight;
+    this.sourceWidth = sourceWidth;
     this.sourceHeight = sourceHeight;
     this.sourceInterlaced = sourceInterlaced;
     this.builtinScalerHint = builtinScalerHint;
@@ -51,6 +68,12 @@ public final class ScaleRequest
   public EnhancementTier getTier() { return tier; }
   public int getTargetWidth() { return targetWidth; }
   public int getTargetHeight() { return targetHeight; }
+
+  /** The source frame width in pixels, or {@code 0} when the caller did not
+   *  supply it. A provider that reads raw frames from the decode pipe should use
+   *  this (with {@link #getSourceHeight()}) to size the headerless input rather
+   *  than inferring width from the height and an assumed aspect ratio. */
+  public int getSourceWidth() { return sourceWidth; }
   public int getSourceHeight() { return sourceHeight; }
   public boolean isSourceInterlaced() { return sourceInterlaced; }
 
@@ -69,7 +92,8 @@ public final class ScaleRequest
   public String toString()
   {
     return "ScaleRequest[" + tier.token() + " " + targetWidth + "x" + targetHeight
-        + " src=" + sourceHeight + (sourceInterlaced ? "i" : "p")
+        + " src=" + (sourceWidth > 0 ? sourceWidth + "x" : "") + sourceHeight
+        + (sourceInterlaced ? "i" : "p")
         + " hint=" + builtinScalerHint + " " + purpose + "]";
   }
 }

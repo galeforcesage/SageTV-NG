@@ -472,7 +472,16 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     // With multi-UI clients we now need to call this on goodbye in order to clean up any watches we have
     try
     {
-      seek.finishWatch(uiMgr);
+      // seek is assigned at the top of run(); if this VideoFrame is torn down before its
+      // thread reached that line (e.g. a client that connected then disconnected early),
+      // the field is still null and the old code NPE'd here -- which meant finishWatch was
+      // NEVER called, so the tuner/live-buffer encoder was never released and kept recording
+      // until the whole server shut down (observed: WGN live buffer growing for 15 min after
+      // the client left). Fall back to the same singleton run() would have assigned so the
+      // watch is always released on teardown.
+      Hunter s = seek;
+      if (s == null) s = SeekerSelector.getInstance();
+      if (s != null) s.finishWatch(uiMgr);
     }catch(Exception e)
     {
       System.out.println("Error calling finishWatch from VF goodbye:" + e);
@@ -914,7 +923,8 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
             // that issue gets fixed...but for the meantime, in order to match V7 behavior...do this instead.
             if (eos || (waitTime <= 0 && (!currFile.isMusic() ||
                 (sage.media.format.MediaFormat.DTS.equals(currFile.getContainerFormat()) && uiMgr.getUIClientType() == UIClient.LOCAL && Sage.WINDOWS_OS)) &&
-                getRealDurMillis() > 1 && !currFile.isDVD() && (!liveControl || player instanceof DShowMediaPlayer)))
+                getRealDurMillis() > 1 && !currFile.isDVD() && (!liveControl || player instanceof DShowMediaPlayer ||
+                (liveFileInactivated && Sage.getBoolean("videoframe/seam_on_inactive_file", true)))))
             {
               if (processingWatchRequest)
               {
@@ -979,6 +989,43 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
                   }
                 }
                 if (Sage.DBG) System.out.println("watchMe=" + watchMe + " currFile=" + currFile);
+
+                // Live re-tune resilience: the current airing is still live but
+                // its buffer stopped (e.g. the sole viewer disconnected, which
+                // releases the tuner) and the searches above found no next- or
+                // current-record file. The legacy path below would STD_COMPLETE
+                // here and dump the user back to the EPG (observed: exit live TV,
+                // re-select "Watch Now" on the same channel -> plays the stale
+                // tail for ~1s -> EOS -> EPG). Instead, re-request a live watch on
+                // the current airing: requestWatch(Airing) re-tunes the channel
+                // (with its own multi-encoder failover) and returns the fresh live
+                // MediaFile, which we then queue to watch — so a dropped/stalled
+                // live buffer transparently re-acquires the tuner.
+                if ((watchMe == null || watchMe == currFile)
+                    && Sage.getBoolean("videoframe/live_retune_on_stalled_buffer", true))
+                {
+                  Airing liveAir = currFile.getContentAiring();
+                  if (liveAir != null && !(liveAir instanceof MediaFile.FakeAiring)
+                      && liveAir.getSchedulingEnd() > Sage.time() && pcAiringCheck(liveAir))
+                  {
+                    if (Sage.DBG) System.out.println("VideoFrame: live buffer ended while airing still live ("
+                        + liveAir + ") — re-tuning the channel instead of dropping to the EPG");
+                    int[] rerr = new int[1];
+                    MediaFile retuned = seek.requestWatch(liveAir, rerr, uiMgr);
+                    if (retuned != null && rerr[0] == 0)
+                    {
+                      notifyPlaybackFinished();
+                      watchQueue.insertElementAt(new VFJob(TIME_SET, retuned.getRecordTime()), 0);
+                      watchQueue.insertElementAt(new VFJob(WATCH_MF, retuned, playlistChain.isEmpty() ?
+                          null : ((Playlist) playlistChain.firstElement())), 0);
+                      waitTime = -1;
+                      continue;
+                    }
+                    else if (Sage.DBG)
+                      System.out.println("VideoFrame: live re-tune failed (err=" + rerr[0]
+                          + " retuned=" + retuned + ") — falling through to legacy handling");
+                  }
+                }
 
                 // NOTE: There's a serious problem here. If the VF detects a file is stopped
                 // by its request to watch something new before that job is put into the watch queue
@@ -2398,6 +2445,9 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       }
 
       currFile = daJob.file;
+      // New file to watch: clear any stale live inactive-file flag from the prior
+      // airing so its boundary seam decision is made fresh (see liveFileInactivated).
+      liveFileInactivated = false;
       if (FileDownloader.isDownloading(null, currFile.getFile(0)))
         downer = FileDownloader.getFileDownloader(currFile.getFile(0));
       else
@@ -2898,6 +2948,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       if (segFile != null && (player instanceof MetaMediaPlayer || (segFile.toString().equals(daJob.inactiveFilename) && player != null)))
       {
         if (Sage.DBG) System.out.println("VF notified of Inactive File");
+        liveFileInactivated = true;
         if (player instanceof MetaMediaPlayer)
           ((MetaMediaPlayer) player).inactiveFile(daJob.inactiveFilename);
         else
@@ -6694,6 +6745,18 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   // seamed together automatically to give a fluid live timshift. When those
   // seamings occur, liveControl maintains its true state.
   private boolean liveControl;
+  // NG: set when the server delivers an INACTIVE_FILE notice for the file we are
+  // currently playing on the live path. Under liveControl with a MiniPlayer (the
+  // NG server-transcode push path), the seam to the next airing normally waits for
+  // a real player EOS -- but the NG -follow/-stdinctrl (and external GPU-enhance)
+  // pipeline does not reliably deliver that EOS at a program boundary, so playback
+  // would hang on the finished file instead of rolling forward. The INACTIVE_FILE
+  // notice is the server's confirmation that the file is finalized -- exactly the
+  // precondition the EOS-wait was standing in for -- so once we've seen it we let
+  // the seam proceed on drain (waitTime<=0) without the missing EOS. Cleared when
+  // a new file is loaded to watch (WATCH_MF). Gated by
+  // videoframe/seam_on_inactive_file (default true).
+  private boolean liveFileInactivated;
   private boolean networkEncoderPlayback;
   private long extraEncodingDelay;
 

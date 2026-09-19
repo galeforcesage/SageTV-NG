@@ -45,11 +45,17 @@ public class EnhancementSurfacelessClientTest
     return ClientConstraints.parse("exoplayer", videoRows, "", "");
   }
 
+  private sage.enhance.spi.ScaleProviderRegistration upscaleReg;
+
   @BeforeMethod
   public void setUp() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();
     Sage.put(EnhancementAdvisor.PROP_ENABLED, "true");
+    sage.enhance.spi.ScaleProviderRegistry.getInstance().resetForTest();
+    upscaleReg = sage.enhance.spi.ScaleProviderRegistry.getInstance().register(
+        EnhancementAdvisorTest.fakeUpscalerProvider());
+    Sage.put("playback/gpu_enhance/scale_provider", "test-upscaler");
   }
 
   @AfterMethod
@@ -57,6 +63,9 @@ public class EnhancementSurfacelessClientTest
   {
     Sage.remove(EnhancementAdvisor.PROP_ENABLED);
     Sage.remove(EnhancementDryRun.PROP_DRY_RUN);
+    Sage.remove("playback/gpu_enhance/scale_provider");
+    if (upscaleReg != null) { upscaleReg.close(); upscaleReg = null; }
+    sage.enhance.spi.ScaleProviderRegistry.getInstance().resetForTest();
   }
 
   /**

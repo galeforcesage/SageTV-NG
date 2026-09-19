@@ -143,6 +143,13 @@ public class HTTPLSServer implements Runnable
         if (paramMap.containsKey("host"))
           myHost = (String) paramMap.get("host");
 
+        // A bridged PWA arrives over loopback, so the TCP peer is always the
+        // bridge and locality can't be read from the socket. If the bridge
+        // forwarded the real client IP, capture the first hop so setupTranscoder
+        // can classify LAN vs WAN from the actual viewer. Trusted deliberately:
+        // spoofing only changes that client's own quality tier.
+        forwardedForClientIp = extractForwardedForClientIp(paramMap);
+
         byte[] requestBody = null;
         int contentLength = parseContentLength(paramMap);
         if (contentLength > 0)
@@ -188,6 +195,18 @@ public class HTTPLSServer implements Runnable
           continue;
         }
 
+        // --- GPU-enhance active bandwidth probe endpoint ---
+        // A client times a bulk GET of this to measure real link capacity
+        // (correct on LAN and over VPN, unlike the passive render-socket
+        // estimate) and reports the result back via MEASURED_BANDWIDTH_KBPS.
+        // Streams N throwaway bytes; N defaults small and is hard-capped so the
+        // probe is big enough for a real readout but never disruptive.
+        if (pageRequest.startsWith("/bwprobe"))
+        {
+          handleBandwidthProbe(pageRequest, requestMethod);
+          if (keepAlive) continue; else break;
+        }
+
         // Now determine which type of the 3 requests it is
         if (!pageRequest.startsWith("/iosstream_"))
         {
@@ -195,13 +214,23 @@ public class HTTPLSServer implements Runnable
           break;
         }
         boolean isPlaylistRequest = pageRequest.endsWith(".m3u8");
-        if (!isPlaylistRequest && !pageRequest.endsWith(".ts"))
+        // Phase 1 CMAF/fMP4 (Option A) request forms. These are STRICTLY
+        // ADDITIVE: legacy iOS/Mac clients only ever emit ".m3u8" (4 tokens) and
+        // ".ts" (5 tokens), so the branches below never fire for them and their
+        // code paths are unchanged. ".m4s" = fMP4 media segment, "init.mp4" =
+        // the CMAF init segment, and a "_fmp4"-suffixed ".m3u8" = the fMP4
+        // variant playlist (5 tokens, which legacy .m3u8 never is).
+        boolean isFmp4Segment = pageRequest.endsWith(".m4s");
+        boolean isFmp4Init = pageRequest.endsWith(".mp4");
+        if (!isPlaylistRequest && !pageRequest.endsWith(".ts") && !isFmp4Segment && !isFmp4Init)
         {
           if (Sage.DBG) System.out.println("Invalid page request-2 made for iOS HTTP server of: \"" + pageRequest + "\" abort connection!");
           break;
         }
 
         String subRequest = pageRequest.substring(10, pageRequest.lastIndexOf('.'));
+        boolean isFmp4Playlist = isPlaylistRequest && subRequest.endsWith("_fmp4");
+        boolean fmp4 = isFmp4Segment || isFmp4Init || isFmp4Playlist;
         java.util.StringTokenizer toker = new java.util.StringTokenizer(subRequest, "_");
         if (toker.countTokens() != 4 && toker.countTokens() != 5)
         {
@@ -249,6 +278,11 @@ public class HTTPLSServer implements Runnable
         String sessionID = (String)paramMap.get("x-playback-session-id");
         if (sessionID == null)
           sessionID = clientMac + "-" + mfId + "-" + segmentNum;
+        // Keep the fMP4 (CMAF) transcoder in a separate cache slot from any TS
+        // transcoder for the same client/file so setupTranscoder never hands a
+        // dynamicts session to an fMP4 request (different output container).
+        if (fmp4)
+          sessionID = sessionID + "-fmp4";
 
         MediaFile mf = Wizard.getInstance().getFileForID(mfId);
         if (mf == null)
@@ -267,7 +301,89 @@ public class HTTPLSServer implements Runnable
           if (Sage.DBG) System.out.println("Invalid segment num for " + mf + " in iOS HTTP Request of: " + segmentNum);
           break;
         }
-        if ("list".equals(bwStr) && isPlaylistRequest)
+        if (fmp4)
+        {
+          // ===================== Phase 1 CMAF/fMP4 path =====================
+          // Entirely separate from the legacy TS branches below. ffmpeg's hls
+          // muxer writes finalized init.mp4 + seg%d.m4s files (Option A); we
+          // just serve them. The transcoder is configured for "dynamicfmp4" in
+          // setupTranscoder(..., true).
+          String base = "http://" + myHost + "/iosstream_" + clientMac + "_" + mfId + "_" + segmentNum + "_" + bwkbps;
+          if (isFmp4Init)
+          {
+            if (Sage.DBG) System.out.println("CMAF Request for init segment mf=" + mfId + " seg=" + segmentNum + " clientMac=" + clientMac);
+            setupTranscoder(sessionID, mf, segmentNum, bwkbps, 0, uiMgr == null ? null : uiMgr.getVideoFrame(), true);
+            xcode.lastActivityTime = Sage.time();
+            java.io.File initFile = xcode.transcoder.getFmp4InitFile();
+            if (initFile == null)
+            {
+              if (Sage.DBG) System.out.println("CMAF init segment not available for mf=" + mfId + "; abort");
+              break;
+            }
+            sendBackMediaFile(initFile, "video/mp4");
+          }
+          else if (isFmp4Playlist)
+          {
+            // fMP4 variant playlist (HLS v7 + CMAF). Mirrors the TS variant
+            // playlist (@288) but with EXT-X-MAP + .m4s parts.
+            sb.setLength(0);
+            sb.append("#EXTM3U\r\n");
+            sb.append("#EXT-X-VERSION:7\r\n");
+            sb.append("#EXT-X-MEDIA-SEQUENCE:0\r\n");
+            sb.append("#EXT-X-TARGETDURATION:" + partDur + "\r\n");
+            sb.append("#EXT-X-MAP:URI=\"" + base + "_init.mp4\"\r\n");
+            long remTime = mf.getDuration(segmentNum) / 1000;
+            int numParts = (int)Math.ceil((double)remTime / partDur);
+            if (Sage.DBG) System.out.println("CMAF Request for fMP4 playlist at " + bwkbps + "kbps for mf=" + mfId + " seg=" + segmentNum + " clientMac=" + clientMac + " totalParts=" + numParts);
+            int i = 0;
+            while (remTime > 0)
+            {
+              long currDur = Math.min(remTime, partDur);
+              remTime -= partDur;
+              sb.append("#EXTINF:" + currDur + ".0,\r\n");
+              sb.append(base + "_" + i++ + ".m4s\r\n");
+            }
+            if (!mf.isRecording(segmentNum))
+              sb.append("#EXT-X-ENDLIST\r\n");
+
+            // Warm up the transcoder + init + first part before returning the
+            // playlist (mirrors the TS prebuffer @312 to avoid a cold start).
+            if (setupTranscoder(sessionID, mf, segmentNum, bwkbps, 0, uiMgr == null ? null : uiMgr.getVideoFrame(), true))
+            {
+              xcode.transcoder.getFmp4InitFile();
+              java.io.File warm = xcode.transcoder.getSegmentFile(0);
+              if (warm != null) xcode.transcoder.markSegmentConsumed(0);
+              xcode.lastActivityTime = Sage.time();
+            }
+            sendHTTPM3U8Response(sb.toString());
+          }
+          else // isFmp4Segment (.m4s)
+          {
+            int streamPart;
+            try
+            {
+              streamPart = Integer.parseInt(toker.nextToken());
+            }
+            catch (Exception nfe)
+            {
+              if (Sage.DBG) System.out.println("Invalid CMAF segment request (no part#): \"" + pageRequest + "\"");
+              break;
+            }
+            if (Sage.DBG) System.out.println("CMAF Request for media part " + streamPart + " mf=" + mfId + " seg=" + segmentNum + " clientMac=" + clientMac);
+            setupTranscoder(sessionID, mf, segmentNum, bwkbps, streamPart, uiMgr == null ? null : uiMgr.getVideoFrame(), true);
+            xcode.lastRequestedPart = streamPart;
+            java.io.File targetFile = xcode.transcoder.getSegmentFile(streamPart);
+            if (targetFile == null)
+            {
+              if (Sage.DBG) System.out.println("CMAF part " + streamPart + " not available for mf=" + mfId + "; abort");
+              break;
+            }
+            sendBackMediaFile(targetFile, "video/mp4");
+            xcode.transcoder.markSegmentConsumed(streamPart);
+            if (Sage.DBG) System.out.println("CMAF finished sending part " + streamPart + " for mf=" + mfId + " length=" + targetFile.length());
+          }
+        }
+        else if ("list".equals(bwStr) && isPlaylistRequest)
         {
           if (Sage.DBG) System.out.println("iOS HTTP Request for overall playlist for mf=" + mfId + " segment=" + segmentNum + " clientMac=" + clientMac);
           sb.setLength(0);
@@ -934,6 +1050,63 @@ public class HTTPLSServer implements Runnable
     {
     }
     return "";
+  }
+
+  // Pulls the real client IP the bridge/proxy forwarded via X-Forwarded-For.
+  // XFF is a comma-separated chain (client, proxy1, proxy2...); the first hop
+  // is the original client. Returns "" when absent (direct, non-bridged client).
+  private String extractForwardedForClientIp(java.util.Map paramMap)
+  {
+    if (paramMap == null)
+      return "";
+    String xff = trimToEmpty((String) paramMap.get("x-forwarded-for"));
+    if (xff.length() == 0)
+      return "";
+    int comma = xff.indexOf(',');
+    if (comma >= 0)
+      xff = xff.substring(0, comma);
+    return xff.trim();
+  }
+
+  // Classifies a forwarded client IP as LAN (true) or WAN (false) relative to
+  // the server, using the same per-octet subnet-mask compare the MiniClient
+  // control path uses. Returns null when it can't decide (bad/IPv6 address, no
+  // server address), so the caller can fall back to the socket-derived value.
+  // Note: for a loopback-bridged request sake.getLocalAddress() is 127.0.0.1,
+  // so we resolve the server's real LAN address via getLocalHost() instead.
+  private Boolean isForwardedClientLocal(String clientIpStr)
+  {
+    try
+    {
+      byte[] remoteIP = java.net.InetAddress.getByName(clientIpStr).getAddress();
+      if (remoteIP.length != 4)
+        return null; // IPv4 only, matching the rest of the locality logic
+      java.net.InetAddress serverAddr = null;
+      try
+      {
+        if (sake != null && sake.socket() != null)
+          serverAddr = sake.socket().getLocalAddress();
+      }
+      catch (Throwable t) {}
+      if (serverAddr == null || serverAddr.isLoopbackAddress() || serverAddr.isAnyLocalAddress())
+        serverAddr = java.net.InetAddress.getLocalHost();
+      byte[] localIP = serverAddr.getAddress();
+      if (localIP.length != 4)
+        return null;
+      byte[] subnetMask = IOUtils.getSubnetMask(serverAddr).getAddress();
+      boolean local =
+          (localIP[0] & subnetMask[0]) == (remoteIP[0] & subnetMask[0]) &&
+          (localIP[1] & subnetMask[1]) == (remoteIP[1] & subnetMask[1]) &&
+          (localIP[2] & subnetMask[2]) == (remoteIP[2] & subnetMask[2]) &&
+          (localIP[3] & subnetMask[3]) == (remoteIP[3] & subnetMask[3]);
+      return Boolean.valueOf(local);
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("httpls X-Forwarded-For locality check failed for '"
+          + clientIpStr + "': " + t);
+      return null;
+    }
   }
 
   private int parseIntSafe(String s, int fallback)
@@ -2755,6 +2928,75 @@ public class HTTPLSServer implements Runnable
     }
   }
 
+  /**
+   * Serve the GPU-enhance active bandwidth probe. Streams {@code N} throwaway
+   * bytes so a client can time a real bulk transfer and derive true link
+   * capacity (correct on LAN and over VPN, where the passive render-socket
+   * estimate badly under-reads). {@code N} comes from {@code ?bytes=} clamped
+   * to [{@code probe_bytes_min}, {@code probe_bytes_max}] (defaults 64 KiB ..
+   * 16 MiB), defaulting to {@code probe_bytes_default} (4 MiB) -- big enough for
+   * a stable readout, small enough to never disrupt playback. Response is
+   * uncacheable so intermediaries can't satisfy it without touching the wire.
+   */
+  private void handleBandwidthProbe(String pageRequest, String requestMethod) throws java.io.IOException
+  {
+    if (!"GET".equals(requestMethod))
+    {
+      sendHTTPErrorResponse(405, "Method Not Allowed", "bwprobe supports GET only.");
+      return;
+    }
+    int defBytes = Sage.getInt("playback/gpu_enhance/probe_bytes_default", 4 * 1024 * 1024);
+    int minBytes = Sage.getInt("playback/gpu_enhance/probe_bytes_min", 64 * 1024);
+    int maxBytes = Sage.getInt("playback/gpu_enhance/probe_bytes_max", 16 * 1024 * 1024);
+    if (minBytes < 1) minBytes = 1;
+    if (maxBytes < minBytes) maxBytes = minBytes;
+    int nBytes = defBytes;
+    int qIdx = pageRequest.indexOf('?');
+    if (qIdx >= 0)
+    {
+      java.util.StringTokenizer qt = new java.util.StringTokenizer(pageRequest.substring(qIdx + 1), "&");
+      while (qt.hasMoreTokens())
+      {
+        String kv = qt.nextToken();
+        int eq = kv.indexOf('=');
+        if (eq <= 0) continue;
+        if (kv.substring(0, eq).trim().equalsIgnoreCase("bytes"))
+        {
+          try { nBytes = Integer.parseInt(kv.substring(eq + 1).trim()); }
+          catch (NumberFormatException nfe) { nBytes = defBytes; }
+        }
+      }
+    }
+    if (nBytes < minBytes) nBytes = minBytes;
+    if (nBytes > maxBytes) nBytes = maxBytes;
+
+    writeBuf.clear();
+    appendStringToWriteBuf("HTTP/1.1 200 OK\r\n");
+    appendStringToWriteBuf("Server: SageTV " + UIManager.SAGE + "\r\n");
+    appendStringToWriteBuf("Date: " + new java.util.Date().toString() + "\r\n");
+    appendStringToWriteBuf("Cache-Control: no-store, no-cache, must-revalidate\r\n");
+    appendStringToWriteBuf("Pragma: no-cache\r\n");
+    appendStringToWriteBuf("Content-Type: application/octet-stream\r\n");
+    appendStringToWriteBuf("Access-Control-Allow-Origin: *\r\n");
+    appendStringToWriteBuf("Content-Length: " + nBytes + "\r\n\r\n");
+    writeBuf.flip();
+    sake.write(writeBuf);
+
+    // Stream a reusable fixed chunk rather than allocating N bytes up front.
+    byte[] chunk = new byte[Math.min(nBytes, 64 * 1024)];
+    // Content is irrelevant to a throughput measurement; leave it as zeros.
+    long remaining = nBytes;
+    while (remaining > 0)
+    {
+      int len = (int) Math.min(remaining, chunk.length);
+      java.nio.ByteBuffer out = java.nio.ByteBuffer.wrap(chunk, 0, len);
+      while (out.hasRemaining())
+        sake.write(out);
+      remaining -= len;
+    }
+    if (Sage.DBG) System.out.println("GPU_ENHANCE bwprobe served " + nBytes + " bytes");
+  }
+
   private void sendHTTPErrorResponse(int statusCode, String statusText, String message) throws java.io.IOException
   {
     String body = "{\"error\":\"" + escapeForJson(message) + "\"}";
@@ -2830,6 +3072,15 @@ public class HTTPLSServer implements Runnable
   // Returns true if a new transcoder was spawned
   private static Object xcodeSetupLock = new Object();
   private boolean setupTranscoder(String sessionID, MediaFile mf, int segmentNum, int bwkbps, int streamPart, VideoFrame vf) throws java.io.IOException
+  {
+    return setupTranscoder(sessionID, mf, segmentNum, bwkbps, streamPart, vf, false);
+  }
+
+  // fmp4 == true selects the Phase 1 CMAF/fMP4 output mode (dynamicfmp4): ffmpeg
+  // writes finalized init.mp4 + seg%d.m4s files into a per-session temp dir
+  // instead of the TS segment ring. Everything else (client audio negotiation,
+  // bandwidth adaptation, caching) is shared with the legacy TS path.
+  private boolean setupTranscoder(String sessionID, MediaFile mf, int segmentNum, int bwkbps, int streamPart, VideoFrame vf, boolean fmp4) throws java.io.IOException
   {
     synchronized (xcodeSetupLock)
     {
@@ -2907,6 +3158,36 @@ public class HTTPLSServer implements Runnable
             // that track only. -1 (client-mode / legacy) leaves all audio.
             xcode.transcoder.setHttplsSurfaceServerAudioRelIndex(
                 mcsr.getCurrentSurfaceServerAudioRelIndex());
+            // Right-sizing (no upscale): the client's physical display (sink)
+            // resolution, when it advertised one via the NG enhancement caps
+            // round. Legacy clients never send it, so this stays 0 and the
+            // transcoder right-sizes from source + LAN/WAN ceiling instead.
+            xcode.transcoder.setHttplsSinkResolution(mcsr.getSinkWidth(), mcsr.getSinkHeight());
+            // LAN vs WAN tier. The pull path uses the MiniClient control
+            // socket's subnet-mask compare (setLocalClient(mcsr.isLocalConnection())).
+            // But a bridged PWA's control + HTTP sockets both terminate at the
+            // loopback bridge, so mcsr.isLocalConnection() reports LOCAL for
+            // every PWA session regardless of where the real viewer is -- a
+            // WAN phone would wrongly get the LAN ceiling (1080p/60, fatter
+            // bitrate) and stall. When the bridge forwarded the real client IP
+            // (X-Forwarded-For), classify from THAT instead; otherwise fall
+            // back to the socket-derived value for direct MiniClients.
+            boolean localClientDecision = mcsr.isLocalConnection();
+            String localClientBasis = "peer/mcsr";
+            if (Sage.getBoolean("httpls_trust_forwarded_for", true)
+                && forwardedForClientIp != null && forwardedForClientIp.length() > 0)
+            {
+              Boolean fwdLocal = isForwardedClientLocal(forwardedForClientIp);
+              if (fwdLocal != null)
+              {
+                localClientDecision = fwdLocal.booleanValue();
+                localClientBasis = "X-Forwarded-For=" + forwardedForClientIp;
+              }
+            }
+            xcode.transcoder.setLocalClient(localClientDecision);
+            if (Sage.DBG)
+              System.out.println("iOS HTTP server: localClient=" + localClientDecision
+                  + " (" + localClientBasis + ")");
             if (Sage.DBG && (surfAud.length() > 0 || surfVid.length() > 0))
               System.out.println("iOS HTTP server: surface v2.1 targets for '"
                   + mcsr.getCurrentSurfaceId() + "' audio=" + surfAud
@@ -2917,6 +3198,23 @@ public class HTTPLSServer implements Runnable
         catch (Throwable t)
         {
           if (Sage.DBG) System.out.println("iOS HTTP server: could not resolve client audio codecs: " + t);
+        }
+
+        if (fmp4)
+        {
+          // CMAF/fMP4: ffmpeg's hls muxer writes finalized init.mp4 + seg%d.m4s
+          // into a per-session temp dir (Option A). No stdout ring on this path.
+          java.io.File fmp4Dir = java.io.File.createTempFile("stvcmaf", "");
+          fmp4Dir.delete();
+          fmp4Dir.mkdirs();
+          fmp4Dir.deleteOnExit();
+          xcode.transcoder.enableFmp4SegmentedOutput(partDur * 1000, fmp4Dir);
+          xcode.transcoder.setActiveFile(mf.isRecording(segmentNum));
+          xcode.transcoder.setSourceFile(null, mf.getFile(segmentNum));
+          xcode.transcoder.setTranscodeFormat("dynamicfmp4", mf.getFileFormat());
+          xcode.transcoder.seekToTime(streamPart * partDur * 1000);
+          cachedXCodeMap.put(sessionID, xcode);
+          return true;
         }
 
         int numTempFiles = Sage.getInt("xcode_num_temp_httpls_segments", 20);
@@ -2950,7 +3248,7 @@ public class HTTPLSServer implements Runnable
         xcode.transcoder.stopTranscode();
         //cachedXCodeMap.remove(sessionID);
         xcode.transcoder = null;
-        return setupTranscoder(sessionID, mf, segmentNum, bwkbps, streamPart, vf);
+        return setupTranscoder(sessionID, mf, segmentNum, bwkbps, streamPart, vf, fmp4);
       }
       else if (xcode.transcoder.getCurrentVideoBitrateKbps() < targetVideoKbps)
       {
@@ -2963,11 +3261,18 @@ public class HTTPLSServer implements Runnable
 
   private void sendBackTSFile(java.io.File theFile) throws java.io.IOException
   {
+    sendBackMediaFile(theFile, "video/MP2T");
+  }
+
+  // Generalized segment sender (used by both the TS path, video/MP2T, and the
+  // CMAF path, video/mp4 for init.mp4 + .m4s). Same zero-copy transferTo loop.
+  private void sendBackMediaFile(java.io.File theFile, String contentType) throws java.io.IOException
+  {
     writeBuf.clear();
     appendStringToWriteBuf("HTTP/1.1 200 OK\r\n");
     appendStringToWriteBuf("Server: SageTV " + UIManager.SAGE + "\r\n");
     appendStringToWriteBuf("Date: " + new java.util.Date().toString() + "\r\n");
-    appendStringToWriteBuf("Content-Type: video/MP2T\r\n");
+    appendStringToWriteBuf("Content-Type: " + contentType + "\r\n");
     appendStringToWriteBuf("Content-Length: " + theFile.length() + "\r\n\r\n");
     if (writeBuf.position() > 0)
     {
@@ -3135,6 +3440,11 @@ public class HTTPLSServer implements Runnable
   private java.nio.channels.SocketChannel sake;
   private String initialHttpMethod;
   private String myHost;
+  // Real client IP as forwarded by the PWA bridge/proxy via X-Forwarded-For.
+  // Empty for direct (non-bridged) clients. Captured per-request in run() and
+  // read in setupTranscoder to derive the correct LAN/WAN tier for a client
+  // that would otherwise appear as the bridge's loopback address.
+  private String forwardedForClientIp = "";
   private long timeout;
   private int[] bandwidths;
   private int partDur;

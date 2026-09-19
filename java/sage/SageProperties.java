@@ -435,6 +435,16 @@ public class SageProperties
         awriter.newLine();
         awriter.write("#" + new java.util.Date().toString());
         awriter.newLine();
+        // This file is regenerated in full on every save (clean shutdown, periodic
+        // snapshot, any property change), so hand-added comments below do NOT
+        // survive -- only these generated header lines do. Also note: a missing
+        // property is auto-written here with its in-code default on first read
+        // (STORE_DEFAULTS), so once a key appears below, THAT value wins and the
+        // in-code default only governs fresh installs. To change an existing
+        // install, edit the value here (while the server is stopped) -- bumping
+        // the code default alone will not take effect.
+        awriter.write("#NOTE: auto-generated; defaults persist on first read, so the code default only governs fresh installs -- edit the value here to change an existing install.");
+        awriter.newLine();
         for (int i = 0; i < allKeys.length; i++)
         {
           // Check for a key with all 0x0 values which can happen from crashes while saving.

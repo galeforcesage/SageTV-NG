@@ -257,6 +257,139 @@ sed -i 's/scale_npp_filter_deps="ffnvcodec libnppig libnppicc libnppicc libnppc 
 sed -i 's/scale2ref_npp_filter_deps="ffnvcodec libnppig libnppicc libnppicc libnppc libnppidei libnppif"/scale2ref_npp_filter_deps="ffnvcodec libnpp"/' configure
 sed -i 's/sharpen_npp_filter_deps="ffnvcodec libnppig libnppicc libnppicc libnppc libnppidei libnppif"/sharpen_npp_filter_deps="ffnvcodec libnpp"/' configure
 
+# ---------------------------------------------------------------------
+# PATCH 8: AC-4 decoder frame-loss fixes (libavcodec/ac4dec.c)
+# ---------------------------------------------------------------------
+# Numbered 8 to stay aligned with the deployment build recipe, which also
+# carries PATCH 6 (stv:// protocol) and PATCH 7 (MOV active_file). Those two
+# are not yet mirrored into this script.
+#
+# The elliotclee AC-4 fork discards whole 32ms frames on two conditions that do
+# not actually invalidate the PCM it has already decoded. On ATSC 3.0 5.1
+# content this cost ~2s of real dialogue per 29min episode and surfaced as A/V
+# desync in the browser MSE client.
+#
+# 8a: "substream audio data overread" was fatal. audio_data() has already
+#     decoded the samples before this post-hoc byte-accounting check runs, so
+#     returning AVERROR_INVALIDDATA throws away good audio over a 1-9 byte
+#     bookkeeping mismatch. librempeg downgraded this to a warning upstream;
+#     match that. (~52 frames per episode)
+#
+# 8b: "invalid aspx num env" was fatal. A-SPX is the high-frequency extension
+#     and is parsed AFTER the core spectral data (five_channel_data() and
+#     friends), so the core waveform is already decoded when this fires. Keep
+#     the frame and rebuild the high band from the previous frame's A-SPX
+#     envelope (standard SBR-style concealment). (~8 frames per episode)
+#
+# Verified on a 1758s ATSC 3.0 AC-4 5.1 capture: decoded audio went from
+# 1684.128s -> 1686.048s against a 1686.112s clean stereo control, and that
+# stereo control's PCM stayed bit-identical (no collateral change). The 2
+# residual frames are end-of-recording truncation and are not recoverable.
+echo "=== sagetv-ffmpeg: AC-4 frame-loss fixes ==="
+
+python3 << 'PATCH8EOF'
+import sys
+
+F = 'libavcodec/ac4dec.c'
+src = open(F, encoding='utf-8', errors='surrogateescape').read()
+
+def sub_once(old, new, label):
+    global src
+    if new in src:
+        print('  skip %s (already applied)' % label); return
+    n = src.count(old)
+    if n != 1:
+        print('  FAIL %s: found %d occurrences' % (label, n)); sys.exit(1)
+    src = src.replace(old, new, 1)
+    print('  ok   %s' % label)
+
+# --- 8a: overread is a warning, not a dropped frame -------------------------
+sub_once(r'''    if (consumed > audio_size) {
+        av_log(s->avctx, AV_LOG_ERROR, "substream audio data overread: %d\n", consumed - audio_size);
+        return AVERROR_INVALIDDATA;
+    }''',
+r'''    if (consumed > audio_size) {
+        /* SageTV/upstream-align: librempeg downgraded this post-hoc byte-accounting
+           check from fatal to a warning. audio_data() has already decoded the
+           samples; discarding the frame loses ~33ms of real audio. */
+        av_log(s->avctx, AV_LOG_WARNING, "substream audio data overread: %d\n", consumed - audio_size);
+    }''', '8a overread -> warning')
+
+# --- 8b: conceal corrupt A-SPX framing instead of dropping the frame --------
+sub_once(r'''    PresentationInfo   pinfo[8];
+    SubstreamGroupInfo ssgroup[8];
+    Substream          substream;
+} AC4DecodeContext;''',
+r'''    PresentationInfo   pinfo[8];
+    SubstreamGroupInfo ssgroup[8];
+    Substream          substream;
+
+    /* SageTV: set when A-SPX framing for the current frame is corrupt. The core
+       waveform is fully decoded before A-SPX is parsed, so the frame is kept and
+       the high band is concealed from the previous frame's envelope rather than
+       discarding ~33ms of real audio. */
+    int                aspx_conceal;
+} AC4DecodeContext;''', '8b ctx field')
+
+sub_once(r'''        if (ssch->aspx_num_env > 4) {
+            av_log(s->avctx, AV_LOG_ERROR, "invalid aspx num env in FIXFIX: %d\n", ssch->aspx_num_env);
+            return AVERROR_INVALIDDATA;
+        }''',
+r'''        if (ssch->aspx_num_env > 4) {
+            av_log(s->avctx, AV_LOG_WARNING, "invalid aspx num env in FIXFIX: %d (concealing)\n", ssch->aspx_num_env);
+            ssch->aspx_num_env = ssch->aspx_num_env_prev;
+            s->aspx_conceal = 1;
+            return AVERROR_INVALIDDATA;
+        }''', '8b FIXFIX conceal')
+
+sub_once(r'''        if (ssch->aspx_num_env > 5) {
+            av_log(s->avctx, AV_LOG_ERROR, "invalid aspx num env: %d (class %d)\n", ssch->aspx_num_env, ssch->aspx_int_class);
+            return AVERROR_INVALIDDATA;
+        }''',
+r'''        if (ssch->aspx_num_env > 5) {
+            av_log(s->avctx, AV_LOG_WARNING, "invalid aspx num env: %d (class %d) (concealing)\n", ssch->aspx_num_env, ssch->aspx_int_class);
+            ssch->aspx_num_env = ssch->aspx_num_env_prev;
+            s->aspx_conceal = 1;
+            return AVERROR_INVALIDDATA;
+        }''', '8b VARVAR conceal')
+
+sub_once(r'''    ret = audio_data(s, ssinfo->channel_mode, ssinfo->iframe[0]);
+    if (ret < 0)
+        return ret;''',
+r'''    ret = audio_data(s, ssinfo->channel_mode, ssinfo->iframe[0]);
+    if (ret < 0) {
+        int target, cur;
+
+        if (!s->aspx_conceal)
+            return ret;
+        /* SageTV: A-SPX framing was corrupt, but the core waveform for this frame
+           was already decoded (five_channel_data() and friends run before
+           aspx_data_*). Keep the frame; the high band is rebuilt from the
+           previous frame's A-SPX envelope, which is still held in the channel
+           state. The bitstream position is unreliable from here, so realign to
+           the declared end of the audio block rather than running the
+           byte-accounting checks over garbage. */
+        target = (offset + audio_size) * 8;
+        cur = get_bits_count(gb);
+        if (target > cur)
+            skip_bits_long(gb, target - cur);
+        metadata(s, ssinfo, s->iframe_global);
+        align_get_bits(gb);
+        return 0;
+    }''', '8b conceal interception')
+
+sub_once(r'''    if ((ret = init_get_bits8(gb, avpkt->data, avpkt->size)) < 0)
+        return ret;
+    av_log(s->avctx, AV_LOG_DEBUG, "packet_size: %d\n", avpkt->size);''',
+r'''    if ((ret = init_get_bits8(gb, avpkt->data, avpkt->size)) < 0)
+        return ret;
+    s->aspx_conceal = 0;
+    av_log(s->avctx, AV_LOG_DEBUG, "packet_size: %d\n", avpkt->size);''', '8b per-frame reset')
+
+open(F, 'w', encoding='utf-8', errors='surrogateescape').write(src)
+PATCH8EOF
+if [ $? -ne 0 ]; then echo "ERROR: PATCH 8 (ac4dec.c) failed to apply" >&2; exit 1; fi
+
 echo "=== sagetv-ffmpeg: configuring ==="
 PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig" \
 ./configure \
@@ -281,6 +414,12 @@ PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig" \
     --enable-libnpp \
     --enable-vaapi \
     --disable-devices \
+    `# lavfi is the one input "device" SageTV needs: the caption extraction` \
+    `# fallback feeds ffmpeg a "movie=...[out0+subcc]" filter graph, which is` \
+    `# only reachable through -f lavfi. Everything else (v4l2, alsa, x11grab)` \
+    `# stays off. Without this the core binary cannot extract 608/708 captions` \
+    `# and the job has to shell out to a distribution ffmpeg instead.` \
+    --enable-indev=lavfi \
     --disable-bzlib \
     --extra-cflags="-I${PREFIX}/include -I/usr/local/cuda/include -I/usr/include" \
     --extra-ldflags="-L${PREFIX}/lib -L/usr/local/cuda/lib64 -L/usr/lib/x86_64-linux-gnu" \

@@ -71,35 +71,29 @@ public final class EnhancementAdvisor
    */
   public static final String PROP_BUILTIN_PANEL_MAX = "playback/gpu_enhance/builtin_panel_max";
   /**
-   * What an absent {@code DISPLAY_SINK_RESOLUTION} means: {@code "infer"} (the
-   * default) or {@code "refuse"}.
+   * What an absent {@code DISPLAY_SINK_RESOLUTION} means for UPSCALING:
+   * {@code "refuse"} (the default) or {@code "infer"}.
    *
-   * <p>A value the client never sent is an ABSTENTION, not a refusal. It says
-   * "I have no opinion -- serve me as well as you can", and answering it with a
-   * flat no hands the decision to the least informed party in the exchange. So
-   * the default is to decide from what the client did affirmatively state.
+   * <p>Upscaling spends real GPU and bandwidth to make a bigger picture, and it
+   * is only worth doing when the client has a display big enough to show it. A
+   * client that did not report its sink has given no such evidence -- and in
+   * practice clients omit the sink precisely to signal a display too small to
+   * benefit (the PWA sends no sink when its window is under the ~1280px enhance
+   * threshold). So an absent sink now REFUSES upscaling by default and the
+   * stream drops to the deinterlace floor. Silence is not read as consent to
+   * spend a 4K upscale.
    *
-   * <p>This is much safer than it sounds, because it does not fabricate a sink.
-   * The sink clamp is simply skipped, and the tier is then settled by rules that
-   * are all independently fail-closed:
+   * <p>Deinterlacing is unaffected: it does not change frame size, does not
+   * depend on the panel, and is settled before this gate -- an interlaced source
+   * with an unknown sink still gets GPU deinterlace.
    *
-   * <ul>
-   * <li>the decode gate in {@code finish()}, which requires the client to have
-   *     PROVED it can decode the output. A client that declared no ceiling gets
-   *     nothing, so every legacy client lands exactly where it does today.</li>
-   * <li>the 720-line source floor, and the rule that the target must exceed the
-   *     source.</li>
-   * <li>the admin ceiling {@link #PROP_MAX_HEIGHT}, and {@link #PROP_FORM_FACTORS}
-   *     if it has been narrowed.</li>
-   * <li>network headroom and GPU admission downstream, which override any of
-   *     this unconditionally -- a stream that cannot cross the link is not a
-   *     better picture.</li>
-   * </ul>
-   *
-   * <p>What is lost without a sink is only the panel clamp, so the failure mode
-   * is sending 2160p to a 4K-capable decoder attached to a smaller panel: wasted
-   * bandwidth, not a broken stream. Set {@code refuse} to restore the older
-   * behaviour of treating silence as no.
+   * <p>{@code "infer"} restores the older abstention behaviour: the sink clamp is
+   * skipped and the tier is settled by the remaining fail-closed rules (the
+   * decode gate in {@code finish()}, the source floor, {@link #PROP_MAX_HEIGHT},
+   * {@link #PROP_FORM_FACTORS}, and downstream bandwidth/GPU admission). Use it
+   * only for a fleet whose 4K-capable clients genuinely cannot report a sink;
+   * its failure mode is sending 2160p to a smaller panel (wasted bandwidth, not
+   * a broken stream).
    */
   public static final String PROP_UNKNOWN_SINK = "playback/gpu_enhance/unknown_sink";
   /**
@@ -144,10 +138,13 @@ public final class EnhancementAdvisor
     SOURCE_BELOW_FLOOR("source below the 720-line floor and not interlaced"),
     NO_VISIBLE_GAIN("sink is not meaningfully larger than the source"),
     FORM_FACTOR_EXCLUDED("device form factor is not in the upscale-eligible set"),
+    NO_UPSCALE_PROVIDER("no upscaling provider installed; server-side playback upscaling is disabled"),
+    UPSCALE_PROVIDER_UNAVAILABLE("selected upscaling provider is not available right now; delivering source"),
     SURFACE_CANNOT_DECODE("client cannot decode the enhanced output (no surface or codec proved it)"),
     INSUFFICIENT_BANDWIDTH("measured link cannot carry the enhanced stream"),
     CLIENT_UPSCALES_LOCALLY("client's own upscaler is active and preferred"),
-    CLIENT_PREFERS_LOCAL("client explicitly prefers local enhancement");
+    CLIENT_PREFERS_LOCAL("client explicitly prefers local enhancement"),
+    CLIENT_DISABLED("client explicitly disabled enhancement (pref=never)");
 
     private final String description;
     private Verdict(String d) { this.description = d; }
@@ -273,6 +270,12 @@ public final class EnhancementAdvisor
       long sourceBitrateKbps, long availableBandwidthKbps)
   {
     if (!isEnabled()) return NONE_DISABLED;
+    // A client that explicitly chose "never" is a hard opt-out that outranks
+    // every server-side heuristic (and even GPU/source checks): the viewer has
+    // said do not upscale me, full stop. Distinct from "local" (client will do
+    // its own upscale) -- "never" means no enhancement anywhere.
+    if ("never".equals(localPref))
+      return new Advice(EnhancementTier.NONE, Verdict.CLIENT_DISABLED);
     if (!gpuSupported) return new Advice(EnhancementTier.NONE, Verdict.NO_GPU_SUPPORT);
     if (sourceHeight <= 0) return new Advice(EnhancementTier.NONE, Verdict.UNKNOWN_SOURCE);
 
@@ -291,14 +294,23 @@ public final class EnhancementAdvisor
     EnhancementTier deintFloor = sourceInterlaced
         ? EnhancementTier.DEINTERLACE_ONLY : EnhancementTier.NONE;
 
-    // An absent sink is an abstention, not a refusal: the client has expressed
-    // no opinion, so the server decides from what it did state. Refusing here
-    // would let silence -- the least informative thing a client can do -- veto a
-    // decision the server is better placed to make. See PROP_UNKNOWN_SINK: the
-    // sink clamp is skipped, nothing is fabricated, and the decode gate still
-    // requires the client to have proved it can play the result.
+    // An absent sink REFUSES upscaling for AUTO (by default; see PROP_UNKNOWN_SINK).
+    // Upscaling is only worth its GPU + bandwidth when the client has a display
+    // big enough to show the bigger picture, and a client that reported no sink
+    // has proved no such thing -- clients omit the sink precisely to signal a
+    // display too small to benefit (e.g. a browser window under the enhance
+    // threshold). So silence drops to the deinterlace floor rather than being
+    // read as consent to a 4K upscale. Deinterlace does not depend on panel size
+    // and is settled below the floor, so an interlaced source still gets it.
+    //
+    // EXCEPTION -- "Always" (pref=server): that is the user explicitly REQUESTING
+    // a server upscale, the opposite of silence, so it is honored even without a
+    // sink. With no panel to clamp against it upscales to the admin ceiling / max
+    // the decode gate and link allow (exactly the infer path). Only AUTO treats
+    // an unknown sink as "no".
     boolean sinkKnown = sinkWidth > 0 && sinkHeight > 0;
-    if (!sinkKnown && !inferOnUnknownSink())
+    boolean userForcedServerUpscale = "server".equals(localPref);
+    if (!sinkKnown && !userForcedServerUpscale && !inferOnUnknownSink())
       return finish(deintFloor, Verdict.UNKNOWN_SINK, surface, constraints, deintFloor,
           sourceFps, sourceBitrateKbps, availableBandwidthKbps);
 
@@ -326,6 +338,15 @@ public final class EnhancementAdvisor
             sourceFps, sourceBitrateKbps, availableBandwidthKbps);
     }
 
+    // Server-side upscaling requires a separately installed upscaling provider.
+    // The open-source core ships no playback upscaler (the built-in path is a
+    // passthrough), so without a registered provider we never advertise an
+    // enhance tier -- the client receives the source stream and scales itself.
+    // Deinterlacing is unaffected: it drops to the deinterlace floor here.
+    if (!sage.enhance.spi.ScaleProviderRegistry.getInstance().selectedProviderCanUpscale())
+      return finish(deintFloor, Verdict.NO_UPSCALE_PROVIDER, surface, constraints, deintFloor,
+          sourceFps, sourceBitrateKbps, availableBandwidthKbps);
+
     // Never build a picture larger than the panel can show -- in EITHER
     // dimension -- then apply the admin ceiling on top. With no panel reported
     // there is nothing to clamp against, so the admin ceiling and the decode
@@ -344,6 +365,31 @@ public final class EnhancementAdvisor
     if (!tier.isLegalForSourceHeight(sourceHeight))
       return finish(deintFloor, Verdict.SOURCE_BELOW_FLOOR, surface, constraints, deintFloor,
           sourceFps, sourceBitrateKbps, availableBandwidthKbps);
+
+    // The static gate above proved a provider is registered and declares upscale
+    // support; now confirm it can actually render THIS tier right now. The plan
+    // builder gates on the provider's runtime probe(); the offer must agree, or a
+    // registered-but-unready provider (dev build, model warming up, GPU busy)
+    // would have us advertise enhance;tier while the pipeline quietly falls back
+    // to a plain remux -- promising the client a 4K enhance it never gets. Probe
+    // with the resolved tier and, if it cannot render, drop to the deinterlace
+    // floor exactly as if no provider were installed.
+    sage.enhance.spi.ScaleRequest offerProbe = new sage.enhance.spi.ScaleRequest(tier,
+        tier.getTargetWidth(), tier.getTargetHeight(), sourceHeight, sourceInterlaced, null,
+        sage.enhance.spi.ScaleRequest.Purpose.PROBE);
+    if (!sage.enhance.spi.ScaleProviderRegistry.getInstance().selectedProviderCanUpscale(offerProbe))
+      return finish(deintFloor, Verdict.UPSCALE_PROVIDER_UNAVAILABLE, surface, constraints,
+          deintFloor, sourceFps, sourceBitrateKbps, availableBandwidthKbps);
+
+    // We are about to offer this tier. Pre-warm the selected provider now, during
+    // the advisory window, so an expensive external worker is ready by play-start
+    // instead of black-screening the cold start. No-op unless
+    // playback/gpu_enhance/scale/warmup_enabled is set and a provider overrides
+    // warmup(); never blocks the offer (runs on the warmup executor).
+    sage.enhance.spi.ScaleProviderRegistry.getInstance().warmupSelectedProvider(
+        new sage.enhance.spi.ScaleRequest(tier, tier.getTargetWidth(), tier.getTargetHeight(),
+            sourceWidth, sourceHeight, sourceInterlaced, null,
+            sage.enhance.spi.ScaleRequest.Purpose.LIVE));
 
     return finish(tier, Verdict.OFFERED, surface, constraints, deintFloor, sourceFps, sourceBitrateKbps, availableBandwidthKbps);
   }
@@ -388,6 +434,12 @@ public final class EnhancementAdvisor
     if (!sinkKnown) return deintFloor;
     if (sourceHeight < EnhancementTier.SOURCE_HEIGHT_FLOOR) return deintFloor;
 
+    // No installed upscaling provider => no server upscale, only the deint floor.
+    // (Matches the same gate in advise(); a re-clamp can never enable an upscale
+    // the deployment cannot render.)
+    if (!sage.enhance.spi.ScaleProviderRegistry.getInstance().selectedProviderCanUpscale())
+      return deintFloor;
+
     int minGainTenths = Sage.getInt(PROP_MIN_GAIN_TENTHS, DEFAULT_MIN_GAIN_TENTHS);
     if (minGainTenths < 10) minGainTenths = 10;
     if ((long) sinkHeight * 10L < (long) sourceHeight * (long) minGainTenths)
@@ -400,6 +452,15 @@ public final class EnhancementAdvisor
 
     if (tier.isUpscaling() && tier.getTargetHeight() <= sourceHeight) return deintFloor;
     if (!tier.isLegalForSourceHeight(sourceHeight)) return deintFloor;
+
+    // Same runtime-availability gate as advise(): only keep the upscale tier if
+    // the selected provider can actually render it now, so a mid-session re-open
+    // never promises an enhance the pipeline would refuse.
+    sage.enhance.spi.ScaleRequest probe = new sage.enhance.spi.ScaleRequest(tier,
+        tier.getTargetWidth(), tier.getTargetHeight(), sourceHeight, sourceInterlaced, null,
+        sage.enhance.spi.ScaleRequest.Purpose.PROBE);
+    if (!sage.enhance.spi.ScaleProviderRegistry.getInstance().selectedProviderCanUpscale(probe))
+      return deintFloor;
     return tier;
   }
 
@@ -497,6 +558,49 @@ public final class EnhancementAdvisor
   }
 
   /**
+   * Pick the bandwidth figure (Kbps) the enhancement gate should measure a
+   * client against, and report which source it came from. Pure policy, factored
+   * out of {@code MiniPlayer} so it is unit-testable in isolation.
+   *
+   * <p>Order of preference:
+   * <ol>
+   *   <li><b>lan-unmetered</b>: a local client (real subnet/origin-IP match)
+   *       returns 0, which {@link #fitsBandwidth} reads as "no cap". A LAN
+   *       viewer's link is a capability class, not a bottleneck, for a stream
+   *       that tops out at a few tens of Mbps -- and the passive render-socket
+   *       estimate under-reads it by 10x+, which is exactly the bug this avoids.</li>
+   *   <li><b>probe</b>: a fresh client-reported ACTIVE probe (a timed bulk
+   *       transfer, correct over VPN) whose age is within {@code probeMaxAgeMs}.</li>
+   *   <li><b>passive</b>: otherwise the pre-existing passive estimate, so a
+   *       client that reports nothing is never worse off than before.</li>
+   * </ol>
+   *
+   * @param localConnection whether the client is on the local network
+   * @param probedKbps      client-reported active probe result, 0 when none
+   * @param probeAgeMs      effective age of that probe now
+   * @param probeMaxAgeMs   freshness window; a probe older than this is ignored
+   * @param passiveKbps     the legacy passive estimate (fallback)
+   * @return the chosen figure and a short source label
+   */
+  public static BandwidthChoice selectEnhanceBandwidthKbps(boolean localConnection,
+      int probedKbps, long probeAgeMs, long probeMaxAgeMs, int passiveKbps)
+  {
+    if (localConnection)
+      return new BandwidthChoice(0, "lan-unmetered");
+    if (probedKbps > 0 && probeAgeMs <= probeMaxAgeMs)
+      return new BandwidthChoice(probedKbps, "probe");
+    return new BandwidthChoice(passiveKbps, "passive");
+  }
+
+  /** Result of {@link #selectEnhanceBandwidthKbps}: chosen Kbps + its source. */
+  public static final class BandwidthChoice
+  {
+    public final int kbps;
+    public final String source;
+    public BandwidthChoice(int kbps, String source) { this.kbps = kbps; this.source = source; }
+  }
+
+  /**
    * Safety factor applied to measured throughput, matching
    * {@code PlaybackDecisionEngine}'s. Falls back to the global
    * {@code playback/bandwidth_safety_factor} (0.85) so an admin who has already
@@ -531,13 +635,14 @@ public final class EnhancementAdvisor
    * exempted from the list.
    */
   /**
-   * Whether an absent sink is treated as an abstention (decide from what the
-   * client did state) or as a refusal. See {@link #PROP_UNKNOWN_SINK}.
+   * Whether an absent sink is treated as an abstention (infer from what the
+   * client did state) or as a refusal to upscale. Defaults to refuse, so an
+   * unknown display never triggers a server upscale. See {@link #PROP_UNKNOWN_SINK}.
    */
   static boolean inferOnUnknownSink()
   {
-    String mode = Sage.get(PROP_UNKNOWN_SINK, "infer");
-    return mode == null || !"refuse".equalsIgnoreCase(mode.trim());
+    String mode = Sage.get(PROP_UNKNOWN_SINK, "refuse");
+    return mode != null && "infer".equalsIgnoreCase(mode.trim());
   }
 
   static boolean isFormFactorEligible(String formFactor, int sinkWidth, int sinkHeight)

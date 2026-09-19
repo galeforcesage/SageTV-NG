@@ -233,4 +233,95 @@ public class MiniPlayerSocketReconnectTest
     Sage.remove(PlayerTimeoutPolicy.PROFILE_PREFIX + PlayerTimeoutPolicy.NG_DEFAULT_ID
         + "/" + PlayerTimeoutPolicy.SUF_BACKOFF);
   }
+
+
+  private static final String DEADLINE_PROP =
+      PlayerTimeoutPolicy.PROFILE_PREFIX + PlayerTimeoutPolicy.NG_DEFAULT_ID
+          + "/" + PlayerTimeoutPolicy.SUF_PLAYBACK_DEADLINE;
+
+  /** Provider that burns wall-clock time, standing in for the inner socket wait. */
+  private static final class SlowProvider implements MiniPlayer.PlayerSocketProvider
+  {
+    private final long sleepMs;
+    int getChannelCalls = 0;
+    int reconnectCalls = 0;
+
+    SlowProvider(long sleepMs) { this.sleepMs = sleepMs; }
+
+    public SocketChannel getChannel()
+    {
+      getChannelCalls++;
+      try { Thread.sleep(sleepMs); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+      return null;
+    }
+
+    public void requestReconnect() { reconnectCalls++; }
+  }
+
+  /**
+   * The live failure this guards against: a PWA client reconnected its UI
+   * channel but never reopened its media channel, so every acquisition attempt
+   * burned its full window. With attempts=3 that is three stacked waits on the
+   * UI thread -- observed as a 26s+ "Hang Detected" and a frozen client rather
+   * than a reported playback error. An NG session must stop at the unified
+   * budget instead.
+   */
+  @Test
+  public void testNgDeadlineStopsRetryingOnceBudgetIsSpent() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    Sage.put(ATTEMPTS_PROP, "3");
+    Sage.put(BACKOFF_PROP, "0");
+    Sage.put(DEADLINE_PROP, "1");
+    try
+    {
+      SlowProvider p = new SlowProvider(25);
+      assertNull(MiniPlayer.acquirePlayerSocketChannel(p, PlayerTimeoutPolicy.of(true, null)));
+      // First attempt overruns the 1ms budget, so no further attempt is made and
+      // the client is not asked to reconnect again.
+      assertEquals(p.getChannelCalls, 1);
+      assertEquals(p.reconnectCalls, 0);
+    }
+    finally
+    {
+      Sage.remove(DEADLINE_PROP);
+    }
+  }
+
+  /**
+   * Control: a legacy session has no unified budget, so it still exhausts every
+   * configured attempt exactly as it always has.
+   */
+  @Test
+  public void testLegacySessionStillExhaustsAllAttempts() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    Sage.put(ATTEMPTS_PROP, "3");
+    Sage.put(BACKOFF_PROP, "0");
+    SlowProvider p = new SlowProvider(25);
+    assertNull(MiniPlayer.acquirePlayerSocketChannel(p, PlayerTimeoutPolicy.LEGACY));
+    assertEquals(p.getChannelCalls, 3);
+    assertEquals(p.reconnectCalls, 2);
+  }
+
+  /** An explicit zero budget is the escape hatch back to legacy stacking. */
+  @Test
+  public void testNgWithZeroDeadlineBehavesLikeLegacy() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    Sage.put(ATTEMPTS_PROP, "3");
+    Sage.put(BACKOFF_PROP, "0");
+    Sage.put(DEADLINE_PROP, "0");
+    try
+    {
+      SlowProvider p = new SlowProvider(25);
+      assertNull(MiniPlayer.acquirePlayerSocketChannel(p, PlayerTimeoutPolicy.of(true, null)));
+      assertEquals(p.getChannelCalls, 3);
+      assertEquals(p.reconnectCalls, 2);
+    }
+    finally
+    {
+      Sage.remove(DEADLINE_PROP);
+    }
+  }
 }

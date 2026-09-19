@@ -190,8 +190,16 @@ public final class GpuGovernor
       return deny(sessionId, "ffmpeg lacks CUDA scaler/deinterlacer or hevc_nvenc");
 
     // Source floor: never upscale sub-720-line material on the live path.
+    // Record each step so the admission log explains the step-down instead of
+    // printing an empty "(stepped down from enhance_2160p: )" -- the silent
+    // downgrade that made a src=0x0 live probe miss look like a server bug.
+    List<String> whyNot = new ArrayList<String>();
     while (tier.isActive() && !tier.isLegalForSourceHeight(sourceHeight))
+    {
+      whyNot.add(tier.token() + ": source height " + sourceHeight + " below upscale floor "
+          + EnhancementTier.SOURCE_HEIGHT_FLOOR);
       tier = tier.downgrade();
+    }
     if (!tier.isActive())
       return deny(sessionId, "source height " + sourceHeight + " below floor "
           + EnhancementTier.SOURCE_HEIGHT_FLOOR);
@@ -200,7 +208,6 @@ public final class GpuGovernor
     GpuSnapshot snap = GpuMonitor.getInstance().getSnapshot(gpuIndex);
 
     // (3-6) Walk the ladder until a tier fits every remaining budget.
-    List<String> whyNot = new ArrayList<String>();
     while (tier.isActive())
     {
       String failure = checkBudgets(tier, snap, load, estBitrateKbps, offline);
@@ -251,8 +258,10 @@ public final class GpuGovernor
     }
     // The recording reserve is subtracted from the calibrated budget, so the
     // "1 or 2 concurrent sessions?" answer emerges from measurement plus current
-    // load rather than being hand-set per GPU model.
-    if (load != null) ceiling -= load.getReservedTuners();
+    // load rather than being hand-set per GPU model. Skipped under the COEXIST
+    // posture, where a non-GPU capture holds no enhancement slot.
+    if (load != null && RecordingGuard.getInstance().reservesGpuSlotForTuners())
+      ceiling -= load.getReservedTuners();
     if (!offline && liveCount >= Math.max(0, ceiling))
       return "concurrency ceiling " + ceiling + " (active " + liveCount + ")";
 

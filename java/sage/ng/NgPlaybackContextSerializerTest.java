@@ -37,6 +37,8 @@ public class NgPlaybackContextSerializerTest
     testStringEscaping();
     testPtsSamplesSerialization();
     testSkipSegmentsSerialization();
+    testSegmentsSerialization();
+    testEmptySegmentsSerialization();
 
     System.out.println("\n=== Results: " + passed + " passed, " + failed + " failed ===");
     if (failed > 0)
@@ -234,6 +236,47 @@ public class NgPlaybackContextSerializerTest
     assertContains(json, "\"prerollMs\":2000", "skip: commercial prerollMs");
     assertContains(json, "\"type\":\"chapter\"", "skip: chapter type");
     assertContains(json, "\"bookmarks\":[]", "skip: empty bookmarks");
+  }
+
+  private static void testSegmentsSerialization()
+  {
+    // Gapped 2-segment recording (15min + 14min gap + 31min): the manifest must
+    // carry gap-collapsed content bases plus the real wall-clock gap.
+    long t = 1_700_000_000_000L;
+    long seg1Start = t + 15 * 60000L + 14 * 60000L;
+    sage.SegmentTimeline tl = new sage.SegmentTimeline(
+        new java.io.File[] { new java.io.File("a.mpg"), new java.io.File("b.mpg") },
+        new long[] { t, seg1Start },
+        new long[] { t + 15 * 60000L, seg1Start + 31 * 60000L },
+        new long[] { 111, 222 });
+    NgSegmentContext segments = NgSegmentContext.fromTimeline(tl);
+
+    NgPlaybackContext ctx = new NgPlaybackContext(
+        "seg-test", 1, 1, "recording", "ts",
+        2760000, 0, 1, null, null, null, null, null, segments);
+
+    String json = NgPlaybackContextSerializer.toJson(ctx);
+    assertContains(json, "\"segments\":{", "segments: object present");
+    assertContains(json, "\"count\":2", "segments: count");
+    assertContains(json, "\"totalContentMs\":2760000", "segments: total content (gap collapsed)");
+    assertContains(json, "\"hasGaps\":true", "segments: hasGaps");
+    assertContains(json, "\"index\":0", "segments: seg0 index");
+    assertContains(json, "\"index\":1", "segments: seg1 index");
+    assertContains(json, "\"contentBaseMs\":900000", "segments: seg1 content base");
+    assertContains(json, "\"gapBeforeMs\":840000", "segments: seg1 wall-clock gap");
+    assertContains(json, "\"fileSizeBytes\":222", "segments: seg1 file size");
+  }
+
+  private static void testEmptySegmentsSerialization()
+  {
+    // Backward-compatible constructor (no segments arg) -> EMPTY manifest.
+    NgPlaybackContext ctx = new NgPlaybackContext(
+        "no-seg", 1, 1, "recording", "ts",
+        600000, 0, 1, null, null, null, null, null);
+    String json = NgPlaybackContextSerializer.toJson(ctx);
+    assertContains(json, "\"segments\":{", "empty segments: object present");
+    assertContains(json, "\"count\":0", "empty segments: count 0");
+    assertContains(json, "\"items\":[]", "empty segments: empty items");
   }
 
   // --- Assertion helpers ---

@@ -9,6 +9,7 @@
  */
 package sage.enhance.spi.offline;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -33,6 +34,15 @@ import sage.Sage;
  *       returns {@code null}.</li>
  * </ul>
  *
+ * <p>The wrapper script also needs an ffmpeg/ffprobe pair to split the source
+ * into frame chunks and to reassemble them. Left to itself it falls back to
+ * whatever {@code ffmpeg} is on {@code PATH}, which on most installs is the
+ * distribution build: no SageTV custom flags, no AC-4 decoder and no NVIDIA
+ * scaler. We therefore pass the same unified binary the rest of the core uses
+ * (see {@link sage.FFMPEGTranscoder#getTranscoderPath}). If it is not present
+ * the flags are omitted and the wrapper keeps its own PATH-based default, so a
+ * build without the bundled tools still works.
+ *
  * <p>It is <b>not</b> specialized in the SPI sense.
  */
 public final class RealEsrganOfflineProvider implements OfflineUpscaleProvider
@@ -44,6 +54,25 @@ public final class RealEsrganOfflineProvider implements OfflineUpscaleProvider
 
   @Override
   public boolean isSpecialized() { return false; }
+
+  /**
+   * Point the wrapper at the core's own ffmpeg/ffprobe rather than letting it
+   * fall through to {@code PATH}. Appends nothing when the bundled tools are
+   * absent, leaving the wrapper's default intact.
+   */
+  private static void addCoreFfmpeg(List<String> argv)
+  {
+    String ffmpeg  = Sage.getToolPath("ffmpeg");
+    String ffprobe = Sage.getToolPath("ffprobe");
+    if (new File(ffmpeg).isFile())
+    {
+      argv.add("--ffmpeg"); argv.add(ffmpeg);
+    }
+    if (new File(ffprobe).isFile())
+    {
+      argv.add("--ffprobe"); argv.add(ffprobe);
+    }
+  }
 
   @Override
   public List<String> buildProbeCommand()
@@ -63,6 +92,7 @@ public final class RealEsrganOfflineProvider implements OfflineUpscaleProvider
     argv.add("--probe");
     argv.add("--realesrgan"); argv.add(binary);
     argv.add("--model"); argv.add(model);
+    addCoreFfmpeg(argv);
     return argv;
   }
 
@@ -83,6 +113,7 @@ public final class RealEsrganOfflineProvider implements OfflineUpscaleProvider
     argv.add("--model");  argv.add(model);
     argv.add("--chunk-frames"); argv.add(Integer.toString(chunk));
     argv.add("--realesrgan"); argv.add(binary);
+    addCoreFfmpeg(argv);
     return argv;
   }
 }

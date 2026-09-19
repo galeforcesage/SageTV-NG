@@ -10,8 +10,21 @@ code living in this repository**.
 This document is the contract for implementing a scaler provider. The seam lives
 in package `sage.enhance.spi` and is integrated at
 `GpuEnhancePipeline.buildPlan()` / `buildFilterChain()` with lease lifecycle in
-`FFMPEGTranscoder`. `BuiltinScaleProvider` is the always-present default and the
-exact behavior-preserving reference.
+`FFMPEGTranscoder`. `BuiltinScaleProvider` is the always-present default.
+
+> **The built-in does not upscale; the CUDA-Lanczos provider does.** The built-in
+> provider is a **passthrough**: it renders the mandatory deinterlace/re-encode
+> but emits **no scale filter**. In this fork live upscaling is provided by the
+> **automatic preference chain**: a specialized AI provider (e.g. VSR, installed
+> by a plugin) is tried first, then the always-registered
+> `CudaLanczosScaleProvider` (a deterministic CUDA/Lanczos stage, available
+> whenever this ffmpeg exposes `scale_cuda`/`scale_npp`), then the passthrough
+> (source). Server-side upscaling therefore happens whenever **any** chain member
+> can render; with none available (no GPU/filters and no plugin), the
+> `EnhancementAdvisor` does not offer an upscale tier — clients receive the plain
+> source stream and scale it themselves. There is **no** operator property that
+> must name a provider. (Offline/batch conversion is a separate subsystem and keeps its own
+> upscaler — see §10.)
 
 > The SPI is deliberately backend-neutral. A provider that wraps a proprietary or
 > EULA'd runtime ships and installs as a separate artifact; only the neutral seam
@@ -42,11 +55,12 @@ All in `sage.enhance.spi`:
 | `ScaleProviderAvailability` | immutable | `available()` / `unavailable(detail)`. |
 | `ScaleExecutionPlan` | immutable | How you want the scale stage realized. |
 | `ExecutionForm` | enum | `BUILTIN`, `FFMPEG_FILTER`, `EXTERNAL_PROCESS`, `SIDECAR`. |
-| `ScaleProviderRegistry` | singleton | `register()` / `select()`. |
+| `ScaleProviderRegistry` | singleton | `register()` / `select()`; runs the upscale preference chain. |
 | `ScaleProviderRegistration` | `AutoCloseable` | Handle; `close()` unregisters. |
 | `ScaleGovernor`, `ScaleGovernor.Lease` | admission budget | Core-managed. |
 | `ScaleSelection` | immutable | Internal selection result. |
-| `BuiltinScaleProvider` | class | Default + guaranteed fallback. |
+| `BuiltinScaleProvider` | class | Default passthrough (deinterlace-only, no upscale) + guaranteed fallback. |
+| `CudaLanczosScaleProvider` | class | Always-registered deterministic CUDA/Lanczos live upscaler; the chain's second choice after a specialized AI provider. |
 
 ### 2.1 The interface
 
@@ -67,7 +81,7 @@ Hard rules (enforced by the core; breaking them gets you skipped, never a crash)
 - `plan()` returns the scale stage for exactly one request and must not mutate
   shared state.
 - **Any exception** from `probe()` or `plan()` is treated as *unavailable* and
-  the core falls back to the built-in scaler. A provider cannot break playback.
+  the core falls back to the built-in passthrough. A provider cannot break playback.
 
 ### 2.2 `ScaleRequest` (what the core hands you)
 
@@ -94,6 +108,8 @@ state — so a provider cannot influence those decisions.
 
 ### 2.3 `ScaleExecutionPlan` (what you return)
 
+**Filter form** (in-process `-vf` fragment):
+
 ```java
 new ScaleExecutionPlan(ExecutionForm form, String ffmpegFilter, String implementationLabel);
 ```
@@ -103,9 +119,61 @@ new ScaleExecutionPlan(ExecutionForm form, String ffmpegFilter, String implement
   it. `null` for non-filter forms and for non-upscaling plans.
 - `implementationLabel` — honest, human-readable mechanism for telemetry/logs.
 
-The core uses the plan only if `isRenderablePhase0()` is true: form is `BUILTIN`
-or `FFMPEG_FILTER` **and** the filter is non-empty. Otherwise it falls back to
-the built-in scaler (see §5).
+**External-process form** (a provider-owned worker the core spawns):
+
+```java
+new ScaleExecutionPlan(ExecutionForm.EXTERNAL_PROCESS, List<String> workerArgv,
+                       int outputWidth, int outputHeight, String pipePixelFormat,
+                       String implementationLabel);
+```
+
+- `workerArgv` — the worker command line, spawned **verbatim, with no shell**.
+- `outputWidth` / `outputHeight` — the exact size of each frame the worker writes
+  to its stdout; the core sizes the encode stage from these.
+- `pipePixelFormat` — the pixel format on the stdio pipes (`rgb24` today).
+
+The core uses the plan only if `isRenderable()` is true — either a non-empty
+filter fragment (`BUILTIN`/`FFMPEG_FILTER`), or an `EXTERNAL_PROCESS` plan with a
+non-empty `workerArgv` and a positive output geometry. Otherwise no scale fragment
+is rendered and the stream is delivered at source resolution — the built-in
+passthrough (see §5). (`isRenderablePhase0()` is a deprecated alias for
+`isRenderable()`.) `SIDECAR` is declared but not yet rendered.
+
+#### 2.3.1 External-process live frame transport
+
+When an `EXTERNAL_PROCESS` plan is selected on the live path, the core renders a
+three-process pipeline and streams raw frames between the stages over OS pipes:
+
+```
+ffmpeg (decode) --rgb24--> worker (yours) --rgb24--> ffmpeg (encode, NVENC)
+```
+
+- **Decode stage** decodes the source, deinterlaces on the CPU, and writes
+  headerless `rawvideo` at the **source** resolution
+  (`source_w × source_h × 3` bytes per frame).
+- **Worker** reads one input-frame-sized blob, upscales, and writes one
+  output-frame-sized blob (`output_w × output_h × 3` bytes). No per-frame header,
+  length prefix, or metadata — dimensions are fixed for the whole session from the
+  argv. Row-major, top-to-bottom, R-G-B per pixel (identical to ffmpeg
+  `-pix_fmt rgb24`).
+- **Encode stage** reads the upscaled frames, re-reads the source for its audio
+  (same input flags, so any `-ss` seek stays aligned), applies NVENC HEVC, and
+  writes the delivery container to stdout.
+
+**Lifecycle.** The worker prints `READY\n` to **stderr** once its model is warm;
+the core waits up to `playback/gpu_enhance/scale/external_worker_startup_timeout_seconds`
+(default 30) for it. If `READY` never arrives (or the worker exits first), the core
+abandons the external pipeline and falls back to the built-in passthrough command for
+this session — the client still gets a stream, but it **deinterlaces/re-encodes only
+and does NOT upscale** (source resolution). On clean shutdown the core closes the
+worker's stdin (EOF); the worker flushes and exits. If no frames flow for
+`playback/gpu_enhance/scale/external_worker_stall_timeout_seconds` (default 5) the core
+kills the worker and the session tears down (a mid-session worker cannot be hot-swapped
+back to the built-in).
+
+**No vendor code lives in the core.** The core only knows how to spawn the argv
+the plan hands it and pipe raw frames; the worker, its model, and any EULA'd
+runtime ship and install with your plugin.
 
 ### 2.4 Capabilities & availability
 
@@ -129,22 +197,33 @@ advisory in this phase; the live cap is the governor property.
 
 Per enhanced session, once, at plan time (`buildPlan()` → `ScaleProviderRegistry.select()`):
 
-1. The registry reads property `playback/gpu_enhance/scale_provider` (default =
-   built-in id). If it isn't your id, you aren't consulted.
-2. It calls your `probe(request)`. `null`/unavailable → fallback to built-in.
-3. If you declared `specialized`, it acquires a `ScaleGovernor` permit. Budget
-   exhausted → fallback to built-in.
-4. It calls your `plan(request)`. `null`, empty, or a non-renderable form →
-   permit released, fallback to built-in.
-5. Success → the session **captures** your plan and the permit for its lifetime.
+For an **upscaling** request the registry builds the **preference chain** —
+specialized upscale-capable providers first (e.g. VSR), then non-specialized
+ones (`CudaLanczosScaleProvider`) — and walks it, best first:
+
+1. It calls the candidate's `probe(request)`. `null`/unavailable → **try the next
+   candidate**.
+2. If the candidate declared `specialized`, it acquires a `ScaleGovernor` permit.
+   Budget exhausted → **try the next candidate**.
+3. It calls `plan(request)`. `null`, empty, or a non-renderable form → permit
+   released, **try the next candidate**.
+4. Success → the session **captures** that plan (and permit) for its lifetime.
+5. If no candidate can render, the built-in passthrough is used (source
+   resolution). A non-upscaling / `DEINTERLACE_ONLY` request skips the chain
+   entirely and uses the built-in directly.
+
+An optional soft-preference head, `playback/gpu_enhance/scale_provider`, is
+**empty by default**; when set to a registered id it only moves that provider to
+the front of the chain — it never pins or restricts, so an unavailable head still
+falls through. There is deliberately no property that *selects* the upscaler.
 
 Guarantees:
 
 - **Selection is captured once.** Registering/unregistering a provider or
   changing the property affects only *future* sessions. There is **no mid-stream
   hot-swap** of an active playback.
-- **Fallback always targets the built-in directly**, never a second registry
-  lookup, so a failing provider can't recurse.
+- **The chain degrades in order**, ending at the built-in directly (never a
+  second registry lookup), so a failing provider can't recurse.
 - **`buildFilterChain()` only renders the captured plan** — no registry lookup,
   no governor acquire — which is what makes capture-once safe.
 
@@ -175,21 +254,107 @@ runs out of process. The core is explicit about what it renders today:
 
 | Form | Meaning | Rendered today? |
 |---|---|---|
-| `BUILTIN` | The built-in CUDA scale fragment. | Yes (built-in only). |
+| `BUILTIN` | Passthrough — no scale fragment (deinterlace/re-encode only). A directly-constructed calibration/offline-parity plan may still carry a CUDA scale fragment here. | Yes. |
 | `FFMPEG_FILTER` | A provider-supplied `-vf` scale fragment the deployed ffmpeg can execute. | **Yes.** |
-| `EXTERNAL_PROCESS` | A native worker process the provider owns. | Not yet rendered. |
+| `EXTERNAL_PROCESS` | A native worker process the provider owns, spawned into a `decode → worker → encode` pipeline. | **Yes** (see §2.3.1). |
 | `SIDECAR` | A long-lived sidecar service. | Not yet rendered. |
 
 - If a backend can be expressed as a `-vf` fragment the deployed ffmpeg
   understands (a built-in filter, or a custom libavfilter CUDA filter compiled
-  into the server's ffmpeg), it can ship against the current seam with **no
-  further core changes** and stay fully in-VRAM.
-- An out-of-process backend requires the core to first learn to render
-  `EXTERNAL_PROCESS` / `SIDECAR`: a frame-transport contract (e.g. CUDA IPC
-  shared surfaces or a forwarding filter shim), extra immutable fields on
-  `ScaleExecutionPlan` (transport handle, pixel format, colorspace), a bounded
-  per-frame latency budget, and session-scoped teardown. That is a follow-up
-  core change; returning those forms today simply falls back to the built-in.
+  into the server's ffmpeg), it can ship as a `FFMPEG_FILTER` provider and stay
+  fully in-VRAM.
+- An out-of-process backend ships as an `EXTERNAL_PROCESS` provider: it returns a
+  worker argv and the output frame geometry, and the core renders the three-stage
+  pipeline described in §2.3.1 (headerless `rgb24` frames over stdio, `READY`
+  handshake, startup/stall timeouts, and fallback to the built-in passthrough
+  (deinterlace-only, no upscale) on failure). No vendor code enters the core.
+- `SIDECAR` (a long-lived daemon shared across sessions) is still declared but not
+  yet rendered; returning it today falls back to the built-in.
+
+---
+
+## 5.1 Warmup (optional pre-warm to eliminate cold-start)
+
+> Status: SPI surface landed; core wiring is gated behind
+> `playback/gpu_enhance/scale/warmup_enabled` (default off) and is inert until a
+> provider overrides `warmup()`. Providers that never override it are unaffected.
+
+An `EXTERNAL_PROCESS` provider may need seconds to become ready (model load,
+shader compile, GPU context init). Paid at play-start that cost is a black
+screen. The advisory phase evaluates providers seconds *before* playback begins,
+which is a natural window to pre-warm one. The seam is two `default` methods on
+`ScaleProvider` plus an opaque `WarmContext` handle the core holds between the
+advisory phase and pipeline build:
+
+```java
+public interface ScaleProvider {
+  // ... id(), capabilities(), probe(), plan(ScaleRequest) ...
+
+  /** Begin expensive init for an anticipated session; return a handle the core
+   *  holds and passes back at build time, or null for no warmup. May block. */
+  default WarmContext warmup(ScaleRequest request) { return null; }
+
+  /** Build a plan using a still-valid pre-warmed context. If unusable, close it,
+   *  fall back to plan(request), and let the core cold-start. */
+  default ScaleExecutionPlan plan(ScaleRequest request, WarmContext warm) {
+    if (warm != null) warm.close();
+    return plan(request);
+  }
+}
+```
+
+`WarmContext extends AutoCloseable`:
+
+| Member | Contract |
+|---|---|
+| `long ttlMillis()` | Max delay between offer and play-start; the core closes and discards the context if it is not consumed within this window. 30–60 s is typical. Non-positive is treated as already-expired. |
+| `boolean isValid()` | The core checks this before `plan(req, warm)`; a crashed worker / dropped connection / reclaimed GPU returns false and the core cold-starts. |
+| `void close()` | Release everything (kill process, free VRAM). **Idempotent** — may be called after `plan()` consumed it, or twice by the reaper. |
+
+Guarantees the core gives a provider:
+
+- **Optional.** Return `null` from `warmup()` and nothing changes (the default).
+- **Single-owner.** A `WarmContext` is consumed at most once, then closed; it is
+  never shared across concurrent sessions.
+- **Bounded.** If the offer is never taken, a reaper calls `close()` after
+  `ttlMillis()` — a warm worker cannot leak VRAM indefinitely.
+- **Matched by geometry.** The core only hands a warm context back to
+  `plan(req, warm)` when the live request's provider id, source WxH, target WxH,
+  and tier match the request the context was warmed for. On any mismatch the core
+  closes the stale context and cold-starts, so a provider's `plan(req, warm)` can
+  assume the dimensions line up (but should still verify and cold-fall-back).
+
+Consuming a warm worker: return a plan that carries the already-running process
+so the core skips the spawn (the argv is retained for logging only):
+
+```java
+@Override public ScaleExecutionPlan plan(ScaleRequest req, WarmContext warm) {
+  VsrWarmContext ctx = (VsrWarmContext) warm;
+  if (!ctx.isValid() || dimensionsMismatch(req, ctx)) { ctx.close(); return plan(req); }
+  return ScaleExecutionPlan.externalWithWarmProcess(
+      WorkerCommand.buildLiveStream(...),   // diagnostics only when warm
+      req.getTargetWidth(), req.getTargetHeight(), "rgb24", "nvidia-vsr",
+      ctx.getWorker());                     // core wires this process, no spawn
+}
+```
+
+Resolved design decisions (deviations from the draft proposal, noted for the
+plugin team):
+
+- **Non-blocking.** `warmup()` runs on a dedicated single-thread executor. The
+  advisory never blocks the offer on it; the offer is made from `probe()`/`plan()`
+  as today, and the warm context is resolved (with a short bounded wait) at build
+  time. Blocking the offer for a 9 s model load would defeat the point.
+- **No speculative governor permit.** `warmup()` does **not** hold a
+  `ScaleGovernor`/GPU admission permit. The warm worker is best-effort and must
+  never block a recording or a real transcode for the GPU (recording protection
+  is invariant 0). The normal permit is acquired at consume time inside
+  `select()`, exactly as on the cold path. If a provider wants to gate warmup on
+  GPU budget, it does so privately inside its own `warmup()`.
+- **Keyed by request geometry, not media id.** The consume point
+  (`ScaleProviderRegistry.select(ScaleRequest)`) carries only the request, so the
+  stash key is `(providerId, srcW, srcH, targetW, targetH, tier)` — which also
+  gives the dimensions-match guarantee above for free.
 
 ---
 
@@ -243,11 +408,14 @@ public final class MyPlugin implements sage.SageTVPlugin {
 Registration rules:
 
 - A duplicate id is **rejected** (`IllegalStateException`), never a silent
-  replace.
+  replace. The reserved ids `builtin-passthrough` and `cuda-lanczos` cannot be
+  registered.
 - `close()` removes only your instance (identity-keyed).
-- Selection is a **two-step opt-in**: the plugin registers, *and* the property
-  `playback/gpu_enhance/scale_provider` names your id. Registering alone changes
-  nothing, so a provider can be installed dormant.
+- A registered upscale-capable provider **joins the preference chain
+  automatically** — no property is required. Specialized (AI) providers are tried
+  ahead of the deterministic CUDA-Lanczos fallback. Registering is enough; the
+  optional `playback/gpu_enhance/scale_provider` head only reorders, it does not
+  gate.
 
 ---
 
@@ -259,11 +427,12 @@ Registration rules:
    muxing, seek, or timestamp flags; don't smuggle extra filters into
    `ffmpegFilter`.
 3. **Degrade, never fail hard.** Missing runtime, no headroom, unsupported format
-   → `unavailable(...)` (or a null-filter plan). The user gets built-in scaling,
-   not a broken stream.
+   → `unavailable(...)` (or a null-filter plan). The user gets the built-in
+   passthrough (source-resolution, deinterlaced) — not a broken stream.
 4. **Cheap probe.** No allocation, I/O, or runtime load in `probe()`.
 5. **Byte-identical when disabled.** With no provider selected, output must equal
-   the built-in path exactly. Don't add global side effects at class-load.
+   the built-in passthrough path exactly (no scale fragment). Don't add global
+   side effects at class-load.
 
 ---
 
@@ -276,8 +445,8 @@ Registration rules:
 - [ ] Throwing from `probe()`/`plan()` falls back to built-in with no disruption.
 - [ ] Registered in `start()`, `reg.close()` in `stop()`; install/uninstall
       leaves the built-in path byte-identical.
-- [ ] With the property unset, generated argv equals stock for 720p→2160p,
-      1080i→2160p, and 1080p→2160p plans.
+- [ ] With the property unset, generated argv equals the built-in passthrough
+      (no scale fragment; deinterlace preserved) for 720p, 1080i, and 1080p sources.
 - [ ] Concurrency respects `playback/gpu_enhance/scale/max_specialized_sessions`;
       the over-budget session cleanly falls back to built-in.
 
@@ -287,8 +456,13 @@ Registration rules:
 
 | Property | Default | Meaning |
 |---|---|---|
-| `playback/gpu_enhance/scale_provider` | built-in id | Which provider live requests prefer. |
+| `playback/gpu_enhance/scale_provider` | *(empty)* | Optional soft-preference head: names a registered provider to try first. Empty = pure automatic chain. Never pins or restricts. |
+| `playback/gpu_enhance/scale_cuda_lanczos_provider` | `auto` | Master switch for the always-registered CUDA-Lanczos live upscaler. `auto`/truthy = enabled; a falsey value forces VSR-or-nothing. |
 | `playback/gpu_enhance/scale/max_specialized_sessions` | `1` | Concurrent specialized-provider ceiling. |
+| `playback/gpu_enhance/scale/external_worker_startup_timeout_seconds` | `30` | How long the core waits for an `EXTERNAL_PROCESS` worker's `READY` before falling back to the built-in passthrough (deinterlace-only, no upscale). |
+| `playback/gpu_enhance/scale/external_worker_stall_timeout_seconds` | `5` | Idle-frame watchdog: if no frames flow for this long, the core kills the worker and tears the session down. |
+| `playback/gpu_enhance/scale/warmup_enabled` | `false` | Master switch for the §5.1 warmup path. When off (default) the advisor never calls `warmup()` and `select()` never consults the warm stash — behavior is identical to no-warmup. Turn on only with a provider that overrides `warmup()`. |
+| `playback/gpu_enhance/scale/warmup_max_ttl_seconds` | `60` | Upper bound the core clamps a provider's `WarmContext.ttlMillis()` to, so a misbehaving provider cannot pin a warm worker (and its VRAM) indefinitely. |
 
 ---
 

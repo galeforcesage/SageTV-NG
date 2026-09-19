@@ -44,7 +44,7 @@ import sage.Scheduler;
  *
  * <p>Property knobs:
  * <pre>
- *   playback/gpu_enhance/recording_protection   "protect" (default) | "balanced"
+ *   playback/gpu_enhance/recording_protection   "protect" (default) | "balanced" | "coexist"
  *   playback/gpu_enhance/schedule_lookahead_ms  default 300000 (5 min)
  * </pre>
  */
@@ -70,11 +70,30 @@ public final class RecordingGuard
      * {@link EnhancementTier#DEINTERLACE_ONLY}, which costs a small fraction of
      * an upscale tier.
      */
-    BALANCED;
+    BALANCED,
+    /**
+     * Full-tier coexistence. While recording, the desired tier is <b>not</b>
+     * capped; admission is deferred entirely to the governor's measured capacity
+     * ladder (free VRAM, video-engine pressure, disk-write budget). Correct on a
+     * box whose recordings are hardware captures straight to disk &mdash; they
+     * consume no NVENC/CUDA, so a single upscale can run beside them from genuine
+     * GPU headroom &mdash; while the measured budgets still fail closed if the
+     * GPU or array is actually saturated (e.g. a recording that itself
+     * transcodes on the GPU shows up as engine pressure and is denied there).
+     * Unlike PROTECT/BALANCED this posture also does not reserve an enhancement
+     * concurrency slot per tuner (see {@link #reservesGpuSlotForTuners()}), since
+     * a non-GPU capture needs none.
+     */
+    COEXIST;
 
     public static Posture fromToken(String t)
     {
-      if (t != null && t.trim().equalsIgnoreCase("balanced")) return BALANCED;
+      if (t != null)
+      {
+        String s = t.trim();
+        if (s.equalsIgnoreCase("balanced")) return BALANCED;
+        if (s.equalsIgnoreCase("coexist")) return COEXIST;
+      }
       return PROTECT;
     }
   }
@@ -214,13 +233,31 @@ public final class RecordingGuard
     if (load == null) return EnhancementTier.NONE;
     if (!load.isBusyOrImminent()) return desired;
 
-    if (getPosture() == Posture.BALANCED)
+    switch (getPosture())
     {
-      // Capped, not forbidden: deinterlace-only is cheap enough to coexist.
-      return (desired.getRank() <= EnhancementTier.DEINTERLACE_ONLY.getRank())
-          ? desired : EnhancementTier.DEINTERLACE_ONLY;
+      case COEXIST:
+        // Recording does not consume the GPU on this box; defer entirely to the
+        // capacity ladder, which still denies if VRAM / engine / disk are tight.
+        return desired;
+      case BALANCED:
+        // Capped, not forbidden: deinterlace-only is cheap enough to coexist.
+        return (desired.getRank() <= EnhancementTier.DEINTERLACE_ONLY.getRank())
+            ? desired : EnhancementTier.DEINTERLACE_ONLY;
+      case PROTECT:
+      default:
+        return EnhancementTier.NONE;
     }
-    return EnhancementTier.NONE;
+  }
+
+  /**
+   * Whether an enhancement concurrency slot must be reserved for each active or
+   * imminent tuner. True for {@link Posture#PROTECT}/{@link Posture#BALANCED};
+   * false for {@link Posture#COEXIST}, where recordings are assumed not to occupy
+   * a GPU session and the measured VRAM/engine/disk budgets are the sole guard.
+   */
+  public boolean reservesGpuSlotForTuners()
+  {
+    return getPosture() != Posture.COEXIST;
   }
 
   /** Convenience: sample and veto in one call. */

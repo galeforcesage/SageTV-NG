@@ -5189,10 +5189,34 @@ public class Wizard implements EPGDBPublic2
       long endTime, boolean mustStart)
   {
     Airing[] primary = getAirings(stationID, startTime, endTime, mustStart);
-    if (primary != null && primary.length > 0) return primary;
+    // A station that carries only synthetic "No Data" placeholder airings
+    // (e.g. an ATSC 3.0 variant channel minted alongside a Schedules Direct
+    // station) must be treated as EMPTY here, otherwise the placeholders mask
+    // the hole and the sibling-alias fallback below never runs -- leaving the
+    // guide showing "No Data" even though the real EPG exists on the ATSC 1.0
+    // sibling. See EpgFallbackResolver / Atsc3MirrorManager.
+    if (hasRealAirings(primary)) return primary;
     int fallbackID = sage.epg.EpgFallbackResolver.getInstance().resolveFallback(stationID);
     if (fallbackID == 0 || fallbackID == stationID) return primary;
-    return getAirings(fallbackID, startTime, endTime, mustStart);
+    Airing[] fallback = getAirings(fallbackID, startTime, endTime, mustStart);
+    // Only alias in the sibling if it actually has real programming; never
+    // trade one station's placeholders for another's.
+    if (hasRealAirings(fallback)) return fallback;
+    return primary;
+  }
+
+  /**
+   * @return {@code true} if the array contains at least one airing that is not
+   *         a "No Data" placeholder ({@link #isNoShow(Airing)}).
+   */
+  private boolean hasRealAirings(Airing[] airings)
+  {
+    if (airings == null || airings.length == 0) return false;
+    for (int i = 0; i < airings.length; i++)
+    {
+      if (airings[i] != null && !isNoShow(airings[i])) return true;
+    }
+    return false;
   }
 
   public Airing[] getAirings(Show forMe, long startingAfter)

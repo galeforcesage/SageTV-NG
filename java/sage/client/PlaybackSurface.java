@@ -83,6 +83,30 @@ public final class PlaybackSurface
   // server-side deinterlacing transcode. Browser/MSE decode paths populate
   // this because no browser MSE implementation decodes interlaced H.264.
   private final Set<String> interlacedUnsupportedCodecs;
+  // --- Per-container transport dimension (Protocol 2.1) ---
+  // Canonical container -> {pushAllowed, pullAllowed}. A container that the
+  // client declared with an explicit transport attribute (e.g.
+  // {@code MPEG2-PS;push=true;pull=false} on PLAYBACK_SURFACE_<id>_CONTAINERS)
+  // gets an entry here; a bare container name gets NO entry and is treated as
+  // "both transports allowed" (fail-open, so every pre-2.1 client is
+  // unaffected). This is the surface-native equivalent of the legacy per-player
+  // {@code IJK_CONTAINER_CONSTRAINTS} push/pull rows: it lets a surface say
+  // "MPEG2-PS is a push-only container for me" -- a program stream the client
+  // can receive over the push transport (libavformat demux) but CANNOT
+  // direct-play from a raw pull (a pull OPEN of the .mpg returns NON_MEDIA). The
+  // flat CONTAINERS+DELIVERY_MODES model could not express that, so the server
+  // would pick the cheapest transport (pull) and strand the client. See
+  // {@link #containerAllowsTransport}.
+  private final Map<String, boolean[]> containerTransports;
+  // --- Audio multichannel decode dimension (Protocol 2.1) ---
+  // Max audio channels this surface can decode/render (e.g. 6 for 5.1, 8 for
+  // 7.1) via PLAYBACK_SURFACE_<id>_AUDIO_MAX_CHANNELS. 0 == "the client didn't
+  // declare it", which every consumer reads as legacy/undeclared and resolves
+  // from the negotiated audio codec instead of assuming multichannel. Only an
+  // EXPLICIT value >= 6 opts a surface into preserved surround on a path that
+  // would otherwise downmix to stereo (e.g. the GPU-enhance AC-4 sidecar); an
+  // explicit value < 6 forces stereo even for an EAC3/AC3 client.
+  private final int audioMaxChannels;
 
   /**
    * Backward-compatible constructor (pre-2.1.0006). Applies the conservative
@@ -149,6 +173,57 @@ public final class PlaybackSurface
       int maxOutputWidth, int maxOutputHeight, int maxFps,
       Set<String> interlacedUnsupportedCodecs)
   {
+    this(id, route, priority, deliveryModes, videoCodecs, audioCodecs, containers,
+        audioTrackAccess, audioTrackSelectionMode, audioContainerRules,
+        maxOutputWidth, maxOutputHeight, maxFps, interlacedUnsupportedCodecs, null);
+  }
+
+  /**
+   * Full constructor including the per-container transport dimension (Protocol
+   * 2.1).
+   *
+   * @param containerTransports canonical-container -&gt; {pushAllowed,
+   *   pullAllowed}; null/empty =&gt; no container declared a transport
+   *   restriction, so every container is reachable on either transport
+   *   (fail-open). Only an EXPLICIT {@code push=false} / {@code pull=false} on a
+   *   container restricts it, which is how a surface declares a push-only
+   *   container such as MPEG2-PS.
+   */
+  public PlaybackSurface(String id, String route, int priority,
+      List<String> deliveryModes, List<String> videoCodecs,
+      List<String> audioCodecs, List<String> containers,
+      String audioTrackAccess, String audioTrackSelectionMode,
+      Map<String, List<String>> audioContainerRules,
+      int maxOutputWidth, int maxOutputHeight, int maxFps,
+      Set<String> interlacedUnsupportedCodecs,
+      Map<String, boolean[]> containerTransports)
+  {
+    this(id, route, priority, deliveryModes, videoCodecs, audioCodecs, containers,
+        audioTrackAccess, audioTrackSelectionMode, audioContainerRules,
+        maxOutputWidth, maxOutputHeight, maxFps, interlacedUnsupportedCodecs,
+        containerTransports, 0);
+  }
+
+  /**
+   * Full constructor including the audio multichannel-decode dimension
+   * (Protocol 2.1).
+   *
+   * @param audioMaxChannels max audio channels this surface can decode/render;
+   *   0 =&gt; undeclared (legacy), which resolves from the negotiated audio codec
+   *   rather than assuming surround. An explicit value &gt;= 6 opts into preserved
+   *   5.1/7.1 on paths that would otherwise downmix to stereo; an explicit value
+   *   &lt; 6 forces stereo.
+   */
+  public PlaybackSurface(String id, String route, int priority,
+      List<String> deliveryModes, List<String> videoCodecs,
+      List<String> audioCodecs, List<String> containers,
+      String audioTrackAccess, String audioTrackSelectionMode,
+      Map<String, List<String>> audioContainerRules,
+      int maxOutputWidth, int maxOutputHeight, int maxFps,
+      Set<String> interlacedUnsupportedCodecs,
+      Map<String, boolean[]> containerTransports,
+      int audioMaxChannels)
+  {
     if (id == null || id.length() == 0)
       throw new IllegalArgumentException("PlaybackSurface id must be non-empty");
     this.id = id;
@@ -188,6 +263,21 @@ public final class PlaybackSurface
           norm.add(PlaybackSurfaceSet.canonicalVideoCodec(c));
       this.interlacedUnsupportedCodecs = Collections.unmodifiableSet(norm);
     }
+    if (containerTransports == null || containerTransports.isEmpty())
+      this.containerTransports = Collections.<String, boolean[]>emptyMap();
+    else
+    {
+      Map<String, boolean[]> norm = new java.util.LinkedHashMap<String, boolean[]>(containerTransports.size());
+      for (Map.Entry<String, boolean[]> e : containerTransports.entrySet())
+      {
+        if (e.getKey() == null || e.getValue() == null || e.getValue().length < 2) continue;
+        norm.put(PlaybackSurfaceSet.canonicalContainer(e.getKey()),
+            new boolean[] { e.getValue()[0], e.getValue()[1] });
+      }
+      this.containerTransports = Collections.unmodifiableMap(norm);
+    }
+    // Negative/nonsense channel counts collapse to "undeclared".
+    this.audioMaxChannels = Math.max(0, audioMaxChannels);
   }
 
   public String getId() { return id; }
@@ -207,6 +297,13 @@ public final class PlaybackSurface
   public int getMaxOutputHeight() { return maxOutputHeight; }
   /** Declared decoder frame-rate limit, or 0 when the client didn't say. */
   public int getMaxFps() { return maxFps; }
+  /**
+   * Declared max audio channels this surface can decode/render, or 0 when the
+   * client didn't say. An explicit value &gt;= 6 opts into preserved surround on
+   * paths that would otherwise downmix to stereo; 0 (legacy) is resolved from
+   * the negotiated audio codec by the consumer, never assumed multichannel.
+   */
+  public int getAudioMaxChannels() { return audioMaxChannels; }
 
   /**
    * True when this surface EXPLICITLY declared it cannot decode interlaced
@@ -290,8 +387,19 @@ public final class PlaybackSurface
   /** Alias- and case-tolerant check against the surface's audio codec list. */
   public boolean supportsAudioCodec(String codec)
   {
-    return codec != null
-        && audioCodecs.contains(PlaybackSurfaceSet.canonicalAudioCodec(codec));
+    if (codec == null) return false;
+    String canon = PlaybackSurfaceSet.canonicalAudioCodec(codec);
+    // AC-4 (Dolby AC-4, ATSC 3.0) is never treated as client-decodable in this
+    // deployment. No shipping Android surface here (exoplayer/media3 or the ijk
+    // software fallback) can actually render AC-4 -- a DIRECT_PLAY/REMUX audio
+    // copy of AC-4 produces silence -- and the bundled ffmpeg cannot mux AC-4
+    // into any container the clients accept. AC-4 -> E-AC-3 transcode is therefore
+    // mandatory. Some clients nonetheless advertise "AC4" in their audio list;
+    // honoring that led the decision engine to pick the ijk surface with
+    // DIRECT_PLAY and push raw AC-4 (no audio). Force the audio dimension to
+    // "not natively supported" so evaluateForSurface escalates to AUDIO_TRANSCODE.
+    if ("AC4".equals(canon)) return false;
+    return audioCodecs.contains(canon);
   }
 
   /** Alias- and case-tolerant check against the surface's container list. */
@@ -299,6 +407,57 @@ public final class PlaybackSurface
   {
     return container != null
         && containers.contains(PlaybackSurfaceSet.canonicalContainer(container));
+  }
+
+  /**
+   * True when this surface can receive the given container over the requested
+   * transport. Fail-open: a container the client declared WITHOUT an explicit
+   * transport attribute has no entry and is reachable on either transport
+   * (so every pre-2.1 client, and any container sent bare, behaves exactly as
+   * before). Only an explicit {@code push=false} / {@code pull=false} on the
+   * container restricts it.
+   *
+   * <p>This is the surface-native equivalent of the legacy per-player
+   * {@code IJK_CONTAINER_CONSTRAINTS} push/pull rows. It lets a surface honestly
+   * declare a push-only container (e.g. {@code MPEG2-PS;push=true;pull=false}):
+   * the client can play a program stream when it is PUSHED (libavformat demux)
+   * but not when it is PULLED as a raw {@code stv://} .mpg (a pull OPEN returns
+   * NON_MEDIA). {@code container} is canonicalized internally.
+   *
+   * @param push true to ask about the push transport, false for pull.
+   */
+  public boolean containerAllowsTransport(String container, boolean push)
+  {
+    if (container == null) return false;
+    boolean[] t = containerTransports.get(PlaybackSurfaceSet.canonicalContainer(container));
+    if (t == null) return true; // fail-open: unspecified transport is allowed
+    return push ? t[0] : t[1];
+  }
+
+  /**
+   * True when this surface declared the container as PUSH-ONLY -- it can be
+   * pushed but not pulled (e.g. MPEG2-PS). Used by the delivery-mode selector so
+   * a push-only container is never routed over the cheaper pull transport it
+   * cannot actually direct-play. False when the container is unrestricted (no
+   * entry, fail-open) or explicitly pull-capable.
+   */
+  public boolean isContainerPushOnly(String container)
+  {
+    if (container == null) return false;
+    boolean[] t = containerTransports.get(PlaybackSurfaceSet.canonicalContainer(container));
+    return t != null && t[0] && !t[1];
+  }
+
+  /**
+   * True when this surface declared the container as PULL-ONLY -- it can be
+   * pulled but not pushed. Symmetric with {@link #isContainerPushOnly}; false
+   * for an unrestricted (fail-open) or push-capable container.
+   */
+  public boolean isContainerPullOnly(String container)
+  {
+    if (container == null) return false;
+    boolean[] t = containerTransports.get(PlaybackSurfaceSet.canonicalContainer(container));
+    return t != null && t[1] && !t[0];
   }
 
   /**
@@ -352,6 +511,13 @@ public final class PlaybackSurface
   @Override
   public String toString()
   {
+    StringBuilder ct = new StringBuilder();
+    for (Map.Entry<String, boolean[]> e : containerTransports.entrySet())
+    {
+      if (ct.length() > 0) ct.append(",");
+      ct.append(e.getKey()).append(";push=").append(e.getValue()[0])
+        .append(";pull=").append(e.getValue()[1]);
+    }
     return "PlaybackSurface[id=" + id
         + " route=" + route
         + " priority=" + priority
@@ -359,6 +525,7 @@ public final class PlaybackSurface
         + " video=" + videoCodecs
         + " audio=" + audioCodecs
         + " containers=" + containers
+        + " containerTransports=[" + ct + "]"
         + " audioTrackAccess=" + audioTrackAccess
         + " audioTrackSelectionMode=" + audioTrackSelectionMode
         + " audioContainerRules=" + audioContainerRules

@@ -243,13 +243,22 @@ public final class PlayerTimeoutPolicy
    * The unified soonest-wins budget for a single playback attempt. Returns a
    * value &gt; 0 (active) only for NG sessions; legacy sessions return 0,
    * signalling "no unified cap -- keep the independent, stacking behavior".
+   *
+   * <p>For an NG session this resolves through the usual cascade and, when
+   * nothing is configured, falls back to {@link #NG_PLAYBACK_DEADLINE_MS}. That
+   * fallback is deliberate and is the one knob where NG does <em>not</em> defer
+   * to the legacy value: without it the acquisition budgets stack, and a client
+   * that has dropped its media channel wedges the caller for
+   * {@code attempts * expireWait} (60s at the shipped 2 &times; 30000) before any
+   * error is reported. Legacy sessions are still untouched -- they return 0 here
+   * and keep the exact historical stacking behavior.
    */
   public static long playbackDeadlineMs(ProfileContext ctx)
   {
     if (ctx == null || !ctx.isNg())
       return 0L;
     return Math.max(0L, resolveLong(ctx, SUF_PLAYBACK_DEADLINE, BASE_PLAYBACK_DEADLINE,
-        0L));
+        NG_PLAYBACK_DEADLINE_MS));
   }
 
   /**
@@ -294,6 +303,7 @@ public final class PlayerTimeoutPolicy
     written += seedIfAbsent(SUF_ATTEMPTS,     Integer.toString(NG_ATTEMPTS));
     written += seedIfAbsent(SUF_BACKOFF,      Long.toString(NG_BACKOFF_MS));
     written += seedIfAbsent(SUF_CONN_TIMEOUT, Long.toString(NG_CONN_TIMEOUT_MS));
+    written += seedIfAbsent(SUF_PLAYBACK_DEADLINE, Long.toString(NG_PLAYBACK_DEADLINE_MS));
     return written;
   }
 

@@ -13,9 +13,11 @@ import sage.enhance.GpuEnhancePipeline;
 import static org.testng.Assert.*;
 
 /**
- * The provider seam must not change what the pipeline renders when the built-in
- * scaler is selected, must render the captured plan (not re-resolve the
- * registry), and must never let a provider drop the mandatory deinterlacer.
+ * The provider seam renders exactly what the selected provider produced. With the
+ * built-in passthrough this means NO scale stage (the playback path no longer
+ * upscales); a foreign provider's fragment is rendered verbatim; the mandatory
+ * deinterlacer is always preserved; and a directly-constructed plan (no captured
+ * exec) still uses the legacy render for calibration/offline parity.
  */
 public class ScaleSeamRenderTest
 {
@@ -56,41 +58,29 @@ public class ScaleSeamRenderTest
   }
 
   @Test
-  public void builtinCaptureRendersIdenticalTo720pProgressive()
+  public void builtinCaptureRendersNoScaleFor720pProgressive()
   {
-    // 720p progressive → 2160p, no deinterlace.
-    EnhancementPlan leg = legacy(EnhancementTier.ENHANCE_2160P, false, "scale_npp");
+    // 720p progressive → 2160p, no deinterlace: the passthrough renders nothing.
     EnhancementPlan cap = captured(EnhancementTier.ENHANCE_2160P, false, "scale_npp");
-    assertEquals(GpuEnhancePipeline.buildFilterChain(cap),
-        GpuEnhancePipeline.buildFilterChain(leg),
-        "720p progressive chain must be byte-identical with the seam");
-    assertEquals(GpuEnhancePipeline.buildFilterChain(cap),
-        "scale_npp=3840:2160:interp_algo=lanczos");
+    assertNull(GpuEnhancePipeline.buildFilterChain(cap),
+        "the built-in passthrough must not upscale on the playback path");
   }
 
   @Test
-  public void builtinCaptureRendersIdenticalTo1080iInterlaced()
+  public void builtinCaptureKeepsDeinterlaceButDropsScaleFor1080i()
   {
-    // 1080i → 2160p, with deinterlace: the deint stage must precede the scaler.
-    EnhancementPlan leg = legacy(EnhancementTier.ENHANCE_2160P, true, "scale_npp");
+    // 1080i → 2160p: the mandatory deinterlace still renders, but no scale stage.
     EnhancementPlan cap = captured(EnhancementTier.ENHANCE_2160P, true, "scale_npp");
-    assertEquals(GpuEnhancePipeline.buildFilterChain(cap),
-        GpuEnhancePipeline.buildFilterChain(leg),
-        "1080i chain must be byte-identical with the seam");
-    assertEquals(GpuEnhancePipeline.buildFilterChain(cap),
-        "yadif_cuda=0:-1:1,scale_npp=3840:2160:interp_algo=lanczos");
+    assertEquals(GpuEnhancePipeline.buildFilterChain(cap), "yadif_cuda=0:-1:1",
+        "deinterlace is preserved; the passthrough contributes no scale stage");
   }
 
   @Test
-  public void builtinCaptureRendersIdenticalTo1080pProgressiveCuda()
+  public void builtinCaptureRendersNoScaleForCuda()
   {
-    // 1080p progressive → 2160p on a build with only scale_cuda.
-    EnhancementPlan leg = legacy(EnhancementTier.ENHANCE_2160P, false, "scale_cuda");
+    // 1080p progressive → 2160p on a scale_cuda-only build: still nothing.
     EnhancementPlan cap = captured(EnhancementTier.ENHANCE_2160P, false, "scale_cuda");
-    assertEquals(GpuEnhancePipeline.buildFilterChain(cap),
-        GpuEnhancePipeline.buildFilterChain(leg),
-        "scale_cuda chain must be byte-identical with the seam");
-    assertEquals(GpuEnhancePipeline.buildFilterChain(cap), "scale_cuda=3840:2160");
+    assertNull(GpuEnhancePipeline.buildFilterChain(cap));
   }
 
   @Test

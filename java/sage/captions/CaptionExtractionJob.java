@@ -179,9 +179,31 @@ class CaptionExtractionJob implements Runnable
    *         stream was found and the caller should fall back to the legacy
    *         608/708 extraction path.
    */
+  /**
+   * Resolve the ffmpeg binary for caption extraction.
+   *
+   * <p>Delegates to {@link CaptionFfmpeg}, which is shared with the identical
+   * fallback in {@code sage.FFMPEGTranscoder} so the two cannot drift apart.
+   */
+  private static String resolveFfmpeg()
+  {
+    return CaptionFfmpeg.resolve();
+  }
+
+  /**
+   * Resolve an ffmpeg binary that can actually run the {@code subcc} fallback,
+   * whose entire input is a lavfi filter graph.
+   *
+   * @return a usable binary, or {@code null} if none supports lavfi.
+   */
+  private static String resolveLavfiFfmpeg()
+  {
+    return CaptionFfmpeg.resolveLavfi();
+  }
+
   private boolean runAtsc3StppIfPresent()
   {
-    String ffmpeg = Sage.get("caption_extraction/ffmpeg_path", sage.FFMPEGTranscoder.getTranscoderPath());
+    String ffmpeg = resolveFfmpeg();
     Atsc3StppExtractor.StppStream stream = Atsc3StppExtractor.detectStppStream(recFile, ffmpeg);
     if (stream == null) return false;
 
@@ -554,8 +576,15 @@ class CaptionExtractionJob implements Runnable
     {
       if (tmp.exists()) tmp.delete();
 
-      String ffmpeg = Sage.get("caption_extraction/ffmpeg_path",
-          sage.FFMPEGTranscoder.getTranscoderPath());
+      String ffmpeg = resolveLavfiFfmpeg();
+      if (ffmpeg == null)
+      {
+        System.out.println("CaptionExtractionJob: no ffmpeg with a lavfi input device is available;" +
+            " cannot run the subcc caption fallback for " + recFile +
+            ". Install ccextractor (preferred) or a distribution ffmpeg build.");
+        tmp.delete();
+        return;
+      }
       int extractSec = Sage.getInt("caption_extraction/extract_seconds", 0);
 
       // The lavfi `movie=PATH[out0+subcc]` filter exposes a captions subtitle

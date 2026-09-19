@@ -775,6 +775,17 @@ public class MiniClientSageRenderer extends SageRenderer
   {
     return getPlayerSocketChannel(uiMgr.getLocalUIClientName(), this);
   }
+
+  /**
+   * Deadline-bounded form of {@link #getPlayerSocketChannel()}. An inactive
+   * deadline behaves exactly like the unbounded form.
+   */
+  public java.nio.channels.SocketChannel getPlayerSocketChannel(
+      PlayerTimeoutPolicy.PlaybackDeadline deadline)
+  {
+    return getSocketChannelInfo(uiMgr.getLocalUIClientName(), this, clientPlayerSocketMap,
+        clientPlayerSocketMapTimes, deadline).getSocketChannel();
+  }
   public static java.nio.channels.SocketChannel getPlayerSocketChannel(String clientName,
       MiniClientSageRenderer mcsr)
   {
@@ -810,6 +821,26 @@ public class MiniClientSageRenderer extends SageRenderer
   public static SocketChannelInfo getSocketChannelInfo(String clientName,
       MiniClientSageRenderer mcsr, java.util.Map socketMap, java.util.Map socketMapTimes)
   {
+    return getSocketChannelInfo(clientName, mcsr, socketMap, socketMapTimes,
+        PlayerTimeoutPolicy.PlaybackDeadline.none());
+  }
+
+  /**
+   * Deadline-bounded acquisition.
+   *
+   * <p>{@code deadline} caps how long this will block waiting for the client to
+   * (re)attach its player socket. That matters because this runs on the caller's
+   * thread -- for playback startup that is the UI thread, holding the UI lock --
+   * so an unbounded wait here presents to the user as a frozen client rather than
+   * a failed playback. An inactive deadline (the legacy default) imposes no cap
+   * and reproduces the historical behavior exactly.
+   */
+  public static SocketChannelInfo getSocketChannelInfo(String clientName,
+      MiniClientSageRenderer mcsr, java.util.Map socketMap, java.util.Map socketMapTimes,
+      PlayerTimeoutPolicy.PlaybackDeadline deadline)
+  {
+    if (deadline == null)
+      deadline = PlayerTimeoutPolicy.PlaybackDeadline.none();
     synchronized (mapLock)
     {
       if (clientName == null)
@@ -831,11 +862,16 @@ public class MiniClientSageRenderer extends SageRenderer
       while (true)
       {
         long maxWait = reconnectLeft ? initialWait : expireWait;
+        // Soonest-wins: never wait past the unified playback budget.
+        maxWait = deadline.effectiveWait(maxWait, startWait);
         while (sake == null && Sage.eventTime() - startWait < maxWait)
         {
           try
           {
-            mapLock.wait(2000);
+            // Chunk the wait so an expiring deadline is honoured promptly rather
+            // than overshooting by up to a full 2s slice.
+            long slice = Math.min(2000L, maxWait - (Sage.eventTime() - startWait));
+            mapLock.wait(Math.max(1L, slice));
           }
           catch (InterruptedException e){}
           if (clientName == null)
@@ -4680,6 +4716,20 @@ public class MiniClientSageRenderer extends SageRenderer
           sendGetPropertyAsync("DISPLAY_HDR_TYPES");
           sendGetPropertyAsync("LOCAL_ENHANCEMENT");
           sendGetPropertyAsync("QUALITY_HINT");
+          // Active bandwidth probe result (Kbps[;age=ms]). The client times a
+          // bulk download of the server's /bwprobe endpoint during login/menu
+          // browsing and caches it, so a real link-capacity number is already
+          // in hand here -- correct on LAN and over VPN, unlike the passive
+          // render-socket estimate. Absent/blank on clients that don't probe,
+          // which leaves the GPU-enhance gate on its existing fallback.
+          sendGetPropertyAsync("MEASURED_BANDWIDTH_KBPS");
+          // Bridged transports (the PWA bridge) terminate the raw GFX/Media TCP
+          // sockets at the bridge, so the subnet-mask locality check above sees
+          // the bridge's address, not the viewer's -- every bridged client then
+          // looks LOCAL. When the client/bridge knows the real origin IP it
+          // reports it here so we can re-derive localConnection from the actual
+          // viewer. Absent (direct clients) => keep the socket-derived value.
+          sendGetPropertyAsync("CLIENT_ORIGIN_IP");
           sendBufferNow();
 
           clientPlatformProp = recvr.getStringReply();
@@ -4693,9 +4743,13 @@ public class MiniClientSageRenderer extends SageRenderer
           String hdrTypesProp = recvr.getStringReply();
           String localEnhancementProp = recvr.getStringReply();
           String qualityHintProp = recvr.getStringReply();
+          String measuredBandwidthProp = recvr.getStringReply();
+          String clientOriginIpProp = recvr.getStringReply();
           clientAudioLanguage = (clientAudioLanguageProp == null) ? "" : clientAudioLanguageProp.trim();
           applyEnhancementCapabilities(sinkResolutionProp, refreshRatesProp,
               hdrTypesProp, localEnhancementProp, qualityHintProp);
+          applyMeasuredBandwidth(measuredBandwidthProp);
+          applyClientOriginIp(clientOriginIpProp);
 
           clientPlatform = (clientPlatformProp == null) ? "" : clientPlatformProp.trim();
           clientDeviceFormFactor = (deviceFormFactorProp == null) ? "" : deviceFormFactorProp.trim();
@@ -7376,6 +7430,57 @@ public class MiniClientSageRenderer extends SageRenderer
     return localConnection;
   }
 
+  // Re-derives localConnection from a client/bridge-reported origin IP. Used when
+  // the raw TCP socket terminates at a bridge (PWA), so the socket-level subnet
+  // compare in establishConnection saw the bridge, not the viewer. A blank/invalid
+  // value leaves the socket-derived localConnection untouched. force_nonlocal_connection
+  // still wins. Trusted deliberately: a spoofed value only changes that client's
+  // own quality tier, never another user's.
+  private void applyClientOriginIp(String originIpProp)
+  {
+    if (!Sage.getBoolean("miniclient/trust_client_origin_ip", true))
+      return;
+    String ip = (originIpProp == null) ? "" : originIpProp.trim();
+    if (ip.length() == 0)
+      return;
+    try
+    {
+      byte[] remoteIP = java.net.InetAddress.getByName(ip).getAddress();
+      if (remoteIP.length != 4)
+        return; // IPv4 only, matching establishConnection's locality logic
+      java.net.InetAddress serverAddr = clientSocket.socket().getLocalAddress();
+      if (serverAddr == null || serverAddr.isLoopbackAddress() || serverAddr.isAnyLocalAddress())
+        serverAddr = java.net.InetAddress.getLocalHost();
+      byte[] localIP = serverAddr.getAddress();
+      if (localIP.length != 4)
+        return;
+      byte[] subnetMask = IOUtils.getSubnetMask(serverAddr).getAddress();
+      boolean local =
+          (localIP[0] & subnetMask[0]) == (remoteIP[0] & subnetMask[0]) &&
+          (localIP[1] & subnetMask[1]) == (remoteIP[1] & subnetMask[1]) &&
+          (localIP[2] & subnetMask[2]) == (remoteIP[2] & subnetMask[2]) &&
+          (localIP[3] & subnetMask[3]) == (remoteIP[3] & subnetMask[3]);
+      clientOriginIp = ip;
+      // force_nonlocal_connection is an explicit override; never let origin IP
+      // flip a forced-WAN client back to LAN.
+      if (uiMgr.getBoolean("force_nonlocal_connection", false))
+        local = false;
+      localConnection = local;
+      if (Sage.DBG) System.out.println("MiniClient CLIENT_ORIGIN_IP=" + ip
+          + " -> localConnection=" + localConnection);
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("MiniClient CLIENT_ORIGIN_IP parse failed for '"
+          + originIpProp + "': " + t);
+    }
+  }
+
+  public String getClientOriginIp()
+  {
+    return clientOriginIp;
+  }
+
   public boolean isLoopbackConnection()
   {
     return loopbackConnection;
@@ -8357,8 +8462,18 @@ public class MiniClientSageRenderer extends SageRenderer
         if (eq <= 0) continue;
         String k = part.substring(0, eq).trim().toLowerCase(java.util.Locale.ROOT);
         String v = part.substring(eq + 1).trim().toLowerCase(java.util.Locale.ROOT);
-        if ("pref".equals(k) && ("auto".equals(v) || "local".equals(v) || "server".equals(v)))
-          localEnhancementPref = v;
+        // Accept the three positive prefs plus an explicit hard opt-out.
+        // "never"/"off"/"none"/"disabled" all canonicalize to "never" so the
+        // client's "GPU Enhancement: Never" setting actually reaches the
+        // advisor instead of falling through to the "auto" default (which lets
+        // the server decide, i.e. silently re-enables enhancement).
+        if ("pref".equals(k))
+        {
+          if ("auto".equals(v) || "local".equals(v) || "server".equals(v))
+            localEnhancementPref = v;
+          else if ("never".equals(v) || "off".equals(v) || "none".equals(v) || "disabled".equals(v))
+            localEnhancementPref = "never";
+        }
         else if ("status".equals(k)
             && ("active".equals(v) || "available".equals(v) || "none".equals(v)))
           localEnhancementStatus = v;
@@ -8385,6 +8500,80 @@ public class MiniClientSageRenderer extends SageRenderer
   public String getLocalEnhancementStatus() { return localEnhancementStatus; }
   /** {@code auto} | {@code quality} | {@code savings}. */
   public String getClientQualityHint() { return clientQualityHint; }
+
+  /**
+   * Client-reported ACTIVE bandwidth probe in Kbps, or 0 when the client has
+   * not reported one. This is a real bulk-transfer throughput measurement (the
+   * client timing a download of {@code /bwprobe}), correct on LAN and over VPN,
+   * as opposed to the passive UI-render-socket average from
+   * {@link #getEstimatedBandwidth()}. Consumed only by the GPU enhancement
+   * bandwidth gate.
+   */
+  public int getProbedBandwidthKbps() { return probedBandwidthKbps; }
+
+  /**
+   * Effective age (ms) of the reported probe sample right now: the client's own
+   * reported sample age plus the time elapsed on the server since we received
+   * it. {@link Long#MAX_VALUE} when no probe has been reported, so a missing
+   * probe always reads as "too old" to any freshness check.
+   */
+  public long getProbedBandwidthAgeMs()
+  {
+    if (probedBandwidthKbps <= 0 || probedBandwidthReportedAtMs <= 0)
+      return Long.MAX_VALUE;
+    long sinceReport = Sage.eventTime() - probedBandwidthReportedAtMs;
+    if (sinceReport < 0) sinceReport = 0;
+    return probedBandwidthSampleAgeMs + sinceReport;
+  }
+
+  /**
+   * Parse the client's {@code MEASURED_BANDWIDTH_KBPS} report. Accepts either a
+   * bare integer ({@code "243000"}) or {@code "kbps;age=<ms>"}
+   * ({@code "243000;age=240000"} = 243 Mbps measured 4 minutes ago). Absent,
+   * blank, zero, or unparseable leaves the probe cleared (0), which every
+   * consumer reads as "no active probe -> fall back". Sanity-capped to a
+   * plausible range so a bogus value can't invent link capacity that isn't
+   * there.
+   */
+  private void applyMeasuredBandwidth(String measuredBandwidth)
+  {
+    probedBandwidthKbps = 0;
+    probedBandwidthReportedAtMs = 0;
+    probedBandwidthSampleAgeMs = 0;
+    if (measuredBandwidth == null) return;
+    String s = measuredBandwidth.trim();
+    if (s.length() == 0) return;
+    int kbps = 0;
+    long ageMs = 0;
+    java.util.StringTokenizer st = new java.util.StringTokenizer(s, ";");
+    boolean first = true;
+    while (st.hasMoreTokens())
+    {
+      String tok = st.nextToken().trim();
+      if (first)
+      {
+        first = false;
+        try { kbps = Integer.parseInt(tok); } catch (NumberFormatException e) { return; }
+      }
+      else
+      {
+        int eq = tok.indexOf('=');
+        if (eq <= 0) continue;
+        String k = tok.substring(0, eq).trim().toLowerCase(java.util.Locale.ROOT);
+        String v = tok.substring(eq + 1).trim();
+        if (k.equals("age"))
+        {
+          try { ageMs = Long.parseLong(v); } catch (NumberFormatException e) { ageMs = 0; }
+        }
+      }
+    }
+    // Reject non-positive and absurd values (> ~10 Gbps); clamp negative age.
+    if (kbps <= 0 || kbps > 10000000) return;
+    if (ageMs < 0) ageMs = 0;
+    probedBandwidthKbps = kbps;
+    probedBandwidthSampleAgeMs = ageMs;
+    probedBandwidthReportedAtMs = Sage.eventTime();
+  }
   /** {@code TV} | {@code TABLET} | {@code PHONE} | {@code DESKTOP}, or empty. */
   public String getDeviceFormFactor() { return clientDeviceFormFactor; }
 
@@ -8453,6 +8642,8 @@ public class MiniClientSageRenderer extends SageRenderer
       return capsSnapshot.contains("SUBTITLE_SIDECAR") || capsSnapshot.contains("SIDECAR_SUBTITLE");
     if ("BANDWIDTH_FEEDBACK_V1".equals(normCap))
       return capsSnapshot.contains("BANDWIDTH_FEEDBACK_V1") || capsSnapshot.contains("BW_FEEDBACK_V1");
+    if ("HLS_FMP4".equals(normCap))
+      return capsSnapshot.contains("HLS_FMP4") || capsSnapshot.contains("CMAF") || capsSnapshot.contains("FMP4");
 
     return false;
   }
@@ -8460,6 +8651,20 @@ public class MiniClientSageRenderer extends SageRenderer
   public boolean supportsNgBandwidthFeedbackV1()
   {
     return hasClientCapability("BANDWIDTH_FEEDBACK_V1");
+  }
+
+  /**
+   * True when the client advertised support for CMAF/fMP4 HLS delivery
+   * (capability token {@code HLS_FMP4}, aliases {@code CMAF}/{@code FMP4}).
+   * When set, the server emits the fMP4 media-playlist OPENURL
+   * ({@code _<bw>_fmp4.m3u8} + {@code init.mp4} + {@code .m4s} parts) instead
+   * of the legacy MPEG-TS master playlist ({@code _list.m3u8}). This is a
+   * durable, client-advertised capability -- not a bring-up/test toggle -- so
+   * the CMAF path activates purely from what the client negotiates.
+   */
+  public boolean supportsHlsFmp4()
+  {
+    return hasClientCapability("HLS_FMP4");
   }
 
   /**
@@ -10160,6 +10365,16 @@ public class MiniClientSageRenderer extends SageRenderer
   private String localEnhancementPref = "auto";
   private String localEnhancementStatus = "none";
   private String clientQualityHint = "auto";
+  // Client-reported ACTIVE bandwidth probe (Kbps) and how old the sample was
+  // when reported (ms). 0 == no probe reported. Unlike the passive render-socket
+  // estimate (getEstimatedBandwidth), this is a real throughput measurement the
+  // client took by timing a bulk download of the server's /bwprobe endpoint, so
+  // it reflects true link capacity (correct on LAN and over VPN alike) instead
+  // of lightly-loaded UI-channel byte accounting. Consumed ONLY by the GPU
+  // enhancement bandwidth gate; never feeds the legacy transcode ladder.
+  private int probedBandwidthKbps;
+  private long probedBandwidthReportedAtMs; // server-clock time we received it
+  private long probedBandwidthSampleAgeMs;  // client-reported age of the sample
   private Boolean fullScreenChange;
   private String remoteResolutionChange;
   private final Object remoteResolutionChangeLock = new Object();
@@ -10272,6 +10487,9 @@ public class MiniClientSageRenderer extends SageRenderer
 
   private boolean localConnection;
   private boolean loopbackConnection;
+  // Real viewer origin IP reported via CLIENT_ORIGIN_IP (bridged transports).
+  // Empty for direct clients.
+  private String clientOriginIp = "";
 
   private int gfxScalingCaps;
   private boolean hasOfflineCache;

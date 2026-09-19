@@ -124,4 +124,30 @@ public class MediaServerXcodeEnhanceTest
     assertFalse(req.enhanceRequested);
     assertNull(req.tierToken);
   }
+
+  /**
+   * The browserhd fMP4 encode command MUST disable B-frames (-bf 0). Browser
+   * MSE rejects the negative composition-time offsets that B-frame reordering
+   * produces on this path (movenc writes them with baseMediaDecodeTime=0 and no
+   * edit list, so the first fragment carries samples with PTS &lt; DTS and
+   * Chrome/Edge fire a SourceBuffer 'error' on the first append). This is a
+   * correctness invariant of the browser-only profile, so it is hardcoded, not
+   * a property. Guard it against a regression that reintroduces B-frames.
+   */
+  @Test
+  public void browserHdParamsForceNoBFrames() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    java.lang.reflect.Method m = MediaServer.class.getDeclaredMethod("buildBrowserHdParams");
+    m.setAccessible(true);
+    String params = (String) m.invoke(null);
+    assertTrue(params.contains(" -bf 0"),
+        "browserhd command must disable B-frames for MSE compatibility; got: " + params);
+    assertTrue(params.contains(" -profile:v high"),
+        "browserhd command must keep -profile:v high; got: " + params);
+    // -bf 0 must precede the GOP/keyframe args, matching the option ordering the
+    // encoder expects (the flag is appended immediately after -profile:v high).
+    assertTrue(params.indexOf(" -bf 0") < params.indexOf(" -g "),
+        "-bf 0 must be emitted before -g; got: " + params);
+  }
 }

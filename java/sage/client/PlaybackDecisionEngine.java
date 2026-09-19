@@ -462,7 +462,8 @@ public class PlaybackDecisionEngine
           // when false the passthrough Tri is ignored and the legacy
           // decode-only reject stands.
           if (sage.Sage.getBoolean("playback/honor_audio_passthrough", true)
-              && arow.passthrough == ClientConstraints.Tri.TRUE)
+              && arow.passthrough == ClientConstraints.Tri.TRUE
+              && !"AC4".equals(PlaybackSurfaceSet.canonicalAudioCodec(mediaAudioCodec)))
           {
             audioPassthrough = true;
             if (sage.Sage.DBG)
@@ -1554,7 +1555,7 @@ public class PlaybackDecisionEngine
       d = escalateForInterlacedIfDeclaredUndecodable(d, s, constraints,
           mediaVideoCodec, sourceInterlaced);
 
-      String mode = pickDeliveryModeForDecision(s, d.decision);
+      String mode = pickDeliveryModeForDecision(s, d.decision, mediaContainer);
       if (mode == null)
       {
         if (sage.Sage.DBG) System.out.println("PlaybackDecisionEngine.evaluateSurfaces: "
@@ -1870,18 +1871,40 @@ public class PlaybackDecisionEngine
    * </ul>
    * Returns {@code null} to signal "no viable mode for this decision"; the
    * caller drops the surface with a WARN.
+   *
+   * <p>For a {@code DIRECT_PLAY} of the raw source container, the surface's
+   * per-container transport declaration is honored: a push-only container (e.g.
+   * {@code MPEG2-PS;push=true;pull=false}) is never routed over the cheaper pull
+   * transport it cannot direct-play (a raw {@code stv://} .mpg pull OPEN returns
+   * NON_MEDIA on the client), and a pull-only container is never pushed. A
+   * container with no explicit transport attribute is reachable on either
+   * (fail-open), so the cheapest-first pull>push>hls order is unchanged for
+   * every pre-2.1 client. Transport constraints apply ONLY to DIRECT_PLAY,
+   * where the client receives the raw source container; the non-direct branches
+   * feed a SERVER-PRODUCED container whose transport the source constraint does
+   * not govern.
    */
-  private static String pickDeliveryModeForDecision(PlaybackSurface s, Decision d)
+  private static String pickDeliveryModeForDecision(PlaybackSurface s, Decision d,
+      String mediaContainer)
   {
     if (s == null) return null;
     java.util.List<String> declared = s.getDeliveryModes();
     if (declared == null || declared.isEmpty()) return null;
     if (d == Decision.DIRECT_PLAY)
     {
-      // Any servable mode; cheapest first.
-      if (declared.contains("pull")) return "pull";
-      if (declared.contains("push")) return "push";
+      // Cheapest first, but only over a transport the raw container can use.
+      // containerAllowsTransport is fail-open: an unrestricted container allows
+      // both, preserving the legacy pull-first order.
+      boolean pullOK = s.containerAllowsTransport(mediaContainer, /*push=*/false);
+      boolean pushOK = s.containerAllowsTransport(mediaContainer, /*push=*/true);
+      if (declared.contains("pull") && pullOK) return "pull";
+      if (declared.contains("push") && pushOK) return "push";
       if (declared.contains("hls"))  return "hls";
+      if (sage.Sage.DBG && (!pullOK || !pushOK))
+        System.out.println("PlaybackDecisionEngine: surface '" + s.getId()
+            + "' DIRECT_PLAY of " + mediaContainer + " has no servable transport"
+            + " (container push=" + pushOK + " pull=" + pullOK
+            + ", surface delivery=" + declared + ")");
       return null;
     }
     // Non-DIRECT: server must feed transformed bytes; raw pull cannot, but

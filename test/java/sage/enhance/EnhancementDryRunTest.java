@@ -38,10 +38,16 @@ public class EnhancementDryRunTest
         "all", "client", null, 3840, 2160, 60);
   }
 
+  private sage.enhance.spi.ScaleProviderRegistration upscaleReg;
+
   @BeforeMethod
   public void setUp() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();
+    sage.enhance.spi.ScaleProviderRegistry.getInstance().resetForTest();
+    upscaleReg = sage.enhance.spi.ScaleProviderRegistry.getInstance().register(
+        EnhancementAdvisorTest.fakeUpscalerProvider());
+    Sage.put("playback/gpu_enhance/scale_provider", "test-upscaler");
   }
 
   @AfterMethod
@@ -49,6 +55,9 @@ public class EnhancementDryRunTest
   {
     Sage.remove(EnhancementAdvisor.PROP_ENABLED);
     Sage.remove(EnhancementDryRun.PROP_DRY_RUN);
+    Sage.remove("playback/gpu_enhance/scale_provider");
+    if (upscaleReg != null) { upscaleReg.close(); upscaleReg = null; }
+    sage.enhance.spi.ScaleProviderRegistry.getInstance().resetForTest();
   }
 
   private EnhancementTier eval()

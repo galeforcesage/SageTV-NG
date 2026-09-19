@@ -175,7 +175,7 @@ public class EncodingServer implements Runnable
     {
       try
       {
-        cd.loadDevice();
+        cd.loadDeviceTracked();
         return true;
       }
       catch (EncodingException e)

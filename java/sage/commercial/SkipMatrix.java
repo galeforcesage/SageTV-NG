@@ -205,6 +205,15 @@ public class SkipMatrix
   }
 
   /**
+   * Returns the kind of the given segment index
+   * ({@link #KIND_COMMERCIAL}, {@link #KIND_PROMO}, or {@link #KIND_CHAPTER}).
+   */
+  public int getSegmentKind(int index)
+  {
+    return kind[index] & 0xFF;
+  }
+
+  /**
    * Returns the next commercial boundary (start or end of any segment) after the given position,
    * or -1 if no boundary exists after this position. Uses binary search for efficiency.
    *

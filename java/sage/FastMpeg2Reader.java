@@ -299,7 +299,29 @@ public final class FastMpeg2Reader
   {
     this.ac4SourceAudioCodec = codec;
   }
+  /**
+   * The client-friendly codec chosen to replace an AC-4 source track (or null
+   * if the source is not AC-4 / no override was set). Used by the push-format
+   * hint synthesis so the wire STREAMINFO advertises the codec the client is
+   * actually fed rather than the un-muxable AC-4 the profile mode names.
+   */
+  public String getAc4SourceAudioCodec()
+  {
+    return ac4SourceAudioCodec;
+  }
   private String ac4SourceAudioCodec;
+  /**
+   * Optional per-client audio multichannel capability (winning surface's
+   * declared AUDIO_MAX_CHANNELS; 0 = legacy/undeclared). Forwarded to the
+   * FFMPEGTranscoder constructed in init() so the GPU-enhance AC-4 sidecar can
+   * preserve 5.1 for a client that advertised it (or, when undeclared, a
+   * passthrough EAC3/AC3 codec) and otherwise downmix to stereo.
+   */
+  public void setSidecarMaxAudioChannels(int ch)
+  {
+    this.sidecarMaxAudioChannels = ch;
+  }
+  private int sidecarMaxAudioChannels;
   /**
    * Optional GPU-enhancement tier for this push transcode. When set to an
    * active tier it is forwarded to the FFMPEGTranscoder constructed in init(),
@@ -386,6 +408,8 @@ public final class FastMpeg2Reader
       inxs.setEnableOutputBuffering(true);
       if (ac4SourceAudioCodec != null && inxs instanceof FFMPEGTranscoder)
         ((FFMPEGTranscoder) inxs).setAc4SourceAudioCodec(ac4SourceAudioCodec);
+      if (inxs instanceof FFMPEGTranscoder)
+        ((FFMPEGTranscoder) inxs).setSidecarMaxAudioChannels(sidecarMaxAudioChannels);
       if (enhancementTier != null && enhancementTier.isActive() && inxs instanceof FFMPEGTranscoder)
         ((FFMPEGTranscoder) inxs).setEnhancementRequest(enhancementTier);
       forcedPS = true;

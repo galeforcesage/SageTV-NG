@@ -106,6 +106,39 @@ public class RecordingGuardTest
         EnhancementTier.DEINTERLACE_ONLY);
   }
 
+  // ---- Coexist posture ----------------------------------------------------
+
+  @Test
+  public void testCoexistKeepsFullTierWhileRecording()
+  {
+    Sage.put(PROP_PROTECTION, "coexist");
+    RecordingGuard g = RecordingGuard.getInstance();
+    assertEquals(g.getPosture(), RecordingGuard.Posture.COEXIST);
+    // Full upscale survives an active recording; the capacity ladder decides.
+    assertEquals(g.applyVeto(EnhancementTier.ENHANCE_2160P, recordingNow()),
+        EnhancementTier.ENHANCE_2160P);
+    // ...and an imminent one.
+    assertEquals(g.applyVeto(EnhancementTier.ENHANCE_2160P, imminent()),
+        EnhancementTier.ENHANCE_2160P);
+  }
+
+  @Test
+  public void testCoexistDoesNotReserveTunerSlots()
+  {
+    Sage.put(PROP_PROTECTION, "coexist");
+    assertFalse(RecordingGuard.getInstance().reservesGpuSlotForTuners(),
+        "coexist must not reserve an enhancement slot for a non-GPU capture");
+  }
+
+  @Test
+  public void testProtectAndBalancedReserveTunerSlots()
+  {
+    Sage.put(PROP_PROTECTION, "protect");
+    assertTrue(RecordingGuard.getInstance().reservesGpuSlotForTuners());
+    Sage.put(PROP_PROTECTION, "balanced");
+    assertTrue(RecordingGuard.getInstance().reservesGpuSlotForTuners());
+  }
+
   // ---- Fail-closed behavior ----------------------------------------------
 
   @Test

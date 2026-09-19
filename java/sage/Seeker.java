@@ -2207,7 +2207,7 @@ public class Seeker implements Hunter
     {
       try
       {
-        encState.capDev.loadDevice();
+        encState.capDev.loadDeviceTracked();
       }
       catch (EncodingException e)
       {
@@ -2644,7 +2644,7 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
                     Sage.getBoolean("mmc/fully_reload_digital_tuners_on_halt_detection", false))
                 {
                   encState.capDev.freeDevice();
-                  encState.capDev.loadDevice();
+                  encState.capDev.loadDeviceTracked();
                 }
                 loadedOK = true;
                 encState.capDev.startEncoding(null, encState.currRecordFile.getRecordingFile().toString(), "");
@@ -2672,6 +2672,47 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
               encState.resetRequested = false;
               encState.lastSizeCheckTime = 0;
               encState.lastCheckedSize = 0;
+
+              // Phase 2 tuner resilience: mid-recording migration. If the device
+              // could not be reloaded (dead/unreachable tuner, not a transient
+              // encoding stall) and it has failed to load repeatedly, stop
+              // hammering it. Provided another functioning tuner can carry this
+              // station, cleanly finalize the partial recording here (endRecord
+              // ends the segment and unpins the airing from this dead encoder)
+              // and kick the scheduler, which reassigns the still-active airing
+              // to a healthy tuner via its existing failover path. The partial
+              // file is preserved; the continuation becomes a new segment/file
+              // on the new tuner. Disabled when the threshold is <= 0.
+              long migrateAfter = Sage.getLong("mmc/failed_loads_before_recording_migration", 2L);
+              if (!loadedOK && migrateAfter > 0 && encState.currRecord != null
+                  && encState.capDev.isInLoadCooldown()
+                  && encState.capDev.getConsecutiveLoadFailures() >= migrateAfter)
+              {
+                int migStation = encState.currRecord.getStationID();
+                boolean healthyAlternate = false;
+                for (EncoderState alt : encoderStateMap.values())
+                {
+                  if (alt != encState && alt.capDev.isFunctioning() && alt.capDev.canEncode()
+                      && !alt.capDev.isInLoadCooldown() && alt.stationSet.contains(migStation))
+                  {
+                    healthyAlternate = true;
+                    break;
+                  }
+                }
+                if (healthyAlternate)
+                {
+                  Airing migAir = encState.currRecord;
+                  if (Sage.DBG) System.out.println("SEEKER migrating in-progress recording off dead tuner "
+                      + encState.capDev.getName() + " (consecutive load failures="
+                      + encState.capDev.getConsecutiveLoadFailures() + ") airing=" + migAir);
+                  endRecord(encState, Sage.time(), false);
+                  // Reassign the still-desired airing to a healthy tuner on the next pass.
+                  sched.kick(true);
+                }
+                else if (Sage.DBG)
+                  System.out.println("SEEKER wants to migrate recording off dead tuner "
+                      + encState.capDev.getName() + " but no healthy station-capable tuner is available; will keep retrying");
+              }
             }
           }
           else if (encState.lastCheckedSize != recLength)
@@ -4688,6 +4729,22 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
         && "true".equalsIgnoreCase(requestor.getCapability(recordIt ? "RecordRequestLiveMultiConflict"
             : "WatchRequestLiveMultiConflict"));
     Map<Airing, EncoderState> conflictMap = multiConflictCapable ? new LinkedHashMap<Airing, EncoderState>(encoderStateMap.size()) : null;
+    // Tuner resilience: if at least one tuner that can serve this station is
+    // NOT in a load-failure cooldown, prefer those and skip the cooled-down
+    // ones during selection. If EVERY station-capable tuner is cooled down we
+    // leave them all eligible (a last-resort attempt is better than refusing).
+    boolean haveHealthyForStation = false;
+    if (iKnowIWantThisEncoder == null)
+    {
+      for (EncoderState es : tryUs)
+      {
+        if (es.stationSet.contains(theAir.stationID) && !es.capDev.isInLoadCooldown())
+        {
+          haveHealthyForStation = true;
+          break;
+        }
+      }
+    }
     while (true)
     {
       Iterator<EncoderState> walker = tryUs.iterator();
@@ -4704,6 +4761,13 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
         EncoderState es = walker.next();
         if (!es.stationSet.contains(theAir.stationID))
         {
+          walker.remove();
+          continue;
+        }
+        if (haveHealthyForStation && es.capDev.isInLoadCooldown())
+        {
+          if (Sage.DBG) System.out.println("findBestEncoderForNow: skipping " + es.capDev.getName()
+              + " (in load-failure cooldown; a healthy tuner can serve this station)");
           walker.remove();
           continue;
         }
@@ -5198,12 +5262,36 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
     // avoids the encoder-resolution / "currRecord on same stationID" substitution path
     // below that mis-resolves recordings whose Airing has a generic/duplicate title
     // (e.g. "No Data" channels) when the airing's scheduling slot is in the past.
+    //
+    // IMPORTANT: only take this shortcut when the airing's scheduling slot is in
+    // the past. A live-TV watch targets an airing whose slot is still open; if its
+    // live buffer died prematurely (e.g. the recording stopped after a few seconds
+    // due to a tune failure or a torn-down session), the bound MediaFile is left as
+    // a short, non-live, non-recording stub. Routing to that stub serves a dead file
+    // with no -follow (ffmpeg emits an empty output → the client gets zero bytes →
+    // black screen). For a still-open airing we must instead fall through to the
+    // encoder-resolution/tune path so the tuner re-tunes and produces a fresh,
+    // growing live buffer.
     {
+      // A genuinely completed recording — including one opened for direct file
+      // playback — has its scheduling window entirely in the past. A live-TV
+      // airing whose buffer died early still has a future scheduling end even
+      // though its bound file stopped growing, so keying purely off the
+      // scheduling end (not FakeAiring-ness) is what separates "replay a
+      // finished recording" from "re-tune a stalled live channel".
+      boolean airingSlotPast = (watchAir.getSchedulingEnd() <= Sage.time());
       MediaFile boundMF = wiz.getFileForAiring(watchAir);
-      if (boundMF != null && !boundMF.isAnyLiveStream() && !boundMF.isRecording())
+      if (boundMF != null && !boundMF.isAnyLiveStream() && !boundMF.isRecording() && airingSlotPast)
       {
         if (Sage.DBG) System.out.println("Seeker.requestWatch(Airing) routing to bound MediaFile=" + boundMF);
         return requestWatch(boundMF, errorReturn, uiClient);
+      }
+      else if (boundMF != null && !boundMF.isAnyLiveStream() && !boundMF.isRecording())
+      {
+        if (Sage.DBG) System.out.println("Seeker.requestWatch(Airing) bound MediaFile=" + boundMF
+            + " is a dead live-buffer stub for a still-open airing (schedEnd="
+            + watchAir.getSchedulingEnd() + " now=" + Sage.time()
+            + "); falling through to re-tune instead of serving the stub");
       }
     }
 
@@ -5231,6 +5319,13 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
     // 1 - highest merit not recording a must see, equal merit than use lower WP of currRec or non-used source
     EncoderState es = null;
     MediaFile rv = null;
+    int liveFailoverAttempts = 0;
+    // Orphaned-capture guard: remember the encoder we attach this client to (and
+    // set forceWatch on) below, so that if we ultimately fail to hand back a
+    // playable file we can release it on the way out instead of leaving a
+    // phantom controlling client that pins the tuner and captures forever.
+    EncoderState engagedES = null;
+    boolean engagedClientAdded = false;
     while(true) {
       es = findBestEncoderForNow(watchAir, false, uiClient, errorReturn);
       if (es == null && (!liveStreaming || errorReturn[0] == VideoFrame.WATCH_FAILED_USER_REJECTED_CONFLICT))
@@ -5363,6 +5458,8 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
             es.forceWatch = watchAir;
           es.forceProcessed = false;
           es.controllingClients.add(uiClient);
+          engagedES = es;
+          engagedClientAdded = true;
           // Also release any encoders who currently are controlled by this client
           for (EncoderState tempES : encoderStateMap.values())
           {
@@ -5379,6 +5476,30 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
           work();
           if (rv == null)
             rv = wiz.getFileForAiring(watchAir);
+          // Tuner resilience: work() just tried to load the chosen capture
+          // device. If that load failed (device now quarantined in cooldown and
+          // still not loaded), don't hand back a dead live file that surfaces as
+          // "No signal" on the client. Release this client's hold on the dead
+          // tuner and retry selection so findBestEncoderForNow routes to a
+          // healthy tuner that can serve this station. Bounded so that when no
+          // healthy alternative exists we fall through to best-effort behavior.
+          if (es != null && es.capDev.isInLoadCooldown() && !es.capDev.isLoaded()
+              && liveFailoverAttempts < encoderStateMap.size() + 1)
+          {
+            liveFailoverAttempts++;
+            if (Sage.DBG) System.out.println("requestWatch: encoder " + es.capDev.getName()
+                + " failed to load; releasing and re-selecting a healthy tuner (attempt "
+                + liveFailoverAttempts + ")");
+            if (es.controllingClients.remove(uiClient) && es.controllingClients.isEmpty())
+            {
+              es.forceWatch = null;
+              es.forceProcessed = false;
+              es.absoluteClientControl = null;
+            }
+            if (es == engagedES) { engagedES = null; engagedClientAdded = false; }
+            rv = null;
+            continue;
+          }
         }
         else
         {
@@ -5392,6 +5513,22 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
             rv = es.currRecordFile;
             if (Sage.DBG) System.out.println("Encoder is recording same channel..return the file for what its recording now:" + rv);
           }
+        }
+        // Dead-stub guard: after re-tuning a still-open live airing whose bound
+        // MediaFile had stopped (the black-screen / zero-byte case), the airing
+        // may still resolve to that non-growing stub. If the encoder we just
+        // engaged is actually recording this station now, hand back its live
+        // recording file so the client gets a growing, -follow'd buffer instead
+        // of the dead stub.
+        if (rv != null && es != null && es.currRecordFile != null && es.currRecordFile != rv
+            && !rv.isRecording() && !rv.isAnyLiveStream()
+            && es.currRecord != null && es.currRecord.stationID == watchAir.stationID
+            && watchAir.stationID != 0)
+        {
+          if (Sage.DBG) System.out.println("requestWatch: bound file " + rv
+              + " is a non-growing stub but encoder is recording this station; returning live file "
+              + es.currRecordFile);
+          rv = es.currRecordFile;
         }
       }
       break;
@@ -5422,6 +5559,27 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
     sched.kick(true);
     if (rv == null)
     {
+      // Failed-watch rollback: we attached this client to an encoder and set its
+      // forceWatch above but never produced a playable file. The client gets a
+      // failed watch and will not call finishWatch, so left as-is the encoder
+      // stays pinned by this phantom controlling client + forceWatch and keeps
+      // capturing indefinitely (observed on No-Data channels whose synthetic
+      // airing rolls over forever). Release our engagement so the work loop can
+      // tear the orphaned capture down.
+      if (engagedClientAdded && engagedES != null)
+      {
+        synchronized (this)
+        {
+          if (engagedES.controllingClients.remove(uiClient) && engagedES.controllingClients.isEmpty())
+          {
+            engagedES.forceWatch = null;
+            engagedES.forceProcessed = false;
+            engagedES.absoluteClientControl = null;
+          }
+        }
+        kick();
+        sched.kick(false);
+      }
       if (Sage.DBG) System.out.println("requestWatch returning null for unknown reason");
       errorReturn[0] = VideoFrame.WATCH_FAILED_GENERAL_SEEKER;
     }

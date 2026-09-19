@@ -415,8 +415,26 @@ public class CaptionExtractionManager
   /**
    * Tail-extract loop for an in-progress recording (live-buffer or normal
    * scheduled/manual recording that's still writing). Wakes every
-   * caption_extraction/live_interval_ms (default 10s) and re-derives the
+   * caption_extraction/live_interval_ms (default 2s) and re-derives the
    * current caption set from the growing source file.
+   *
+   * <p><b>Live caption latency (why the default is 2s, not 10s):</b> a cue's
+   * end-to-end delivery latency to a live viewer is up to <em>two</em> full
+   * cycles -- one cycle for the extraction pass that first produces the cue,
+   * plus one more for the lag-by-one tail-release in
+   * {@link #pushDeltaToViewers} (a cue is only released once a subsequent
+   * pass reproduces it unchanged). At the old 10s default that was a ~20s
+   * worst-case latency, far larger than a live push client's few-second
+   * buffer lead, so cues routinely arrived after playback had already passed
+   * their media position and were shown very late or skipped entirely --
+   * observed live as captions arriving in bursts with ~20s silent gaps. The
+   * cue text carries its correct media-timeline begin/end and is displayed
+   * by media time, so the only lever is delivering it sooner: at the 2s
+   * cycle floor the worst-case latency drops to ~4s, which fits inside a
+   * typical client buffer so cues land before playback reaches them. The
+   * per-cycle cost stays low because STPP extraction is incremental (it
+   * parses only the newly-grown bytes of the already free-running extractor
+   * output, it does not respawn ffmpeg per cycle).
    *
    * <p>Piece C v2: this class is now also the single owner of the whole
    * live-caption delivery + persistence-policy seam for a MediaFile:
@@ -497,7 +515,7 @@ public class CaptionExtractionManager
 
     // Set once at the top of run(); used only to size the sleep between
     // cycles.
-    private volatile long intervalMs = 10000L;
+    private volatile long intervalMs = 2000L;
 
     // Lag-by-one tail-release tracking (see pushDeltaToViewers): identity
     // key of the tail cue as of the last cycle it was seen. Single-threaded
@@ -532,7 +550,7 @@ public class CaptionExtractionManager
     @Override
     public void run()
     {
-      intervalMs = Math.max(2000L, Sage.getLong("caption_extraction/live_interval_ms", 10000L));
+      intervalMs = Math.max(2000L, Sage.getLong("caption_extraction/live_interval_ms", 2000L));
       long minBytes = Math.max(0L, Sage.getLong("caption_extraction/live_min_file_bytes", 524288L));
       final int id = mf.getID();
       try

@@ -129,9 +129,21 @@ public class Scheduler implements SchedulerInterface
         {
           if (!cdi.getCaptureDevice().isLoaded())
           {
+            // Tuner resilience: a device that just failed to load is quarantined
+            // for a cooldown window. Skip it cheaply here instead of hammering
+            // loadDevice() (a dead network tuner blocks on a socket timeout)
+            // every scheduler pass; it is re-probed automatically once the
+            // cooldown lapses, so a returning tuner self-heals.
+            if (cdi.getCaptureDevice().isInLoadCooldown())
+            {
+              if (Sage.DBG) System.out.println("Schedule skipping encoder " + cdi.getCaptureDevice().getName() +
+                  " (in load-failure cooldown, " + cdi.getCaptureDevice().getConsecutiveLoadFailures() + " consecutive failures)");
+              walker.remove();
+              continue;
+            }
             try
             {
-              cdi.getCaptureDevice().loadDevice();
+              cdi.getCaptureDevice().loadDeviceTracked();
               allDevs.add(cdi.getCaptureDevice());
             }
             catch (EncodingException e)

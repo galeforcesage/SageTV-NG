@@ -164,8 +164,13 @@ public class PlayerTimeoutPolicyTest
     assertEquals(PlayerTimeoutPolicy.attempts(ng), 2);
     assertEquals(PlayerTimeoutPolicy.backoffMs(ng), 250L);
     assertEquals(PlayerTimeoutPolicy.connectionTimeoutMs(ng), 30000L);
-    // Soonest-wins stays disabled (0) until explicitly opted in.
-    assertEquals(PlayerTimeoutPolicy.playbackDeadlineMs(ng), 0L);
+    // The one deliberate exception: the unified soonest-wins budget has no
+    // legacy equivalent to defer to, and leaving it at 0 is what lets the
+    // acquisition budgets stack into a ~60s block on the caller's thread. An
+    // NG session therefore gets it by default; legacy still returns 0.
+    assertEquals(PlayerTimeoutPolicy.playbackDeadlineMs(ng),
+        PlayerTimeoutPolicy.NG_PLAYBACK_DEADLINE_MS);
+    assertEquals(PlayerTimeoutPolicy.playbackDeadlineMs(PlayerTimeoutPolicy.LEGACY), 0L);
   }
 
   @Test
@@ -194,8 +199,8 @@ public class PlayerTimeoutPolicyTest
   @Test
   public void testSeedRecommendedNgDefaultsIsIdempotentAndNonClobbering()
   {
-    // Fresh seed writes all five knobs into the ng_default tier.
-    assertEquals(PlayerTimeoutPolicy.seedRecommendedNgDefaults(), 5);
+    // Fresh seed writes all six knobs into the ng_default tier.
+    assertEquals(PlayerTimeoutPolicy.seedRecommendedNgDefaults(), 6);
     ProfileContext ng = PlayerTimeoutPolicy.of(true, null);
     assertEquals(PlayerTimeoutPolicy.expireWaitMs(ng), 15000L);
     assertEquals(PlayerTimeoutPolicy.attempts(ng), 3);
@@ -323,14 +328,20 @@ public class PlayerTimeoutPolicyTest
   public void testForContextBuildsActiveOnlyForNg()
   {
     assertFalse(PlaybackDeadline.forContext(PlayerTimeoutPolicy.LEGACY, 0L).isActive());
-    // An NG session opts into the unified deadline via the ng_default tier.
+    // An NG session can size the unified deadline via the ng_default tier.
     putNgDefault(PlayerTimeoutPolicy.SUF_PLAYBACK_DEADLINE, "15000");
     PlaybackDeadline ngD = PlaybackDeadline.forContext(PlayerTimeoutPolicy.of(true, null), 1000L);
     assertTrue(ngD.isActive());
     assertEquals(ngD.deadlineAtMs(), 1000L + 15000L);
-    // Without the opt-in, even an NG session has no unified cap.
+    // With the tier removed an NG session still has a cap -- the built-in NG
+    // default -- because an uncapped acquisition is what froze the UI.
     Sage.remove(PlayerTimeoutPolicy.PROFILE_PREFIX + PlayerTimeoutPolicy.NG_DEFAULT_ID
         + "/" + PlayerTimeoutPolicy.SUF_PLAYBACK_DEADLINE);
+    PlaybackDeadline dflt = PlaybackDeadline.forContext(PlayerTimeoutPolicy.of(true, null), 1000L);
+    assertTrue(dflt.isActive());
+    assertEquals(dflt.deadlineAtMs(), 1000L + PlayerTimeoutPolicy.NG_PLAYBACK_DEADLINE_MS);
+    // Explicitly zeroing it is still an escape hatch back to legacy stacking.
+    putNgDefault(PlayerTimeoutPolicy.SUF_PLAYBACK_DEADLINE, "0");
     assertFalse(PlaybackDeadline.forContext(PlayerTimeoutPolicy.of(true, null), 1000L).isActive());
   }
 }

@@ -19,6 +19,14 @@ import org.testng.annotations.Test;
 import sage.Sage;
 import sage.TestUtils;
 import sage.client.PlaybackSurface;
+import sage.enhance.spi.ExecutionForm;
+import sage.enhance.spi.ScaleExecutionPlan;
+import sage.enhance.spi.ScaleProvider;
+import sage.enhance.spi.ScaleProviderAvailability;
+import sage.enhance.spi.ScaleProviderCapabilities;
+import sage.enhance.spi.ScaleProviderRegistration;
+import sage.enhance.spi.ScaleProviderRegistry;
+import sage.enhance.spi.ScaleRequest;
 
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
@@ -45,11 +53,37 @@ public class EnhancementAdvisorTest
     return new PlaybackSurface("s1", "route", 0, DELIVERY, VCODECS, ACODECS, CONT);
   }
 
+  private static final String PROP_SCALE_PROVIDER = "playback/gpu_enhance/scale_provider";
+  private ScaleProviderRegistration upscaleReg;
+
+  /** A minimal registered upscaling provider so the advisor will actually offer
+   *  enhance tiers. Without one, server-side upscaling is disabled and the advisor
+   *  drops to the deinterlace floor (that path is covered by its own tests).
+   *  Shared with the other enhancement tests that exercise the advisor. */
+  public static ScaleProvider fakeUpscalerProvider()
+  {
+    return new ScaleProvider()
+    {
+      public String id() { return "test-upscaler"; }
+      public ScaleProviderCapabilities capabilities()
+      { return new ScaleProviderCapabilities("test-upscaler", false, true, 8); }
+      public ScaleProviderAvailability probe(ScaleRequest r)
+      { return ScaleProviderAvailability.available(); }
+      public ScaleExecutionPlan plan(ScaleRequest r)
+      { return new ScaleExecutionPlan(ExecutionForm.FFMPEG_FILTER, "test=3840:2160", "Test"); }
+    };
+  }
+
   @BeforeMethod
   public void setUp() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();
     Sage.put(EnhancementAdvisor.PROP_ENABLED, "true");
+    // An upscaling provider is installed and selected: the default state under
+    // test here is "server upscaling is available".
+    ScaleProviderRegistry.getInstance().resetForTest();
+    upscaleReg = ScaleProviderRegistry.getInstance().register(fakeUpscalerProvider());
+    Sage.put(PROP_SCALE_PROVIDER, "test-upscaler");
   }
 
   @AfterMethod
@@ -63,6 +97,9 @@ public class EnhancementAdvisorTest
     Sage.remove(EnhancementAdvisor.PROP_BW_SAFETY);
     Sage.remove(EnhancementAdvisor.PROP_ASSUME_LAN);
     Sage.remove("playback/bandwidth_safety_factor");
+    Sage.remove(PROP_SCALE_PROVIDER);
+    if (upscaleReg != null) { upscaleReg.close(); upscaleReg = null; }
+    ScaleProviderRegistry.getInstance().resetForTest();
   }
 
   private EnhancementAdvisor.Advice advise(int sw, int sh, boolean inter, int fps,
@@ -92,6 +129,91 @@ public class EnhancementAdvisorTest
         adviseBw(1920, 1080, false, 30, 3840, 2160, surface(3840, 2160, 60), 8000, 100000);
     assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P);
     assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.OFFERED, "verdict");
+  }
+
+  // ---------- server upscaling requires an installed provider ----------
+  //
+  // The open-source core ships no playback upscaler (the built-in path is a
+  // passthrough). Without a registered upscaling provider the advisor must not
+  // advertise any enhance tier; deinterlacing, which needs no scaler, still runs.
+
+  @Test
+  public void testNoUpscaleProviderRefusesUpscaleButKeepsDeinterlace()
+  {
+    // Remove the provider the harness installed: now nothing can upscale.
+    Sage.remove(PROP_SCALE_PROVIDER);
+    ScaleProviderRegistry.getInstance().resetForTest();
+
+    // Interlaced source: the upscale is refused, but deinterlace survives.
+    EnhancementAdvisor.Advice a =
+        adviseBw(1920, 1080, true, 30, 3840, 2160, surface(3840, 2160, 60), 8000, 100000);
+    assertEquals(a.getTier(), EnhancementTier.DEINTERLACE_ONLY,
+        "an interlaced source still deinterlaces with no upscaling provider");
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.NO_UPSCALE_PROVIDER);
+  }
+
+  @Test
+  public void testNoUpscaleProviderYieldsNoneForProgressive()
+  {
+    Sage.remove(PROP_SCALE_PROVIDER);
+    ScaleProviderRegistry.getInstance().resetForTest();
+
+    // Progressive source: nothing to deinterlace and no upscaler => no offer.
+    EnhancementAdvisor.Advice a =
+        adviseBw(1920, 1080, false, 30, 3840, 2160, surface(3840, 2160, 60), 8000, 100000);
+    assertEquals(a.getTier(), EnhancementTier.NONE);
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.NO_UPSCALE_PROVIDER);
+  }
+
+  // ---------- registered-but-unavailable provider (offer must match plan) ----------
+  //
+  // A provider that is registered and declares upscale support but whose runtime
+  // probe() reports "not right now" (a dev build, a model still warming up, a
+  // busy GPU) must NOT be offered. Otherwise the advisor advertises enhance;tier
+  // while the plan builder -- which gates on the same probe -- quietly falls back
+  // to a plain remux, promising the client a 4K enhance it never receives.
+
+  /** Registered, upscale-capable, but never available right now. */
+  public static ScaleProvider unavailableUpscalerProvider()
+  {
+    return new ScaleProvider()
+    {
+      public String id() { return "test-unavailable"; }
+      public ScaleProviderCapabilities capabilities()
+      { return new ScaleProviderCapabilities("test-unavailable", false, true, 8); }
+      public ScaleProviderAvailability probe(ScaleRequest r)
+      { return ScaleProviderAvailability.unavailable("model warming up"); }
+      public ScaleExecutionPlan plan(ScaleRequest r)
+      { return new ScaleExecutionPlan(ExecutionForm.FFMPEG_FILTER, "test=3840:2160", "Test"); }
+    };
+  }
+
+  @Test
+  public void testRegisteredButUnavailableProviderIsNotOfferedProgressive()
+  {
+    ScaleProviderRegistry.getInstance().resetForTest();
+    ScaleProviderRegistry.getInstance().register(unavailableUpscalerProvider());
+    Sage.put(PROP_SCALE_PROVIDER, "test-unavailable");
+
+    EnhancementAdvisor.Advice a =
+        adviseBw(1920, 1080, false, 30, 3840, 2160, surface(3840, 2160, 60), 8000, 100000);
+    assertEquals(a.getTier(), EnhancementTier.NONE,
+        "an unavailable provider must be treated exactly like no provider");
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.UPSCALE_PROVIDER_UNAVAILABLE);
+  }
+
+  @Test
+  public void testRegisteredButUnavailableProviderStillDeinterlaces()
+  {
+    ScaleProviderRegistry.getInstance().resetForTest();
+    ScaleProviderRegistry.getInstance().register(unavailableUpscalerProvider());
+    Sage.put(PROP_SCALE_PROVIDER, "test-unavailable");
+
+    EnhancementAdvisor.Advice a =
+        adviseBw(1920, 1080, true, 30, 3840, 2160, surface(3840, 2160, 60), 8000, 100000);
+    assertEquals(a.getTier(), EnhancementTier.DEINTERLACE_ONLY,
+        "deinterlace needs no scaler, so it survives an unavailable upscaler");
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.UPSCALE_PROVIDER_UNAVAILABLE);
   }
 
   // ---------- unmeasured-link policy (trust-LAN now vs WAN-safe target) ----------
@@ -315,40 +437,61 @@ public class EnhancementAdvisorTest
   }
 
   /**
-   * An absent sink is an abstention, not a refusal. The client stated no
-   * opinion about its display but DID state a 4K decode ceiling, so the server
-   * decides from the evidence it was given rather than handing the decision to
-   * silence.
+   * An absent sink refuses upscaling by default. Upscaling spends GPU and
+   * bandwidth for a bigger picture, and a client that reported no display size
+   * has given no evidence it would even be visible -- clients omit the sink
+   * precisely to signal a display too small to benefit. So silence drops to the
+   * deinterlace floor (here NONE, since the source is progressive), it is not
+   * read as consent to a 4K upscale, even though the client proved a 4K decoder.
    */
   @Test
-  public void testUnknownSinkIsAnAbstentionNotARefusal()
+  public void testUnknownSinkRefusesUpscaleByDefault()
   {
     EnhancementAdvisor.Advice a =
         advise(1920, 1080, false, 30, 0, 0, surface(3840, 2160, 60), "auto", "none");
-    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P,
-        "No sink means 'you decide', and the client proved it can decode 4K");
-    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.OFFERED, "verdict");
-  }
-
-  /**
-   * The admin escape hatch: an installation that wants silence read as "no"
-   * gets the older behaviour back with one property.
-   */
-  @Test
-  public void testUnknownSinkCanBeConfiguredToRefuse()
-  {
-    Sage.put(EnhancementAdvisor.PROP_UNKNOWN_SINK, "refuse");
-    EnhancementAdvisor.Advice a =
-        advise(1920, 1080, false, 30, 0, 0, surface(3840, 2160, 60), "auto", "none");
-    assertEquals(a.getTier(), EnhancementTier.NONE);
+    assertEquals(a.getTier(), EnhancementTier.NONE,
+        "No sink means no proof the display can show a bigger picture, so no upscale");
     assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.UNKNOWN_SINK, "verdict");
   }
 
   /**
-   * The safety property that makes inference safe to default on: inferring
-   * from declared decode ceilings gives a client that declared NOTHING exactly
-   * nothing. Every legacy client lands where it always did, via the decode
-   * gate rather than the sink check.
+   * The admin escape hatch: an installation whose 4K-capable clients genuinely
+   * cannot report a sink can opt back into inferring from the declared decode
+   * ceiling with one property.
+   */
+  @Test
+  public void testUnknownSinkCanBeConfiguredToInfer()
+  {
+    Sage.put(EnhancementAdvisor.PROP_UNKNOWN_SINK, "infer");
+    EnhancementAdvisor.Advice a =
+        advise(1920, 1080, false, 30, 0, 0, surface(3840, 2160, 60), "auto", "none");
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P,
+        "infer mode decides from the proven 4K decode ceiling");
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.OFFERED, "verdict");
+  }
+
+  /**
+   * "Always" (pref=server) is the user explicitly REQUESTING a server upscale,
+   * the opposite of silence, so an unknown sink does NOT veto it: it upscales to
+   * the max the decoder and link allow, even by default (unknown_sink=refuse).
+   * Only AUTO reads an unknown sink as "no".
+   */
+  @Test
+  public void testAlwaysUpscalesEvenWithUnknownSink()
+  {
+    EnhancementAdvisor.Advice a =
+        advise(1920, 1080, false, 30, 0, 0, surface(3840, 2160, 60), "server", "none");
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P,
+        "explicit Always requests a server upscale even without a reported panel");
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.OFFERED, "verdict");
+  }
+
+  /**
+   * Even in the opt-in {@code infer} mode, a client that declared NOTHING (no
+   * sink AND no decode ceiling) still gets no upscale: inference reads declared
+   * decode ceilings, so a legacy client that declared none lands at NONE via the
+   * decode gate. Under the default {@code refuse} mode it lands at NONE too, via
+   * the sink check -- either way, silence never buys an upscale.
    */
   @Test
   public void testUnknownSinkWithNoDeclaredCeilingStillGetsNoUpscale()

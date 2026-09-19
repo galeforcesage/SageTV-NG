@@ -85,6 +85,14 @@ public final class NgPlaybackContextBuilder
     /** Commercial segments: pairs of [startMs, endMs, kind] */
     public List<long[]> skipSegments = null;
 
+    // --- Multi-segment recording timeline ---
+    /**
+     * Whole-recording virtual timeline for a multi-segment recording, or null
+     * for a single-file recording (the common case). When set, the builder
+     * emits a segment manifest the NG client uses to navigate boundaries.
+     */
+    public sage.SegmentTimeline segmentTimeline = null;
+
     // --- Server capabilities ---
     /** True if server-side transcoding is active */
     public boolean serverSideTranscoding = false;
@@ -116,12 +124,13 @@ public final class NgPlaybackContextBuilder
     NgIndexContext index = NgIndexContext.EMPTY; // Phase 2: no keyframe scanning
     NgSkipContext skip = buildSkipContext(snap);
     NgFlowPolicy flow = NgFlowPolicy.DEFAULT;
+    NgSegmentContext segments = NgSegmentContext.fromTimeline(snap.segmentTimeline);
 
     return new NgPlaybackContext(
         sessionId, snap.mediaFileId, snap.airingId,
         mode, container, durationMs, serverMediaTimeMs,
         snap.streamEpoch,
-        live, seek, index, skip, flow
+        live, seek, index, skip, flow, segments
     );
   }
 

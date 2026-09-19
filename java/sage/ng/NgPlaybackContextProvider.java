@@ -121,6 +121,24 @@ public final class NgPlaybackContextProvider
       boolean timeshifted, boolean isLiveStream, boolean serverSideTranscoding,
       long recordingStartEpochMs)
   {
+    openSession(sessionKey, clientName, sessionId, mediaFileId, airingId,
+        containerFormat, durationMs, timeshifted, isLiveStream,
+        serverSideTranscoding, recordingStartEpochMs, null);
+  }
+
+  /**
+   * Open a session, additionally advertising a multi-segment recording timeline.
+   *
+   * @param segmentTimeline whole-recording virtual timeline (built by the wiring
+   *                        layer from the MediaFile), or null for single-file.
+   *                        The provider performs no filesystem I/O of its own;
+   *                        the timeline is a pre-built value object.
+   */
+  public void openSession(String sessionKey, String clientName, String sessionId,
+      long mediaFileId, long airingId, String containerFormat, long durationMs,
+      boolean timeshifted, boolean isLiveStream, boolean serverSideTranscoding,
+      long recordingStartEpochMs, sage.SegmentTimeline segmentTimeline)
+  {
     if (sessionKey == null) return;
 
     SessionState state = new SessionState(sessionKey, clientName, sessionId, mediaFileId, airingId);
@@ -130,6 +148,7 @@ public final class NgPlaybackContextProvider
     state.snapshot.isLiveStream = isLiveStream;
     state.snapshot.serverSideTranscoding = serverSideTranscoding;
     state.snapshot.recordingStartEpochMs = recordingStartEpochMs;
+    state.snapshot.segmentTimeline = segmentTimeline;
 
     // Open the live-window calculator (always, even for non-live — it's a no-op if not used)
     state.calculator.open(recordingStartEpochMs);
@@ -158,6 +177,33 @@ public final class NgPlaybackContextProvider
     if (sessionKey == null) return null;
     SessionState state = sessions.get(sessionKey);
     return (state != null) ? state.lastContext : null;
+  }
+
+  /**
+   * Apply aggregated whole-recording commercial-skip data to a session and rebuild
+   * its context so NG clients receive the skip manifest.
+   * <p>
+   * The marks must already be expressed in whole-recording <b>content time</b>
+   * (see {@code sage.commercial.SkipAggregator}). This is an open-time / refresh
+   * hook, not a per-tick call; the {@code .edl}/{@code .skip} reads that produce
+   * the list happen in the wiring layer, keeping this provider I/O-free.
+   *
+   * @param sessionKey   the session to update
+   * @param skipSegments content-time rows {@code {startMs, endMs, kind}} (may be null/empty)
+   * @param nowMs        System.currentTimeMillis() at time of call
+   */
+  public void applySkipSegments(String sessionKey, java.util.List<long[]> skipSegments, long nowMs)
+  {
+    if (sessionKey == null) return;
+    SessionState state = sessions.get(sessionKey);
+    if (state == null) return;
+
+    synchronized (state)
+    {
+      state.snapshot.skipSegments = skipSegments;
+      // Rebuild immutable context so getCurrentContext() returns the skip manifest.
+      state.lastContext = NgPlaybackContextBuilder.build(state.snapshot);
+    }
   }
 
   /**

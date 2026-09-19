@@ -9,7 +9,10 @@ import sage.enhance.EnhancementTier;
 import static org.testng.Assert.*;
 
 /**
- * The built-in provider must reproduce the pre-seam scale fragment exactly.
+ * The built-in provider is a passthrough: it never renders a scale stage, so the
+ * open-source playback path does not upscale. Server-side upscaling is an opt-in
+ * capability of a separately installed provider. (Offline/batch Lanczos is a
+ * different subsystem and is unaffected.)
  */
 public class BuiltinScaleProviderTest
 {
@@ -28,23 +31,23 @@ public class BuiltinScaleProviderTest
   }
 
   @Test
-  public void nppFragmentIsLegacyLanczos()
+  public void upscaleRequestRendersNoFragment()
   {
     ScaleExecutionPlan ex = p.plan(upscale("scale_npp"));
-    assertEquals(ex.getFfmpegFilter(), "scale_npp=3840:2160:interp_algo=lanczos",
-        "NPP fragment must match the legacy token exactly");
+    assertNull(ex.getFfmpegFilter(),
+        "the built-in passthrough must not emit any scale fragment for upscaling");
     assertEquals(ex.getForm(), ExecutionForm.BUILTIN);
-    assertEquals(ex.getImplementationLabel(), "NPP/Lanczos");
-    assertTrue(ex.rendersFilterFragment());
+    assertFalse(ex.rendersFilterFragment());
+    assertFalse(ex.isRenderable(),
+        "an upscale that reaches the passthrough is non-renderable, so the core skips it");
   }
 
   @Test
-  public void cudaFragmentHasNoLanczosFlag()
+  public void cudaUpscaleAlsoRendersNoFragment()
   {
     ScaleExecutionPlan ex = p.plan(upscale("scale_cuda"));
-    assertEquals(ex.getFfmpegFilter(), "scale_cuda=3840:2160",
-        "scale_cuda fragment must match the legacy token exactly");
-    assertEquals(ex.getImplementationLabel(), "CUDA");
+    assertNull(ex.getFfmpegFilter());
+    assertEquals(ex.getImplementationLabel(), "passthrough");
   }
 
   @Test
@@ -52,14 +55,19 @@ public class BuiltinScaleProviderTest
   {
     assertFalse(p.capabilities().isSpecialized(),
         "the built-in scaler must never take a specialized permit");
-    assertEquals(p.id(), "builtin-lanczos");
+    assertFalse(p.capabilities().supportsUpscale(),
+        "the built-in passthrough must declare it cannot upscale");
+    assertEquals(p.id(), "builtin-passthrough");
   }
 
   @Test
-  public void unavailableWhenNoScalerForUpscale()
+  public void availableForUpscaleButRendersNothing()
   {
-    assertFalse(p.probe(upscale(null)).isAvailable(),
-        "no CUDA scaler means the built-in cannot upscale");
+    // The passthrough is always "available" -- it simply contributes no scale
+    // stage. Availability without a renderable plan is what makes the core fall
+    // through to the plain stream.
+    assertTrue(p.probe(upscale(null)).isAvailable());
+    assertFalse(p.plan(upscale(null)).isRenderable());
   }
 
   @Test

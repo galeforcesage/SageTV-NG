@@ -167,6 +167,12 @@ public final class PlaybackSurfaceSet
     if ("QUICKTIME".equals(u)) return "MP4";
     // Legacy short forms sometimes seen.
     if ("MPG".equals(u) || "MPEG".equals(u)) return "MPEG2-PS";
+    // MPEG1-PS and MPEG2-PS are the SAME program-stream container/demuxer; the
+    // MPEG-1-vs-2 distinction is carried by the video codec (MPEG1-VIDEO vs
+    // MPEG2-VIDEO), not the container. Fold the MPEG1 spelling onto MPEG2-PS so
+    // a client can advertise it (with transport attributes) without the token
+    // being rejected as non-canonical.
+    if ("MPEG1-PS".equals(u)) return "MPEG2-PS";
     if ("TS".equals(u)) return "MPEG2-TS";
     if ("MKV".equals(u)) return "MATROSKA";
     return u;
@@ -347,12 +353,85 @@ public final class PlaybackSurfaceSet
   }
 
   /**
+   * A surface {@code CONTAINERS} token may carry per-container transport
+   * attributes as {@code CONTAINER;push=<bool>;pull=<bool>} (e.g.
+   * {@code MPEG2-PS;push=true;pull=false}). Returns the bare container part
+   * (before the first {@code ';'}) of each token so canonical validation sees
+   * {@code MPEG2-PS}, not the whole attribute string -- which would otherwise be
+   * rejected as non-canonical and DROP the container (and, if it were the
+   * surface's only container, the whole surface). Bare tokens with no {@code ';'}
+   * pass through unchanged, so stock clients are unaffected. Mirrors
+   * {@link #stripCodecAttributes}.
+   */
+  static List<String> stripContainerAttributes(List<String> tokens)
+  {
+    if (tokens.isEmpty()) return tokens;
+    List<String> out = new ArrayList<String>(tokens.size());
+    for (String t : tokens)
+    {
+      if (t == null) continue;
+      int semi = t.indexOf(';');
+      String container = (semi < 0 ? t : t.substring(0, semi)).trim();
+      if (container.length() > 0) out.add(container);
+    }
+    return out;
+  }
+
+  /**
+   * Parse the per-container transport declaration from a surface
+   * {@code CONTAINERS} token list. A container gets an entry
+   * {@code {pushAllowed, pullAllowed}} only when its token carries an explicit
+   * {@code push=<bool>} and/or {@code pull=<bool>} attribute; a bare container
+   * (no {@code ';'}) gets NO entry and is therefore treated as reachable on
+   * either transport (fail-open) by {@link PlaybackSurface#containerAllowsTransport}.
+   * An attribute that is present but not stated defaults to {@code true} (so
+   * {@code MPEG2-PS;pull=false} means push=true, pull=false). This is the
+   * surface-native equivalent of the legacy {@code IJK_CONTAINER_CONSTRAINTS}
+   * push/pull rows, letting a surface declare a push-only container.
+   */
+  static Map<String, boolean[]> parseContainerTransports(String surfaceId, List<String> tokens)
+  {
+    if (tokens.isEmpty()) return Collections.<String, boolean[]>emptyMap();
+    Map<String, boolean[]> out = new LinkedHashMap<String, boolean[]>();
+    for (String t : tokens)
+    {
+      if (t == null) continue;
+      int semi = t.indexOf(';');
+      if (semi < 0) continue; // bare container, no transport attributes
+      String container = canonicalContainer(t.substring(0, semi).trim());
+      if (!CANONICAL_CONTAINERS.contains(container))
+      {
+        System.err.println("PlaybackSurfaceSet WARN: surface '" + surfaceId
+            + "' CONTAINERS transport attribute on non-canonical container '"
+            + t + "'; transport constraint ignored");
+        continue;
+      }
+      boolean push = true, pull = true, sawAttr = false;
+      for (String a : t.substring(semi + 1).split(";"))
+      {
+        String attr = a.trim().toLowerCase(java.util.Locale.ROOT);
+        if (attr.length() == 0) continue;
+        if (attr.equals("push=true"))       { push = true;  sawAttr = true; }
+        else if (attr.equals("push=false")) { push = false; sawAttr = true; }
+        else if (attr.equals("pull=true"))  { pull = true;  sawAttr = true; }
+        else if (attr.equals("pull=false")) { pull = false; sawAttr = true; }
+        else System.err.println("PlaybackSurfaceSet WARN: surface '" + surfaceId
+            + "' CONTAINERS transport attribute '" + attr + "' on " + container
+            + " not recognized (accepted: push=<bool>, pull=<bool>); ignored");
+      }
+      if (sawAttr) out.put(container, new boolean[] { push, pull });
+    }
+    return out.isEmpty() ? Collections.<String, boolean[]>emptyMap() : out;
+  }
+
+  /**
    * Build a set from the raw {@code PLAYBACK_SURFACES} list plus a lookup
    * function that returns the per-surface property strings for a given id.
    * The array is read positionally:
    * {@code [ROUTE, PRIORITY, DELIVERY_MODES, VIDEO_CODECS, AUDIO_CODECS,
    * CONTAINERS, AUDIO_TRACK_ACCESS, AUDIO_TRACK_SELECTION_MODE,
-   * AUDIO_CONTAINER_RULES, MAX_OUTPUT_WIDTH, MAX_OUTPUT_HEIGHT, MAX_FPS]}.
+   * AUDIO_CONTAINER_RULES, MAX_OUTPUT_WIDTH, MAX_OUTPUT_HEIGHT, MAX_FPS,
+   * AUDIO_MAX_CHANNELS]}.
    *
    * <p>Indices 0-5 are required (pre-2.1.0006). Indices 6-8 (the track-access
    * dimension) are OPTIONAL -- when the array is shorter than 9, or those
@@ -365,6 +444,11 @@ public final class PlaybackSurfaceSet
    * enhancement) are likewise OPTIONAL; absent or unparseable entries become 0,
    * meaning "undeclared", which disables enhancement for that surface rather
    * than assuming it can decode whatever the server would like to send.
+   *
+   * <p>Index 12 (AUDIO_MAX_CHANNELS) is OPTIONAL; absent/unparseable => 0
+   * ("undeclared"), which downstream resolves from the negotiated audio codec
+   * (a stereo-safe legacy default) rather than assuming surround. Only an
+   * explicit value >= 6 opts a surface into preserved 5.1/7.1.
    *
    * <p>Callers own the transport (the miniclient uses
    * {@code sendGetPropertyAsync} + {@code recvr.getStringReply()}). Any
@@ -407,8 +491,10 @@ public final class PlaybackSurfaceSet
       Set<String> interlacedUnsupported = parseInterlacedUnsupported(id, rawVideoTokens);
       List<String> audioCodecs = validateAndFilter(id, "AUDIO_CODECS",
           split(props[4]), CANONICAL_AUDIO_CODECS);
+      List<String> rawContainerTokens = split(props[5]);
       List<String> containers = validateAndFilter(id, "CONTAINERS",
-          split(props[5]), CANONICAL_CONTAINERS);
+          stripContainerAttributes(rawContainerTokens), CANONICAL_CONTAINERS);
+      Map<String, boolean[]> containerTransports = parseContainerTransports(id, rawContainerTokens);
       if (videoCodecs.isEmpty() && audioCodecs.isEmpty() && containers.isEmpty())
       {
         System.err.println("PlaybackSurfaceSet WARN: surface '" + id
@@ -426,10 +512,13 @@ public final class PlaybackSurfaceSet
       int maxOutW = parseOptionalDimension(id, "MAX_OUTPUT_WIDTH",  props, 9);
       int maxOutH = parseOptionalDimension(id, "MAX_OUTPUT_HEIGHT", props, 10);
       int maxFps  = parseOptionalDimension(id, "MAX_FPS",           props, 11);
+      // --- audio multichannel dimension (optional; unknown => 0 => stereo) ---
+      int audioMaxCh = parseOptionalDimension(id, "AUDIO_MAX_CHANNELS", props, 12);
       out.put(id, new PlaybackSurface(id, route, priority,
           deliveryModes, videoCodecs, audioCodecs, containers,
           audioTrackAccess, audioTrackSelectionMode, audioContainerRules,
-          maxOutW, maxOutH, maxFps, interlacedUnsupported));
+          maxOutW, maxOutH, maxFps, interlacedUnsupported, containerTransports,
+          audioMaxCh));
     }
     return out.isEmpty() ? empty() : new PlaybackSurfaceSet(out);
   }

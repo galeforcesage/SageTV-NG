@@ -5502,7 +5502,20 @@ public class MediaFile extends DBObject implements SegmentedFile
       args.add("idle");
     }
     if (isRecording())
-      args.add("-activefile");
+    {
+      // Active recording: the file is still growing. The legacy fork-only
+      // "-activefile" is rejected by the consolidated CUDA ffmpeg ("Option not
+      // found"), which killed thumbnail generation for in-progress recordings.
+      // We deliberately do NOT substitute "-follow 1" here: this is a one-shot
+      // "-vframes 1" grab at an offset that is already written, so plain open
+      // works and exits immediately (verified). "-follow 1" would keep
+      // following the growing file forever, and unlike the transcode path there
+      // is no "-stdinctrl"/"inactivefile" channel to end it, so it would hang
+      // the ThumbnailGen thread. Only emit the follow flag for legacy fork
+      // binaries that still require it to read an actively-written file.
+      if (!Sage.getBoolean("ffmpeg/use_follow_flag", true))
+        args.add("-activefile");
+    }
     if (skipNonKeys)
     {
       args.add("-skip_frame");

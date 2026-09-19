@@ -40,12 +40,28 @@ public final class NgPlaybackContext
   private final NgIndexContext index;
   private final NgSkipContext skip;
   private final NgFlowPolicy flow;
+  private final NgSegmentContext segments;
 
+  /**
+   * Backward-compatible constructor: no segment manifest (single-file default).
+   * Delegates to the full constructor with {@link NgSegmentContext#EMPTY}.
+   */
   public NgPlaybackContext(String sessionId, long mediaFileId, long airingId,
       String mode, String container, long durationMs, long serverMediaTimeMs,
       int streamEpoch,
       NgLiveContext live, NgSeekPolicy seek, NgIndexContext index,
       NgSkipContext skip, NgFlowPolicy flow)
+  {
+    this(sessionId, mediaFileId, airingId, mode, container, durationMs,
+        serverMediaTimeMs, streamEpoch, live, seek, index, skip, flow,
+        NgSegmentContext.EMPTY);
+  }
+
+  public NgPlaybackContext(String sessionId, long mediaFileId, long airingId,
+      String mode, String container, long durationMs, long serverMediaTimeMs,
+      int streamEpoch,
+      NgLiveContext live, NgSeekPolicy seek, NgIndexContext index,
+      NgSkipContext skip, NgFlowPolicy flow, NgSegmentContext segments)
   {
     this.version = CURRENT_VERSION;
     this.sessionId = (sessionId != null) ? sessionId : "";
@@ -61,6 +77,7 @@ public final class NgPlaybackContext
     this.index = (index != null) ? index : NgIndexContext.EMPTY;
     this.skip = (skip != null) ? skip : NgSkipContext.EMPTY;
     this.flow = (flow != null) ? flow : NgFlowPolicy.DEFAULT;
+    this.segments = (segments != null) ? segments : NgSegmentContext.EMPTY;
   }
 
   public int getVersion() { return version; }
@@ -77,6 +94,7 @@ public final class NgPlaybackContext
   public NgIndexContext getIndex() { return index; }
   public NgSkipContext getSkip() { return skip; }
   public NgFlowPolicy getFlow() { return flow; }
+  public NgSegmentContext getSegments() { return segments; }
 
   @Override
   public String toString()

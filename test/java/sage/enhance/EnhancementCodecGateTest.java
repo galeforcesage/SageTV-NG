@@ -57,11 +57,17 @@ public class EnhancementCodecGateTest
     return ClientConstraints.parse("exoplayer", videoRows, "", "");
   }
 
+  private sage.enhance.spi.ScaleProviderRegistration upscaleReg;
+
   @BeforeMethod
   public void setUp() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();
     Sage.put(EnhancementAdvisor.PROP_ENABLED, "true");
+    sage.enhance.spi.ScaleProviderRegistry.getInstance().resetForTest();
+    upscaleReg = sage.enhance.spi.ScaleProviderRegistry.getInstance().register(
+        EnhancementAdvisorTest.fakeUpscalerProvider());
+    Sage.put("playback/gpu_enhance/scale_provider", "test-upscaler");
   }
 
   @AfterMethod
@@ -72,6 +78,9 @@ public class EnhancementCodecGateTest
     Sage.remove(EnhancementAdvisor.PROP_MIN_GAIN_TENTHS);
     Sage.remove(EnhancementAdvisor.PROP_OVERRIDE_LOCAL);
     Sage.remove(EnhancementAdvisor.PROP_FORM_FACTORS);
+    Sage.remove("playback/gpu_enhance/scale_provider");
+    if (upscaleReg != null) { upscaleReg.close(); upscaleReg = null; }
+    sage.enhance.spi.ScaleProviderRegistry.getInstance().resetForTest();
   }
 
   private EnhancementAdvisor.Advice advise(int sw, int sh, int sinkW, int sinkH,
@@ -350,12 +359,12 @@ public class EnhancementCodecGateTest
   // size. Second, the per-codec rows are sent unconditionally and are unaffected
   // by the setting, so a decode refusal is always a hardware fact.
   //
-  // Third, and the reason the empty-sink test below asserts the OPPOSITE of what
-  // it once did: clearing a measurement is not a way to express a refusal. An
-  // empty sink is an abstention -- "I have no opinion" -- and the server answers
-  // it from what the client did state. A client that wants to refuse needs to
-  // say so somewhere that means refusal; §2.9.1 of NGServerVideoEnhancement.md
-  // tracks that gap.
+  // Third, an ABSENT sink refuses upscaling: upscaling is only worth its GPU +
+  // bandwidth when the client has a display big enough to show the bigger
+  // picture, and a client that sent no sink has proved no such thing. In
+  // practice clients omit the sink precisely to signal a display too small to
+  // benefit, so the empty-sink test below asserts NONE -- silence is not read as
+  // consent to a 4K upscale.
 
   private EnhancementAdvisor.Advice adviseSink(String formFactor, int sinkW, int sinkH,
       PlaybackSurface s)
@@ -365,24 +374,18 @@ public class EnhancementCodecGateTest
   }
 
   /**
-   * An empty sink is an abstention, not an opt-out. A client that sends no
-   * panel size has expressed no opinion, and the server answers from what the
-   * client did declare -- here, a proven 4K decoder on a TV.
-   *
-   * <p>This test previously asserted the opposite, on the strength of the
-   * Android client expressing its "Never" setting by clearing the sink. That
-   * conflated two things: what a client SENDS and what it WANTS. Clearing a
-   * measurement is not a way to say no, because it is indistinguishable from
-   * three other conditions -- and reading silence as refusal means the least
-   * informed party in the exchange decides.
+   * An empty sink refuses upscaling. A client that sent no panel size has given
+   * no evidence a bigger picture would be visible, so the server does not spend
+   * a 4K upscale on it even though it proved a 4K decoder -- it drops to the
+   * deinterlace floor (here NONE, since the source is progressive).
    */
   @Test
-  public void testEmptySinkIsAnAbstentionNotAnOptOut()
+  public void testEmptySinkRefusesUpscaleByDefault()
   {
     EnhancementAdvisor.Advice a = adviseSink("TV", 0, 0, surface(3840, 2160, 60));
-    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P,
-        "no sink means 'server, you decide'");
-    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.OFFERED, "verdict");
+    assertEquals(a.getTier(), EnhancementTier.NONE,
+        "no sink means no proof the display can show a bigger picture, so no upscale");
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.UNKNOWN_SINK, "verdict");
   }
 
   /**

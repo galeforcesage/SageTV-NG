@@ -20,6 +20,14 @@ import java.text.DecimalFormat;
 public class FFMPEGTranscoder implements TranscodeEngine
 {
   private static final boolean XCODE_DEBUG = Sage.DBG && Sage.getBoolean("media_server/transcode_debug", false);
+  // Per-buffer / per-read byte-pushing telemetry: the ring-copy and raw-stdout
+  // read lines in readTranscodedData/readFullyTranscodedData and the fill/output
+  // consumer loops. Each fires once per ~32KB moved to the client, i.e. thousands
+  // of lines a minute during a single play, which buries the decision/setup and
+  // ffmpeg-stderr detail and forces frequent log rotation. Gate them separately
+  // so media_server/transcode_debug can stay on for the useful lines without the
+  // byte flood; set media_server/transcode_debug_io=true to get them back.
+  private static final boolean XCODE_DEBUG_IO = Sage.DBG && Sage.getBoolean("media_server/transcode_debug_io", false);
   static final String BITRATE_OPTIONS_SIZE_KEY = "httpls_bandwidth/%s/video_size";
   private static final String[] EMBED_CC_SIDECAR_SUFFIXES = {
       ".srt", ".eng.srt", ".cc.srt", ".vtt"
@@ -208,6 +216,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
   private int surfaceTargetAudioChannels;
   public void setSurfaceTargetAudioCodec(String codec) { this.surfaceTargetAudioCodec = codec; }
   public void setSurfaceTargetAudioChannels(int ch) { this.surfaceTargetAudioChannels = ch; }
+  // Winning surface's declared AUDIO_MAX_CHANNELS for the enhance AC-4 sidecar
+  // (0 = legacy/undeclared). Drives the per-client 5.1-vs-stereo decision that
+  // replaced the old playback/gpu_enhance/scale/ac4_sidecar_af global override.
+  public void setSidecarMaxAudioChannels(int ch) { this.sidecarMaxAudioChannels = ch; }
+  private int sidecarMaxAudioChannels;
 
   /**
    * Server-side audio EQ/processing plan for this transcode session (Audio
@@ -520,7 +533,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
       }
       int buffNum = (int) (((xcodeBufferVirtualReadPos - xcodeBufferVirtualOffset) / xcodeBuffer[0].length) + xcodeBufferBaseNum) % xcodeBuffer.length;
       int buffOffset = (int) (xcodeBufferVirtualReadPos - xcodeBufferVirtualOffset) % xcodeBuffer[0].length;
-      if (XCODE_DEBUG) System.out.println("Xcode readTranscodedData(" + inLength + ") buffNum=" + buffNum +
+      if (XCODE_DEBUG_IO) System.out.println("Xcode readTranscodedData(" + inLength + ") buffNum=" + buffNum +
           " buffOffset=" + buffOffset);
       int tempOffset = inOffset;
       while (leftToRead > 0)
@@ -535,7 +548,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
         buffNum = (buffNum + 1) % xcodeBuffer.length;
         buffOffset = 0;
       }
-      if (XCODE_DEBUG) System.out.println("Xcode transferData complete overage=" + overage);
+      if (XCODE_DEBUG_IO) System.out.println("Xcode transferData complete overage=" + overage);
       xcodeBufferVirtualReadPos += inLength;
       synchronized (xcodeSyncLock)
       {
@@ -545,7 +558,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
           xcodeBufferBaseNum = (xcodeBufferBaseNum + 1) % xcodeBuffer.length;
           xcodeBufferVirtualOffset += xcodeBuffer[0].length;
           numFilledXcodeBuffers--;
-          if (XCODE_DEBUG) System.out.println("Adjusted buffer nums xcodeBufferBaseNum=" + xcodeBufferBaseNum +
+          if (XCODE_DEBUG_IO) System.out.println("Adjusted buffer nums xcodeBufferBaseNum=" + xcodeBufferBaseNum +
               " xcodeBufferVirtualOffset=" + xcodeBufferVirtualOffset + " numFilledBuffers=" + numFilledXcodeBuffers);
           xcodeSyncLock.notifyAll();
         }
@@ -559,7 +572,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
         }
         else
           java.util.Arrays.fill(buf, (int)(inOffset + inLength - overage), inOffset + inLength, (byte)0xFF);
-        if (XCODE_DEBUG) System.out.println("Xcoder Sending overage=" + overage);
+        if (XCODE_DEBUG_IO) System.out.println("Xcoder Sending overage=" + overage);
       }
     }
     else
@@ -576,7 +589,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
         }
         else
           numRead = xcodeStdout.read(buf, inOffset, leftToRead);
-        if (XCODE_DEBUG) System.out.println("Xcoder readFully " + numRead + " bytes directly from transcoder and is pushing it out");
+        if (XCODE_DEBUG_IO) System.out.println("Xcoder readFully " + numRead + " bytes directly from transcoder and is pushing it out");
         if (numRead == -1)
         {
           // EOF, use the overage buffer for the rest but also push what we have in ours
@@ -718,6 +731,18 @@ public class FFMPEGTranscoder implements TranscodeEngine
   public void sendTranscodeOutputToChannel(long offset, long length, java.nio.channels.WritableByteChannel chan) throws java.io.IOException
   {
     long leftToRead = length;
+    // Option B (media_server/transcode_seekable_buffer): a read whose offset has
+    // already fallen behind the small in-memory ring window is served straight
+    // from the bounded circular spill history on disk, so an in-generation
+    // seek/reconnect (PWA proxy re-fetch, MSE Range behind the frontier, legacy
+    // pull re-read) never tears down and restarts ffmpeg at a new -ss. Falls
+    // through to the legacy restart path only when the target is older than the
+    // retained spill window.
+    if (seekableSpill && bufferOutput && offset < xcodeBufferVirtualOffset)
+    {
+      if (serveFromSpill(offset, length, chan))
+        return;
+    }
     // Check to see if we're going to need to do a seek to fulfill this read request.
     if ((!bufferOutput && offset != xcodeBufferVirtualOffset) || (bufferOutput && (offset < xcodeBufferVirtualOffset ||
         offset + length > xcodeBufferVirtualOffset + xcodeBuffer.length*xcodeBuffer[0].length)))
@@ -729,17 +754,44 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (bufferOutput)
     {
       long overage = offset + length - xcodeBufferVirtualSize;
-      int numTries = 50;
+      // Live-stream integrity (browserhd / PWA MSE pull path): NEVER fabricate
+      // 0xFF filler INTO a still-producing stream. Padding the unproduced tail of
+      // a READ that straddles the live frontier injects undecodable bytes mid
+      // fMP4, and the browser MSE demuxer rejects the append
+      // (CHUNK_DEMUXER_ERROR_APPEND_FAILED / "failed to prepare video sample for
+      // decode"). A well-behaved client only READs within the SIZE-advertised
+      // avail (getVirtualTranscodeSize), but an over-read at the live edge must
+      // still resolve to REAL bytes, not filler. So while the encoder is alive,
+      // wait for the frontier to actually reach the requested span -- in healthy
+      // operation the encoder runs ahead of realtime and this clears in well
+      // under a second. Only once the transcode has genuinely ended
+      // (xcodeDone == true) is a read past the frontier a legitimate past-EOF
+      // read that may be padded (the READ protocol still requires a fixed byte
+      // count, so the native pull path continues to get its length back).
+      long stallCapMs = Sage.getInt("media_server/transcode_read_stall_ms", 60000);
+      long waitedMs = 0;
       if (XCODE_DEBUG && overage > 0) System.out.println("Xcoder waiting for more data to appear in transcode buffer over=" + overage +
           " xcodeDone=" + xcodeDone);
 
-      while (overage > 0 && !xcodeDone && (numTries-- > 0))
+      while (overage > 0 && !xcodeDone && waitedMs < stallCapMs)
       {
-        try { Thread.sleep(200); } catch (Exception e){}
+        try { Thread.sleep(50); } catch (Exception e){}
+        waitedMs += 50;
         overage = offset + length - xcodeBufferVirtualSize;
       }
       if (overage > 0)
       {
+        // The frontier still hasn't reached the requested span. Either the
+        // transcode ended (true EOF -> padding the tail past the final byte is
+        // correct) or the encoder is alive but stalled beyond the cap (a genuine
+        // stall or a client seek past the live edge). The alive case is the ONLY
+        // path that can still place filler on the wire; log it loudly so it can
+        // be told apart from real EOF. It preserves the fixed-length READ
+        // contract; a real stall trips the client watchdog, which re-opens.
+        if (!xcodeDone && Sage.DBG)
+          System.out.println("XCODE_LIVE_STALL read past frontier: offset=" + offset
+              + " length=" + length + " avail=" + xcodeBufferVirtualSize
+              + " overage=" + overage + " waitedMs=" + waitedMs);
         if (overage > leftToRead)
         {
           leftToRead = 0;
@@ -752,7 +804,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
       }
       int buffNum = (int) (((offset - xcodeBufferVirtualOffset) / xcodeBuffer[0].length) + xcodeBufferBaseNum) % xcodeBuffer.length;
       int buffOffset = (int) (offset - xcodeBufferVirtualOffset) % xcodeBuffer[0].length;
-      if (XCODE_DEBUG) System.out.println("Xcode transferData(" + offset + ", " + leftToRead + ") buffNum=" + buffNum +
+      if (XCODE_DEBUG_IO) System.out.println("Xcode transferData(" + offset + ", " + leftToRead + ") buffNum=" + buffNum +
           " buffOffset=" + buffOffset);
       // Bytes actually served out of the ring for this read (excludes any overage
       // filler that was not yet produced). Freeing must be based on the END of this
@@ -799,7 +851,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
           xcodeBufferBaseNum = (xcodeBufferBaseNum + 1) % xcodeBuffer.length;
           xcodeBufferVirtualOffset += xcodeBuffer[0].length;
           numFilledXcodeBuffers--;
-          if (XCODE_DEBUG) System.out.println("Adjusted buffer nums xcodeBufferBaseNum=" + xcodeBufferBaseNum +
+          if (XCODE_DEBUG_IO) System.out.println("Adjusted buffer nums xcodeBufferBaseNum=" + xcodeBufferBaseNum +
               " xcodeBufferVirtualOffset=" + xcodeBufferVirtualOffset + " numFilledBuffers=" + numFilledXcodeBuffers);
           xcodeSyncLock.notifyAll();
         }
@@ -807,15 +859,15 @@ public class FFMPEGTranscoder implements TranscodeEngine
       leftToRead = 0;
       if (ringServed > 0)
         chan.write(java.nio.ByteBuffer.wrap(ringSnapshot, 0, (int) ringServed));
-      if (XCODE_DEBUG) System.out.println("Xcode transferData complete overage=" + overage);
+      if (XCODE_DEBUG_IO) System.out.println("Xcode transferData complete overage=" + overage);
       while (overage > 0)
       {
         initOverageBuffer();
         overageBuf.limit((int)Math.min(overage, overageBuf.capacity()));
-        if (XCODE_DEBUG) System.out.println("Xcoder sending overage=" + overageBuf.limit());
+        if (XCODE_DEBUG_IO) System.out.println("Xcoder sending overage=" + overageBuf.limit());
         int numWritten = chan.write(overageBuf); // just write out FF's
         overage -= numWritten;
-        if (XCODE_DEBUG) System.out.println("Xcoder overage sent capacity=" + overageBuf.capacity() + " overage=" + overage + " numWritten=" + numWritten);
+        if (XCODE_DEBUG_IO) System.out.println("Xcoder overage sent capacity=" + overageBuf.capacity() + " overage=" + overage + " numWritten=" + numWritten);
       }
       xcodeBufferVirtualReadPos = offset + length;
     }
@@ -832,7 +884,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
       {
         int currRead = Math.min((int)leftToRead, hackBuf.remaining());
         int numRead = xcodeStdout.read(dataBuf, myOffset, currRead);
-        if (XCODE_DEBUG) System.out.println("Xcoder read " + numRead + " bytes directly from transcoder and is pushing it out");
+        if (XCODE_DEBUG_IO) System.out.println("Xcoder read " + numRead + " bytes directly from transcoder and is pushing it out");
         if (numRead == -1)
         {
           // EOF, use the overage buffer for the rest but also push what we have in ours
@@ -865,6 +917,123 @@ public class FFMPEGTranscoder implements TranscodeEngine
         overageBuf.put(overageFF);
     }
     overageBuf.clear();
+  }
+
+  // ===== Option B: bounded seekable spill history =========================
+  // A fixed-capacity circular file mirroring the transcode output. Only reads
+  // that have fallen behind the live in-memory ring consult it (see
+  // sendTranscodeOutputToChannel). Gated OFF by default; when off none of this
+  // runs and the transcoder behaves exactly as before. Opened per generation in
+  // startTranscode and deleted in stopTranscode, so a genuine restart resets the
+  // history and disk is reclaimed the moment the stream ends.
+  protected void openSpillIfEnabled()
+  {
+    closeSpillQuietly();
+    seekableSpill = bufferOutput && Sage.getBoolean("media_server/transcode_seekable_buffer", false);
+    if (!seekableSpill)
+      return;
+    spillCapBytes = Math.max(16L << 20, Sage.getLong("media_server/transcode_spill_max_bytes", 512L << 20));
+    spillSafetyMargin = Math.max(1L << 20, Sage.getLong("media_server/transcode_spill_safety_margin_bytes", 8L << 20));
+    if (spillSafetyMargin >= spillCapBytes)
+      spillSafetyMargin = spillCapBytes / 8;
+    try
+    {
+      String dir = Sage.get("media_server/transcode_spill_dir", "");
+      xcodeSpillFile = (dir != null && dir.length() > 0)
+          ? java.io.File.createTempFile("sagetv_xcode_spill_", ".bin", new java.io.File(dir))
+          : java.io.File.createTempFile("sagetv_xcode_spill_", ".bin");
+      xcodeSpillChannel = new java.io.RandomAccessFile(xcodeSpillFile, "rw").getChannel();
+      if (Sage.DBG) System.out.println("Xcode seekable spill enabled: " + xcodeSpillFile
+          + " cap=" + spillCapBytes + " margin=" + spillSafetyMargin);
+    }
+    catch (java.io.IOException e)
+    {
+      if (Sage.DBG) System.out.println("Xcode spill open failed; falling back to ring-only: " + e);
+      closeSpillQuietly();
+      seekableSpill = false;
+    }
+  }
+
+  protected void closeSpillQuietly()
+  {
+    java.nio.channels.FileChannel ch = xcodeSpillChannel;
+    xcodeSpillChannel = null;
+    if (ch != null)
+      try { ch.close(); } catch (Exception e){}
+    java.io.File f = xcodeSpillFile;
+    xcodeSpillFile = null;
+    if (f != null)
+      try { f.delete(); } catch (Exception e){}
+  }
+
+  // Serve [offset, offset+length) from the circular spill, padding any tail that
+  // has not been produced yet with 0xFF (matching the ring path). Returns false
+  // (serving nothing) when the target is older than the safely-retained window,
+  // so the caller falls back to the legacy restart path. The safety margin keeps
+  // the read region from colliding with the writer's circular overwrite point.
+  protected boolean serveFromSpill(long offset, long length, java.nio.channels.WritableByteChannel chan)
+      throws java.io.IOException
+  {
+    java.nio.channels.FileChannel ch = xcodeSpillChannel;
+    if (ch == null)
+      return false;
+    long size = xcodeBufferVirtualSize;
+    long spillBase = Math.max(0, size - spillCapBytes) + spillSafetyMargin;
+    if (offset < spillBase)
+      return false;
+    long canRead = Math.min(length, Math.max(0, size - offset));
+    long served = spillReadCircular(ch, spillCapBytes, offset, canRead, chan);
+    long overage = length - served;
+    while (overage > 0)
+    {
+      initOverageBuffer();
+      overageBuf.limit((int) Math.min(overage, overageBuf.capacity()));
+      overage -= chan.write(overageBuf);
+    }
+    if (XCODE_DEBUG) System.out.println("Xcode served behind-window read from spill offset=" + offset
+        + " length=" + length + " served=" + served);
+    return true;
+  }
+
+  // Circular-file primitives, kept static + package-private so the wrap/segment
+  // math is unit tested against a real FileChannel without a live transcoder.
+  static void spillWriteCircular(java.nio.channels.FileChannel ch, long cap, byte[] data, int off, int len,
+      long virtualPos) throws java.io.IOException
+  {
+    int done = 0;
+    while (done < len)
+    {
+      long fpos = (virtualPos + done) % cap;
+      int seg = (int) Math.min(len - done, cap - fpos);
+      java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(data, off + done, seg);
+      while (bb.hasRemaining())
+        ch.write(bb, fpos + (seg - bb.remaining()));
+      done += seg;
+    }
+  }
+
+  static long spillReadCircular(java.nio.channels.FileChannel ch, long cap, long offset, long canRead,
+      java.nio.channels.WritableByteChannel out) throws java.io.IOException
+  {
+    if (canRead <= 0)
+      return 0;
+    long served = 0;
+    java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocate((int) Math.min(canRead, 1 << 16));
+    while (served < canRead)
+    {
+      long fpos = (offset + served) % cap;
+      int want = (int) Math.min(Math.min(canRead - served, cap - fpos), bb.capacity());
+      bb.clear();
+      bb.limit(want);
+      int n = ch.read(bb, fpos);
+      if (n <= 0)
+        break;
+      bb.flip();
+      while (bb.hasRemaining())
+        out.write(bb);
+      served += n;
+    }
+    return served;
   }
 
   public void setOutputFile(java.io.File theFile)
@@ -1104,6 +1273,16 @@ public class FFMPEGTranscoder implements TranscodeEngine
       iOSMode = true;
       dynamicRateAdjust = true;
     }
+    else if ("dynamicfmp4".equalsIgnoreCase(str))
+    {
+      // CMAF/fMP4 HLS for browser (hls.js) + Tizen AVPlay. Same encode
+      // decisions as dynamicts (iOSMode + dynamicRateAdjust), but ffmpeg's hls
+      // muxer writes finalized init.mp4 + seg%d.m4s files directly (Option A) --
+      // no stdout ring, no Java-side box cutting. See Phase1-CMAF-VOD plan.
+      iOSMode = true;
+      dynamicRateAdjust = true;
+      fmp4Mode = true;
+    }
     else if ("dynamich264".equalsIgnoreCase(str))
     {
       // Modern H.264 MPEG-TS push (bandwidth-aware, GPU-accelerated when
@@ -1316,7 +1495,74 @@ public class FFMPEGTranscoder implements TranscodeEngine
         }
         
         xcodeParams += " -packetsize " + packetsize;
-        
+
+        // ExoPlayer/android_media3 mis-clocks a raw MPEG2-in-MPEG2-TS copy-remux
+        // (observed: client media clock plays clean ~10-25s then races to EOF /
+        // loops on 59.94p H.262). This is a client TS-clocking weakness, not a
+        // source problem (source PTS verified clean+monotonic). Upstream SageTV
+        // never fed MPEG2-TS to such a player -- its native clients decode
+        // MPEG2-PS directly. For the copy-remux-to-TS fallback we add MPEG-TS
+        // muxer timing hints (frequent PCR + PAT/PMT resent at each keyframe,
+        // zeroed mux preload/delay) to give the client stable, frequent clock
+        // references. Scoped to the mpegts + video-copy case so nothing else is
+        // affected; the exact flag string is live-tunable (revert = empty).
+        if ("mpegts".equalsIgnoreCase(f) && "COPY".equals(vcodec))
+        {
+          String tsFix = Sage.get("miniplayer/mpegts_copy_remux_extra_ffmpeg",
+              "-muxpreload 0 -muxdelay 0 -mpegts_flags +resend_headers+pat_pmt_at_frames -pcr_period 20");
+          if (tsFix != null && tsFix.trim().length() > 0)
+            xcodeParams += " " + tsFix.trim();
+        }
+
+        // android_media3's Matroska push path periodically rebuffers (~3s
+        // stalls) on long-GOP ATSC 3.0 HEVC. The Matroska muxer defaults to
+        // large, keyframe-aligned clusters (cluster_time_limit ~5s and a new
+        // cluster only at each video keyframe): with a broadcast HEVC keyframe
+        // cadence of ~1-2s the client can't advance its media clock until a
+        // whole cluster arrives, so any hiccup in keyframe delivery starves the
+        // decoder and shows as a periodic freeze. Force short, frequent clusters
+        // (independent of keyframe spacing) plus prompt packet flushing so the
+        // client receives timestamps -- and playable bytes -- many times per
+        // second. This keeps the proven Matroska+E-AC-3 audio path (no container
+        // change) while smoothing the clock. Scoped to the matroska + video-copy
+        // live push; live-tunable (revert = empty string).
+        if (("matroska".equalsIgnoreCase(f) || "mkv".equalsIgnoreCase(f)) && "COPY".equals(vcodec))
+        {
+          // The short-cluster/flush flags above make each cluster small, but the
+          // Matroska muxer still defaults to max_interleave_delta=1s: it will
+          // HOLD already-ready video packets for up to a second waiting on the
+          // other stream so the file stays tightly interleaved. On the ATSC 3.0
+          // path video is a raw copy while audio is decoded from AC-4 and
+          // re-encoded to E-AC-3, and the AC-4 elementary stream starts ~667ms
+          // after video (no AC-4 TS parser, so timestamps are coarse). The
+          // transcoded audio therefore drifts behind the copied video and
+          // periodically lags past the 1s interleave window; when it does, the
+          // muxer stops emitting video, bursts a batch once audio catches up,
+          // and the client sees a ~1-3s hole in the pushed byte stream with no
+          // ffmpeg error. A deeper client buffer only delays when that hole is
+          // hit, it cannot fill it. The non-transcoded (copy-audio) live path
+          // never lags and never stalls, which is why only ATSC 3.0 freezes.
+          //
+          // -max_interleave_delta 0 disables that hold: ffmpeg flushes each
+          // stream's packets as soon as they are ready instead of waiting to
+          // interleave, so the push trickles out steadily. This LOWERS latency
+          // (no up-to-1s mux hold) rather than adding a lead buffer. Folded into
+          // the same live-tunable property (revert = empty string).
+          //
+          // A/V-SYNC SAFE: this is a muxer write-ordering flag only. It does not
+          // touch any packet PTS/DTS, and it does not touch the AC-4 decode or
+          // the -af aformat/aresample=async=0 chain that actually governs audio
+          // timing. Every audio and video packet keeps its exact timestamp, so
+          // the client (Media3/exoplayer) still lip-syncs by PTS exactly as
+          // before. Do NOT "fix" the prior AC-4 audio-desync work by flipping
+          // aresample async here -- that is the flag that would reintroduce
+          // drift; this one does not.
+          String mkvFix = Sage.get("miniplayer/matroska_copy_remux_extra_ffmpeg",
+              "-cluster_time_limit 500 -cluster_size_limit 262144 -flush_packets 1 -max_interleave_delta 0");
+          if (mkvFix != null && mkvFix.trim().length() > 0)
+            xcodeParams += " " + mkvFix.trim();
+        }
+
       }
       dynamicRateAdjust = false;
     }
@@ -1346,21 +1592,6 @@ public class FFMPEGTranscoder implements TranscodeEngine
       return Sage.getToolPath("ffmpeg");
     else
       throw new RuntimeException("Transcoder executable is missing!!! checked at: " + Sage.getToolPath("SageTVTranscoder") + " and " + Sage.getToolPath("ffmpeg"));
-  }
-
-  /**
-   * @return true if {@code src} reports HEVC video or AC-4 audio, meaning the
-   *         stock ffmpeg cannot decode it and we must route through the AC-4
-   *         capable build.
-   */
-  private static boolean needsAc4Ffmpeg(sage.media.format.ContainerFormat src)
-  {
-    if (src == null) return false;
-    String v = src.getPrimaryVideoFormat();
-    if (sage.media.format.MediaFormat.HEVC.equals(v)) return true;
-    String a = src.getPrimaryAudioFormat();
-    if (sage.media.format.MediaFormat.AC4.equals(a)) return true;
-    return false;
   }
 
   /**
@@ -1463,9 +1694,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
     }
     if (!replaced)
     {
-      // Profile had no explicit audio codec — append one so AC-4 source actually decodes.
-      xcodeParamsVec.add("-c:a");
-      xcodeParamsVec.add(ac4SourceAudioCodec);
+      // Profile had no explicit audio codec — append one so AC-4 source actually
+      // decodes. Insert before the "-" stdout sentinel, not after it.
+      addBeforeOutputSentinel(xcodeParamsVec, "-c:a", ac4SourceAudioCodec);
     }
     // E-AC-3 default bitrate bump for 5.1 — ac3 stays at whatever the profile chose.
     if ("eac3".equalsIgnoreCase(ac4SourceAudioCodec))
@@ -1474,13 +1705,107 @@ public class FFMPEGTranscoder implements TranscodeEngine
       if (abIndex >= 0)
         xcodeParamsVec.set(abIndex, eac3Bps);
       else
-      {
-        xcodeParamsVec.add("-b:a");
-        xcodeParamsVec.add(eac3Bps);
-      }
+        // NOTE: a bare add() here lands AFTER the "-" output sentinel (added
+        // earlier), so ffmpeg silently ignores it and E-AC-3 encodes at its
+        // default ~448k instead of 640k. Insert before the sentinel instead.
+        addBeforeOutputSentinel(xcodeParamsVec, "-b:a", eac3Bps);
     }
     if (Sage.DBG) System.out.println("FFMPEGTranscoder: AC-4 source — audio codec overridden to "
         + ac4SourceAudioCodec + (abIndex >= 0 ? " (bitrate slot=" + abIndex + ")" : ""));
+  }
+
+  /**
+   * Insert an output option immediately before the {@code "-"} stdout sentinel
+   * so it is applied to the streamed output, never appended after it (where
+   * ffmpeg silently ignores it). Falls back to a plain append when there is no
+   * sentinel (offline file output).
+   */
+  @SuppressWarnings({"rawtypes","unchecked"})
+  private static void addBeforeOutputSentinel(java.util.ArrayList xcodeParamsVec, String opt, String val)
+  {
+    int outIdx = xcodeParamsVec.lastIndexOf("-");
+    if (outIdx < 0) { xcodeParamsVec.add(opt); xcodeParamsVec.add(val); }
+    else { xcodeParamsVec.add(outIdx, opt); xcodeParamsVec.add(outIdx + 1, val); }
+  }
+
+  /**
+   * Final hygiene pass for the native placeshifter remux/copy push (live ATSC
+   * 3.0 HEVC/AC-4). Two independent fixes, both scoped to a stream-COPY output:
+   *
+   * <ol>
+   *   <li><b>Drop the spurious NVDEC input decoder.</b> {@link #nativeHevcHwDecodeArgs()}
+   *   prepends {@code -hwaccel cuda -c:v hevc_cuvid} to tolerate the missing-ref
+   *   (RPS/POC) errors the SOFTWARE HEVC decoder throws — but that only matters
+   *   when ffmpeg actually decodes. On a {@code -vcodec copy} output no video is
+   *   decoded, so the cuvid decoder is never consumed; it only spins up a live
+   *   NVDEC session whose surface-pool re-inits on ATSC 3.0 discontinuities can
+   *   stall the shared demux&rarr;copy pipeline. Remove it on the copy path.</li>
+   *
+   *   <li><b>Re-base timestamps.</b> ATSC 3.0 source PTS/DTS can start non-zero
+   *   or step at recording/signal boundaries. Copied verbatim into the strict
+   *   Matroska (or MPEG-TS) push muxer, that makes the client's media clock jump
+   *   backward &mdash; a multi-second freeze while the recording keeps growing
+   *   (observed: base media time snapping 462s&rarr;299s). Add
+   *   {@code -avoid_negative_ts make_zero}, exactly like the proven live
+   *   {@code hevc_nvenc} MPEG-TS path and the {@code MediaServer} TS remux.</li>
+   * </ol>
+   *
+   * Runs after every codec-swapping override (so it observes the final video
+   * codec — e.g. GPU-enhance may have swapped {@code copy}&rarr;{@code nvenc}).
+   */
+  @SuppressWarnings({"rawtypes","unchecked"})
+  private void maybeFixNativeCopyPushCommand(java.util.ArrayList xcodeParamsVec)
+  {
+    int iIdx = xcodeParamsVec.indexOf("-i");
+    if (iIdx < 0) return;
+
+    boolean videoCopy = false, audioCopy = false;
+    String outMux = null;
+    for (int i = iIdx + 2; i + 1 < xcodeParamsVec.size(); i++)
+    {
+      Object o = xcodeParamsVec.get(i);
+      if (!(o instanceof String)) continue;
+      String tok = (String) o;
+      Object nvo = xcodeParamsVec.get(i + 1);
+      String val = (nvo instanceof String) ? (String) nvo : null;
+      if (("-vcodec".equals(tok) || "-c:v".equals(tok) || "-codec:v".equals(tok)) && "copy".equalsIgnoreCase(val))
+        videoCopy = true;
+      else if (("-acodec".equals(tok) || "-c:a".equals(tok) || "-codec:a".equals(tok)) && "copy".equalsIgnoreCase(val))
+        audioCopy = true;
+      else if ("-f".equals(tok) && val != null && outMux == null)
+        outMux = val;
+    }
+
+    // FIX 1 — a video stream-copy never decodes, so the NVDEC cuvid input
+    // decoder is pure overhead and a live-stall source. Strip it.
+    if (videoCopy)
+    {
+      for (int i = 0; i + 1 < iIdx; i++)
+      {
+        Object o = xcodeParamsVec.get(i);
+        if (("-c:v".equals(o) || "-vcodec".equals(o)) && "hevc_cuvid".equals(xcodeParamsVec.get(i + 1)))
+        {
+          int from = i, to = i + 1;
+          if (i >= 2 && "-hwaccel".equals(xcodeParamsVec.get(i - 2)) && "cuda".equals(xcodeParamsVec.get(i - 1)))
+            from = i - 2; // also drop the paired "-hwaccel cuda"
+          for (int r = to; r >= from; r--) xcodeParamsVec.remove(r);
+          if (Sage.DBG) System.out.println("FFMPEGTranscoder: video is -vcodec copy — dropped spurious "
+              + "-hwaccel cuda -c:v hevc_cuvid input decoder (no decode occurs on a copy)");
+          break;
+        }
+      }
+    }
+
+    // FIX 2 — re-base timestamps on the streaming copy push (matroska/mpegts)
+    // so a non-zero / discontinuous source PTS cannot rewind the client clock.
+    boolean pushRemux = (videoCopy || audioCopy) && outputFile == null && !fmp4Mode
+        && ("matroska".equalsIgnoreCase(outMux) || "mpegts".equalsIgnoreCase(outMux));
+    if (pushRemux && !xcodeParamsVec.contains("-avoid_negative_ts") && !xcodeParamsVec.contains("-copyts"))
+    {
+      addBeforeOutputSentinel(xcodeParamsVec, "-avoid_negative_ts", "make_zero");
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: copy push (" + outMux + ") — added "
+          + "-avoid_negative_ts make_zero (re-base timestamps; prevent client media-clock rewind/freeze)");
+    }
   }
 
   /**
@@ -1533,6 +1858,70 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // aac/opus/etc: ~64 kbps per channel, clamped to [96k, 512k].
     int kbps = Math.min(512, Math.max(96, channels * 64));
     return kbps + "k";
+  }
+
+  /**
+   * Max output channels the lossy audio ENCODER named {@code codec} can emit.
+   * The AC-3 family is the trap: E-AC-3 the *format* carries 7.1, but the
+   * libavcodec {@code eac3}/{@code ac3} encoders both top out at 5.1 (6ch)
+   * (verified: {@code ffmpeg -h encoder=eac3} lists no 7.1 layout). Feeding a
+   * 7.1 (8ch) source to them unclamped makes ffmpeg abort with "Specified
+   * channel layout is not supported" -- no audio stream is produced and the
+   * client shows "no signal". Returns 0 for codecs we must NOT clamp
+   * (aac/opus/flac/pcm handle >= 8) and for copy/unknown.
+   */
+  static int maxChannelsForAudioCodec(String codec)
+  {
+    if (codec == null) return 0;
+    String c = codec.trim().toLowerCase(java.util.Locale.ROOT);
+    if (c.equals("ac3") || c.equals("a_ac3") || c.equals("eac3")
+        || c.equals("e-ac-3") || c.equals("ec-3") || c.equals("ec3")) return 6;
+    if (c.equals("mp2") || c.equals("mpg1l2") || c.equals("mp3") || c.equals("mpg1l3")) return 2;
+    return 0; // aac/libfdk_aac/opus/flac/pcm/copy/unknown -> no clamp
+  }
+
+  /**
+   * Final safety pass: clamp the re-encode channel count to what the chosen
+   * audio ENCODER can actually emit. Without this a 7.1 source transcoded to
+   * ac3/eac3 asks for a layout the encoder does not support, ffmpeg exits before
+   * opening the output, and the client renders nothing ("no signal"). ffmpeg
+   * auto-downmixes to the requested {@code -ac}, so 7.1 -> 5.1 is clean. No-op
+   * for stream-copy and for codecs that already handle the source width.
+   */
+  @SuppressWarnings({"rawtypes","unchecked"})
+  void clampAudioChannelsToEncoder(java.util.ArrayList xcodeParamsVec)
+  {
+    if (isAudioCopySelected(xcodeParamsVec)) return;
+    int acodecIdx = -1, acIdx = -1;
+    for (int i = 0; i < xcodeParamsVec.size() - 1; i++)
+    {
+      Object o = xcodeParamsVec.get(i);
+      if (!(o instanceof String)) continue;
+      String tok = (String) o;
+      if (tok.equals("-acodec") || tok.equals("-c:a") || tok.equals("-codec:a")) acodecIdx = i + 1;
+      else if (tok.equals("-ac")) acIdx = i + 1;
+    }
+    if (acodecIdx < 0) return; // no explicit encoder named -> nothing to clamp against
+    Object codecObj = xcodeParamsVec.get(acodecIdx);
+    if (!(codecObj instanceof String)) return;
+    String codec = (String) codecObj;
+    if ("copy".equalsIgnoreCase(codec)) return;
+    int max = maxChannelsForAudioCodec(codec);
+    if (max <= 0) return; // encoder handles wide layouts; leave alone
+    int requested = -1;
+    if (acIdx >= 0)
+    {
+      try { requested = Integer.parseInt(((String) xcodeParamsVec.get(acIdx)).trim()); }
+      catch (Exception e) { requested = -1; }
+    }
+    if (requested < 0 && sourceFormat != null && sourceFormat.getAudioFormat() != null)
+      requested = sourceFormat.getAudioFormat().getChannels();
+    if (requested <= max) return; // 5.1 or narrower -> nothing to do
+    if (acIdx >= 0) xcodeParamsVec.set(acIdx, Integer.toString(max));
+    else addBeforeOutputSentinel(xcodeParamsVec, "-ac", Integer.toString(max));
+    if (Sage.DBG) System.out.println("FFMPEGTranscoder: clamped " + codec + " channels "
+        + requested + " -> " + max + " (AC-3-family encoder tops out at 5.1; an unclamped 7.1"
+        + " layout aborts the encode -> client 'no signal')");
   }
 
   /**
@@ -1680,19 +2069,421 @@ public class FFMPEGTranscoder implements TranscodeEngine
    * stored in {@link #enhanceSessionId} so {@link #stopTranscode()} releases the
    * held capacity. Any failure degrades to "no enhancement" — never a broken tune.
    */
+  // ---- External-process (upscale worker) enhancement launch ---------------
+
+  /**
+   * Launch the three-process enhancement pipeline
+   * ({@code ffmpeg decode → worker → ffmpeg encode}) staged by
+   * {@link #maybeApplyGpuEnhancement}, wiring the stages with OS pipes and daemon
+   * pump threads. Waits for the worker's {@code READY} handshake on stderr within
+   * {@code playback/gpu_enhance/scale/external_worker_startup_timeout_seconds}.
+   * Returns the encode process (whose stdout is the enhanced stream) on success,
+   * or {@code null} on any spawn/handshake failure so the caller runs the
+   * single-process fallback. No vendor code lives here: the worker argv comes
+   * entirely from the provider's plan.
+   */
+  private Process launchExternalEnhancePipeline(
+      sage.enhance.GpuEnhancePipeline.ExternalPipeline ep, java.util.List<String> workerArgv,
+      Process warmWorker)
+      throws java.io.IOException
+  {
+    if (ep == null || workerArgv == null || workerArgv.isEmpty()) return null;
+
+    // Audio side-channel: create the named pipe the decode stage writes and the
+    // encode stage reads BEFORE spawning either, so both processes can rendezvous
+    // on it during ffmpeg input/output open (encode blocks opening the FIFO for
+    // read until decode opens it for write). Unlinked in teardownExternalEnhance.
+    final String audioSidecar = ep.getAudioSidecarPath();
+    if (audioSidecar != null)
+    {
+      try { new java.io.File(audioSidecar).delete(); } catch (Throwable ignore) {}
+      int rc = -1;
+      try { rc = new ProcessBuilder("mkfifo", audioSidecar).inheritIO().start().waitFor(); }
+      catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+      if (rc != 0)
+        throw new java.io.IOException("mkfifo failed (rc=" + rc + ") for audio sidecar " + audioSidecar);
+      enhanceAudioSidecarPath = audioSidecar;
+      if (Sage.DBG) System.out.println("GPU_ENHANCE audio sidecar FIFO created: " + audioSidecar);
+    }
+
+    // A pre-warmed worker (from ScaleWarmupCache) is already spawned and already
+    // signaled READY (the provider consumed that during warmup), so the core
+    // neither spawns it nor waits on a READY latch it would never see.
+    final boolean warm = (warmWorker != null && warmWorker.isAlive());
+
+    long startupMs = Math.max(1000L,
+        Sage.getLong("playback/gpu_enhance/scale/external_worker_startup_timeout_seconds", 30L) * 1000L);
+    final long stallMs = Math.max(1000L,
+        Sage.getLong("playback/gpu_enhance/scale/external_worker_stall_timeout_seconds", 10L) * 1000L);
+
+    ProcessBuilder dPb = new ProcessBuilder(ep.getDecodeArgv());
+    Sage.applyTimeZoneToProcessBuilder(dPb);
+    ProcessBuilder wPb = new ProcessBuilder(workerArgv);
+    Sage.applyTimeZoneToProcessBuilder(wPb);
+    ProcessBuilder ePb = new ProcessBuilder(ep.getEncodeArgv());
+    Sage.applyTimeZoneToProcessBuilder(ePb);
+
+    Process decode = null, worker = null, encode = null, audio = null;
+    try
+    {
+      if (Sage.DBG) System.out.println("GPU_ENHANCE external decode argv: " + ep.getDecodeArgv());
+      decode = dPb.start();
+      if (warm)
+      {
+        worker = warmWorker;
+        if (Sage.DBG) System.out.println("GPU_ENHANCE using pre-warmed worker "
+            + "(skipping spawn + READY wait); argv(diag): " + workerArgv);
+      }
+      else
+      {
+        if (Sage.DBG) System.out.println("GPU_ENHANCE external worker argv: " + workerArgv);
+        worker = wPb.start();
+      }
+      if (Sage.DBG) System.out.println("GPU_ENHANCE external encode argv: " + ep.getEncodeArgv());
+      encode = ePb.start();
+
+      // Audio side-channel process: a standalone ffmpeg that accurately seeks the
+      // source and copies its audio to the FIFO the encode reads (input 1). It is
+      // decoupled from the raw video pipe, so it fills the FIFO freely without the
+      // interleave deadlock that a second decode output caused. Its stderr is
+      // drained to the log so the pipe never back-pressures it.
+      final java.util.List<String> audioArgv = ep.getAudioArgv();
+      if (audioArgv != null && !audioArgv.isEmpty())
+      {
+        if (Sage.DBG) System.out.println("GPU_ENHANCE external audio argv: " + audioArgv);
+        ProcessBuilder aPb = new ProcessBuilder(audioArgv);
+        Sage.applyTimeZoneToProcessBuilder(aPb);
+        audio = aPb.start();
+        registerLiveChild(audio);
+        ProcessPriority.reduce(audio);
+        startStderrDrain("enhance-audio-stderr", audio.getErrorStream());
+      }
+
+      registerLiveChild(decode);
+      registerLiveChild(worker);
+      registerLiveChild(encode);
+      ProcessPriority.reduce(decode);
+      ProcessPriority.reduce(worker);
+      ProcessPriority.reduce(encode);
+
+      // Worker stderr: scan for READY, then keep draining to the log.
+      if (warm)
+      {
+        // Already READY; just drain worker stderr to the log and confirm the
+        // three processes are alive before wiring the frame pumps.
+        startStderrDrain("enhance-worker-stderr", worker.getErrorStream());
+        if (!worker.isAlive() || !decode.isAlive() || !encode.isAlive())
+        {
+          if (Sage.DBG) System.out.println("GPU_ENHANCE pre-warmed pipeline not all alive"
+              + " (workerAlive=" + worker.isAlive() + " decodeAlive=" + decode.isAlive()
+              + " encodeAlive=" + encode.isAlive() + "); abandoning external pipeline");
+          destroyQuietly(encode); destroyQuietly(worker); destroyQuietly(decode); destroyQuietly(audio);
+          unregisterLiveChild(decode); unregisterLiveChild(worker); unregisterLiveChild(encode); unregisterLiveChild(audio);
+          return null;
+        }
+      }
+      else
+      {
+        final java.util.concurrent.CountDownLatch ready =
+            new java.util.concurrent.CountDownLatch(1);
+        final Process wf = worker;
+        Thread werr = new Thread("enhance-worker-stderr")
+        {
+          public void run()
+          {
+            java.io.BufferedReader r = new java.io.BufferedReader(
+                new java.io.InputStreamReader(wf.getErrorStream()));
+            try
+            {
+              String line;
+              while ((line = r.readLine()) != null)
+              {
+                if (line.contains("READY")) ready.countDown();
+                if (XCODE_DEBUG) System.out.println("enhance worker: " + line);
+              }
+            }
+            catch (java.io.IOException ignore) {}
+          }
+        };
+        werr.setDaemon(true);
+        werr.start();
+
+        // Wait up to startupMs for READY, but bail out immediately if any of the
+        // three pipeline processes dies first. A crashing worker (e.g. a provider
+        // runtime error) otherwise wedges the client for the FULL timeout before we
+        // fall back to the plain command -- the multi-second black screen the user
+        // sees. Polling in short slices lets us abandon within ~200ms of a crash.
+        boolean got = false;
+        long readyDeadline = System.currentTimeMillis() + startupMs;
+        while (true)
+        {
+          if (ready.await(200, java.util.concurrent.TimeUnit.MILLISECONDS)) { got = true; break; }
+          if (!worker.isAlive() || !decode.isAlive() || !encode.isAlive()) break;
+          if (System.currentTimeMillis() >= readyDeadline) break;
+        }
+        if (!got || !worker.isAlive() || !decode.isAlive() || !encode.isAlive())
+        {
+          if (Sage.DBG) System.out.println("GPU_ENHANCE external worker not READY within "
+              + startupMs + "ms (got=" + got + " workerAlive=" + worker.isAlive()
+              + " decodeAlive=" + decode.isAlive() + " encodeAlive=" + encode.isAlive()
+              + "); abandoning external pipeline");
+          destroyQuietly(encode); destroyQuietly(worker); destroyQuietly(decode); destroyQuietly(audio);
+          unregisterLiveChild(decode); unregisterLiveChild(worker); unregisterLiveChild(encode); unregisterLiveChild(audio);
+          return null;
+        }
+      }
+
+      // Frame pumps: decode.stdout -> worker.stdin ; worker.stdout -> encode.stdin.
+      final long[] lastProgress = { System.currentTimeMillis() };
+      startFramePump("enhance-decode->worker", decode.getInputStream(),
+          worker.getOutputStream(), lastProgress);
+      startFramePump("enhance-worker->encode", worker.getInputStream(),
+          encode.getOutputStream(), null);
+      startStderrDrain("enhance-decode-stderr", decode.getErrorStream());
+
+      // Stall watchdog: if frames stop flowing decode->worker for stallMs while
+      // the decode is still producing, OR the worker dies outright, tear the
+      // upscale stages down so the encode's inputs both EOF and the session ends
+      // (a mid-session external worker cannot be hot-swapped; the client re-plans
+      // and gets a plain remux on re-open). Crucially this also destroys the audio
+      // sidecar: it -follows the growing file and never EOFs on its own, so once
+      // the worker is gone the encode's video pipe EOFs but its audio input would
+      // not -- killing the sidecar here EOFs that input too, letting the encode
+      // exit and unblocking teardown. Without it, a client that already left would
+      // leave the sidecar (and encode) running forever: the "exit but the server
+      // keeps transcoding" leak.
+      final Process wd = worker, dd = decode, ed = encode;
+      Thread watch = new Thread("enhance-stall-watchdog")
+      {
+        public void run()
+        {
+          while (ed.isAlive())
+          {
+            try { Thread.sleep(1000L); } catch (InterruptedException ie) { return; }
+            if (!dd.isAlive()) return; // decode finished: clean EOF path, not a stall
+            boolean workerGone = !wd.isAlive();
+            boolean stalled = System.currentTimeMillis() - lastProgress[0] > stallMs;
+            if (workerGone || stalled)
+            {
+              if (Sage.DBG) System.out.println("GPU_ENHANCE external worker "
+                  + (workerGone ? "died" : "stalled > " + stallMs + "ms")
+                  + "; tearing down worker + audio sidecar so the encode can EOF"
+                  + " (plain remux on re-open)");
+              if (stalled) markEnhanceStallCooldown(FFMPEGTranscoder.this.currFile);
+              destroyQuietly(wd);
+              Process a = FFMPEGTranscoder.this.enhanceAudioProcess;
+              if (a != null) destroyQuietly(a);
+              return;
+            }
+          }
+        }
+      };
+      watch.setDaemon(true);
+      watch.start();
+
+      this.enhanceDecodeProcess = decode;
+      this.enhanceWorkerProcess = worker;
+      this.enhanceAudioProcess = audio;
+      this.externalSourceCtrl = ep.hasSourceControl();
+      if (Sage.DBG) System.out.println("GPU_ENHANCE external pipeline live (decode+worker+encode)");
+      return encode;
+    }
+    catch (java.io.IOException ioe)
+    {
+      destroyQuietly(encode); destroyQuietly(worker); destroyQuietly(decode); destroyQuietly(audio);
+      unregisterLiveChild(decode); unregisterLiveChild(worker); unregisterLiveChild(encode); unregisterLiveChild(audio);
+      throw ioe;
+    }
+    catch (Throwable t)
+    {
+      destroyQuietly(encode); destroyQuietly(worker); destroyQuietly(decode); destroyQuietly(audio);
+      unregisterLiveChild(decode); unregisterLiveChild(worker); unregisterLiveChild(encode); unregisterLiveChild(audio);
+      if (Sage.DBG) System.out.println("GPU_ENHANCE external pipeline setup failed: " + t);
+      return null;
+    }
+  }
+
+  /** Copy bytes from {@code in} to {@code out} on a daemon thread, closing both on
+   *  EOF/error so the downstream stage sees the pipe close (flush + exit). When
+   *  {@code progress} is non-null, its element 0 is stamped with the time of each
+   *  successful write for the stall watchdog. */
+  private void startFramePump(final String name, final java.io.InputStream in,
+      final java.io.OutputStream out, final long[] progress)
+  {
+    Thread t = new Thread(name)
+    {
+      public void run()
+      {
+        byte[] buf = new byte[64 * 1024];
+        try
+        {
+          int n;
+          while ((n = in.read(buf)) >= 0)
+          {
+            if (n > 0)
+            {
+              out.write(buf, 0, n);
+              out.flush();
+              if (progress != null) progress[0] = System.currentTimeMillis();
+            }
+          }
+        }
+        catch (java.io.IOException ignore) {}
+        finally
+        {
+          try { out.close(); } catch (java.io.IOException ignore) {}
+          try { in.close(); } catch (java.io.IOException ignore) {}
+        }
+      }
+    };
+    t.setDaemon(true);
+    t.start();
+  }
+
+  /** Drain a child stderr to the log on a daemon thread so it can never block. */
+  private void startStderrDrain(final String name, final java.io.InputStream in)
+  {
+    Thread t = new Thread(name)
+    {
+      public void run()
+      {
+        java.io.BufferedReader r = new java.io.BufferedReader(
+            new java.io.InputStreamReader(in));
+        try
+        {
+          String line;
+          while ((line = r.readLine()) != null)
+            if (XCODE_DEBUG) System.out.println(name + ": " + line);
+        }
+        catch (java.io.IOException ignore) {}
+      }
+    };
+    t.setDaemon(true);
+    t.start();
+  }
+
+  /** Tear down the external-process enhancement sub-stages (decode + worker), if
+   *  any. The encode process is the tracked xcodeProcess and is handled by the
+   *  normal stopTranscode() path. Idempotent. */
+  private void teardownExternalEnhance()
+  {
+    externalEnhanceActive = false;
+    externalSourceCtrl = false;
+    Process w = enhanceWorkerProcess, d = enhanceDecodeProcess, a = enhanceAudioProcess;
+    enhanceWorkerProcess = null;
+    enhanceDecodeProcess = null;
+    enhanceAudioProcess = null;
+    if (w != null) { destroyQuietly(w); unregisterLiveChild(w); }
+    if (d != null) { destroyQuietly(d); unregisterLiveChild(d); }
+    if (a != null) { destroyQuietly(a); unregisterLiveChild(a); }
+    String fifo = enhanceAudioSidecarPath;
+    enhanceAudioSidecarPath = null;
+    if (fifo != null) { try { new java.io.File(fifo).delete(); } catch (Throwable ignore) {} }
+  }
+
+  /** Force-kill a process and any descendants, swallowing all errors. */
+  private static void destroyQuietly(Process p)
+  {
+    if (p == null) return;
+    try { p.descendants().forEach(ProcessHandle::destroyForcibly); } catch (Throwable ignore) {}
+    try { p.destroyForcibly(); } catch (Throwable ignore) {}
+  }
+
+  /**
+   * Per-source enhancement stall cooldown. When the external upscale pipeline
+   * stalls mid-session (worker can't sustain realtime -- e.g. bob-deinterlaced
+   * 1080i-&gt;4K runs at only ~1.08x on this GPU, so any dip falls behind the live
+   * edge), killing the worker tears the session down and the client re-OPENs.
+   * Without this, that re-open re-attempts the same enhancement, stalls again,
+   * and loops -- a black-screen flicker that also churns live tuner watches
+   * ("all tuners busy" with no real clients). Keyed by source file path (stable
+   * across a client re-open of the same airing), this makes the FIRST re-open
+   * after a stall fall back to a plain, stable remux for a cooldown window, then
+   * retry enhancement later in case conditions improved. Static so it survives
+   * the per-open transcoder instance churn.
+   */
+  private static final java.util.concurrent.ConcurrentHashMap<String,Long>
+      ENHANCE_STALL_COOLDOWN = new java.util.concurrent.ConcurrentHashMap<String,Long>();
+
+  /** Arm the stall cooldown for a source so its next open serves plain remux. */
+  static void markEnhanceStallCooldown(java.io.File src)
+  {
+    if (src == null) return;
+    long secs = Sage.getLong("playback/gpu_enhance/stall_cooldown_seconds", 120L);
+    if (secs <= 0L) return;
+    ENHANCE_STALL_COOLDOWN.put(src.toString(), System.currentTimeMillis() + secs * 1000L);
+    if (Sage.DBG) System.out.println("GPU_ENHANCE stall cooldown armed for " + secs
+        + "s: next open of " + src + " serves plain remux (unenhanced)");
+  }
+
+  /** True while the given source is inside its post-stall cooldown window. */
+  static boolean enhanceStallCoolingDown(java.io.File src)
+  {
+    if (src == null) return false;
+    Long until = ENHANCE_STALL_COOLDOWN.get(src.toString());
+    if (until == null) return false;
+    if (System.currentTimeMillis() >= until.longValue())
+    {
+      ENHANCE_STALL_COOLDOWN.remove(src.toString());
+      return false;
+    }
+    return true;
+  }
+
   void maybeApplyGpuEnhancement(java.util.ArrayList xcodeParamsVec)
   {
     try
     {
       if (enhanceRequest == null || !enhanceRequest.isActive()) return;
       if (!sage.enhance.EnhancementDryRun.isLive()) return;
-      // Recording-integrity gate: never touch a recording mux or an active-file
-      // source. Enhancement applies to the confirmed modern copy-family playback
-      // modes (remux/copy) and to the browserhd re-encode path (H.264 for browser
-      // MSE, chosen when the source can't be stream-copied to fMP4, e.g. MPEG-2).
+      // Enhancement applies to the confirmed modern copy-family playback modes
+      // (remux/copy) and to the browserhd re-encode path (H.264 for browser MSE,
+      // chosen when the source can't be stream-copied to fMP4, e.g. MPEG-2).
       boolean copyFamily = isModernCopyFamilyXcodeMode() || isEnhanceableCopyContainerMode();
       boolean reencodeEnhanceable = isEnhanceableReencodeMode();
-      if (activeFile || (!copyFamily && !reencodeEnhanceable)) return;
+
+      // Recording-integrity gate. The enhancement pipeline only ever READS the
+      // source: the decode stage opens it read-only and writes raw frames to a
+      // pipe (see GpuEnhancePipeline.buildExternalPipeline), and a growing live
+      // recording is tailed with the SAME inherited "-follow 1" the main
+      // transcoder uses -- a second read-only reader never touches the recording
+      // mux. Historically this refused every active file outright, which was
+      // stricter than the integrity concern requires and silently disabled the
+      // live-TV / in-progress-recording 4K upscale this whole feature exists for
+      // (the advisor still advertised verdict=OFFERED tier=2160p to the client,
+      // then this gate returned with no log line -- the two layers disagreed and
+      // the viewer got a plain copy). Active-file enhancement is now allowed by
+      // default; the kill-switch restores the old fail-closed behavior. Recording
+      // capacity is still protected downstream by GpuGovernor admission, which
+      // runs the RecordingGuard veto (posture PROTECT/BALANCED/COEXIST) and the
+      // measured VRAM/engine/disk ladder -- so a box that must not spend GPU
+      // beside a recording denies there, honestly, rather than here, silently.
+      if (activeFile && !Sage.getBoolean("playback/gpu_enhance/allow_active_file", true))
+      {
+        if (Sage.DBG) System.out.println("GPU_ENHANCE apply: skipped -- active-file"
+            + " (live/in-progress recording) enhancement disabled via"
+            + " playback/gpu_enhance/allow_active_file=false");
+        return;
+      }
+      if (!copyFamily && !reencodeEnhanceable)
+      {
+        if (Sage.DBG) System.out.println("GPU_ENHANCE apply: skipped -- xcodeMode '"
+            + xcodeModeName + "' is neither copy-family nor re-encode-enhanceable");
+        return;
+      }
+
+      // Post-stall cooldown: this source stalled the upscale pipeline recently
+      // (see the stall watchdog in launchExternalEnhancePipeline). Serve a plain,
+      // stable remux now instead of re-attempting an enhancement that cannot
+      // sustain realtime on this GPU -- which would stall again and loop, churning
+      // live tuner watches. The window expires on its own, so a later open retries.
+      if (currFile != null && enhanceStallCoolingDown(currFile))
+      {
+        if (Sage.DBG) System.out.println("GPU_ENHANCE apply: skipped -- source in"
+            + " post-stall cooldown (playback/gpu_enhance/stall_cooldown_seconds);"
+            + " serving plain remux for " + currFile);
+        return;
+      }
 
       // Optional operator override: force a specific tier regardless of the tier
       // the client negotiated from its display sink (a 1080p browser sink caps the
@@ -1714,7 +2505,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
         }
       }
 
-      int srcH = 0, srcFps = 0;
+      int srcW = 0, srcH = 0, srcFps = 0;
+      double srcFpsExact = 0.0;
       boolean interlaced = false;
       long srcKbps = 0L;
       if (sourceFormat != null)
@@ -1722,12 +2514,49 @@ public class FFMPEGTranscoder implements TranscodeEngine
         sage.media.format.VideoFormat vf = sourceFormat.getVideoFormat();
         if (vf != null)
         {
+          srcW = vf.getWidth();
           srcH = vf.getHeight();
           srcFps = Math.round(vf.getFps());
+          srcFpsExact = vf.getFps();
           interlaced = vf.isInterlaced();
         }
         long br = sourceFormat.getBitrate();
         if (br > 0) srcKbps = br / 1000L;
+      }
+
+      // Live/active-file geometry recovery. For an in-progress source (live TV,
+      // growing recording) sourceFormat is frequently not yet populated, so the
+      // block above leaves srcW/srcH at 0. A zero srcH sinks the governor's source
+      // floor: isLegalForSourceHeight() fails for every upscaling tier, so
+      // requestAdmission silently steps 2160p -> 1080p -> deinterlace_only, and
+      // buildPlan then returns null for the progressive source -- the client,
+      // already promised tier=2160p by the advisor, is handed a plain copy. The
+      // advisor recovered the true geometry at offer time with the same bounded
+      // probe (MiniPlayer, "live-source probe recovered geometry"); the apply path
+      // must do the same or the two layers disagree exactly as before. Bounded
+      // daemon probe, hard timeout, property-gated -- a slow/growing file can
+      // never stall the transcode; on timeout/error srcH stays 0 and we admit
+      // honestly against what we know.
+      if ((srcW <= 0 || srcH <= 0) && currFile != null
+          && Sage.getBoolean("playback/gpu_enhance/live_source_probe", true))
+      {
+        sage.media.format.VideoFormat pvf = probeSourceVideoFormatBounded(currFile,
+            Sage.getInt("playback/gpu_enhance/live_source_probe_ms", 750));
+        if (pvf != null && pvf.getWidth() > 0 && pvf.getHeight() > 0)
+        {
+          srcW = pvf.getWidth();
+          srcH = pvf.getHeight();
+          interlaced = pvf.isInterlaced();
+          int pfps = Math.round(pvf.getFps());
+          if (pfps > 0) { srcFps = pfps; srcFpsExact = pvf.getFps(); }
+          if (Sage.DBG) System.out.println("GPU_ENHANCE apply: live-source probe recovered geometry "
+              + srcW + "x" + srcH + (interlaced ? "i" : "p") + "@" + srcFps + " from " + currFile);
+        }
+        else if (Sage.DBG)
+        {
+          System.out.println("GPU_ENHANCE apply: live-source probe did not recover geometry"
+              + " (source still 0x0) for " + currFile + "; admission uses srcH=" + srcH);
+        }
       }
 
       // Live sink re-negotiation (Protocol 2.1 ";sink=WxH" on the msproxy
@@ -1789,7 +2618,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
       sage.enhance.EnhancementTier granted = adm.getTier();
       sage.enhance.EnhancementPlan plan = sage.enhance.GpuEnhancePipeline.buildPlan(
-          granted, interlaced, srcH, estKbps);
+          granted, interlaced, srcW, srcH, estKbps);
       if (plan == null || !plan.isActive())
       {
         gov.release(sessionId);
@@ -1801,17 +2630,180 @@ public class FFMPEGTranscoder implements TranscodeEngine
         return;
       }
 
+      // External-process (upscale worker) plan: build the decode/encode stages
+      // that bracket the worker from the copy-family base command BEFORE the
+      // in-place rewrite below turns xcodeParamsVec into the single-process
+      // fallback. The three-process pipeline is attempted first at launch; if the
+      // worker never signals READY (or fails to spawn), the launcher discards it
+      // and runs the fallback command (which deinterlaces/re-encodes but does not
+      // upscale), so the client always gets a stream.
+      pendingExternalPipeline = null;
+      pendingExternalWorkerArgv = null;
+      pendingExternalWarmProcess = null;
+      // A pre-warmed worker the plan may carry. If we end up NOT staging the
+      // external pipeline (wrong argv shape, or an ep build failure), this warm
+      // worker was consumed from the cache and would otherwise leak, so we tear
+      // it down explicitly below.
+      Process planWarmProcess =
+          (plan.getScaleExec() != null) ? plan.getScaleExec().getWarmProcess() : null;
+      if (plan.getScaleExec() != null && plan.getScaleExec().rendersExternalProcess()
+          && (copyFamily || reencodeEnhanceable))
+      {
+        java.util.List<String> baseArgv =
+            new java.util.ArrayList<String>(xcodeParamsVec);
+        // Source codec for explicit *_cuvid NVDEC decode in the decode stage, but
+        // only where the server actually has an NVIDIA GPU: the vast majority of
+        // SageTV servers are CPU-only, so gate on the cached GPU-enhance capability
+        // probe (NVDEC ships with the same build as the NVENC/CUDA this checks).
+        // A null codec keeps the generic accel hint. Kill-switch: property
+        // playback/gpu_enhance/decode_cuvid=false.
+        String srcVideoFmt = null;
+        if (sourceFormat != null
+            && Sage.getBoolean("playback/gpu_enhance/decode_cuvid", true)
+            && sage.HwEncoder.gpuEnhanceSupported())
+          srcVideoFmt = sourceFormat.getPrimaryVideoFormat();
+        // Raw-frame-rate cap: RGB24 at 60fps is ~530 MB/s through the OS pipe and
+        // the pipeline sustains ~43fps, so faster sources can optionally be
+        // decimated to this cap before the pipe. Default 0 = disabled (no
+        // decimation): the pipeline runs at true source fps and the encode
+        // -framerate still tracks the source. Set >0 to re-enable the cap.
+        int fpsCap = Sage.getInt("playback/gpu_enhance/pipe_fps_cap", 0);
+        // Audio side-channel: copy the source audio out of the SAME accurately-
+        // seeked decode process (a FIFO the decode writes and the encode reads)
+        // instead of the encode re-opening the file on a second, independent seek.
+        // On a resumed play the two independent seeks (cuvid fast-seek for video,
+        // demux seek for audio) land at different times and the rawvideo worker
+        // pipe strips the video PTS, so audio and video drift by a seek-dependent
+        // 0.5-1.2s. One decode + accurate seek keeps them aligned by construction.
+        // No-op at ss=0 (accurateSeekSplit collapses), so no startup penalty at
+        // the head. Kill-switch: playback/gpu_enhance/scale/audio_sidecar=false.
+        String audioSidecar = null;
+        double seekPrerollSec = 0.0;
+        if (Sage.getBoolean("playback/gpu_enhance/scale/audio_sidecar", true))
+        {
+          seekPrerollSec = Sage.getInt("playback/gpu_enhance/scale/seek_preroll_ms", 2000) / 1000.0;
+          audioSidecar = new java.io.File(System.getProperty("java.io.tmpdir", "/tmp"),
+              "sage-enh-audio-" + sessionId + "-" + System.nanoTime() + ".ts").getPath();
+        }
+        // Audio sidecar handling. The mpegts muxer in the pinned fork cannot
+        // stream-copy AC-4, so a blind "-c:a copy" in the sidecar exits before it
+        // opens the FIFO and the encode deadlocks reading it. For an AC-4 source we
+        // reproduce the EXACT audio handling of the non-enhanced path: transcode to
+        // the client codec (ac4SourceAudioCodec, default ac3), add -copytb 0 (the
+        // demuxer has no AC-4 TS parser) and the aresample=async drift-correction
+        // filter (the fork's AC-4 decoder drops frames -- "overread" -- which would
+        // otherwise slip audio ahead of video). null => plain -c:a copy.
+        sage.enhance.GpuEnhancePipeline.SidecarAudio sidecarAudio = null;
+        if (sourceFormat != null
+            && sage.media.format.MediaFormat.AC4.equals(sourceFormat.getPrimaryAudioFormat()))
+        {
+          String acodec = (ac4SourceAudioCodec != null && ac4SourceAudioCodec.length() > 0)
+              ? ac4SourceAudioCodec : "ac3";
+          String abps;
+          if ("eac3".equalsIgnoreCase(acodec))     abps = Sage.get("miniplayer/eac3_bitrate", "640k");
+          else if ("ac3".equalsIgnoreCase(acodec)) abps = "384k";
+          else if ("aac".equalsIgnoreCase(acodec)) abps = "256k";
+          else                                     abps = null;
+          java.util.List<String> inOpts = new java.util.ArrayList<String>();
+          if (sage.media.format.MediaFormat.MPEG2_TS.equals(sourceFormat.getFormatName()))
+          { inOpts.add("-copytb"); inOpts.add("0"); }
+          java.util.List<String> outOpts = new java.util.ArrayList<String>();
+          outOpts.add("-c:a"); outOpts.add(acodec);
+          if (abps != null) { outOpts.add("-b:a"); outOpts.add(abps); }
+          // Audio filter for the enhanced-matroska sidecar. The 5.1-vs-stereo
+          // choice is now PER CLIENT, driven by the winning surface's declared
+          // AUDIO_MAX_CHANNELS (setSidecarMaxAudioChannels), NOT a SageTV-global
+          // setting:
+          //   * explicit capability wins -- AUDIO_MAX_CHANNELS >= 6 preserves
+          //     surround; an explicit value < 6 forces the stereo downmix;
+          //   * legacy/undeclared (0) mirrors the non-enhance ladder: a
+          //     passthrough EAC3/AC3 codec pick keeps 5.1, AAC/MP2 downmixes.
+          // Stereo => buildAudioResampleFilter(true, true) =
+          // "aformat=channel_layouts=stereo,aresample=async=N"; surround =>
+          // buildAudioResampleFilter(true, false) = "aresample=async=N" (source
+          // layout preserved). The aresample re-clock is ALWAYS present -- the
+          // fork's AC-4 decoder drops frames ("overread"), and dropping the
+          // re-clock (not the downmix) was the render-breaker at frame 162.
+          boolean downmixToStereo;
+          if (sidecarMaxAudioChannels > 0)
+            downmixToStereo = sidecarMaxAudioChannels < 6;
+          else
+            downmixToStereo = !("eac3".equalsIgnoreCase(acodec) || "ac3".equalsIgnoreCase(acodec));
+          String sidecarAf;
+          if (downmixToStereo)
+            sidecarAf = buildAudioResampleFilter(true, true);
+          else
+          {
+            // Preserve surround -- but the AC-3-family encoder tops out at 5.1,
+            // so a 7.1 AC-4 source must be downmixed to 5.1 or the eac3/ac3
+            // encoder aborts ("channel layout not supported") and the client
+            // gets no audio ("no signal"). Only cap when the source is actually
+            // wider than 5.1; never upmix a narrower source.
+            int srcCh = (sourceFormat.getAudioFormat() != null)
+                ? sourceFormat.getAudioFormat().getChannels() : 0;
+            int cap = maxChannelsForAudioCodec(acodec);
+            if (cap > 0 && srcCh > cap)
+              sidecarAf = "aformat=channel_layouts=5.1," + buildAudioResampleFilter(true, false);
+            else
+              sidecarAf = buildAudioResampleFilter(true, false);
+          }
+          if (Sage.DBG) System.out.println("FFMPEGTranscoder: enhance AC-4 sidecar audio -> codec="
+              + acodec + " maxChannels="
+              + (sidecarMaxAudioChannels > 0 ? Integer.toString(sidecarMaxAudioChannels) : "undeclared")
+              + " downmixToStereo=" + downmixToStereo + " af=" + sidecarAf);
+          outOpts.add("-af"); outOpts.add(sidecarAf);
+          sidecarAudio = new sage.enhance.GpuEnhancePipeline.SidecarAudio(inOpts, outOpts);
+        }
+        sage.enhance.GpuEnhancePipeline.ExternalPipeline ep = copyFamily
+            ? sage.enhance.GpuEnhancePipeline.buildExternalPipeline(baseArgv, plan, srcFps, srcVideoFmt, fpsCap, srcFpsExact, audioSidecar, seekPrerollSec, sidecarAudio)
+            : sage.enhance.GpuEnhancePipeline.buildExternalReencodePipeline(baseArgv, plan, srcFps, srcVideoFmt, fpsCap, srcFpsExact, audioSidecar, seekPrerollSec, sidecarAudio);
+        if (ep != null)
+        {
+          pendingExternalPipeline = ep;
+          pendingExternalWorkerArgv = plan.getScaleExec().getExternalArgv();
+          pendingExternalWarmProcess = plan.getScaleExec().getWarmProcess();
+          if (Sage.DBG) System.out.println("GPU_ENHANCE external-process pipeline staged: "
+              + plan.getScaleExec().getImplementationLabel()
+              + " path=" + (copyFamily ? "copy-family" : "re-encode")
+              + " worker=" + pendingExternalWorkerArgv
+              + (pendingExternalWarmProcess != null ? " (pre-warmed)" : ""));
+        }
+      }
+      // Consumed a warm worker but did not stage it into a pipeline: don't leak it.
+      if (pendingExternalWarmProcess == null && planWarmProcess != null)
+      {
+        if (Sage.DBG) System.out.println("GPU_ENHANCE pre-warmed worker not staged "
+            + "(no external pipeline); destroying it");
+        destroyQuietly(planWarmProcess);
+      }
+
       boolean rewritten = copyFamily
           ? sage.enhance.GpuEnhancePipeline.rewriteArgv(xcodeParamsVec, plan, srcFps)
           : sage.enhance.GpuEnhancePipeline.rewriteReencodeArgv(xcodeParamsVec, plan, srcFps);
       if (!rewritten)
       {
-        gov.release(sessionId);
-        // Active plan we are discarding unused: return its specialized permit.
-        plan.releaseScaleLease();
-        if (Sage.DBG) System.out.println("GPU_ENHANCE apply: argv not "
-            + (copyFamily ? "copy-family" : "re-encode") + " shape, left untouched");
-        return;
+        // For an EXTERNAL_PROCESS plan the upscale is delivered by the staged
+        // three-process worker pipeline (decode -> worker -> encode), NOT by the
+        // single-process argv. A failed single-process rewrite is therefore NOT
+        // fatal when a worker pipeline was successfully staged above: the
+        // un-rewritten base command is a valid un-enhanced fallback, used only if
+        // the worker never comes up (launchExternalEnhancePipeline returns null).
+        // Keep the governor session, the scale lease and the staged pipeline;
+        // tearing them down here is what silently reduced every external-process
+        // enhancement to a plain stream.
+        if (pendingExternalPipeline == null)
+        {
+          gov.release(sessionId);
+          pendingExternalWorkerArgv = null;
+          // Active plan we are discarding unused: return its specialized permit.
+          plan.releaseScaleLease();
+          if (Sage.DBG) System.out.println("GPU_ENHANCE apply: argv not "
+              + (copyFamily ? "copy-family" : "re-encode") + " shape, left untouched");
+          return;
+        }
+        if (Sage.DBG) System.out.println("GPU_ENHANCE apply: single-process rewrite not "
+            + (copyFamily ? "copy-family" : "re-encode") + " shape; delivering via external"
+            + " worker pipeline (base command retained as un-enhanced fallback)");
       }
       enhanceSessionId = sessionId;
       // Capture the specialized permit (null for the built-in scaler) so it is
@@ -1825,6 +2817,12 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // encoder wedges on a full ring after ~128 KB. Record the true target here so
       // the enhanceSessionId branch in startTranscode() sizes the ring generously.
       if (estKbps > 0) currVideoBitrateKbps = (int) Math.min(Integer.MAX_VALUE, estKbps);
+      // Live-adjust ceiling for this enhanced session: its own -maxrate envelope
+      // (GpuEnhancePipeline sets -maxrate = 1.5x the tier/genre estimate), so the
+      // PWA bridge's XCODE_ADJUST can trim within, and drive back up to, the full
+      // upscale bitrate instead of being clamped to the generic 8 Mbps default.
+      if (estKbps > 0)
+        policyCeilingKbps = (int) Math.min(Integer.MAX_VALUE, estKbps * 3L / 2L);
       if (Sage.DBG) System.out.println("GPU_ENHANCE LIVE applied " + plan
           + " session=" + sessionId + " mode=" + xcodeModeName
           + " profile=" + (enhanceProfile == null ? "unknown" : enhanceProfile.name())
@@ -1842,6 +2840,103 @@ public class FFMPEGTranscoder implements TranscodeEngine
       }
       releaseEnhanceScaleLease();
       if (Sage.DBG) System.out.println("GPU_ENHANCE apply failed (ignored): " + t);
+    }
+  }
+
+  /**
+   * Impose the shared {@link sage.media.BitratePolicy} launch-time rate cap on
+   * the plain (un-enhanced) browserhd re-encode. browserhd re-encodes to H.264
+   * for browser/PWA MSE at the <i>source</i> resolution (it does not scale), so a
+   * high-detail 50/60&nbsp;fps source can otherwise let NVENC spike far above the
+   * link budget (~78&nbsp;Mbps was observed on 720p content), overrunning the
+   * MSE/PWA buffer and producing the tearing/stall the client reported. This
+   * replaces the former static {@code media_server/browserhd_*} flat cap with a
+   * per-session, resolution- and (where metered) bandwidth-aware ceiling drawn
+   * from the same curve every other re-encode path now uses.
+   *
+   * <p>Skipped when a GPU enhancement plan already owns the bitrate
+   * ({@link #enhanceSessionId} set) or for any non-browserhd mode. The live
+   * {@code videorateadapt} channel (driven by {@code XCODE_ADJUST} from the PWA
+   * bridge) still trims within this envelope on the patched binary, so WAN
+   * adaptation is unaffected. Any failure leaves the encoder default untouched.
+   */
+  void applyBrowserHdRateCap(java.util.ArrayList xcodeParamsVec)
+  {
+    try
+    {
+      if (!isEnhanceableReencodeMode()) return;   // browserhd only
+      if (enhanceSessionId != null) return;        // enhancement owns the bitrate
+      if (!Sage.getBoolean("media_server/browserhd_policy_cap", true)) return;
+      if (sourceFormat == null) return;
+      sage.media.format.VideoFormat vf = sourceFormat.getVideoFormat();
+      if (vf == null) return;
+      int outW = vf.getWidth();
+      int outH = vf.getHeight();
+      double fps = vf.getFps();
+      if (outH <= 0) return; // unknown geometry -> leave encoder default
+
+      // browserhd always re-encodes H.264 (h264_nvenc, or libx264 fallback) for
+      // MSE. Read the actual codec token so codecFactor and the nvenc -rc are
+      // correct even if a deployment forces libx264.
+      String vcodec = "h264";
+      boolean nvenc = false;
+      for (int i = 0; i + 1 < xcodeParamsVec.size(); i++)
+      {
+        Object o = xcodeParamsVec.get(i);
+        if ("-c:v".equals(o) || "-vcodec".equals(o))
+        {
+          vcodec = String.valueOf(xcodeParamsVec.get(i + 1));
+          break;
+        }
+      }
+      if (vcodec != null && vcodec.toLowerCase(java.util.Locale.ROOT).contains("nvenc"))
+        nvenc = true;
+
+      // Per-client link budget: estimatedBandwidth (bits/s) only when metered.
+      // 0 and the LAN sentinel (>=49 Mbps) both mean "unmetered" -> the
+      // resolution anchor alone. On the browserhd pull path the PWA bridge drives
+      // WAN adaptation live via XCODE_ADJUST, so an unmetered launch cap is right;
+      // the anchor's job here is only to stop the 78 Mbps LAN spike.
+      int linkKbps = 0;
+      long bw = estimatedBandwidth;
+      if (bw > 0 && bw < 49000000L) linkKbps = (int) (bw / 1000L);
+
+      // Genre + frame-rate motion, from the same EPG source the enhance path uses.
+      sage.enhance.EnhancementProfile prof = sage.enhance.MotionHint.profileForFile(currFile);
+      sage.enhance.EnhancementProfile.MotionClass mc =
+          sage.enhance.MotionHint.motionFor(prof, (int) Math.round(fps));
+      sage.media.BitratePolicy.Motion motion = mapPolicyMotion(mc);
+
+      sage.media.BitratePolicy.Plan plan =
+          sage.media.BitratePolicy.compute(outW, outH, fps, vcodec, motion, linkKbps, 0);
+
+      int applied = sage.enhance.GpuEnhancePipeline.applyBitratePlan(
+          xcodeParamsVec, plan, nvenc);
+      if (applied > 0)
+      {
+        currVideoBitrateKbps = applied;
+        policyCeilingKbps = plan.maxrateKbps;
+        if (Sage.DBG) System.out.println("browserhd BitratePolicy cap: out=" + outW + "x"
+            + outH + "@" + Math.round(fps) + " codec=" + vcodec + " motion=" + motion
+            + " linkKbps=" + linkKbps + " -> " + plan);
+      }
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("browserhd BitratePolicy cap skipped: " + t);
+    }
+  }
+
+  /** Map the genre motion class onto the shared {@link sage.media.BitratePolicy} enum. */
+  private static sage.media.BitratePolicy.Motion mapPolicyMotion(
+      sage.enhance.EnhancementProfile.MotionClass m)
+  {
+    if (m == null) return sage.media.BitratePolicy.Motion.MEDIUM;
+    switch (m)
+    {
+      case HIGH: return sage.media.BitratePolicy.Motion.HIGH;
+      case LOW:  return sage.media.BitratePolicy.Motion.LOW;
+      default:   return sage.media.BitratePolicy.Motion.MEDIUM;
     }
   }
 
@@ -1965,6 +3060,36 @@ public class FFMPEGTranscoder implements TranscodeEngine
     return asyncVal;
   }
 
+  /**
+   * Builds the complete {@code -af} argument for an audio re-encode. Single source
+   * of truth for both the {@code dynamicRateAdjust}/mpeg4 branch and the mp4-family
+   * branch of {@code startTranscode()}, which previously carried byte-identical
+   * copies of this logic -- a duplication that is exactly how the two paths drift
+   * apart when only one of them gets a fix.
+   * <p>
+   * Note for future A/V-sync work: {@code aresample}'s {@code first_pts=0} option
+   * is the usual textbook remedy for "audio starts offset from video", and was
+   * measured here against a real ATSC 3.0 HEVC/AC-4 capture on the
+   * {@link #isVideoCopyToFmp4()} path. It changed the output by {@code 0}: with or
+   * without it, the decoded audio content landed at the same offset (158.7ms vs
+   * 157.9ms across paths) and the only residual difference was the copied video
+   * track's own 83ms {@code start_time}. Don't re-add it speculatively without
+   * measuring the decoded PCM onset -- container {@code start_time} alone is
+   * misleading on fragmented MP4.
+   */
+  String buildAudioResampleFilter(boolean isAc4Source, boolean isDownmixToStereo)
+  {
+    String asyncVal = resolveAudioResampleAsync(isAc4Source);
+    String resample = "aresample=async=" + asyncVal;
+    if (isAc4Source && isDownmixToStereo)
+    {
+      String filter = "aformat=channel_layouts=stereo," + resample;
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: AC-4 downmix filter: " + filter);
+      return filter;
+    }
+    return resample;
+  }
+
   public void startTranscode() throws java.io.IOException
   {
     // Never orphan a still-running child by overwriting xcodeProcess below. The
@@ -2021,7 +3146,12 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (transcodeStartSeekTime != 0)
     {
       xcodeParamsVec.add("-ss");
-      xcodeParamsVec.add(Long.toString(transcodeStartSeekTime/1000));
+      // Fractional seconds. The old integer truncation (transcodeStartSeekTime/1000)
+      // silently dropped up to 999 ms on EVERY seek -- always rounding DOWN, i.e.
+      // toward earlier content, which is the safe direction but still visibly
+      // off on a resume. Emit ms precision so the seek lands where asked.
+      xcodeParamsVec.add(String.format(java.util.Locale.US, "%d.%03d",
+          transcodeStartSeekTime / 1000, transcodeStartSeekTime % 1000));
 
       // Narflex: further testing on 3/27/07 shows this isn't needed anymore, so we're disabling it.
       // We're also changing the dts_delta_threshold so the timestamps get reset appropriately if we're seeking close to the front
@@ -2057,16 +3187,52 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
     xcodeParamsVec.add("-y");
 
+    // Optional diagnostic: emit machine-readable progress to stderr every N seconds
+    // so the XcodeStderrConsumer logs periodic "out_time_us=/speed=" lines. This is
+    // the clean discriminator between a SERVER-side transcode stall (out_time_us
+    // freezes for the duration of the on-screen freeze) and a CLIENT-side render/
+    // decode stall (out_time_us keeps advancing while the client is frozen). The
+    // default -v info stats line is \r-terminated and gets swallowed by the line-
+    // oriented stderr consumer, so it is unreliable for this. Off by default (adds
+    // ~1 stderr block/sec); enable for a diagnostic run with:
+    //   xcode_progress_probe=1        (optional xcode_progress_period_secs, default 1)
+    // -stats_period / -progress are global options and must precede -i, which is
+    // where we are here.
+    if (Sage.getBoolean("xcode_progress_probe", false))
+    {
+      xcodeParamsVec.add("-stats_period");
+      xcodeParamsVec.add(Sage.get("xcode_progress_period_secs", "1"));
+      xcodeParamsVec.add("-progress");
+      xcodeParamsVec.add("pipe:2");
+    }
+
     // GPU-accelerated DECODE (input option, must precede -i). Set by the
     // pull-xcode/browserhd path via setHwaccelDecode(). Offloads HEVC/H.264
     // decode to the GPU (e.g. NVDEC via "cuda"), the main start/seek latency
     // for high-res HEVC. No -hwaccel_output_format => frames land in system
     // memory, so the downstream CPU filter graph + encoder are untouched and
     // ffmpeg falls back to software decode for unsupported codecs.
+    // Decide the httpls/CMAF video pipeline (remux-first / full-GPU / default)
+    // BEFORE any decode or encode args are emitted, so both blocks agree.
+    planHttplsVideoPipeline();
     if (hwaccelDecode != null && hwaccelDecode.length() > 0)
     {
       xcodeParamsVec.add("-hwaccel");
       xcodeParamsVec.add(hwaccelDecode);
+    }
+    else if (httplsHwFullGpu)
+    {
+      // T3: keep decoded frames in CUDA memory (NVDEC) so the -vf chain
+      // (yadif_cuda + scale_cuda/scale_npp) and h264_nvenc all run in-VRAM with
+      // no CPU round-trip -- the fix for the ~0.55x-realtime software-decode
+      // CMAF path. A generic -hwaccel (not a per-codec cuvid decoder) is used so
+      // ffmpeg still falls back cleanly if a specific stream can't be NVDEC'd.
+      xcodeParamsVec.add("-hwaccel");
+      xcodeParamsVec.add("cuda");
+      xcodeParamsVec.add("-hwaccel_output_format");
+      xcodeParamsVec.add("cuda");
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: httpls: T3 full-GPU decode "
+          + "(-hwaccel cuda -hwaccel_output_format cuda) scaler=" + httplsHwScaler);
     }
     else
     {
@@ -2119,7 +3285,26 @@ public class FFMPEGTranscoder implements TranscodeEngine
     }
 
     if (activeFile)
-      xcodeParamsVec.add("-activefile");
+    {
+      // Live-DVR follow mode: keep reading the input while the recorder is still
+      // appending to it. Historically this was the SageTV-fork-only flag
+      // "-activefile" (docs/FFMPEG_UNIFICATION_PLAN.md 0002-add-activefile-flag).
+      // The consolidated CUDA ffmpeg now deployed does NOT carry that patch, so
+      // "-activefile" is rejected with "Option not found" and the whole input
+      // open fails -> 0 bytes -> the pull client wedges at "Loading...". It DOES
+      // support the upstream-native "-follow 1" (empirically verified on this
+      // binary), which is the same "keep following a growing file" semantics and
+      // is cleanly ended by the "inactivefile" stdin control below via
+      // -stdinctrl. Prefer -follow 1; the legacy flag stays available behind a
+      // property for any environment still running the old fork binary.
+      if (Sage.getBoolean("ffmpeg/use_follow_flag", true))
+      {
+        xcodeParamsVec.add("-follow");
+        xcodeParamsVec.add("1");
+      }
+      else
+        xcodeParamsVec.add("-activefile");
+    }
 
     // -stdinctrl is a SageTV custom flag re-implemented in the unified
     // FFmpeg build (see docs/FFMPEG_UNIFICATION_PLAN.md). Always pass it;
@@ -2168,15 +3353,31 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // ("dimensions not set", empty hvcC) — or fails the header — and the MSE
       // client reports videoWidth=0 (audio still works). Unlike the transcode
       // path there is no encoder to supply dimensions and no keyframe-resync
-      // fallback, so use a larger probe window to guarantee the parameter sets
-      // are found first. This costs NO extra startup latency: +frag_keyframe
-      // won't flush the first fragment until the first keyframe anyway.
+      // fallback, so the probe must span far enough to see the parameter sets.
+      //
+      // STARTUP LATENCY (measured, not assumed): on a live tune-in the source
+      // .mpg is being WRITTEN at realtime with little/no backlog, so ffmpeg's
+      // find_stream_info blocks reading up to `probesize` bytes as the file
+      // grows. At a typical ~4 Mbps that made the old 8 MB probe wait ~15 s
+      // before ffmpeg emitted its first byte (banner→"Input #0" gap in the
+      // log). probesize — NOT analyzeduration — was the binding limit here
+      // (AC-4 / bin_data streams keep find_stream_info hungry to the byte
+      // ceiling), so the enlarged probe was the direct cause of slow starts,
+      // contrary to the old "+frag_keyframe makes it free" reasoning (only true
+      // for VOD, where the whole file is already on disk).
+      //
+      // The param-set guarantee does NOT need a huge probe on live: the
+      // keyframe-align input seek below (-ss <kf> -noaccurate_seek, default on)
+      // lands ffmpeg ON a keyframe, so VPS/SPS/PPS sit at the read position and
+      // a couple MB is ample. Cap the live videocopy probe so first-frame
+      // latency tracks the keyframe interval (~2-4s), not an 8 MB realtime fill.
+      // VOD keeps its own (large) keys — see the !activeFile branch below.
       boolean videoCopyFmp4 = isVideoCopyToFmp4();
       long probeSize = videoCopyFmp4
-          ? Sage.getLong("ffmpeg/live_probesize_videocopy", 8000000)
+          ? Sage.getLong("ffmpeg/live_probesize_videocopy", 2000000)
           : Sage.getLong("ffmpeg/live_probesize", 1000000);
       long analyzeDur = videoCopyFmp4
-          ? Sage.getLong("ffmpeg/live_analyzeduration_videocopy", 5000000)
+          ? Sage.getLong("ffmpeg/live_analyzeduration_videocopy", 2500000)
           : Sage.getLong("ffmpeg/live_analyzeduration", 1500000);
       xcodeParamsVec.add("-probesize");
       xcodeParamsVec.add(Long.toString(probeSize));
@@ -2235,12 +3436,18 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // unchanged. If sourceFormat is unavailable (null), neither this nor
       // the activeFile branch fires and ffmpeg's current default behavior is
       // preserved automatically.
+      // NOTE: VOD reads a COMPLETE file from disk, so a large probe is read
+      // instantly (no realtime-fill wait like the live branch above) — the big
+      // window here is genuinely near-free and is what keeps AVPlay/Tizen from
+      // disconnecting before the first byte. Kept on its OWN keys so tightening
+      // the live videocopy probe for channel-change latency does not touch this
+      // path (byte-for-byte unchanged: 8 MB / 5 s defaults).
       boolean videoCopyFmp4 = isVideoCopyToFmp4();
       long probeSize = videoCopyFmp4
-          ? Sage.getLong("ffmpeg/live_probesize_videocopy", 8000000)
+          ? Sage.getLong("ffmpeg/vod_probesize_videocopy", 8000000)
           : Sage.getLong("ffmpeg/live_probesize", 1000000);
       long analyzeDur = videoCopyFmp4
-          ? Sage.getLong("ffmpeg/live_analyzeduration_videocopy", 5000000)
+          ? Sage.getLong("ffmpeg/vod_analyzeduration_videocopy", 5000000)
           : Sage.getLong("ffmpeg/live_analyzeduration", 1500000);
       xcodeParamsVec.add("-probesize");
       xcodeParamsVec.add(Long.toString(probeSize));
@@ -2294,8 +3501,21 @@ public class FFMPEGTranscoder implements TranscodeEngine
     {
       isMpeg4Codec = true;
       // Add the parameters for dynamic bitrate control
-      xcodeParamsVec.add("-f");
-      xcodeParamsVec.add("mpegts");
+      if (!fmp4Mode)
+      {
+        xcodeParamsVec.add("-f");
+        xcodeParamsVec.add("mpegts");
+      }
+      else if (!httplsVideoCopy)
+      {
+        // CMAF: force an IDR at every segment boundary so each .m4s decodes
+        // standalone given init.mp4 (validated on-server 2026-09-07). The hls
+        // muxer + container are added at the output-target stage below. Skipped
+        // for T1 stream-copy: -force_key_frames is ignored under -vcodec copy
+        // (segments split at the source's existing keyframes instead).
+        xcodeParamsVec.add("-force_key_frames");
+        xcodeParamsVec.add("expr:gte(t,n_forced*" + (segmentDur / 1000) + ")");
+      }
       // Live/HLS video encoder selection. Route through HwEncoder so NVENC is
       // used when the host has an NVIDIA GPU + an nvenc-capable ffmpeg; else
       // fall back to software libx264 (no-GPU hosts keep working unchanged).
@@ -2305,37 +3525,130 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // live transcode (VAAPI / QSV / AMF)". HwEncoder.pick() only returns
       // those kinds when the ffmpeg binary actually advertises them, so this
       // stays software until that work lands.
+      boolean liveNvenc = false;
+      if (httplsVideoCopy)
+      {
+        // T1 remux-first: stream-copy the video (planHttplsVideoPipeline already
+        // proved it fits the client), skipping the whole decode/scale/encode.
+        if (Sage.DBG)
+          System.out.println("FFMpegTranscoder: httpls: video encoder tier -> copy (T1 remux-first passthrough)");
+        xcodeParamsVec.add("-vcodec");
+        xcodeParamsVec.add(videoCodec = "copy");
+      }
+      else
+      {
       HwEncoder.Kind liveKind = HwEncoder.pick("h264");
-      boolean liveNvenc = (liveKind == HwEncoder.Kind.NVENC);
+      liveNvenc = (liveKind == HwEncoder.Kind.NVENC);
       if (liveKind != HwEncoder.Kind.NONE && !liveNvenc && Sage.DBG)
         System.out.println("FFMpegTranscoder: httpls: HW encoder " + liveKind +
             " is not yet wired for the live/HLS path (needs hwupload filter-graph rework);" +
             " using software libx264. See ROADMAP: AMD/Intel live transcode.");
       if (Sage.DBG)
         System.out.println("FFMpegTranscoder: httpls: video encoder tier -> " +
-            (liveNvenc ? "h264_nvenc (NVENC)" : "libx264 (software)"));
+            (httplsHwFullGpu ? "h264_nvenc (T3 full-GPU: NVDEC+CUDA scale)"
+             : liveNvenc ? "h264_nvenc (NVENC, software decode)" : "libx264 (software)"));
       xcodeParamsVec.add("-vcodec");
       xcodeParamsVec.add(videoCodec = liveNvenc ? "h264_nvenc" : "libx264");
-      String sizeKey = String.format(BITRATE_OPTIONS_SIZE_KEY, estimatedBandwidth/1000);
-      String xcodeSize = Sage.get(sizeKey, Sage.get(String.format(BITRATE_OPTIONS_SIZE_KEY, "default"), "480x272"));
-      if (Sage.DBG)
-        System.out.println("FFMpegTranscoder: httpls: Using framesize "+xcodeSize+" for bandwidth: "+(estimatedBandwidth/1000)+" base on key: " + sizeKey);
-      // this will always return a valid 2 element array of w and h
-      int size[] = parseFrameSize(xcodeSize, 480, 272);
-      if (Sage.DBG)
-        System.out.println("FFMpegTranscoder: httpls: Calculated framesize " + size[0] + "x" + size[1]);
-      targetWidth = size[0];
-      targetHeight = size[1];
+      }
+      // Resolution selection. Legacy (.ts iOS) path keeps the historical
+      // httpls_bandwidth/<kbps>/video_size ladder byte-for-byte. The NG CMAF
+      // (fmp4Mode) path -- and the legacy path only when explicitly opted in via
+      // httpls_rightsize_resolution -- instead RIGHT-SIZES to the source-native
+      // resolution, clamped down to the LAN/WAN ceiling and the client's real
+      // display (sink). This never upscales; upscaling is the GPU-enhance path.
+      boolean rightSize = fmp4Mode || Sage.getBoolean("httpls_rightsize_resolution", false);
+      if (rightSize)
+      {
+        int[] rs = computeRightSizedTarget(srcVideo, targetWidth, targetHeight);
+        targetWidth = rs[0];
+        targetHeight = rs[1];
+        // T1 CPU guardrail: on a GPU-less server the software encoder (libx264)
+        // must sustain realtime, so cap the software-encode height (default 720)
+        // -- never upscale, and preserve aspect (even width). NVENC (liveNvenc)
+        // and the T3 full-GPU path have the throughput headroom and are exempt.
+        if (!liveNvenc && !httplsHwFullGpu)
+        {
+          int cpuMaxH = Sage.getInt("httpls_cpu_max_height", 720);
+          if (cpuMaxH > 0 && targetHeight > cpuMaxH)
+          {
+            targetWidth = (int) Math.round((double) targetWidth * cpuMaxH / targetHeight);
+            if ((targetWidth & 1) == 1) targetWidth++;
+            targetHeight = cpuMaxH;
+            if (Sage.DBG) System.out.println("FFMPEGTranscoder: httpls: T1 CPU res cap -> "
+                + targetWidth + "x" + targetHeight + " (libx264 realtime headroom)");
+          }
+        }
+        if (Sage.DBG)
+          System.out.println("FFMpegTranscoder: httpls: right-sized framesize " + targetWidth + "x" + targetHeight
+              + " (source=" + (srcVideo != null ? srcVideo.getWidth() + "x" + srcVideo.getHeight() : "?")
+              + " sink=" + httplsSinkWidth + "x" + httplsSinkHeight
+              + " localClient=" + localClient + " fmp4=" + fmp4Mode + ")");
+      }
+      else
+      {
+        String sizeKey = String.format(BITRATE_OPTIONS_SIZE_KEY, estimatedBandwidth/1000);
+        String xcodeSize = Sage.get(sizeKey, Sage.get(String.format(BITRATE_OPTIONS_SIZE_KEY, "default"), "480x272"));
+        if (Sage.DBG)
+          System.out.println("FFMpegTranscoder: httpls: Using framesize "+xcodeSize+" for bandwidth: "+(estimatedBandwidth/1000)+" base on key: " + sizeKey);
+        // this will always return a valid 2 element array of w and h
+        int size[] = parseFrameSize(xcodeSize, 480, 272);
+        if (Sage.DBG)
+          System.out.println("FFMpegTranscoder: httpls: Calculated framesize " + size[0] + "x" + size[1]);
+        targetWidth = size[0];
+        targetHeight = size[1];
+      }
       currAudioBitrateKbps = 32;
-      currVideoBitrateKbps = (int)Math.max(64000, (estimatedBandwidth - 32000))/1000;
-      // FFmpeg 7.x: bare -b is ambiguous; must use -b:v
-      xcodeParamsVec.add("-b:v");
-      xcodeParamsVec.add(currVideoBitrateKbps*1000 + "");
-      xcodeParamsVec.add("-s");
-      xcodeParamsVec.add(targetWidth + "x" + targetHeight);
-      xcodeParamsVec.add("-r");
-      // Trying to lower the frame rate here caused problems...
-      xcodeParamsVec.add("29.97");
+      // Per-variant bitrate from the shared sage.media.BitratePolicy for THIS
+      // variant's resolution, clamped by the client's link. The old formula
+      // (link - 32k) tied the encode rate to the raw link, so a fast LAN client
+      // got e.g. ~50 Mbps into a 480x272 variant -- bits the small frame can't
+      // use and the segmenter/buffer chokes on. HLS still switches quality by
+      // re-opening at a different frame size (ABR); this only right-sizes the
+      // bitrate each variant launches with, consistent with every other path.
+      int hlsLinkKbps = (estimatedBandwidth > 0 && estimatedBandwidth < 49000000L)
+          ? (int) (estimatedBandwidth / 1000L) : 0;
+      // Frame rate selection. Legacy httpls forced a flat 29.97 fps, which
+      // HALVED 59.94 fps sources (e.g. a 720p60 sports/action feed) -- a real
+      // quality regression against "best video for the source". The right-sized
+      // paths (CMAF always; legacy TS only when httpls_rightsize_resolution is
+      // on) preserve the SOURCE cadence, capped at the LAN/WAN ceiling
+      // (getDynamicMaxFps: LAN up to ffmpeg/dynamic_max_fps_lan=60, WAN NTSC/PAL
+      // default). min() with source fps means we never invent motion the source
+      // doesn't have (a 24p film stays 24p; a 59.94 feed stays 59.94 on LAN).
+      double targetFps;
+      if (rightSize)
+      {
+        double srcFps = (srcVideo != null) ? srcVideo.getFps() : 0;
+        int fpsCeil = getDynamicMaxFps(srcVideo);
+        targetFps = (srcFps > 0) ? Math.min(srcFps, (double) fpsCeil) : fpsCeil;
+      }
+      else
+        targetFps = 29.97;
+      sage.enhance.EnhancementProfile hlsProf = sage.enhance.MotionHint.profileForFile(currFile);
+      sage.media.BitratePolicy.Motion hlsMotion = mapPolicyMotion(
+          sage.enhance.MotionHint.motionFor(hlsProf, 30));
+      sage.media.BitratePolicy.Plan hlsPlan = sage.media.BitratePolicy.compute(
+          targetWidth, targetHeight, targetFps, videoCodec, hlsMotion, hlsLinkKbps, 0);
+      currVideoBitrateKbps = hlsPlan.targetKbps;
+      policyCeilingKbps = hlsPlan.maxrateKbps;
+      // FFmpeg 7.x: bare -b is ambiguous; must use -b:v. Skipped entirely for T1
+      // stream-copy (no encode). For T3 full-GPU the frame size moves into the
+      // CUDA -vf filtergraph (scale_cuda/scale_npp), so -s is omitted there too.
+      if (!httplsVideoCopy)
+      {
+        xcodeParamsVec.add("-b:v");
+        xcodeParamsVec.add(currVideoBitrateKbps*1000 + "");
+        if (!httplsHwFullGpu)
+        {
+          xcodeParamsVec.add("-s");
+          xcodeParamsVec.add(targetWidth + "x" + targetHeight);
+        }
+        xcodeParamsVec.add("-r");
+        // rightSize: source cadence capped at the LAN/WAN ceiling (see above).
+        // legacy: unchanged flat 29.97.
+        xcodeParamsVec.add(rightSize
+            ? String.format(java.util.Locale.US, "%.3f", targetFps) : "29.97");
+      }
       // --- Audio codec negotiation: source -> down to player capability ---
       // HLS/MPEG-TS segments may only carry AAC, AC-3 or E-AC-3. If the client
       // (its effective ClientProfile audio set) can decode the SOURCE audio
@@ -2392,11 +3705,12 @@ public class FFMPEGTranscoder implements TranscodeEngine
         xcodeParamsVec.add("-ar");
         xcodeParamsVec.add("44100");
       }
-      if (liveNvenc)
+      if (httplsVideoCopy)
       {
-      // NVENC accepts software frames directly (no -hwaccel/hwupload needed on
-      // this path). Emit encoder-appropriate rate control instead of the
-      // libx264-only option soup, which nvenc rejects or ignores.
+        // T1 stream-copy: no encoder rate-control params (nothing is encoded).
+      }
+      else if (liveNvenc)
+      {
       xcodeParamsVec.add("-preset");
       xcodeParamsVec.add(Sage.get("multimedia/hwaccel/nvenc/live_preset", "p4"));
       xcodeParamsVec.add("-rc:v");
@@ -2414,6 +3728,15 @@ public class FFMPEGTranscoder implements TranscodeEngine
       }
       else
       {
+      // T1 CPU guardrail: pick a realtime-safe x264 preset by core count/height
+      // FIRST, so the fine-tuning option soup below still overrides individual
+      // knobs. This is what lets a GPU-less server keep up with the live edge.
+      int cpuCores = Runtime.getRuntime().availableProcessors();
+      String x264Preset = libx264LivePreset(cpuCores, targetHeight);
+      xcodeParamsVec.add("-preset");
+      xcodeParamsVec.add(x264Preset);
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: httpls: libx264 realtime preset="
+          + x264Preset + " cores=" + cpuCores + " targetH=" + targetHeight);
       xcodeParamsVec.add("-coder");
       xcodeParamsVec.add("0");
       xcodeParamsVec.add("-flags");
@@ -2464,10 +3787,13 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add("-level:v");
       xcodeParamsVec.add("30");
       }
+      if (!httplsVideoCopy)
+      {
       xcodeParamsVec.add("-maxrate");
       xcodeParamsVec.add(currVideoBitrateKbps*6000/5 + "");
       xcodeParamsVec.add("-bufsize");
       xcodeParamsVec.add(currVideoBitrateKbps*5000 + "");
+      }
 
       // FFmpeg 7.x: -deinterlace is removed; users now express deinterlace via -vf yadif.
       // Skip auto-add if user already asked for either legacy or modern form, OR if the
@@ -2475,15 +3801,50 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // shouldAutoAddYadif javadoc). Always false in this httpls/live branch since it
       // always sets a real video encoder, kept for defense-in-depth/consistency with the
       // other occurrence below.
-      if (shouldAutoAddYadif(xcodeParamsVec, xcodeParams, srcVideo, targetHeight,
+      if (httplsVideoCopy)
+      {
+        // T1 stream-copy: no -vf at all (filter + copy is a hard ffmpeg error).
+      }
+      else if (httplsHwFullGpu)
+      {
+        // T3 CUDA filtergraph: [<cuda-deint>,]<scaler>=W:H[:format=nv12], all
+        // operating on the NVDEC cuda frames, so nothing leaves VRAM until NVENC.
+        // The deinterlacer is only inserted for a genuinely interlaced source
+        // whose target keeps full field height (matches the CPU-yadif policy).
+        StringBuilder vf = new StringBuilder();
+        boolean deint = srcVideo != null && srcVideo.isInterlaced()
+            && targetHeight > srcVideo.getHeight() / 2
+            && Sage.getBoolean("xcode_auto_deinterlace", true);
+        if (deint)
+        {
+          String cd = HwEncoder.cudaDeinterlacer(
+              Sage.getBoolean("multimedia/hwaccel/httpls_bwdif", false));
+          if (cd != null) vf.append(cd).append("=0:-1:1").append(',');
+        }
+        vf.append(httplsHwScaler).append('=').append(targetWidth).append(':').append(targetHeight);
+        // Pin 8-bit output for h264_nvenc "high" (handles a 10-bit source);
+        // gated on the modern-build capability probe so older builds that reject
+        // the format option are never handed it.
+        if (HwEncoder.scalerSupportsLanczos(httplsHwScaler)) vf.append(":format=nv12");
+        xcodeParamsVec.add("-vf");
+        xcodeParamsVec.add(vf.toString());
+        if (Sage.DBG) System.out.println("FFMPEGTranscoder: httpls: T3 GPU -vf " + vf
+            + " (deint=" + deint + ")");
+      }
+      else if (shouldAutoAddYadif(xcodeParamsVec, xcodeParams, srcVideo, targetHeight,
           Sage.getBoolean("xcode_auto_deinterlace", true)))
       {
         if (Sage.DBG) System.out.println("Automatically adding yadif deinterlace filter to transcoding process");
         addOrComposeYadif(xcodeParamsVec);
       }
 
-      // Preserve aspect ratio properly
-      if (sourceFormat != null)
+      // Preserve aspect ratio properly -- but NEVER on a stream copy. ffmpeg
+      // warns "Overriding aspect ratio with stream copy may produce invalid
+      // files", and for an HEVC copy into Matroska it rewrites inconsistent
+      // track DisplayWidth/Height that ExoPlayer/media3 rejects as a malformed
+      // container (playback dies within seconds). The display aspect is already
+      // carried in the HEVC SPS/VUI SAR, so -aspect is redundant here anyway.
+      if (sourceFormat != null && !isVideoCopySelected(xcodeParamsVec))
       {
         sage.media.format.VideoFormat vidForm = sourceFormat.getVideoFormat();
         if (vidForm != null && ((vidForm.getArNum() > 0 && vidForm.getArDen() > 0) || (vidForm.getWidth() > 0 && vidForm.getHeight() > 0)))
@@ -2542,6 +3903,24 @@ public class FFMPEGTranscoder implements TranscodeEngine
       int[] wh = pickH264PushSize(videoKbps, srcVideo);
       targetWidth = wh[0];
       targetHeight = wh[1];
+      // Resolution follows the link (pickH264PushSize above); the ENCODE bitrate
+      // now comes from the shared sage.media.BitratePolicy for that resolution,
+      // so the push path agrees with browserhd/enhance on "resolution -> bitrate"
+      // instead of using a bespoke 90%-of-link figure. The link is still passed
+      // as the clamp, so a constrained client is throttled below the resolution
+      // anchor exactly as before; NVENC videorateadapt continues to trim live.
+      double pushFps = (srcVideo != null && srcVideo.getFps() > 0) ? srcVideo.getFps() : 0;
+      int pushLinkKbps = (estimatedBandwidth > 0 && estimatedBandwidth < 49000000L)
+          ? (int) (estimatedBandwidth / 1000L) : 0;
+      sage.enhance.EnhancementProfile pushProf = sage.enhance.MotionHint.profileForFile(currFile);
+      sage.media.BitratePolicy.Motion pushMotion = mapPolicyMotion(
+          sage.enhance.MotionHint.motionFor(pushProf, (int) Math.round(pushFps)));
+      sage.media.BitratePolicy.Plan pushPlan = sage.media.BitratePolicy.compute(
+          targetWidth, targetHeight, pushFps, videoCodec, pushMotion, pushLinkKbps, 0);
+      videoKbps = pushPlan.targetKbps;
+      int pushMaxrateKbps = pushPlan.maxrateKbps;
+      int pushBufsizeKbps = pushPlan.bufsizeKbps;
+      policyCeilingKbps = pushPlan.maxrateKbps;
       currVideoBitrateKbps = videoKbps;
       currAudioBitrateKbps = audioKbps;
       currFps = MMC.getInstance().isNTSCVideoFormat() ? 30 : 25;
@@ -2592,11 +3971,13 @@ public class FFMPEGTranscoder implements TranscodeEngine
         xcodeParamsVec.add("high");
       }
       xcodeParamsVec.add("-maxrate");
-      xcodeParamsVec.add(Integer.toString(currVideoBitrateKbps * 6000 / 5));
+      xcodeParamsVec.add(Integer.toString(pushMaxrateKbps * 1000));
       xcodeParamsVec.add("-bufsize");
-      xcodeParamsVec.add(Integer.toString(currVideoBitrateKbps * 5000));
-      // Preserve display aspect ratio (same as the legacy dynamic path).
-      if (sourceFormat != null)
+      xcodeParamsVec.add(Integer.toString(pushBufsizeKbps * 1000));
+      // Preserve display aspect ratio (same as the legacy dynamic path) --
+      // but never on a stream copy (ffmpeg warns it produces invalid files;
+      // corrupts the Matroska track header -> client "malformed container").
+      if (sourceFormat != null && !isVideoCopySelected(xcodeParamsVec))
       {
         sage.media.format.VideoFormat vidForm = sourceFormat.getVideoFormat();
         if (vidForm != null && ((vidForm.getArNum() > 0 && vidForm.getArDen() > 0) || (vidForm.getWidth() > 0 && vidForm.getHeight() > 0)))
@@ -2708,8 +4089,13 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add("-packetsize");
       xcodeParamsVec.add(Integer.toString(currPacketSize));
 
-      // Preserve aspect ratio properly
-      if (sourceFormat != null)
+      // Preserve aspect ratio properly -- but never on a stream copy. ffmpeg
+      // warns "Overriding aspect ratio with stream copy may produce invalid
+      // files"; on an HEVC copy into Matroska this corrupts the track header
+      // and the client (media3/ExoPlayer) rejects it as a malformed container.
+      // This is the exact site that fired for the 10-bit HEVC live-push that
+      // died in ~5s with a parsing error. SAR already lives in the HEVC VUI.
+      if (sourceFormat != null && !isVideoCopySelected(xcodeParamsVec))
       {
         sage.media.format.VideoFormat vidForm = sourceFormat.getVideoFormat();
         if (vidForm != null && ((vidForm.getArNum() > 0 && vidForm.getArDen() > 0) || (vidForm.getWidth() > 0 && vidForm.getHeight() > 0)))
@@ -2824,9 +4210,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
           flagsIndex = xcodeParamsVec.size();
         }
       }
-      if (xcodeParams.indexOf("-aspect") == -1 && sourceFormat != null)
+      if (xcodeParams.indexOf("-aspect") == -1 && sourceFormat != null && !isVideoCopySelected(xcodeParamsVec))
       {
-        // Preserve aspect ratio properly
+        // Preserve aspect ratio properly -- but never on a stream copy (ffmpeg
+        // warns it produces invalid files; corrupts the container -> client
+        // "malformed container"). SAR already lives in the video bitstream.
         sage.media.format.VideoFormat vidForm = sourceFormat.getVideoFormat();
         if (vidForm != null && ((vidForm.getArNum() > 0 && vidForm.getArDen() > 0) || (vidForm.getWidth() > 0 && vidForm.getHeight() > 0)))
         {
@@ -3130,6 +4518,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // this instance -- see isServerAudioEqActive().
     maybeDisqualifyAudioCopyForServerEq(xcodeParamsVec);
     boolean audioIsCopy = isAudioCopySelected(xcodeParamsVec);
+    boolean videoIsCopy = isVideoCopySelected(xcodeParamsVec);
     // MP4-family + AAC stream-copy: AAC from an ADTS-framed source (MPEG-TS)
     // must be reframed to ASC via aac_adtstoasc or the mp4 muxer rejects the
     // header ("Malformed AAC bitstream detected") and aborts the whole remux,
@@ -3162,20 +4551,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
       {
         boolean isAc4Source = sourceFormat != null &&
             sage.media.format.MediaFormat.AC4.equals(sourceFormat.getPrimaryAudioFormat());
-        String asyncVal = resolveAudioResampleAsync(isAc4Source);
         int acIdx = xcodeParamsVec.indexOf("-ac");
         boolean isDownmixToStereo = acIdx >= 0 && acIdx + 1 < xcodeParamsVec.size() &&
             "2".equals(xcodeParamsVec.get(acIdx + 1));
         xcodeParamsVec.add("-af");
-        if (isAc4Source && isDownmixToStereo)
-        {
-          xcodeParamsVec.add("aformat=channel_layouts=stereo,aresample=async=" + asyncVal);
-          if (Sage.DBG) System.out.println("FFMPEGTranscoder: AC-4 downmix filter: aformat=channel_layouts=stereo,aresample=async=" + asyncVal);
-        }
-        else
-        {
-          xcodeParamsVec.add("aresample=async=" + asyncVal);
-        }
+        xcodeParamsVec.add(buildAudioResampleFilter(isAc4Source, isDownmixToStereo));
       }
       else if (Sage.DBG)
       {
@@ -3185,25 +4565,24 @@ public class FFMPEGTranscoder implements TranscodeEngine
     else //if (xcodeParams.indexOf("-f mp4") != -1 || xcodeParams.indexOf("-f 3gp") != -1 || xcodeParams.indexOf("-f psp") != -1)
     {
       xcodeParamsVec.add("-fps_mode");
-      xcodeParamsVec.add("cfr");
+      // A stream-copied video is never decoded, so CFR normalization is
+      // impossible and (on ffmpeg 6/7) rewrites the copied PTS/DTS instead of
+      // dropping/duplicating frames -> visible tearing and timeslice hopping on
+      // the client (seen on the ATSC-3 HEVC live-push remux). Preserve the
+      // source cadence with passthrough for the copy path. An explicit -r is
+      // incompatible with passthrough on ffmpeg 7, so only switch when none is
+      // present (the copy remux never sets one).
+      boolean copyKeepsCadence = videoIsCopy && !xcodeParamsVec.contains("-r");
+      xcodeParamsVec.add(copyKeepsCadence ? "passthrough" : "cfr");
       if (!audioIsCopy)
       {
         boolean isAc4Source = sourceFormat != null &&
             sage.media.format.MediaFormat.AC4.equals(sourceFormat.getPrimaryAudioFormat());
-        String asyncVal = resolveAudioResampleAsync(isAc4Source);
         int acIdx = xcodeParamsVec.indexOf("-ac");
         boolean isDownmixToStereo = acIdx >= 0 && acIdx + 1 < xcodeParamsVec.size() &&
             "2".equals(xcodeParamsVec.get(acIdx + 1));
         xcodeParamsVec.add("-af");
-        if (isAc4Source && isDownmixToStereo)
-        {
-          xcodeParamsVec.add("aformat=channel_layouts=stereo,aresample=async=" + asyncVal);
-          if (Sage.DBG) System.out.println("FFMPEGTranscoder: AC-4 downmix filter: aformat=channel_layouts=stereo,aresample=async=" + asyncVal);
-        }
-        else
-        {
-          xcodeParamsVec.add("aresample=async=" + asyncVal);
-        }
+        xcodeParamsVec.add(buildAudioResampleFilter(isAc4Source, isDownmixToStereo));
       }
       else if (Sage.DBG)
       {
@@ -3232,6 +4611,28 @@ public class FFMPEGTranscoder implements TranscodeEngine
     {
       xcodeParamsVec.add(IOUtils.getLibAVFilenameString(outputFile.toString()));
       bufferOutput = false;
+    }
+    else if (fmp4Mode)
+    {
+      // Option A: ffmpeg's hls muxer writes finalized fMP4 files directly into
+      // the session dir (init.mp4 + seg%d.m4s + index.m3u8). Java never reads
+      // stdout on this path; HTTPLSServer serves the files. -start_number keeps
+      // segment filenames aligned to absolute part numbers across seek-restarts,
+      // and temp_file makes each .m4s appear atomically (rename) only when
+      // complete, so a reader that sees seg<N>.m4s never observes a torn box.
+      bufferOutput = false;
+      fmp4StartSegment = segmentTargetCounter;
+      java.io.File dir = fmp4OutputDir;
+      xcodeParamsVec.add("-f"); xcodeParamsVec.add("hls");
+      xcodeParamsVec.add("-hls_time"); xcodeParamsVec.add(Long.toString(segmentDur / 1000));
+      xcodeParamsVec.add("-hls_segment_type"); xcodeParamsVec.add("fmp4");
+      xcodeParamsVec.add("-hls_flags"); xcodeParamsVec.add("independent_segments+temp_file");
+      xcodeParamsVec.add("-hls_list_size"); xcodeParamsVec.add("0");
+      xcodeParamsVec.add("-start_number"); xcodeParamsVec.add(Integer.toString(segmentTargetCounter));
+      xcodeParamsVec.add("-hls_segment_filename");
+      xcodeParamsVec.add(IOUtils.getLibAVFilenameString(new java.io.File(dir, "seg%d.m4s").toString()));
+      xcodeParamsVec.add("-hls_fmp4_init_filename"); xcodeParamsVec.add("init.mp4");
+      xcodeParamsVec.add(IOUtils.getLibAVFilenameString(new java.io.File(dir, "index.m3u8").toString()));
     }
     else
       xcodeParamsVec.add("-");
@@ -3292,18 +4693,80 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // sync, channels) intact and avoids forking every transcode profile.
     maybeOverrideAc4AudioCodec(xcodeParamsVec);
     maybeOverrideSurfaceAudio(xcodeParamsVec);
+    // Downmix any layout wider than the chosen AC-3-family encoder can emit
+    // (7.1 -> 5.1); otherwise ffmpeg aborts and the client sees "no signal".
+    clampAudioChannelsToEncoder(xcodeParamsVec);
     maybeStripInapplicableHvc1Tag(xcodeParamsVec);
     // GPU enhancement (upscale/deinterlace) — the LAST argv edit, so it operates
     // on the final copy-family command and can never be undone by an audio
     // override above. No-op unless enhancement is live AND admitted; audio is
     // never touched here.
     maybeApplyGpuEnhancement(xcodeParamsVec);
+    // Launch-time bitrate policy for the plain (un-enhanced) browserhd re-encode:
+    // replace the static profile cap with a per-session, resolution/bandwidth
+    // aware ceiling. No-op when enhancement claimed the bitrate just above, or
+    // for any non-browserhd mode.
+    applyBrowserHdRateCap(xcodeParamsVec);
+    // Native placeshifter copy-push hygiene: drop the spurious NVDEC decoder on
+    // a video-copy output and re-base timestamps so the client media clock can't
+    // rewind mid-stream (freeze). Last argv edit, so it sees the final codecs.
+    maybeFixNativeCopyPushCommand(xcodeParamsVec);
     String[] xcodeParamArray = (String[]) xcodeParamsVec.toArray(Pooler.EMPTY_STRING_ARRAY);
     // Always log the FFmpeg command line for diagnosability (disable with xcode_cmdline_debug=FALSE)
     if (Sage.DBG && !"FALSE".equals(Sage.get("xcode_cmdline_debug", "TRUE"))) System.out.println("Executing xcoding process with args: " + java.util.Arrays.asList(xcodeParamArray));
     ProcessBuilder xcodePb = new ProcessBuilder(xcodeParamArray);
     Sage.applyTimeZoneToProcessBuilder(xcodePb);
-    xcodeProcess = xcodePb.start();
+    // External-process enhancement (upscale worker): try the three-process
+    // pipeline first. On any spawn/handshake failure it returns null and we fall
+    // through to the single-process command rewriteArgv already built. That
+    // fallback deinterlaces/re-encodes but does NOT upscale (source resolution) --
+    // the core ships no built-in playback upscaler -- so the client always gets a
+    // stream even if the worker never comes up.
+    externalEnhanceActive = false;
+    Process externalEncode = null;
+    if (pendingExternalPipeline != null)
+    {
+      try { externalEncode = launchExternalEnhancePipeline(pendingExternalPipeline, pendingExternalWorkerArgv, pendingExternalWarmProcess); }
+      catch (Throwable t)
+      {
+        if (Sage.DBG) System.out.println("GPU_ENHANCE external pipeline launch failed, "
+            + "falling back to single-process command: " + t);
+      }
+      pendingExternalPipeline = null;
+      pendingExternalWorkerArgv = null;
+      pendingExternalWarmProcess = null;
+      if (externalEncode == null)
+      {
+        teardownExternalEnhance();
+        // The upscale worker never came up, so this session is now a plain
+        // (un-enhanced) transcode. It must NOT keep holding the GPU enhance
+        // concurrency slot: otherwise a subsequent re-negotiation (e.g. the client
+        // moves to a higher-resolution display and re-OPENs) is wrongly denied with
+        // "concurrency ceiling 1 (active 1)" until this dead session finally ends.
+        // The fallback command needs neither the governor permit nor the scale
+        // lease, so return both now. Both releases are idempotent, so stopTranscode()
+        // unwinding later is harmless.
+        if (enhanceSessionId != null)
+        {
+          try { sage.enhance.GpuGovernor.getInstance().release(enhanceSessionId); }
+          catch (Throwable ignore) {}
+          if (Sage.DBG) System.out.println("GPU_ENHANCE external pipeline abandoned; "
+              + "released governor permit for " + enhanceSessionId
+              + " (falling back to plain transcode)");
+          enhanceSessionId = null;
+        }
+        releaseEnhanceScaleLease();
+      }
+    }
+    if (externalEncode != null)
+    {
+      xcodeProcess = externalEncode;
+      externalEnhanceActive = true;
+    }
+    else
+    {
+      xcodeProcess = xcodePb.start();
+    }
     // Windows can't express priority reduction as a command prefix, so the
     // nice/ionice block above is POSIX-only. Apply the equivalent by PID here so
     // Windows hosts aren't left running transcodes at normal priority against
@@ -3526,11 +4989,23 @@ public class FFMPEGTranscoder implements TranscodeEngine
     };
     xcodeStderrThread.setDaemon(true);
     xcodeStderrThread.start();
-    numFilledXcodeBuffers = 0;
+    // Reset the fill counter and advance the writer generation atomically so any
+    // still-draining writer from a prior generation (whose join() may have timed
+    // out) can observe the change and retire instead of corrupting the reused ring.
+    synchronized (xcodeSyncLock)
+    {
+      numFilledXcodeBuffers = 0;
+      xcodeStdoutGeneration++;
+      // Wake any prior-generation writer parked in wait() so it re-checks the
+      // generation and retires immediately instead of after its wait timeout.
+      xcodeSyncLock.notifyAll();
+    }
+    final int myXcodeGen = xcodeStdoutGeneration;
     xcodeStdout = xcodeProcess.getInputStream();
     forciblyStopped = false;
     if (bufferOutput)
     {
+      openSpillIfEnabled();
       xcodeStdoutThread = new Thread("XcodeDataConsumer")
       {
         public void run()
@@ -3543,7 +5018,17 @@ public class FFMPEGTranscoder implements TranscodeEngine
               int currBufReadPos = 0;
               synchronized (xcodeSyncLock)
               {
-                if (numFilledXcodeBuffers == xcodeBuffer.length && !xcodeDone)
+                // A newer startTranscode() (seek/re-open restart) superseded this
+                // writer; retire it so only one writer ever fills the reused ring.
+                if (xcodeStdoutGeneration != myXcodeGen)
+                  return;
+                // Backpressure: block while the ring is at (or, defensively, over)
+                // capacity. MUST be >= not ==: if the count is ever nudged past
+                // length by a restart race, an == check never matches again and the
+                // writer laps the reader unbounded (numFilled was seen climbing to
+                // ~100 in a 64-slot ring -> torn fMP4 -> CHUNK_DEMUXER_ERROR). >=
+                // re-blocks and self-corrects.
+                if (numFilledXcodeBuffers >= xcodeBuffer.length && !xcodeDone)
                 {
                   if (XCODE_DEBUG) System.out.println("Waiting for transcode buffer to become available...");
                   try
@@ -3560,21 +5045,49 @@ public class FFMPEGTranscoder implements TranscodeEngine
               do
               {
                 numRead = xcodeStdout.read(xcodeBuffer[currBuffNum], xcodeBuffer[currBuffNum].length - leftToRead, leftToRead);
-                if (XCODE_DEBUG) System.out.println("Read " + numRead + " bytes from transcoder");
+                if (XCODE_DEBUG_IO) System.out.println("Read " + numRead + " bytes from transcoder");
                 leftToRead -= numRead;
               } while (numRead != -1 && leftToRead > 0);
               if (numRead == -1)
               {
-                xcodeDone = true;
+                // Only the current generation's real EOF marks the stream done; a
+                // retired writer's old-pipe EOF must not touch the new generation.
+                if (xcodeStdoutGeneration == myXcodeGen)
+                  xcodeDone = true;
                 break;
               }
               else
               {
+                // If a restart superseded us while we were blocked in read() above,
+                // the bytes we just read belong to the retired generation's pipe.
+                // Discard them and retire -- never advertise or spill them onto the
+                // new generation's ring.
+                if (xcodeStdoutGeneration != myXcodeGen)
+                  return;
+                if (seekableSpill)
+                {
+                  // Mirror the just-filled chunk into the circular spill BEFORE
+                  // advertising it via xcodeBufferVirtualSize, so a behind-window
+                  // reader never sees a byte count that isn't yet on disk. On any
+                  // spill IO failure, disable the spill and keep streaming from the
+                  // ring (never break the live transcode for a history-buffer error).
+                  try
+                  {
+                    spillWriteCircular(xcodeSpillChannel, spillCapBytes,
+                        xcodeBuffer[currBuffNum], 0, xcodeBuffer[currBuffNum].length, xcodeBufferVirtualSize);
+                  }
+                  catch (Exception se)
+                  {
+                    if (Sage.DBG) System.out.println("Xcode spill write failed; disabling spill: " + se);
+                    closeSpillQuietly();
+                    seekableSpill = false;
+                  }
+                }
                 synchronized (xcodeSyncLock)
                 {
                   numFilledXcodeBuffers++;
                   xcodeBufferVirtualSize += xcodeBuffer[currBuffNum].length;
-                  if (XCODE_DEBUG) System.out.println("Number of transcode buffers filled=" + numFilledXcodeBuffers
+                  if (XCODE_DEBUG_IO) System.out.println("Number of transcode buffers filled=" + numFilledXcodeBuffers
                       + " virtXcodedBytes=" + xcodeBufferVirtualSize);
                 }
               }
@@ -3583,14 +5096,19 @@ public class FFMPEGTranscoder implements TranscodeEngine
           catch (Exception e){}
           finally
           {
-            xcodeDone = true;
+            // Only the current generation's writer may signal end-of-stream. A
+            // retired writer (superseded by a seek/re-open restart) must leave the
+            // new generation's xcodeDone untouched, or it would prematurely mark a
+            // freshly started stream as finished.
+            if (xcodeStdoutGeneration == myXcodeGen)
+              xcodeDone = true;
           }
         }
       };
       xcodeStdoutThread.setDaemon(true);
       xcodeStdoutThread.start();
     }
-    else if (httplsMode)
+    else if (httplsMode && !fmp4Mode)
     {
       for (int i = 0; i < segmentData.length; i++)
       {
@@ -3622,7 +5140,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
             do
             {
               numRead = xcodeStdout.read(readBuf);
-              if (XCODE_DEBUG) System.out.println("Read " + numRead + " bytes from transcoder");
+              if (XCODE_DEBUG_IO) System.out.println("Read " + numRead + " bytes from transcoder");
               fos.write(readBuf, 0, numRead);
               synchronized (segFileSyncLock)
               {
@@ -3687,7 +5205,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeStdoutThread.start();
     }
 
-    xcodeStdin = xcodeProcess.getOutputStream();
+    // The external-process encode stage's stdin is the raw-frame pipe fed by the
+    // worker pump, NOT the SageTV -stdinctrl channel. Leave xcodeStdin null so the
+    // 'inactivefile'/'videorateadapt' control writes are skipped (all guarded on
+    // xcodeStdin != null) rather than corrupting the frame stream.
+    xcodeStdin = externalEnhanceActive ? null : xcodeProcess.getOutputStream();
     //try{Thread.sleep(Sage.getInt("media_server/xcode_start_delay", 1000));}catch (Exception e){}
   }
 
@@ -3854,7 +5376,17 @@ public class FFMPEGTranscoder implements TranscodeEngine
       if (runCommandForCc(cmd, "ccextractor")) return true;
     }
 
-    String ffmpeg = Sage.get("caption_extraction/ffmpeg_path", getTranscoderPath(sourceFormat));
+    // This fallback's entire input is a lavfi filter graph, and the core ffmpeg is
+    // built --disable-devices, so resolve a binary that actually has lavfi rather
+    // than defaulting to the core one and failing with "Unknown input format".
+    String ffmpeg = sage.captions.CaptionFfmpeg.resolveLavfi();
+    if (ffmpeg == null)
+    {
+      if (Sage.DBG) System.out.println("FFMPEGTranscoder: no ffmpeg with a lavfi input device is" +
+          " available, so embedded 608/708 caption extraction is skipped. Install ccextractor" +
+          " (caption_extraction/ccextractor_path) to handle this properly.");
+      return false;
+    }
     java.util.ArrayList cmd = new java.util.ArrayList();
     cmd.add(ffmpeg);
     cmd.add("-hide_banner");
@@ -4111,6 +5643,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
         unregisterLiveChild(doomed);
     }
     xcodeProcess = null;
+    // Tear down the external-process enhancement sub-stages (decode + worker), if
+    // any, alongside the encode process handled above.
+    teardownExternalEnhance();
     if (XCODE_DEBUG) System.out.println("Destroyed!");
     // Return any GPU-enhance capacity this session held, so VRAM/engine budget
     // is freed for the next admission the moment the stream ends.
@@ -4163,6 +5698,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
       for (int i = 0; i < segmentData.length; i++)
         segmentData[i].file.delete();
     }
+
+    // Option B: drop the seekable spill history for this generation.
+    closeSpillQuietly();
 
     clearPreparedEmbeddedCcSubtitleFile();
   }
@@ -4311,6 +5849,45 @@ public class FFMPEGTranscoder implements TranscodeEngine
           System.out.println("Error writing to xcoder stdin of:" + e);
         }
       }
+      else if (!activeFile && externalEnhanceActive && externalSourceCtrl)
+      {
+        // External GPU-enhance pipeline: xcodeStdin is null because the encode
+        // stage's stdin is the raw-frame pipe. The -stdinctrl control channel
+        // lives on the source-reading stages (decode + audio sidecar) instead, so
+        // route the boundary 'inactivefile' there. That stops their -follow ->
+        // source EOF -> pipeline drains -> EOS, so VideoFrame's live rollover fires
+        // for enhanced sessions just as it does for a single-process transcode.
+        writeExternalInactiveFile();
+      }
+    }
+  }
+
+  /** Deliver 'inactivefile' to the external enhance source stages (decode + audio
+   *  sidecar) at a program boundary. Best-effort and fully guarded: a null or
+   *  already-exited stage is skipped, so this never affects the roll (VideoFrame
+   *  seams on the INACTIVE_FILE notice regardless). */
+  private void writeExternalInactiveFile()
+  {
+    writeInactiveTo(enhanceDecodeProcess, "decode");
+    writeInactiveTo(enhanceAudioProcess, "audio");
+  }
+
+  private void writeInactiveTo(Process p, String tag)
+  {
+    if (p == null) return;
+    try
+    {
+      java.io.OutputStream os = p.getOutputStream();
+      if (os != null)
+      {
+        os.write("inactivefile\n".getBytes(Sage.BYTE_CHARSET));
+        os.flush();
+        if (Sage.DBG) System.out.println("GPU_ENHANCE sent inactivefile to external " + tag + " stage");
+      }
+    }
+    catch (Exception e)
+    {
+      if (Sage.DBG) System.out.println("GPU_ENHANCE inactivefile write to external " + tag + " stage failed: " + e);
     }
   }
 
@@ -4335,6 +5912,20 @@ public class FFMPEGTranscoder implements TranscodeEngine
   public int getCurrentVideoBitrateKbps()
   {
     return currVideoBitrateKbps;
+  }
+
+  /**
+   * The launch-time video-bitrate ceiling (kbps) that the shared
+   * {@link sage.media.BitratePolicy} set for THIS session -- the {@code -maxrate}
+   * it computed from the output resolution/link/codec. Used by the live
+   * {@code XCODE_ADJUST} handler so a pull proxy can drive the bitrate up to this
+   * session's real envelope (e.g. 40&nbsp;Mbps for a 2160p enhance) instead of a
+   * single flat cap that would throttle every high-resolution session to 8&nbsp;Mbps.
+   * 0 when no policy plan was applied (the handler then keeps its configured default).
+   */
+  public int getPolicyCeilingKbps()
+  {
+    return policyCeilingKbps;
   }
 
   public int getCurrentStreamBitrateKbps()
@@ -4629,6 +6220,17 @@ public class FFMPEGTranscoder implements TranscodeEngine
     transcodeStartSeekTime = (ms > 0) ? ms : 0;
   }
 
+  /**
+   * The pending pre-launch seek position in milliseconds (0 = from start). Read
+   * by {@link MediaServer} so it can clamp a pull-xcode {@code ss=} against the
+   * opened file's demuxable end (via {@link SeekWindow}) once the physical file
+   * is known -- XCODE_SETUP sets the seek before OPENFILE names the file.
+   */
+  public long getTranscodeStartSeekTime()
+  {
+    return transcodeStartSeekTime;
+  }
+
   public void setPass(int x)
   {
     pass = x;
@@ -4652,8 +6254,142 @@ public class FFMPEGTranscoder implements TranscodeEngine
     segmentDur = segmentDurMsec;
   }
 
+  // Phase 1 CMAF/fMP4 (Option A). Reuses the httpls encode-decision branch
+  // (httplsMode) but ffmpeg's hls muxer writes finalized init.mp4 + seg%d.m4s
+  // files into outputDir itself -- there is no segmentData stdout ring on this
+  // path. HTTPLSServer serves the files via getFmp4InitFile / getSegmentFile.
+  public void enableFmp4SegmentedOutput(int segmentDurMsec, java.io.File outputDir)
+  {
+    httplsMode = true;
+    fmp4Mode = true;
+    segmentDur = segmentDurMsec;
+    fmp4OutputDir = outputDir;
+    if (outputDir != null) outputDir.mkdirs();
+  }
+
+  // The finalized CMAF init segment (moov-only). Blocks briefly until ffmpeg has
+  // written it. Note ffmpeg (fast NVENC) may transcode the whole file and EXIT
+  // before the client asks, so we key off the FILE existing, not process/xcodeDone
+  // state -- once init.mp4 is on disk it is valid whether or not ffmpeg is alive.
+  public java.io.File getFmp4InitFile() throws java.io.IOException
+  {
+    if (fmp4OutputDir == null) return null;
+    java.io.File init = new java.io.File(fmp4OutputDir, "init.mp4");
+    long deadline = Sage.time() + Sage.getInt("httpls_fmp4_init_wait_ms", 15000);
+    while (Sage.time() < deadline)
+    {
+      if (init.isFile()) return init;
+      // Only give up early if the encoder is truly gone AND produced nothing.
+      if ((xcodeProcess == null || !xcodeProcess.isAlive()) && !init.isFile())
+      {
+        // one more grace check for a last-moment flush
+        try { Thread.sleep(50); } catch (InterruptedException e){}
+        if (init.isFile()) return init;
+        break;
+      }
+      try { Thread.sleep(50); } catch (InterruptedException e){}
+    }
+    return init.isFile() ? init : null;
+  }
+
+  // Return the finalized seg<segNum>.m4s. temp_file makes each .m4s appear
+  // atomically (rename on segment close), so the file merely EXISTING means it is
+  // complete and safe to serve -- this is the source of truth, checked FIRST and
+  // regardless of process state. A fast NVENC transcode routinely produces every
+  // segment and exits before the client requests part 1, so we must NOT treat
+  // "process ended" (xcodeDone / !isTranscoding) as "segment unavailable" the way
+  // the earlier version did (that made seg1 abort and seg2 force a needless
+  // rebuild). We only (re)launch the encoder when the file is absent AND either
+  // nothing is running or the running encoder began AFTER segNum (a backward seek
+  // it will never reach).
+  public java.io.File getFmp4SegmentFile(int segNum) throws java.io.IOException
+  {
+    if (fmp4OutputDir == null) return null;
+    java.io.File seg = new java.io.File(fmp4OutputDir, "seg" + segNum + ".m4s");
+    if (seg.isFile()) return seg; // already produced (encoder may have since exited)
+
+    boolean procAlive = (xcodeProcess != null && xcodeProcess.isAlive());
+    // A far-FORWARD seek (e.g. a resume 7 minutes into a show) asks for a segment
+    // the running encoder -- launched earlier and grinding forward from its own
+    // start_number -- will only reach after transcoding everything in between.
+    // Blocking on that is the resume-to-first-frame stall: minutes of content at
+    // a few x realtime is many seconds of wait (measured ~17s on a 435s resume).
+    // If the requested part is well beyond the highest segment produced so far,
+    // relaunch the encoder AT this part with -ss instead of waiting, exactly like
+    // a backward seek. A small look-ahead gap is tolerated so ordinary buffering
+    // (a fast client requesting the next part or two before the encoder has
+    // flushed them) does NOT thrash the pipeline with needless restarts.
+    int forwardGap = Sage.getInt("httpls_fmp4_forward_reseek_gap_parts", 8);
+    boolean farForwardSeek = false;
+    if (procAlive && segNum >= fmp4StartSegment)
+    {
+      // The running encoder is producing forward from fmp4StartSegment, so its
+      // effective position is at least there even before the first new .m4s
+      // lands on disk. Measuring the gap against max(frontier, start) keeps a
+      // just-issued reseek from re-triggering itself while the target part is
+      // still being encoded (which would livelock, never producing it).
+      int effectiveFrontier = Math.max(highestProducedFmp4Segment(), fmp4StartSegment);
+      farForwardSeek = (segNum > effectiveFrontier + forwardGap);
+    }
+    if (!procAlive || segNum < fmp4StartSegment || farForwardSeek)
+    {
+      if (XCODE_DEBUG) System.out.println("fMP4 part #" + segNum + " not present (start=" + fmp4StartSegment
+          + " alive=" + procAlive + " farForward=" + farForwardSeek + "); seeking transcoder to " + ((long) segNum * segmentDur));
+      seekToTime((long) segNum * segmentDur);
+      seg = new java.io.File(fmp4OutputDir, "seg" + segNum + ".m4s");
+      if (seg.isFile()) return seg;
+    }
+    long deadline = Sage.time() + Sage.getInt("httpls_fmp4_segment_wait_ms", 30000);
+    while (Sage.time() < deadline)
+    {
+      if (seg.isFile()) return seg;
+      // The encoder exiting is NOT a failure by itself -- a fast transcode
+      // finishes the whole file. Only give up if it's gone AND this segment
+      // still isn't on disk after a final grace check (i.e. it's past EOF).
+      if (xcodeProcess == null || !xcodeProcess.isAlive())
+      {
+        try { Thread.sleep(100); } catch (InterruptedException e){}
+        break;
+      }
+      try { Thread.sleep(50); } catch (InterruptedException e){}
+    }
+    return seg.isFile() ? seg : null;
+  }
+
+  /**
+   * Highest finalized fMP4 part index currently on disk for this session (a
+   * completed {@code seg<N>.m4s}, never the in-progress {@code .m4s.tmp}), or
+   * {@code -1} if none yet. Lets {@link #getFmp4SegmentFile} tell a far-forward
+   * resume/seek -- where the running encoder is far behind the requested part and
+   * relaunching at {@code -ss} is far faster than waiting -- from ordinary
+   * look-ahead a fast encoder is about to satisfy on its own.
+   */
+  private int highestProducedFmp4Segment()
+  {
+    java.io.File[] fs = (fmp4OutputDir == null) ? null : fmp4OutputDir.listFiles();
+    int max = -1;
+    if (fs != null)
+    {
+      for (java.io.File f : fs)
+      {
+        String n = f.getName();
+        if (n.length() > 7 && n.startsWith("seg") && n.endsWith(".m4s"))
+        {
+          try
+          {
+            int idx = Integer.parseInt(n.substring(3, n.length() - 4));
+            if (idx > max) max = idx;
+          }
+          catch (NumberFormatException ignore) {}
+        }
+      }
+    }
+    return max;
+  }
+
   public java.io.File getSegmentFile(int segNum) throws java.io.IOException
   {
+    if (fmp4Mode) return getFmp4SegmentFile(segNum);
     // There's 3 cases here.
     // 1. The file is already filled and ready to return, the caller should call markSegmentConsumed when done with the file
     // 2. The file is being filled right now, so we block until it's done and then it's like #1
@@ -4701,6 +6437,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
   public void markSegmentConsumed(int segNum)
   {
+    // fMP4 (Option A): ffmpeg owns the files and we keep them for the session so
+    // seeks can re-serve earlier parts without re-encoding -- nothing to free.
+    if (fmp4Mode) return;
     // This means this file is no longer in use, so we can do what we want with it
     synchronized (segFileSyncLock)
     {
@@ -4717,6 +6456,31 @@ public class FFMPEGTranscoder implements TranscodeEngine
   protected String xcodeParams = "";
   protected boolean xcodeDone;
   protected Process xcodeProcess;
+  // External-process (upscale worker) enhancement state. The encode ffmpeg is
+  // tracked as xcodeProcess above; these are the decode ffmpeg and the
+  // provider-owned worker that feed it. Staged by maybeApplyGpuEnhancement,
+  // launched in startTranscode, and torn down in stopTranscode (and by the
+  // shutdown reaper).
+  protected Process enhanceDecodeProcess;
+  protected Process enhanceWorkerProcess;
+  protected volatile boolean externalEnhanceActive = false;
+  /** True when the active external enhance pipeline's source-reading stages
+   *  (decode + audio sidecar) carry -stdinctrl and follow the live file, so a
+   *  boundary 'inactivefile' can be delivered to them (see setActiveFile). */
+  private volatile boolean externalSourceCtrl = false;
+  /** Path of the audio side-channel FIFO (decode -> encode) for a resumed
+   *  enhanced play, or null when the encode re-opens the source for audio.
+   *  Created at launch, unlinked in teardownExternalEnhance. */
+  private volatile String enhanceAudioSidecarPath;
+  /** The standalone audio-only ffmpeg process that accurately seeks the source and
+   *  copies audio into the sidecar FIFO, or null when there is no sidecar. Spawned
+   *  at launch, destroyed in teardownExternalEnhance. */
+  private volatile Process enhanceAudioProcess;
+  private sage.enhance.GpuEnhancePipeline.ExternalPipeline pendingExternalPipeline;
+  private java.util.List<String> pendingExternalWorkerArgv;
+  // A pre-warmed worker (from ScaleWarmupCache via the provider's plan(req,warm)),
+  // or null for the normal cold-spawn path.
+  private Process pendingExternalWarmProcess;
   // Raw-cmdline mode: bypass the legacy bf=/f=/br= token grammar + stream-walk
   // codec/bitrate translation in setTranscodeFormat() and startTranscode().
   // When true, xcodeParams holds the verbatim post-"-i" ffmpeg argv (space
@@ -4755,6 +6519,16 @@ public class FFMPEGTranscoder implements TranscodeEngine
   protected long xcodeBufferVirtualOffset;
   // This is the number of xcode buffers that are currently filled with data
   protected int numFilledXcodeBuffers;
+  // Identifies the current transcode "generation" for the bufferOutput ring. A
+  // seek/re-open restart (stopTranscode()+startTranscode() on the SAME instance)
+  // reuses this instance's ring array and resets the fill counter. If the prior
+  // XcodeDataConsumer writer thread outlived its join(2000) in stopTranscode(),
+  // it would keep filling the reused ring alongside the new writer, driving
+  // numFilledXcodeBuffers past xcodeBuffer.length -- the reader gets lapped and
+  // the browser MSE stack rejects the torn fMP4 (CHUNK_DEMUXER_ERROR_APPEND_FAILED).
+  // Each writer captures the generation at start and exits the moment a newer
+  // startTranscode() bumps it, so only one writer ever mutates the ring.
+  protected volatile int xcodeStdoutGeneration;
   // This is the total number of bytes that are available from the transcoder; it's
   // the virtualOffset + the number of bytes in the buffer
   protected long xcodeBufferVirtualSize;
@@ -4781,6 +6555,22 @@ public class FFMPEGTranscoder implements TranscodeEngine
   protected java.nio.channels.FileChannel fileChannel;
 
   protected boolean bufferOutput;
+
+  // ---- Option B: bounded seekable spill history (see openSpillIfEnabled) ----
+  // When enabled, the XcodeDataConsumer mirrors every committed chunk into a
+  // fixed-capacity circular file on disk. A SIZE/READ pull consumer (PWA proxy
+  // OR legacy miniclient) whose requested byte offset has already fallen behind
+  // the small in-memory ring window is then served from that file instead of
+  // restarting ffmpeg at a new -ss -- the in-generation seek/reconnect thrash.
+  // The ring is left untouched as the live forward window; the spill is only
+  // consulted for behind-window reads. Gated OFF by default so it is a no-op
+  // until media_server/transcode_seekable_buffer is set.
+  protected boolean seekableSpill;
+  protected long spillCapBytes;
+  protected long spillSafetyMargin;
+  protected java.io.File xcodeSpillFile;
+  protected java.nio.channels.FileChannel xcodeSpillChannel;
+
   protected java.io.InputStream xcodeStdout;
 
   protected static final int SEGMENT_FREE = 0;
@@ -4794,7 +6584,20 @@ public class FFMPEGTranscoder implements TranscodeEngine
   protected Object segFileSyncLock = new Object();
   protected int segmentTargetCounter; // this is the segment number we should be actively writing, it accounts for any seek offsets as well (those offsets will affect this number)
 
+  // Phase 1 CMAF/fMP4 ("dynamicfmp4") delivery. Unlike the httpls MPEG-TS path
+  // (Java cuts ffmpeg's stdout into .ts files by time), the hls muxer writes
+  // finalized init.mp4 + seg%d.m4s files itself (Option A), so there is no
+  // stdout ring and no Java-side box cutting on this path. fmp4OutputDir is the
+  // per-session directory those files land in; fmp4StartSegment is the absolute
+  // part number ffmpeg's current run began writing (aligned via -start_number).
+  protected boolean fmp4Mode = false;
+  protected java.io.File fmp4OutputDir;
+  protected int fmp4StartSegment;
+
   protected int currVideoBitrateKbps = -1;
+  /** Launch-time BitratePolicy {@code -maxrate} ceiling (kbps) for this session;
+   *  0 until a policy plan is applied. See {@link #getPolicyCeilingKbps()}. */
+  protected int policyCeilingKbps = 0;
   protected int currAudioBitrateKbps = -1;
   protected float currStreamOverheadPerct;
 
@@ -4837,6 +6640,30 @@ public class FFMPEGTranscoder implements TranscodeEngine
   protected int liveDeficitWindows;
   protected int liveHeadroomWindows;
   protected boolean httplsMode = false;
+
+  /**
+   * T3 full-GPU CMAF/httpls pipeline: NVDEC decode -&gt; [yadif_cuda] -&gt;
+   * scale_cuda/scale_npp -&gt; h264_nvenc, all in VRAM. Set by
+   * {@link #planHttplsVideoPipeline()} from HW availability + source codec and
+   * read by the encode block to emit a CUDA {@code -vf} and skip the CPU
+   * {@code -s} scale. Keeps frames in {@code -hwaccel_output_format cuda} so a
+   * future ScaleProvider (VSR) FFMPEG_FILTER fragment can replace the scale
+   * stage with no PCIe round-trip -- the fix for the ~0.55x-realtime
+   * software-decode CMAF path.
+   */
+  protected boolean httplsHwFullGpu = false;
+  /**
+   * The CUDA scaler ({@code scale_cuda}|{@code scale_npp}) chosen for
+   * {@link #httplsHwFullGpu}; the same scaler the enhancement path reports, for
+   * one consistent scaler story across the transcode and enhancement pipelines.
+   */
+  protected String httplsHwScaler = null;
+  /**
+   * T1 remux-first: the source video already fits the client (H.264, progressive,
+   * within the resolution ceiling) so the video stage is {@code -vcodec copy} --
+   * no decode/scale/encode. Set by {@link #planHttplsVideoPipeline()}.
+   */
+  protected boolean httplsVideoCopy = false;
 
   /**
    * Effective audio codecs the connecting HLS client can decode (canonical
@@ -4887,6 +6714,193 @@ public class FFMPEGTranscoder implements TranscodeEngine
   public void setHttplsSurfaceTargetVideoCodec(String codec)
   {
     this.httplsSurfaceTargetVideoCodec = (codec == null) ? "" : codec;
+  }
+
+  /**
+   * The connecting client's physical display (sink) resolution in pixels, as
+   * reported to {@code MiniClientSageRenderer} (getSinkWidth/getSinkHeight) and
+   * pushed here by {@code HTTPLSServer.setupTranscoder}. 0 means the client did
+   * not report it (e.g. a browser that hasn't advertised its viewport/display),
+   * in which case the right-sizing logic falls back to the source-native /
+   * LAN-WAN ceiling only. This is used ONLY to right-size DOWN (never upscale):
+   * we never encode more pixels than the client can actually display.
+   */
+  protected int httplsSinkWidth = 0;
+  protected int httplsSinkHeight = 0;
+
+  public void setHttplsSinkResolution(int w, int h)
+  {
+    this.httplsSinkWidth = (w > 0) ? w : 0;
+    this.httplsSinkHeight = (h > 0) ? h : 0;
+  }
+
+  /**
+   * Source video codecs the unified ffmpeg's NVDEC can decode into CUDA frames
+   * ({@code -hwaccel cuda -hwaccel_output_format cuda}); anything else keeps the
+   * software-decode path. Deliberately a conservative allowlist of the common
+   * SageTV recording codecs, so an unknown/exotic codec never forces a hard
+   * cuda-only decode that would fail instead of falling back to software.
+   */
+  static boolean nvdecCanDecode(String codec)
+  {
+    if (codec == null) return false;
+    return sage.media.format.MediaFormat.MPEG2_VIDEO.equals(codec)
+        || sage.media.format.MediaFormat.MPEG1_VIDEO.equals(codec)
+        || sage.media.format.MediaFormat.H264.equals(codec)
+        || sage.media.format.MediaFormat.HEVC.equals(codec)
+        || sage.media.format.MediaFormat.VC1.equals(codec)
+        || sage.media.format.MediaFormat.MPEG4_VIDEO.equals(codec);
+  }
+
+  /**
+   * Realtime-safe libx264 preset for the software (no-GPU) live/HLS encode,
+   * derived from CPU core count and target height so a GPU-less server sustains
+   * &gt;=1x realtime rather than falling behind the live edge (the CPU analogue of
+   * T3). Operator override: {@code multimedia/hwaccel/libx264/live_preset}
+   * ({@code auto} = derive; any x264 preset name pins it).
+   */
+  static String libx264LivePreset(int cores, int targetHeight)
+  {
+    String pin = Sage.get("multimedia/hwaccel/libx264/live_preset", "auto");
+    if (pin != null && pin.length() > 0 && !"auto".equalsIgnoreCase(pin)) return pin;
+    boolean hd = targetHeight > 576;
+    if (cores >= 12) return hd ? "faster" : "fast";
+    if (cores >= 8)  return hd ? "veryfast" : "faster";
+    if (cores >= 4)  return "veryfast";
+    return "ultrafast";
+  }
+
+  /**
+   * Decide the httpls/CMAF video pipeline ONCE, before the ffmpeg argv is
+   * assembled, so the decode and encode blocks agree on a single plan:
+   * <ol>
+   *   <li>T1 remux-first ({@link #httplsVideoCopy}) -- stream-copy H.264 that
+   *       already fits the client ceiling (no decode/scale/encode).</li>
+   *   <li>T3 full-GPU ({@link #httplsHwFullGpu}) -- NVDEC decode + CUDA
+   *       deinterlace/scale + NVENC, all in VRAM, for CMAF sessions.</li>
+   *   <li>Default -- software decode + NVENC/libx264 (unchanged).</li>
+   * </ol>
+   * Sets {@link #httplsVideoCopy}, {@link #httplsHwFullGpu} and
+   * {@link #httplsHwScaler}. Safe to call once per session; no-op off the httpls
+   * path.
+   */
+  protected void planHttplsVideoPipeline()
+  {
+    httplsVideoCopy = false;
+    httplsHwFullGpu = false;
+    httplsHwScaler = null;
+    if (!httplsMode) return;
+    sage.media.format.VideoFormat sv = (sourceFormat != null) ? sourceFormat.getVideoFormat() : null;
+    String svc = (sourceFormat != null) ? sourceFormat.getPrimaryVideoFormat() : null;
+
+    // --- T1 remux-first: copy H.264 that already fits the client ceiling ---
+    // Progressive H.264 at/under the client's resolution ceiling needs no scale,
+    // no deinterlace and no re-encode -- stream-copy the video, a large CPU win
+    // on GPU-less servers (browser/CMAF clients already require H.264). MPEG-2
+    // recordings (the common live case) are not H.264 and fall through.
+    if (Sage.getBoolean("httpls_remux_passthrough", true) && sv != null
+        && sage.media.format.MediaFormat.H264.equals(svc) && !sv.isInterlaced()
+        && sv.getWidth() > 0 && sv.getHeight() > 0)
+    {
+      int[] ceil = getDynamicMaxResolution(sv);
+      if (sv.getWidth() <= ceil[0] && sv.getHeight() <= ceil[1])
+      {
+        httplsVideoCopy = true;
+        if (Sage.DBG) System.out.println("FFMPEGTranscoder: httpls: T1 remux-first video passthrough "
+            + "(-vcodec copy) src=H.264 " + sv.getWidth() + "x" + sv.getHeight()
+            + " within ceiling " + ceil[0] + "x" + ceil[1]);
+        return;
+      }
+    }
+
+    // --- T3 full-GPU decode/scale/deinterlace (CMAF/fmp4 only for now) ---
+    if (!fmp4Mode) return;
+    if (!Sage.getBoolean("miniplayer/httpls_hwdecode", true)) return;
+    if (HwEncoder.pick("h264") != HwEncoder.Kind.NVENC) return;
+    if (!nvdecCanDecode(svc)) return;
+    String scaler = HwEncoder.cudaScaler();
+    if (scaler == null) return;
+    // Interlaced source needs a CUDA deinterlacer to stay on the GPU; if none is
+    // available, fall back to the software-decode path (which uses CPU yadif).
+    if (sv != null && sv.isInterlaced() && HwEncoder.cudaDeinterlacer(false) == null) return;
+    // A 10-bit-capable codec (HEVC) without a scaler that can pin 8-bit output
+    // (format=nv12) risks feeding p010 to h264_nvenc "high"; skip full-GPU there.
+    if (sage.media.format.MediaFormat.HEVC.equals(svc) && !HwEncoder.scalerSupportsLanczos(scaler)) return;
+    httplsHwScaler = scaler;
+    httplsHwFullGpu = true;
+    if (Sage.DBG) System.out.println("FFMPEGTranscoder: httpls: T3 full-GPU pipeline eligible; scaler=" + scaler
+        + " src=" + svc + " interlaced=" + (sv != null && sv.isInterlaced()));
+  }
+
+  /**
+   * Compute the right-sized (no-upscale) encode resolution for the NG delivery
+   * paths. Fits the SOURCE frame, preserving its exact aspect ratio, into the
+   * smaller of (a) the LAN/WAN ceiling from {@link #getDynamicMaxResolution}
+   * (which is itself already clamped to source-native, so it never upscales)
+   * and (b) the client's reported physical display (sink) when known. The scale
+   * factor is hard-capped at 1.0, so a source smaller than the cap box is passed
+   * through at its native size and is NEVER upscaled here -- upscaling is the
+   * separate GPU-enhance path's job, not this right-sizing step. Returns even
+   * dimensions (encoder-friendly). Falls back to the caller's current
+   * targetWidth/targetHeight when the source dimensions are unknown.
+   */
+  /**
+   * Bounded, best-effort source-geometry probe used by the enhance apply path
+   * when {@link #sourceFormat} is not yet populated for an in-progress/live
+   * source. Runs {@link sage.media.format.FormatParser#getFileFormat} on a daemon
+   * worker with a hard timeout so a slow or actively-growing file can never stall
+   * the transcode; returns null on timeout/error. Mirrors the advisor-side probe
+   * in {@code MiniPlayer.probeSourceVideoFormatBounded} so the two layers recover
+   * the same geometry.
+   */
+  private static sage.media.format.VideoFormat probeSourceVideoFormatBounded(
+      final java.io.File f, int timeoutMs)
+  {
+    if (f == null || timeoutMs <= 0) return null;
+    final sage.media.format.ContainerFormat[] out = new sage.media.format.ContainerFormat[1];
+    Thread worker = new Thread("GpuEnhanceApplySourceProbe")
+    {
+      public void run()
+      {
+        try { out[0] = sage.media.format.FormatParser.getFileFormat(f); }
+        catch (Throwable t) { /* best-effort probe; ignore and yield null */ }
+      }
+    };
+    worker.setDaemon(true);
+    worker.start();
+    try { worker.join(timeoutMs); }
+    catch (InterruptedException ie) { Thread.currentThread().interrupt(); return null; }
+    sage.media.format.ContainerFormat cf = out[0];
+    return (cf != null) ? cf.getVideoFormat() : null;
+  }
+
+  protected int[] computeRightSizedTarget(sage.media.format.VideoFormat srcVideo,
+      int fallbackW, int fallbackH)
+  {
+    int srcW = (srcVideo != null) ? srcVideo.getWidth() : 0;
+    int srcH = (srcVideo != null) ? srcVideo.getHeight() : 0;
+    if (srcW <= 0 || srcH <= 0)
+      return new int[] { fallbackW, fallbackH };
+    // Source-clamped LAN/WAN ceiling (never upscales, per-axis min to source).
+    int[] ceil = getDynamicMaxResolution(srcVideo);
+    int capW = ceil[0];
+    int capH = ceil[1];
+    // Further clamp to the client's real display when it told us -- no point
+    // encoding 1080p for a device that can only show 1366x768.
+    if (httplsSinkWidth > 0 && httplsSinkHeight > 0)
+    {
+      capW = Math.min(capW, httplsSinkWidth);
+      capH = Math.min(capH, httplsSinkHeight);
+    }
+    if (capW <= 0 || capH <= 0)
+      return new int[] { fallbackW, fallbackH };
+    // Aspect-preserving fit of the source into the cap box; never upscale.
+    double scale = Math.min(1.0, Math.min(capW / (double) srcW, capH / (double) srcH));
+    int outW = ((int) Math.round(srcW * scale)) & ~1;
+    int outH = ((int) Math.round(srcH * scale)) & ~1;
+    if (outW < 2) outW = 2;
+    if (outH < 2) outH = 2;
+    return new int[] { outW, outH };
   }
 
   /**

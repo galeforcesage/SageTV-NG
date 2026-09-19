@@ -2352,6 +2352,52 @@ public class Utility {
       public Object runSafely(Catbert.FastStack stack) throws Exception{
         try
         {
+          // Returns a SINGLE primary IPv4 -- callers depend on that (UPnP
+          // addPortMapping internal-client IP, UPnP mapping compares, the MyIP /
+          // address-update path, connection tests). Do NOT return a list here.
+          // The NetworkInterface-based primary also fixes the legacy Linux path
+          // that printed "0.0.0.0" on modern net-tools output. Use
+          // GetLocalIPAddresses() (plural) for the full list on status screens.
+          String primary = IOUtils.getPrimaryLocalIPv4();
+          if (primary != null)
+            return primary;
+          // Fallback: original per-OS single-address logic.
+          if (Sage.WINDOWS_OS || Sage.MAC_OS_X)
+            return java.net.InetAddress.getLocalHost().getHostAddress();
+          else
+            return LinuxUtils.getIPAddress();
+        }catch(Throwable e)
+        {
+          System.out.println("ERROR:" + e);
+        }
+        return "0.0.0.0";
+      }});
+    rft.put(new PredefinedJEPFunction("Utility", "GetLocalIPAddresses")
+    {
+      /**
+       * Returns all active (non-loopback, non-shim) IPv4 addresses of the machine,
+       * comma-separated, with the primary LAN address first. Intended for display
+       * (e.g. the System Status screen); functional callers that need a single
+       * address should use {@link #GetLocalIPAddress()} instead.
+       * @return a comma-separated list of the machine's active IPv4 addresses
+       *
+       * @declaration public String GetLocalIPAddresses();
+       */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+        try
+        {
+          java.util.List<String> all = IOUtils.getAllLocalIPv4Addresses(false);
+          if (!all.isEmpty())
+          {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < all.size(); i++)
+            {
+              if (i > 0) sb.append(", ");
+              sb.append(all.get(i));
+            }
+            return sb.toString();
+          }
+          // Fallback: single-address logic, so the display still shows something.
           if (Sage.WINDOWS_OS || Sage.MAC_OS_X)
             return java.net.InetAddress.getLocalHost().getHostAddress();
           else

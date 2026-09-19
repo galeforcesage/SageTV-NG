@@ -79,4 +79,55 @@ public class PlaybackSurfaceSetTest
     assertTrue(s.declaresInterlacedUnsupported("H264"),
         "The surface must retain the client's interlaced=false declaration for H264");
   }
+
+  @Test
+  public void build_audioMaxChannels_undeclaredDefaultsToZero()
+  {
+    // No index-12 entry (legacy client): getAudioMaxChannels must read 0, which
+    // downstream resolves from the negotiated codec rather than assuming surround.
+    final String[] props = new String[] {
+        "mse", "10", "push",
+        "HEVC", "EAC3", "MATROSKA",
+        "", "", "", "", "", ""
+    };
+    PlaybackSurface s = PlaybackSurfaceSet.build("push_dev",
+        new java.util.function.Function<String, String[]>() {
+          @Override public String[] apply(String sid) { return props; }
+        }).get("push_dev");
+    assertNotNull(s, "surface must build");
+    assertEquals(s.getAudioMaxChannels(), 0, "absent AUDIO_MAX_CHANNELS must read as 0 (undeclared)");
+  }
+
+  @Test
+  public void build_audioMaxChannels_explicitSurroundParsed()
+  {
+    // Index 12 = AUDIO_MAX_CHANNELS; an explicit 6 opts the surface into 5.1.
+    final String[] props = new String[] {
+        "mse", "10", "push",
+        "HEVC", "EAC3", "MATROSKA",
+        "", "", "", "", "", "", "6"
+    };
+    PlaybackSurface s = PlaybackSurfaceSet.build("push_dev",
+        new java.util.function.Function<String, String[]>() {
+          @Override public String[] apply(String sid) { return props; }
+        }).get("push_dev");
+    assertNotNull(s, "surface must build");
+    assertEquals(s.getAudioMaxChannels(), 6, "explicit AUDIO_MAX_CHANNELS=6 must parse as 6");
+  }
+
+  @Test
+  public void build_audioMaxChannels_garbageTreatedAsUndeclared()
+  {
+    final String[] props = new String[] {
+        "mse", "10", "push",
+        "HEVC", "EAC3", "MATROSKA",
+        "", "", "", "", "", "", "lots"
+    };
+    PlaybackSurface s = PlaybackSurfaceSet.build("push_dev",
+        new java.util.function.Function<String, String[]>() {
+          @Override public String[] apply(String sid) { return props; }
+        }).get("push_dev");
+    assertNotNull(s, "surface must build");
+    assertEquals(s.getAudioMaxChannels(), 0, "unparseable AUDIO_MAX_CHANNELS must fail closed to 0");
+  }
 }

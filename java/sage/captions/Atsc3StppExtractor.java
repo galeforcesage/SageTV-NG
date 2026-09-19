@@ -99,7 +99,7 @@ public final class Atsc3StppExtractor
 
       normalizeTimestamps(flat);
       java.util.Collections.sort(flat);
-      events = CaptionEvent.coalesce(flat);
+      events = coalesceWithHold(flat);
     }
     catch (IOException e)
     {
@@ -779,8 +779,28 @@ public final class Atsc3StppExtractor
     applyEpochOffset(flat, state.epochOffsetSeconds);
     java.util.Collections.sort(flat);
 
-    List<CaptionEvent> coalesced = CaptionEvent.coalesce(flat);
+    List<CaptionEvent> coalesced = coalesceWithHold(flat);
     return reconcile(coalesced, state);
+  }
+
+  /**
+   * Coalesces {@code flat} via {@link CaptionEvent#coalesce(List, double)} with
+   * hold-until-next enabled per the caption_extraction properties, so an STPP
+   * cue whose short TTML window would otherwise clear early instead stays on
+   * screen until the next caption appears (bounded, so it can't linger through
+   * a long silence). Broadcast STPP/IMSC1 packets carry deliberately short,
+   * gapped per-window end times; without this a caption flickers off between
+   * lines. Gated by:
+   *   caption_extraction/hold_until_next             (bool, default true)
+   *   caption_extraction/hold_until_next_max_seconds (float seconds, default 8.0)
+   * Set hold_until_next=false for the exact legacy (gap-preserving) behaviour.
+   */
+  private static List<CaptionEvent> coalesceWithHold(List<CaptionEvent> flat)
+  {
+    double maxHold = Sage.getBoolean("caption_extraction/hold_until_next", true)
+        ? Sage.getFloat("caption_extraction/hold_until_next_max_seconds", 8.0f)
+        : 0.0;
+    return CaptionEvent.coalesce(flat, maxHold);
   }
 
   /**

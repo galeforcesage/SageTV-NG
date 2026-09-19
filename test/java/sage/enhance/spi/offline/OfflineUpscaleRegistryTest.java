@@ -71,7 +71,7 @@ public class OfflineUpscaleRegistryTest
   public void builtinUpscaleCommandIsByteIdentical()
   {
     List<String> cmd = OfflineUpscaleRegistry.getInstance().buildUpscaleCommand(req());
-    assertEquals(cmd, Arrays.asList(
+    assertCorePrefixAndFfmpegTail(cmd, Arrays.asList(
         "/bin/bash", "bin/sage-ai-upscale.sh",
         "--input", new File("/in/src.ts").getAbsolutePath(),
         "--output", new File("/out/ai.mkv").getAbsolutePath(),
@@ -87,11 +87,38 @@ public class OfflineUpscaleRegistryTest
   {
     Sage.put(REQUIRE_VULKAN, "true");
     List<String> cmd = OfflineUpscaleRegistry.getInstance().buildProbeCommand();
-    assertEquals(cmd, Arrays.asList(
+    assertCorePrefixAndFfmpegTail(cmd, Arrays.asList(
         "/bin/bash", "bin/sage-ai-upscale.sh",
         "--probe",
         "--realesrgan", "/usr/local/bin/realesrgan-ncnn-vulkan",
         "--model", "realesr-general-x4v3"));
+  }
+
+  /**
+   * The wrapper must never be left to resolve {@code ffmpeg} from {@code PATH},
+   * which would pick the distribution build instead of the core's unified
+   * binary. The flags are appended only when the bundled tools are present, so
+   * assert the stable prefix exactly and then require that whatever follows is
+   * nothing but {@code --ffmpeg}/{@code --ffprobe} pointing at the core paths.
+   */
+  private static void assertCorePrefixAndFfmpegTail(List<String> cmd, List<String> expectedPrefix)
+  {
+    assertNotNull(cmd);
+    assertTrue(cmd.size() >= expectedPrefix.size(), "command shorter than expected prefix: " + cmd);
+    assertEquals(cmd.subList(0, expectedPrefix.size()), expectedPrefix);
+    List<String> tail = cmd.subList(expectedPrefix.size(), cmd.size());
+    assertEquals(tail.size() % 2, 0, "dangling flag in tail: " + tail);
+    for (int i = 0; i < tail.size(); i += 2)
+    {
+      String flag = tail.get(i);
+      String val = tail.get(i + 1);
+      if ("--ffmpeg".equals(flag))
+        assertEquals(val, Sage.getToolPath("ffmpeg"), "--ffmpeg must be the core binary");
+      else if ("--ffprobe".equals(flag))
+        assertEquals(val, Sage.getToolPath("ffprobe"), "--ffprobe must be the core binary");
+      else
+        fail("unexpected trailing argument: " + flag + " in " + cmd);
+    }
   }
 
   @Test

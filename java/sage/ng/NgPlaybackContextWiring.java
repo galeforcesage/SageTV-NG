@@ -45,8 +45,18 @@ public final class NgPlaybackContextWiring
   /** Minimum interval between push-loop updates (ms). Avoids per-buffer overhead. */
   private static final long PUSH_LOOP_UPDATE_INTERVAL_MS = 2000;
 
-  /** Minimum interval between pull-mode metadata updates (ms). */
-  private static final long PULL_MODE_UPDATE_INTERVAL_MS = 3000;
+  /**
+   * Minimum interval between pull-mode metadata updates (ms).
+   * <p>
+   * This governs how often a pull-mode client (PWA) receives a fresh
+   * server media-time / live-window delta. It must not be larger than the
+   * calculator's own emission floor ({@code MIN_EMIT_INTERVAL_MS = 1000}),
+   * or the client's timeline clock appears frozen for this many ms after the
+   * first frame and then steps forward in coarse jumps. 1000ms lets the clock
+   * advance ~once per second right from the first frame; the calculator's
+   * suppression still prevents redundant deltas when nothing changed.
+   */
+  private static final long PULL_MODE_UPDATE_INTERVAL_MS = 1000;
 
   /** Minimum interval between file-size polls (ms). Rate-limits any external size supplier. */
   private static final long FILE_SIZE_REFRESH_INTERVAL_MS = 3000;
@@ -61,6 +71,12 @@ public final class NgPlaybackContextWiring
   private long cachedFileSize;
   private long openGeneration;
   private long recordingStartEpochMs;
+  /**
+   * Whole-recording timeline for the current playback, cached so
+   * {@link #toRelativeMediaTime(long)} can collapse inter-segment gaps when
+   * converting epoch-based media time to content time. null for single-file.
+   */
+  private volatile sage.SegmentTimeline segmentTimeline;
 
   // --- Global singleton provider ---
   private static final NgPlaybackContextProvider GLOBAL_PROVIDER = new NgPlaybackContextProvider();
@@ -135,9 +151,38 @@ public final class NgPlaybackContextWiring
       this.lastFileSizeRefreshMs = System.currentTimeMillis();
       this.active = true;
 
+      // Build the whole-recording virtual timeline for a multi-segment
+      // recording so the NG context can advertise the segment manifest. Guarded:
+      // any failure yields a null timeline (EMPTY manifest) and never blocks the
+      // playback-open path. Resolving + stat'ing segment files is a one-time
+      // open cost, not on any per-tick hot path.
+      sage.SegmentTimeline segmentTimeline = resolveSegmentTimeline(mediaFileId);
+      this.segmentTimeline = segmentTimeline;
+
       provider.openSession(sessionKey, clientName, sessionId, mediaFileId, airingId,
           containerFormat, durationMs, timeshifted, isLiveStream,
-          serverSideTranscoding, recordingStartEpochMs);
+          serverSideTranscoding, recordingStartEpochMs, segmentTimeline);
+
+      // Surface comskip commercial-skip marks to the NG client, aggregated across
+      // all physical segments into whole-recording content time. This is the first
+      // path that delivers comskip to NG/PWA clients at all (single- or
+      // multi-segment). Guarded and one-time: reading the per-segment .edl/.skip
+      // sidecars is an open-cost, not a per-tick cost, and any failure simply
+      // leaves the skip manifest empty rather than blocking playback.
+      try
+      {
+        if (segmentTimeline != null)
+        {
+          java.util.List<long[]> skip = sage.commercial.SkipAggregator.aggregate(segmentTimeline);
+          if (skip != null && !skip.isEmpty())
+            provider.applySkipSegments(sessionKey, skip, System.currentTimeMillis());
+        }
+      }
+      catch (Throwable t)
+      {
+        if (Boolean.getBoolean("sage.ng.debug"))
+          System.err.println("NgPlaybackContextWiring.onPlaybackOpen skip aggregation: " + t);
+      }
     }
     catch (Exception e)
     {
@@ -304,6 +349,7 @@ public final class NgPlaybackContextWiring
       sessionKey = null;
       sessionId = null;
       fileSizeSupplier = null;
+      segmentTimeline = null;
     }
   }
 
@@ -342,6 +388,27 @@ public final class NgPlaybackContextWiring
   {
     String name = (clientName != null && clientName.length() > 0) ? clientName : "local";
     return name + ":" + mediaFileId + ":" + generation;
+  }
+
+  /**
+   * Resolve the whole-recording {@link sage.SegmentTimeline} for a media file,
+   * or null if it can't be built (unknown id, no segments, or any error). Never
+   * throws — a null result simply yields an EMPTY segment manifest.
+   */
+  private static sage.SegmentTimeline resolveSegmentTimeline(long mediaFileId)
+  {
+    try
+    {
+      if (mediaFileId <= 0) return null;
+      sage.MediaFile mf = sage.Wizard.getInstance().getFileForID((int) mediaFileId);
+      return sage.SegmentTimeline.fromMediaFile(mf);
+    }
+    catch (Throwable t)
+    {
+      if (Boolean.getBoolean("sage.ng.debug"))
+        System.err.println("NgPlaybackContextWiring.resolveSegmentTimeline: " + t);
+      return null;
+    }
   }
 
   /**
@@ -387,6 +454,25 @@ public final class NgPlaybackContextWiring
   {
     if (recordingStartEpochMs > 0 && mediaTimeMs > recordingStartEpochMs)
     {
+      // Multi-segment: the raw epoch media time inside segment i is anchored to
+      // that segment's wall-clock start (its PTS references time-of-day). A naive
+      // "subtract recordingStartEpochMs" yields gap-INCLUSIVE time, but the NG
+      // durationMs (MediaFile.getRecordDuration) is gap-COLLAPSED content time —
+      // so the two desync on a gapped recording and the scrubber overflows.
+      // Map through the timeline to whole-recording content time (gaps collapsed):
+      // contentBase(seg) + (epoch - segmentStart). The last (growing) segment is
+      // NOT clamped, so the live tail keeps advancing monotonically.
+      sage.SegmentTimeline tl = this.segmentTimeline;
+      if (tl != null && tl.isMultiSegment())
+      {
+        int seg = tl.segmentForEpochMs(mediaTimeMs);
+        if (seg >= 0)
+        {
+          long intra = mediaTimeMs - tl.startEpochMs(seg);
+          if (intra < 0) intra = 0;
+          return tl.contentBaseMs(seg) + intra;
+        }
+      }
       return mediaTimeMs - recordingStartEpochMs;
     }
     // Already relative, or no recording start known — use as-is

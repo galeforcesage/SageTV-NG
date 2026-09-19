@@ -14,10 +14,10 @@ package sage.enhance.spi;
  *
  * <p>The selection seam is deliberately execution-form-neutral so a future
  * provider can be an in-process ffmpeg filter, an external native worker, or a
- * sidecar service without changing the public interface. Phase 0 implements only
- * {@link #BUILTIN}; the other forms are declared so the SPI does not have to be
- * redesigned when a private provider needs them, but the core renders no argv for
- * them yet.
+ * sidecar service without changing the public interface. The core renders
+ * {@link #BUILTIN}/{@link #FFMPEG_FILTER} (a single {@code -vf} fragment) and
+ * {@link #EXTERNAL_PROCESS} (a spawned worker in a three-process pipeline);
+ * {@link #SIDECAR} is declared but not yet rendered.
  */
 public enum ExecutionForm
 {
@@ -25,8 +25,9 @@ public enum ExecutionForm
   BUILTIN,
   /** A provider-supplied ffmpeg {@code -vf} scale fragment. */
   FFMPEG_FILTER,
-  /** A separate native process the provider owns. Not rendered in Phase 0. */
+  /** A separate native worker process the provider owns, spawned by the core and
+   *  fed fixed-size raw frames over stdio (decode → worker → encode). */
   EXTERNAL_PROCESS,
-  /** A long-lived sidecar service the provider talks to. Not rendered in Phase 0. */
+  /** A long-lived sidecar service the provider talks to. Not yet rendered. */
   SIDECAR
 }

@@ -39,7 +39,7 @@ import java.util.concurrent.TimeUnit;
  * Property knobs:
  *   multimedia/hwaccel/preferred       comma list (default above)
  *   multimedia/hwaccel/vaapi_device    /dev/dri/renderD128
- *   multimedia/hwaccel/probe_ffmpeg    /usr/local/bin/ffmpeg-ac4
+ *   multimedia/hwaccel/probe_ffmpeg    /opt/sagetv/server/ffmpeg
  *   multimedia/hwaccel/enhance_runtime_probe  true (functionally verify NVENC)
  *
  * NOTE: This class does NOT shell out at class-load time — the probe runs
@@ -110,6 +110,19 @@ public final class HwEncoder
    * without a quality regression.
    */
   private static final Map<String, Boolean> scaleCudaInterpCache = new ConcurrentHashMap<String, Boolean>();
+
+  /** Cache: ffmpeg binary path -> Set of available output-format (muxer) names. */
+  private static final Map<String, Set<String>> muxerCache = new ConcurrentHashMap<String, Set<String>>();
+
+  /**
+   * Cache: {@code "bin|container|codec"} -> whether a real, functional
+   * stream-copy of that codec into that container verified end-to-end. This is
+   * the authoritative container-copy signal; the {@code -codecs}/{@code -muxers}
+   * listings are NOT (an ffmpeg build lists an {@code ac4} decoder and the
+   * mpegts/mp4/matroska muxers yet cannot signal AC-4 in any of them — proven
+   * empirically), which is exactly why this must actually run the copy.
+   */
+  private static final Map<String, Boolean> streamCopyCache = new ConcurrentHashMap<String, Boolean>();
 
   /**
    * Binaries we have already explained the "enhancement unavailable" verdict
@@ -317,6 +330,377 @@ public final class HwEncoder
   public static boolean hasFilter(String name)
   {
     return name != null && detectFilters().contains(name);
+  }
+
+  // ===========================================================================
+  // ffmpeg output-format (muxer) listing + functional container stream-copy
+  // self-test. Ported from the StreamingSourcePlugin's FfmpegCapabilities/
+  // FfmpegCapabilityProbe, but with the plugin's core fallacy corrected: it
+  // treated "has decoder for codec X" + "has muxer for container Y" as proof
+  // that X can be stream-copied into Y. It cannot — the muxer must also have a
+  // codec tag/signaling for X. So the LISTING is kept only as a cheap pre-gate,
+  // and the authoritative answer comes from actually running the copy.
+  // ===========================================================================
+
+  /**
+   * Probe a specific ffmpeg binary's output formats ("muxers") via
+   * {@code -hide_banner -formats}, cached per binary path exactly like
+   * {@link #detectFilters(String)}. A {@code -formats} name token may be a
+   * comma-separated alias list (e.g. {@code "mov,mp4,m4a"}); each alias is
+   * recorded lowercase. Returns an empty set on probe failure (reads as
+   * "muxer absent" — fail closed).
+   */
+  public static Set<String> detectMuxers(String ffmpegBin)
+  {
+    String key = (ffmpegBin == null || ffmpegBin.length() == 0)
+        ? Sage.get(PROP_PROBE_FFMPEG, DEFAULT_PROBE_FF) : ffmpegBin;
+    Set<String> cached = muxerCache.get(key);
+    if (cached != null) return cached;
+    synchronized (HwEncoder.class)
+    {
+      cached = muxerCache.get(key);
+      if (cached != null) return cached;
+      java.util.ArrayList<String> lines = new java.util.ArrayList<String>();
+      try
+      {
+        Process p = new ProcessBuilder(key, "-hide_banner", "-formats")
+            .redirectErrorStream(true).start();
+        BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+        try { String line; while ((line = r.readLine()) != null) lines.add(line); }
+        finally { try { r.close(); } catch (IOException ie) {} }
+        try { p.waitFor(); } catch (InterruptedException ie) { p.destroy(); }
+      }
+      catch (Throwable t)
+      {
+        if (Sage.DBG) System.out.println("HwEncoder: muxer probe of " + key + " failed: " + t);
+      }
+      Set<String> immut = Collections.unmodifiableSet(parseMuxerNames(lines));
+      muxerCache.put(key, immut);
+      if (Sage.DBG)
+        System.out.println("HwEncoder: muxer probe " + key + " -> " + immut.size() + " formats");
+      return immut;
+    }
+  }
+
+  /**
+   * Parse {@code ffmpeg -formats} output into the set of output-format (muxer)
+   * names. Rows look like {@code " DE mpegts   MPEG-TS (MPEG-2 Transport ...)"};
+   * the leading token is 1-2 chars of {@code D}/{@code E}. Only rows advertising
+   * {@code E} (a muxer) are recorded — the plugin's parser wrongly accepted
+   * demux-only ({@code D}) rows as muxers. A comma-separated name token is split
+   * into each alias. Package-visible so tests can feed canned output.
+   */
+  static Set<String> parseMuxerNames(List<String> lines)
+  {
+    Set<String> found = new HashSet<String>();
+    if (lines == null) return found;
+    for (String raw : lines)
+    {
+      if (raw == null) continue;
+      String line = raw.trim();
+      if (line.length() == 0) continue;
+      int sp = line.indexOf(' ');
+      if (sp <= 0) continue;
+      String flags = line.substring(0, sp);
+      if (flags.length() > 2) continue;
+      boolean okFlags = true, hasE = false;
+      for (int i = 0; i < flags.length(); i++)
+      {
+        char c = flags.charAt(i);
+        if (c != 'D' && c != 'E') { okFlags = false; break; }
+        if (c == 'E') hasE = true;
+      }
+      if (!okFlags || !hasE) continue;
+      String rest = line.substring(sp).trim();
+      if (rest.length() == 0) continue;
+      int nameEnd = rest.indexOf(' ');
+      String namesToken = nameEnd < 0 ? rest : rest.substring(0, nameEnd);
+      for (String name : namesToken.split(","))
+      {
+        String n = name.trim();
+        if (n.length() > 0) found.add(n.toLowerCase(Locale.ROOT));
+      }
+    }
+    return found;
+  }
+
+  /** True if the given ffmpeg binary advertises the named output format (muxer). */
+  public static boolean hasMuxer(String ffmpegBin, String muxer)
+  {
+    return muxer != null
+        && detectMuxers(ffmpegBin).contains(muxer.trim().toLowerCase(Locale.ROOT));
+  }
+
+  /** Minimum plausible size (bytes) of a ~1s real container-copy output. A
+   *  header-only stub (e.g. matroska's ~293-byte EBML head written before an
+   *  AC-4 mux failure) falls well below this. */
+  private static final long STREAMCOPY_MIN_OUTPUT_BYTES = 4096L;
+  /** Cap on the container-copy self-test so a wedged ffmpeg can't stall setup. */
+  private static final int STREAMCOPY_PROBE_TIMEOUT_SECS = 20;
+
+  /** ffmpeg stderr fragments (lowercase) that unambiguously mean "this muxer
+   *  cannot carry the codec". Captured empirically across mp4/matroska/raw. */
+  private static final String[] STREAMCOPY_TAG_FAILURES = {
+    "could not find tag for codec",
+    "no wav codec tag found",
+    "could not write header",
+    "codec not currently supported in container",
+    "output file is empty",
+  };
+
+  /**
+   * Functionally verify that {@code ffmpegBin} can stream-copy the selected
+   * track of {@code source} into {@code container} and that the result reads
+   * back as {@code expectedCodecName}. Runs a bounded ({@code -t 1}) real copy
+   * to a temp file, then an {@code ffprobe} readback, and caches the verdict per
+   * {@code binary|container|codec}. Fail-closed: any error, timeout, missing
+   * muxer, tag-failure signature, empty/short output, or codec mismatch yields
+   * {@code false}.
+   *
+   * <p>This is the container-copy authority (see {@link #streamCopyCache}). It
+   * needs a real {@code source} because ffmpeg has no AC-4 encoder to synthesize
+   * a probe stream; the first real AC-4 play seeds the cache, exactly like
+   * {@link #gpuEnhanceRuntimeOk(String)} seeds on first use.
+   */
+  public static boolean streamCopyIntoContainerOk(String ffmpegBin, java.io.File source,
+      String mapSelector, String container, String expectedCodecName)
+  {
+    return streamCopyIntoContainerOk(ffmpegBin, source, mapSelector, container,
+        expectedCodecName, null, null);
+  }
+
+  /**
+   * Variant of {@link #streamCopyIntoContainerOk(String, java.io.File, String,
+   * String, String)} that appends {@code extraOutputArgs} to the mux command
+   * (e.g. {@code -movflags +frag_keyframe+empty_moov+default_base_moof} for a
+   * fragmented-MP4/CMAF probe) and keys the cache with {@code variantLabel} so a
+   * plain-MP4 verdict and a fragmented-MP4 verdict are cached independently.
+   */
+  public static boolean streamCopyIntoContainerOk(String ffmpegBin, java.io.File source,
+      String mapSelector, String container, String expectedCodecName,
+      List<String> extraOutputArgs, String variantLabel)
+  {
+    String bin = (ffmpegBin == null || ffmpegBin.length() == 0)
+        ? Sage.get(PROP_PROBE_FFMPEG, DEFAULT_PROBE_FF) : ffmpegBin;
+    if (source == null || !source.isFile() || container == null || container.length() == 0)
+      return false;
+    String lcContainer = container.trim().toLowerCase(Locale.ROOT);
+    String cacheKey = bin + "|" + lcContainer
+        + (variantLabel == null ? "" : "/" + variantLabel) + "|"
+        + (expectedCodecName == null ? "" : expectedCodecName.trim().toLowerCase(Locale.ROOT));
+    Boolean cached = streamCopyCache.get(cacheKey);
+    if (cached != null) return cached.booleanValue();
+    synchronized (HwEncoder.class)
+    {
+      cached = streamCopyCache.get(cacheKey);
+      if (cached != null) return cached.booleanValue();
+
+      boolean ok = false;
+      java.io.File tmp = null;
+      try
+      {
+        // Cheap pre-gate: if the muxer isn't even present, skip the real copy.
+        if (!detectMuxers(bin).contains(lcContainer))
+        {
+          if (Sage.DBG)
+            System.out.println("HwEncoder: stream-copy probe skipped — no '" + lcContainer
+                + "' muxer on " + bin);
+          streamCopyCache.put(cacheKey, Boolean.FALSE);
+          return false;
+        }
+        tmp = java.io.File.createTempFile("sage-streamcopyprobe-", ".tmp");
+        List<String> cmd = buildStreamCopyProbeCommand(bin, source.getPath(), mapSelector,
+            lcContainer, tmp.getPath(), extraOutputArgs);
+        Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+        StringBuilder out = new StringBuilder();
+        BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+        try
+        {
+          String line;
+          while ((line = r.readLine()) != null)
+            if (out.length() < 4000) out.append(line).append('\n');
+        }
+        finally { try { r.close(); } catch (IOException ie) {} }
+        int exit = -1;
+        if (p.waitFor(STREAMCOPY_PROBE_TIMEOUT_SECS, TimeUnit.SECONDS)) exit = p.exitValue();
+        else p.destroyForcibly();
+        long sz = tmp.length();
+        String readback = null;
+        if (exit == 0 && sz >= STREAMCOPY_MIN_OUTPUT_BYTES)
+          readback = probeFirstAudioCodec(deriveFfprobePath(bin), tmp.getPath());
+        ok = classifyStreamCopyProbe(exit, out.toString(), sz, readback, expectedCodecName);
+        if (Sage.DBG)
+          System.out.println("HwEncoder: stream-copy probe " + expectedCodecName + " -> " + lcContainer
+              + (variantLabel == null ? "" : "/" + variantLabel)
+              + " on " + bin + " = " + (ok ? "OK" : "NO")
+              + " (exit=" + exit + " size=" + sz + " readback=" + readback + ")");
+      }
+      catch (Throwable t)
+      {
+        if (Sage.DBG) System.out.println("HwEncoder: stream-copy probe errored: " + t);
+        ok = false;
+      }
+      finally
+      {
+        if (tmp != null) { try { tmp.delete(); } catch (Throwable t) { /* best effort */ } }
+      }
+      streamCopyCache.put(cacheKey, Boolean.valueOf(ok));
+      return ok;
+    }
+  }
+
+  // --- Explicit AC-4 capability map (per the three-layer design's Layer 3) ----
+  // These name each container/variant independently rather than collapsing them,
+  // because "ffmpeg knows AV_CODEC_ID_AC4" (a decoder) says NOTHING about whether
+  // any given muxer can SIGNAL AC-4. Each answer is an end-to-end verified,
+  // cached stream-copy self-test of the real source's AC-4 track. All are
+  // fail-closed and require a real AC-4 source (ffmpeg has no AC-4 encoder to
+  // synthesize a probe stream, so these seed on first real AC-4 play).
+
+  /** Can ffmpeg copy this source's AC-4 track into a raw {@code .ac4} elementary stream? */
+  public static boolean canMuxRawAc4(String ffmpegBin, java.io.File source)
+  {
+    return streamCopyIntoContainerOk(ffmpegBin, source, "0:a:0", "ac4", "ac4");
+  }
+
+  /** Can ffmpeg mux this source's AC-4 track into a plain (non-fragmented) MP4 (ISOBMFF {@code ac-4} sample entry)? */
+  public static boolean canMuxAc4IntoMp4(String ffmpegBin, java.io.File source)
+  {
+    return streamCopyIntoContainerOk(ffmpegBin, source, "0:a:0", "mp4", "ac4");
+  }
+
+  /** Can ffmpeg mux this source's AC-4 track into a fragmented MP4 / CMAF segment (the PWA delivery target)? */
+  public static boolean canMuxAc4IntoFragmentedMp4(String ffmpegBin, java.io.File source)
+  {
+    return streamCopyIntoContainerOk(ffmpegBin, source, "0:a:0", "mp4", "ac4",
+        java.util.Arrays.asList("-movflags", "+frag_keyframe+empty_moov+default_base_moof"), "frag");
+  }
+
+  /** Can ffmpeg remux this source's AC-4 track into MPEG-TS with correct AC-4 signaling (verified by readback, not just a non-error exit)? */
+  public static boolean canMuxAc4IntoMpegTs(String ffmpegBin, java.io.File source)
+  {
+    return streamCopyIntoContainerOk(ffmpegBin, source, "0:a:0", "mpegts", "ac4");
+  }
+
+  /** Can ffmpeg mux this source's AC-4 track into Matroska ({@code A_AC4} track mapping)? */
+  public static boolean canMuxAc4IntoMatroska(String ffmpegBin, java.io.File source)
+  {
+    return streamCopyIntoContainerOk(ffmpegBin, source, "0:a:0", "matroska", "ac4");
+  }
+
+  /** Convenience: can this ffmpeg stream-copy the first AC-4 audio track of
+   *  {@code source} into {@code container} (verified end-to-end)? Accepts the
+   *  ffmpeg output-format token ({@code matroska}/{@code mp4}/{@code mpegts}). */
+  public static boolean ac4StreamCopyOk(String container, String ffmpegBin, java.io.File source)
+  {
+    return streamCopyIntoContainerOk(ffmpegBin, source, "0:a:0", container, "ac4");
+  }
+
+  /**
+   * Build the container stream-copy self-test command. Package-private so the
+   * command shape is unit-assertable without spawning ffmpeg. {@code extraOutputArgs}
+   * (may be null) are inserted before {@code -f} so container-shaping flags like
+   * {@code -movflags} apply to the output.
+   */
+  static List<String> buildStreamCopyProbeCommand(String bin, String source,
+      String mapSelector, String container, String tmpOut, List<String> extraOutputArgs)
+  {
+    List<String> cmd = new ArrayList<String>();
+    cmd.add(bin);
+    cmd.add("-hide_banner");
+    cmd.add("-loglevel"); cmd.add("error");
+    cmd.add("-y");
+    cmd.add("-i"); cmd.add(source);
+    cmd.add("-map"); cmd.add(mapSelector);
+    cmd.add("-c"); cmd.add("copy");
+    cmd.add("-t"); cmd.add("1");
+    if (extraOutputArgs != null)
+      cmd.addAll(extraOutputArgs);
+    cmd.add("-f"); cmd.add(container);
+    cmd.add(tmpOut);
+    return cmd;
+  }
+
+  /** Back-compat overload (no extra output args). */
+  static List<String> buildStreamCopyProbeCommand(String bin, String source,
+      String mapSelector, String container, String tmpOut)
+  {
+    return buildStreamCopyProbeCommand(bin, source, mapSelector, container, tmpOut, null);
+  }
+
+  /**
+   * Classify a container stream-copy self-test from its observable results.
+   * Package-private + pure so the empirically-captured failure signatures are
+   * unit-tested without a real ffmpeg. Returns {@code true} only when the mux
+   * exited cleanly, wrote a plausibly-sized file with no tag-failure signature,
+   * AND the readback codec equals {@code expectedCodec}.
+   */
+  static boolean classifyStreamCopyProbe(int muxExit, String muxOutput, long outputBytes,
+      String readbackCodec, String expectedCodec)
+  {
+    if (muxOutput != null)
+    {
+      String lc = muxOutput.toLowerCase(Locale.ROOT);
+      for (String sig : STREAMCOPY_TAG_FAILURES)
+        if (lc.contains(sig)) return false;
+    }
+    if (muxExit != 0) return false;
+    if (outputBytes < STREAMCOPY_MIN_OUTPUT_BYTES) return false;
+    if (readbackCodec == null) return false;
+    String rb = readbackCodec.trim();
+    if (rb.length() == 0) return false;
+    if (expectedCodec == null) return false;
+    return rb.equalsIgnoreCase(expectedCodec.trim());
+  }
+
+  /**
+   * Derive the sibling {@code ffprobe} path from an {@code ffmpeg} path
+   * (e.g. {@code /opt/sagetv/server/ffmpeg} -> {@code /opt/sagetv/server/ffprobe}).
+   * Package-private for testing.
+   */
+  static String deriveFfprobePath(String ffmpegBin)
+  {
+    if (ffmpegBin == null || ffmpegBin.length() == 0) return "ffprobe";
+    java.io.File f = new java.io.File(ffmpegBin);
+    String name = f.getName();
+    int at = name.toLowerCase(Locale.ROOT).indexOf("ffmpeg");
+    String probeName = (at >= 0)
+        ? name.substring(0, at) + "ffprobe" + name.substring(at + "ffmpeg".length())
+        : "ffprobe";
+    java.io.File parent = f.getParentFile();
+    return (parent != null) ? new java.io.File(parent, probeName).getPath() : probeName;
+  }
+
+  /** Run ffprobe for the first audio track's codec_name; null on any failure. */
+  private static String probeFirstAudioCodec(String ffprobeBin, String file)
+  {
+    Process p = null;
+    try
+    {
+      List<String> cmd = new ArrayList<String>();
+      cmd.add(ffprobeBin); cmd.add("-hide_banner"); cmd.add("-v"); cmd.add("error");
+      cmd.add("-select_streams"); cmd.add("a:0");
+      cmd.add("-show_entries"); cmd.add("stream=codec_name");
+      cmd.add("-of"); cmd.add("default=nokey=1:noprint_wrappers=1");
+      cmd.add(file);
+      p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+      BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+      String first = null;
+      try
+      {
+        String line;
+        while ((line = r.readLine()) != null)
+        {
+          String t = line.trim();
+          if (first == null && t.length() > 0) first = t;
+        }
+      }
+      finally { try { r.close(); } catch (IOException ie) {} }
+      p.waitFor(10, TimeUnit.SECONDS);
+      return first;
+    }
+    catch (Throwable t) { return null; }
+    finally { if (p != null && p.isAlive()) p.destroyForcibly(); }
   }
 
   /**

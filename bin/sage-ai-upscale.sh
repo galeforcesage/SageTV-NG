@@ -16,10 +16,10 @@
 #       [--model realesr-general-x4v3] \
 #       [--chunk-frames 500] \
 #       [--realesrgan /usr/local/bin/realesrgan-ncnn-vulkan] \
-#       [--ffmpeg /usr/bin/ffmpeg] \
+#       [--ffmpeg /opt/sagetv/server/ffmpeg] [--ffprobe /opt/sagetv/server/ffprobe] \
 #       [--workdir /tmp/sage-ai-upscale.$$]
 #
-#   sage-ai-upscale.sh --probe [--realesrgan BIN] [--model M] [--ffmpeg BIN]
+#   sage-ai-upscale.sh --probe [--realesrgan BIN] [--model M]
 #       Vulkan availability check: upscales a trivial test frame and exits 0
 #       only if a Vulkan device initializes and produces output; exits 7
 #       otherwise. SageTV uses this to decide whether to engage the AI-upscale
@@ -78,32 +78,26 @@ done
 # Exits 0 iff realesrgan-ncnn-vulkan can initialize a Vulkan device and
 # upscale a trivial test frame; exits 7 otherwise. Consulted by SageTV to
 # decide whether to engage the AI-upscale chained job. Only the upscaler
-# binary / model (and optionally ffmpeg for test-frame generation) matter here.
+# binary and model matter here -- the probe deliberately does NOT use ffmpeg.
 if [ "$PROBE" -eq 1 ]; then
     if [ ! -x "$REALESRGAN_BIN" ]; then
         echo "sage-ai-upscale: [probe] upscaler binary not executable: $REALESRGAN_BIN" >&2
         exit 7
-    fi
-    if [ ! -x "$FFMPEG_BIN" ]; then
-        FFMPEG_BIN="$(command -v ffmpeg || true)"
     fi
     PROBE_DIR="$(mktemp -d -t sage-ai-probe.XXXXXX)"
     trap 'rm -rf "$PROBE_DIR"' EXIT
     PROBE_IN="$PROBE_DIR/in"
     PROBE_OUT="$PROBE_DIR/out"
     mkdir -p "$PROBE_IN" "$PROBE_OUT"
-    # Prefer ffmpeg to synthesize a 16x16 test frame; fall back to a hand
-    # written 1x1 PNG so the probe still exercises Vulkan without ffmpeg.
-    if [ -n "$FFMPEG_BIN" ] && [ -x "$FFMPEG_BIN" ]; then
-        "$FFMPEG_BIN" -hide_banner -loglevel error -y -f lavfi \
-            -i color=c=black:s=16x16 -frames:v 1 "$PROBE_IN/f_00000001.png" \
-            >/dev/null 2>&1 || true
-    fi
-    if [ ! -s "$PROBE_IN/f_00000001.png" ]; then
-        printf '%s' \
-'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC' \
-            | base64 -d > "$PROBE_IN/f_00000001.png" 2>/dev/null || true
-    fi
+    # Embedded 16x16 black RGB PNG. This used to be synthesized by ffmpeg via
+    # "-f lavfi -i color=...", which is wrong twice over: the probe is testing
+    # Vulkan, not ffmpeg, and SageTV's own ffmpeg build has the lavfi input
+    # device disabled, so pointing --ffmpeg at it made the probe fail. The old
+    # fallback image was 1x1, which realesrgan-ncnn-vulkan refuses to decode,
+    # so that path reported "no usable Vulkan device" on a perfectly good GPU.
+    printf '%s' \
+'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAEElEQVR42mNgGAWjYBTAAAADEAAB1y2EYwAAAABJRU5ErkJggg==' \
+        | base64 -d > "$PROBE_IN/f_00000001.png" 2>/dev/null || true
     if [ ! -s "$PROBE_IN/f_00000001.png" ]; then
         echo "sage-ai-upscale: [probe] could not create a test frame" >&2
         exit 7

@@ -46,8 +46,38 @@ public final class NgPlaybackContextSerializer
     sb.append(','); appendKey(sb, "index"); appendIndex(sb, ctx.getIndex());
     sb.append(','); appendKey(sb, "skip"); appendSkip(sb, ctx.getSkip());
     sb.append(','); appendKey(sb, "flow"); appendFlow(sb, ctx.getFlow());
+    sb.append(','); appendKey(sb, "segments"); appendSegments(sb, ctx.getSegments());
     sb.append('}');
     return sb.toString();
+  }
+
+  private static void appendSegments(StringBuilder sb, NgSegmentContext segments)
+  {
+    sb.append('{');
+    appendKey(sb, "count"); sb.append(segments.getCount());
+    sb.append(','); appendKey(sb, "totalContentMs"); sb.append(segments.getTotalContentMs());
+    sb.append(','); appendKey(sb, "hasGaps"); sb.append(segments.hasGaps());
+    sb.append(','); appendKey(sb, "items"); appendSegmentItems(sb, segments.getItems());
+    sb.append('}');
+  }
+
+  private static void appendSegmentItems(StringBuilder sb, List<NgSegment> items)
+  {
+    sb.append('[');
+    for (int i = 0; i < items.size(); i++)
+    {
+      if (i > 0) sb.append(',');
+      NgSegment seg = items.get(i);
+      sb.append('{');
+      appendKey(sb, "index"); sb.append(seg.getIndex());
+      sb.append(','); appendKey(sb, "startTimeUtcMs"); sb.append(seg.getStartTimeUtcMs());
+      sb.append(','); appendKey(sb, "durationMs"); sb.append(seg.getDurationMs());
+      sb.append(','); appendKey(sb, "contentBaseMs"); sb.append(seg.getContentBaseMs());
+      sb.append(','); appendKey(sb, "gapBeforeMs"); sb.append(seg.getGapBeforeMs());
+      sb.append(','); appendKey(sb, "fileSizeBytes"); sb.append(seg.getFileSizeBytes());
+      sb.append('}');
+    }
+    sb.append(']');
   }
 
   private static void appendLive(StringBuilder sb, NgLiveContext live)

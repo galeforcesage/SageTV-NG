@@ -668,4 +668,99 @@ public class PlaybackDecisionEngineTest
     assertEquals(out.decision, PlaybackDecisionEngine.Decision.DIRECT_PLAY,
         "The interlaced gate is per-codec: a codec the surface did not flag must be left unchanged");
   }
+
+  // -----------------------------------------------------------------------
+  // Per-container transport dimension (Protocol 2.1): a surface can declare a
+  // push-only container (MPEG2-PS;push=true;pull=false) so the server does not
+  // route a program stream over the pull transport the client cannot
+  // direct-play (a raw stv:// .mpg pull OPEN returns NON_MEDIA).
+  // -----------------------------------------------------------------------
+  private static PlaybackSurfaceSet buildSurfaceSet(final String id, final String delivery,
+      final String video, final String audio, final String containers)
+  {
+    return PlaybackSurfaceSet.build(id, new java.util.function.Function<String, String[]>()
+    {
+      public String[] apply(String sid)
+      {
+        // [ROUTE, PRIORITY, DELIVERY_MODES, VIDEO_CODECS, AUDIO_CODECS, CONTAINERS]
+        return new String[] { "native", "100", delivery, video, audio, containers };
+      }
+    });
+  }
+
+  private static String chosenDeliveryFor(PlaybackSurfaceSet set, String container,
+      String video, String audio)
+  {
+    java.util.List<PlaybackDecisionEngine.SurfaceDecision> ranked =
+        PlaybackDecisionEngine.evaluateSurfaces(set, container, video, audio,
+            1920, 1080, 0, 0, /*sourceInterlaced=*/false, null, null, null);
+    assertFalse(ranked.isEmpty(), "expected at least one servable surface");
+    return ranked.get(0).chosenDeliveryMode;
+  }
+
+  @Test
+  public void pushOnlyContainer_directPlay_routesOverPushNotPull()
+  {
+    // android_ijk-style surface: offers BOTH push and pull, but declares
+    // MPEG2-PS as push-only. A PS source must DIRECT_PLAY over push.
+    PlaybackSurfaceSet set = buildSurfaceSet("android_ijk", "push,pull",
+        "MPEG2-VIDEO,H264,HEVC", "AC3,AAC",
+        "MPEG2-PS;push=true;pull=false,MP4,MATROSKA");
+    assertEquals(chosenDeliveryFor(set, "MPEG2-PS", "MPEG2-VIDEO", "AC3"), "push",
+        "A push-only MPEG2-PS container must be delivered over push, not the cheaper pull");
+  }
+
+  @Test
+  public void unrestrictedContainer_directPlay_keepsPullFirst()
+  {
+    // Control: a bare MPEG2-PS (no transport attribute) is fail-open, so the
+    // legacy cheapest-first pull>push order is preserved.
+    PlaybackSurfaceSet set = buildSurfaceSet("android_ijk", "push,pull",
+        "MPEG2-VIDEO,H264,HEVC", "AC3,AAC",
+        "MPEG2-PS,MP4,MATROSKA");
+    assertEquals(chosenDeliveryFor(set, "MPEG2-PS", "MPEG2-VIDEO", "AC3"), "pull",
+        "An unrestricted container must keep the legacy cheapest-first (pull) routing");
+  }
+
+  @Test
+  public void pushOnlyContainer_otherContainersUnaffected()
+  {
+    // The PS transport restriction must not leak onto MP4 on the same surface.
+    PlaybackSurfaceSet set = buildSurfaceSet("android_ijk", "push,pull",
+        "MPEG2-VIDEO,H264,HEVC", "AC3,AAC",
+        "MPEG2-PS;push=true;pull=false,MP4,MATROSKA");
+    assertEquals(chosenDeliveryFor(set, "MP4", "H264", "AAC"), "pull",
+        "A container without a transport attribute must stay pull-first even when a sibling container is push-only");
+  }
+
+  @Test
+  public void pushOnlyContainer_pushOnlyQueriesTrueOnSurface()
+  {
+    PlaybackSurfaceSet set = buildSurfaceSet("android_ijk", "push,pull",
+        "MPEG2-VIDEO,H264,HEVC", "AC3,AAC",
+        "MPEG2-PS;push=true;pull=false,MP4");
+    PlaybackSurface s = set.get("android_ijk");
+    assertTrue(s.isContainerPushOnly("MPEG2-PS"), "MPEG2-PS declared push-only");
+    assertFalse(s.containerAllowsTransport("MPEG2-PS", /*push=*/false), "PS pull must be disallowed");
+    assertTrue(s.containerAllowsTransport("MPEG2-PS", /*push=*/true), "PS push must be allowed");
+    assertTrue(s.containerAllowsTransport("MP4", /*push=*/false), "MP4 (unrestricted) is fail-open on pull");
+    assertFalse(s.isContainerPushOnly("MP4"), "MP4 is not push-only");
+  }
+
+  @Test
+  public void mpeg1PsAlias_foldsOntoMpeg2PsWithTransportFlags()
+  {
+    // MPEG1-PS is the same PS container as MPEG2-PS; the client may spell it
+    // either way. The transport flags must land on the canonical MPEG2-PS entry.
+    PlaybackSurfaceSet set = buildSurfaceSet("android_ijk", "push,pull",
+        "MPEG1-VIDEO,MPEG2-VIDEO,H264", "AC3,AAC",
+        "MPEG1-PS;push=true;pull=false,MP4");
+    PlaybackSurface s = set.get("android_ijk");
+    assertTrue(s.supportsContainer("MPEG2-PS"),
+        "MPEG1-PS must canonicalize to MPEG2-PS in the container set");
+    assertTrue(s.isContainerPushOnly("MPEG2-PS"),
+        "Transport flags on MPEG1-PS must apply to the canonical MPEG2-PS entry");
+    assertEquals(chosenDeliveryFor(set, "MPEG2-PS", "MPEG1-VIDEO", "AC3"), "push",
+        "A PS source (advertised as MPEG1-PS) must still route over push");
+  }
 }

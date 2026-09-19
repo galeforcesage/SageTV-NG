@@ -23,13 +23,18 @@ import java.util.List;
  * miniclient-playable MPEG-TS (H.264 + AC-3).
  *
  * Strict isolation:
- *   - Always invokes /usr/local/bin/ffmpeg-ac4 by ABSOLUTE PATH.
- *   - Never touches the SageTV-patched ffmpeg or the stock /usr/bin/ffmpeg.
+ *   - Always invokes the core's unified ffmpeg by ABSOLUTE PATH
+ *     (/opt/sagetv/server/ffmpeg, overridable via hdhr/ac4_transcode_ffmpeg).
+ *     Historically this was a separate /usr/local/bin/ffmpeg-ac4 build; the
+ *     FFmpeg unification work folded the AC-4 decoder into the single core
+ *     binary, so no side build is needed or wanted.
+ *   - Never resolves ffmpeg from PATH (that would find the distribution build,
+ *     which has neither the SageTV custom flags nor an AC-4 decoder).
  *   - Sage's existing FFMPEGTranscoder is NOT modified; this is a parallel
  *     code path used only when the source MediaFile is HEVC and the consuming
  *     client is a legacy renderer (HD300 etc.).
  *
- * Single command shape (validated 5/10 on /tmp/hevc-sample.ts at 6.1x rt):
+ * Single command shape:
  *   ffmpeg-ac4 -i &lt;src&gt;
  *              -map 0:v:0 -map 0:a:0
  *              -vf scale=1920:1080:flags=bicubic,format=yuv420p
@@ -44,7 +49,7 @@ import java.util.List;
  *   hdhr/ac4_transcode_enabled    default "auto"  (auto|on|off)
  *                                 auto = on iff ANY HW H.264 encoder is
  *                                 available (nvenc/vaapi/qsv/amf/videotoolbox)
- *   hdhr/ac4_transcode_ffmpeg     default /usr/local/bin/ffmpeg-ac4
+ *   hdhr/ac4_transcode_ffmpeg     default /opt/sagetv/server/ffmpeg
  *   hdhr/ac4_transcode_vcodec     default "auto" (HwEncoder picks); accepts
  *                                 explicit names like h264_nvenc, h264_vaapi
  *   hdhr/ac4_transcode_preset     default p4 (portable hint, mapped per encoder)

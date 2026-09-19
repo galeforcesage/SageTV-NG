@@ -7,6 +7,17 @@ sent by the SageTV-NG server to NG-capable clients **before** `MEDIACMD_OPENURL`
 It eliminates client-side stream probing by providing full codec, resolution,
 audio track, and timing metadata upfront.
 
+> **STREAMINFO is now the sole native NG format channel.** The former `ng_fmt`
+> hint (openURL `|ng_fmt=` push suffix and `?ng_fmt=` pull query) and the
+> `;ng_out=` suffix on `CAP_EFFECTIVE_DELIVERY` have been **retired** — the
+> server no longer emits them. Native NG clients (push *and* pull) must obtain
+> wire codecs from this command; it is a strict superset of `ng_fmt` (adds
+> container, resolution/fps, channel counts, and the full track list). Advertise
+> the `STREAMINFO` capability to receive it. (Browser/CMAF clients don't use this
+> command — they read codecs from the fMP4 `init.mp4` via `#EXT-X-MAP`, standard
+> HLS.) The codecs reported are always the **wire/output** codecs (post-transcode
+> / post-enhance), never the source file's. See `NG-Format-Channel-Migration.md`.
+
 **Backwards compatibility**: This command is ONLY sent to clients that advertise
 the `STREAMINFO` capability during NG session negotiation. Legacy clients never
 receive it and are completely unaffected.
