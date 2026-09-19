@@ -102,6 +102,44 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
     ensureInputExists(CaptureDeviceInput.DIGITAL_TUNER_CROSSBAR_INDEX, 0);
   }
 
+  /**
+   * Maps an HDHomeRun lineup.json {@code VideoCodec} token to the SageTV
+   * {@link sage.media.format.MediaFormat} constant used to seed a MediaFile
+   * format on the HTTP-pull path. Defaults to MPEG-2 video (ATSC 1.0) for any
+   * unrecognized token, which is the safe legacy assumption.
+   */
+  private static String mapLineupVideoCodec(String vc)
+  {
+    if (vc != null)
+    {
+      if ("HEVC".equalsIgnoreCase(vc) || "H265".equalsIgnoreCase(vc))
+        return sage.media.format.MediaFormat.HEVC;
+      if ("H264".equalsIgnoreCase(vc) || "AVC".equalsIgnoreCase(vc))
+        return sage.media.format.MediaFormat.H264;
+    }
+    return sage.media.format.MediaFormat.MPEG2_VIDEO;
+  }
+
+  /**
+   * Maps an HDHomeRun lineup.json {@code AudioCodec} token to the SageTV
+   * {@link sage.media.format.MediaFormat} constant used to seed a MediaFile
+   * format on the HTTP-pull path. Defaults to AC-3 (ATSC 1.0) for any
+   * unrecognized token.
+   */
+  private static String mapLineupAudioCodec(String ac)
+  {
+    if (ac != null)
+    {
+      if ("AC4".equalsIgnoreCase(ac) || "AC-4".equalsIgnoreCase(ac))
+        return sage.media.format.MediaFormat.AC4;
+      if ("EAC3".equalsIgnoreCase(ac) || "E-AC3".equalsIgnoreCase(ac) || "EC3".equalsIgnoreCase(ac))
+        return sage.media.format.MediaFormat.EAC3;
+      if ("AAC".equalsIgnoreCase(ac))
+        return sage.media.format.MediaFormat.AAC;
+    }
+    return sage.media.format.MediaFormat.AC3;
+  }
+
   public void startEncoding(CaptureDeviceInput cdi, String encodeFile, String channel) throws EncodingException
   {
     if (Sage.DBG) System.out.println("startEncoding for "+ getName() +", file=" + encodeFile + ", chan=" + channel);
@@ -140,25 +178,36 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
       if (host != null)
       {
         HDHomeRunLineup lu = HDHomeRunLineup.forHost(host);
-        // Fail-fast for HEVC channels that ARE DRM-locked: native libhdhomerun
+        // Fail-fast for channels that ARE DRM-locked: native libhdhomerun
         // can't decrypt them either, so falling through would just produce a
         // 0-byte capture that gets reaped 30s later. Throwing here surfaces a
         // clean error to the scheduler instead of a silent timeout cycle.
         HDHomeRunLineup.Entry lu_entry = lu.lookup(channel);
-        if (lu_entry != null && lu_entry.drm
-            && "HEVC".equalsIgnoreCase(lu_entry.videoCodec))
+        if (lu_entry != null && lu_entry.drm)
         {
-          if (Sage.DBG) System.out.println("HDHR ATSC3: refusing to record DRM-locked "
-              + "HEVC channel " + channel + " (" + lu_entry.guideName
-              + ") -- no decryption key available");
+          if (Sage.DBG) System.out.println("HDHR: refusing to record DRM-locked "
+              + "channel " + channel + " (" + lu_entry.guideName + ", codec="
+              + lu_entry.videoCodec + ") -- no decryption key available");
           throw new EncodingException(EncodingException.CAPTURE_DEVICE_INSTALL, 0);
         }
-        if (lu.isHevcNonDrm(channel))
+        // Route BOTH ATSC 3.0 (HEVC/AC-4) and ATSC 1.0 (MPEG-2/AC-3) over the
+        // device's /auto/v<ch> HTTP endpoint. libhdhomerun's native UDP
+        // streaming does not survive this container's NAT/cross-subnet setup --
+        // it yields 0 bytes for every channel -- whereas the outbound TCP pull
+        // delivers data. ATSC1 pull can be turned off via
+        // hdhr/atsc1_http_pull_enabled for environments where native works.
+        boolean isHevc = lu_entry != null && "HEVC".equalsIgnoreCase(lu_entry.videoCodec);
+        boolean httpPullEligible = lu_entry != null && lu_entry.url != null
+            && (isHevc || Sage.getBoolean("hdhr/atsc1_http_pull_enabled", true));
+        if (httpPullEligible)
         {
-          String url = lu.getHttpUrl(channel);
+          String url = lu_entry.url;
           if (url != null)
           {
-            if (Sage.DBG) System.out.println("HDHR ATSC3 HTTP-pull: chan=" + channel
+            String seedVideoCodec = mapLineupVideoCodec(lu_entry.videoCodec);
+            String seedAudioCodec = mapLineupAudioCodec(lu_entry.audioCodec);
+            if (Sage.DBG) System.out.println("HDHR HTTP-pull: chan=" + channel
+                + " v=" + seedVideoCodec + " a=" + seedAudioCodec
                 + " url=" + url + " file=" + encodeFile);
             HttpPullCaptureJob job = new HttpPullCaptureJob(url, encodeFile);
             httpPullJob = job;
@@ -186,14 +235,23 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
               if (mf != null)
               {
                 sage.media.format.ContainerFormat existing = mf.getFileFormat();
-                if (existing == null || existing.getNumberOfStreams() == 0)
+                // Seed whenever the current format is not actually usable for playback.
+                // On a fresh file `existing` is null. On re-tune / exit-and-reenter the
+                // MediaFile is reused and can carry a stale, partial format: streams are
+                // present (so getNumberOfStreams()>0) but the primary video/audio codec
+                // names are empty, which makes MediaFile.hasValidFileFormat() return false.
+                // In that state VideoFrame.shouldIWaitToStartPlayback() never clears and
+                // LoadMF spins until the 30s videoframe/max_wait_for_recording_data hard
+                // timeout aborts to a black screen. Re-seed the known HEVC+AC-4 identity so
+                // the format becomes valid immediately, matching the fresh-file path.
+                if (existing == null || existing.getNumberOfStreams() == 0 || !mf.hasValidFileFormat())
                 {
                   sage.media.format.ContainerFormat cf = new sage.media.format.ContainerFormat();
                   cf.setFormatName(sage.media.format.MediaFormat.MPEG2_TS);
                   sage.media.format.VideoFormat vf = new sage.media.format.VideoFormat();
-                  vf.setFormatName(sage.media.format.MediaFormat.HEVC);
+                  vf.setFormatName(seedVideoCodec);
                   sage.media.format.AudioFormat af = new sage.media.format.AudioFormat();
-                  af.setFormatName(sage.media.format.MediaFormat.AC4);
+                  af.setFormatName(seedAudioCodec);
                   cf.setStreamFormats(new sage.media.format.BitstreamFormat[] { vf, af });
                   mf.setMediafileFormat(cf);
                   if (Sage.DBG) System.out.println("ATSC3 HTTP-pull: seeded MediaFile format=" + cf
