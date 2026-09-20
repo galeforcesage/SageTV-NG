@@ -43,9 +43,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libavcodec-dev \
     libswscale-dev \
     libswresample-dev \
-    `# CUDA toolkit for --enable-cuda-nvcc + --enable-libnpp (scale_npp filter)` \
+    `# CUDA toolkit for --enable-cuda-nvcc + --enable-libnpp (scale_npp filter).` \
+    `# nvidia-cuda-toolkit already ships the NPP dev headers (/usr/include/nppi.h)` \
+    `# and linkable libnpp*.so; there is no separate libnpp-dev package on Ubuntu` \
+    `# 24.04 (noble) -- adding one breaks the build with "Unable to locate package".` \
     nvidia-cuda-toolkit \
-    libnpp-dev \
     `# VAAPI for --enable-vaapi (AMD/Intel GPU encode + scale_vaapi filter)` \
     libva-dev \
     && rm -rf /var/lib/apt/lists/*
