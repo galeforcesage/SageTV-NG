@@ -129,12 +129,39 @@ new  = r'''\1
                     }
                 } else if (strstr(sagetv_cmd_buf, "videorateadapt") == sagetv_cmd_buf) {
                     int rate_adjust = atoi(sagetv_cmd_buf + 15) * 1000;
+                    int fi, si, applied = 0;
                     av_log(NULL, AV_LOG_INFO,
                            "SageTV: videorateadapt request: %d bps\\n", rate_adjust);
-                    /* Best-effort runtime bitrate change is non-trivial on
-                       modern fftools (per-output OutputStream lookup needed).
-                       Logging the request preserves the SageTV protocol; the
-                       Java side will treat unrequited rate changes gracefully. */
+                    /* Apply the delta live to every video output encoder. nvenc.c
+                       reconfig_encoder() re-reads enc_ctx->bit_rate each frame and
+                       calls nvEncReconfigureEncoder (forceIDR, no SPS/dimension
+                       change) so the CMAF/MSE init.mp4 stays valid. libx264 self-
+                       reconfigures the same way. Cross-thread int writes to the
+                       encoder ctx are aligned and benign (matches the legacy
+                       SageTV FFmpeg fork's videorateadapt behaviour). */
+                    for (fi = 0; fi < nb_output_files; fi++) {
+                        OutputFile *of = output_files[fi];
+                        if (!of) continue;
+                        for (si = 0; si < of->nb_streams; si++) {
+                            OutputStream *ost = of->streams[si];
+                            AVCodecContext *e;
+                            int64_t nb;
+                            if (!ost || !ost->enc) continue;
+                            e = ost->enc->enc_ctx;
+                            if (!e || e->codec_type != AVMEDIA_TYPE_VIDEO) continue;
+                            nb = (int64_t)e->bit_rate + rate_adjust;
+                            if (nb < 100000) nb = 100000;
+                            e->bit_rate = nb;
+                            e->rc_max_rate = nb;
+                            applied++;
+                            av_log(NULL, AV_LOG_INFO,
+                                   "SageTV: videorateadapt applied out %d:%d -> %lld bps\\n",
+                                   fi, si, (long long)e->bit_rate);
+                        }
+                    }
+                    if (!applied)
+                        av_log(NULL, AV_LOG_WARNING,
+                               "SageTV: videorateadapt: no video output stream found\\n");
                 }
                 *eol = 0;
                 cmd_len = strlen(sagetv_cmd_buf) + 1;

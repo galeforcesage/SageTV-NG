@@ -3244,11 +3244,31 @@ public class HTTPLSServer implements Runnable
       int targetVideoKbps = Math.max(64, bwkbps - 32);
       if (xcode.transcoder.getCurrentVideoBitrateKbps() > targetVideoKbps)
       {
-        if (Sage.DBG) System.out.println("Requested bandwidth has decreased! Dump the transcoder and rebuild it!");
-        xcode.transcoder.stopTranscode();
-        //cachedXCodeMap.remove(sessionID);
-        xcode.transcoder = null;
-        return setupTranscoder(sessionID, mf, segmentNum, bwkbps, streamPart, vf, fmp4);
+        // A bitrate DECREASE must not tear down + rebuild the transcoder on the
+        // CMAF/fMP4 path. Rebuilding starts a fresh ffmpeg whose hls muxer emits a
+        // brand-new init.mp4 (new moov/SPS) mid-stream; the browser MSE demuxer
+        // cannot splice that onto the existing SourceBuffer and fails with
+        // PipelineStatus::DEMUXER_ERROR_COULD_NOT_PARSE (observed killing PWA/VPN
+        // playback). Instead trim the live encoder in place over the SageTV
+        // -stdinctrl 'videorateadapt' channel -- the same live control the
+        // increase branch and the push/XCODE_ADJUST path use. That changes only
+        // rate control; resolution/profile/level (and therefore init.mp4) stay
+        // valid, so playback continues seamlessly with no discontinuity.
+        // The legacy MPEG-TS path keeps the rebuild: each .ts segment self-
+        // describes, so there is no fixed init to invalidate.
+        if (fmp4)
+        {
+          if (Sage.DBG) System.out.println("ADJUSTING (down) HTTP streaming video bandwidth from " + xcode.transcoder.getCurrentVideoBitrateKbps() + " to " + targetVideoKbps + " via live videorateadapt (fMP4, no rebuild)");
+          xcode.transcoder.dynamicVideoRateAdjust(targetVideoKbps - xcode.transcoder.getCurrentVideoBitrateKbps());
+        }
+        else
+        {
+          if (Sage.DBG) System.out.println("Requested bandwidth has decreased! Dump the transcoder and rebuild it!");
+          xcode.transcoder.stopTranscode();
+          //cachedXCodeMap.remove(sessionID);
+          xcode.transcoder = null;
+          return setupTranscoder(sessionID, mf, segmentNum, bwkbps, streamPart, vf, fmp4);
+        }
       }
       else if (xcode.transcoder.getCurrentVideoBitrateKbps() < targetVideoKbps)
       {
