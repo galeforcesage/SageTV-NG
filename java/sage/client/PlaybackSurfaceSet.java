@@ -82,6 +82,10 @@ public final class PlaybackSurfaceSet
       new HashSet<String>(Arrays.asList(
           "all_tracks", "first_substream_only", "order_sensitive", "default_track_only")));
 
+  /** Canonical values for {@code PLAYBACK_SURFACE_<id>_BANDWIDTH_FEEDBACK} (Protocol 2.1 additive). */
+  public static final Set<String> CANONICAL_BANDWIDTH_FEEDBACK = Collections.unmodifiableSet(
+      new HashSet<String>(Arrays.asList("xcode_adjust", "none")));
+
   private static final PlaybackSurfaceSet EMPTY =
       new PlaybackSurfaceSet(Collections.<String, PlaybackSurface>emptyMap());
 
@@ -514,11 +518,14 @@ public final class PlaybackSurfaceSet
       int maxFps  = parseOptionalDimension(id, "MAX_FPS",           props, 11);
       // --- audio multichannel dimension (optional; unknown => 0 => stereo) ---
       int audioMaxCh = parseOptionalDimension(id, "AUDIO_MAX_CHANNELS", props, 12);
+      // --- bandwidth-feedback dimension (optional; unknown => "none") ---
+      String bandwidthFeedback = canonicalBandwidthFeedback(id,
+          (props.length > 13 && props[13] != null) ? props[13].trim() : "");
       out.put(id, new PlaybackSurface(id, route, priority,
           deliveryModes, videoCodecs, audioCodecs, containers,
           audioTrackAccess, audioTrackSelectionMode, audioContainerRules,
           maxOutW, maxOutH, maxFps, interlacedUnsupported, containerTransports,
-          audioMaxCh));
+          audioMaxCh, bandwidthFeedback));
     }
     return out.isEmpty() ? empty() : new PlaybackSurfaceSet(out);
   }
@@ -551,6 +558,21 @@ public final class PlaybackSurfaceSet
           + " '" + raw + "' not an integer; treating as undeclared");
       return 0;
     }
+  }
+
+  /**
+   * Canonicalizes the optional {@code BANDWIDTH_FEEDBACK} dimension. Empty =&gt;
+   * {@code "none"} (legacy/undeclared). An unknown token WARNs and is coerced to
+   * {@code "none"} (fail-safe: a bad hint never invents an XCODE_ADJUST loop).
+   */
+  private static String canonicalBandwidthFeedback(String id, String raw)
+  {
+    if (raw == null || raw.length() == 0) return "none";
+    String v = raw.toLowerCase();
+    if (CANONICAL_BANDWIDTH_FEEDBACK.contains(v)) return v;
+    System.err.println("PlaybackSurfaceSet WARN: surface '" + id + "' BANDWIDTH_FEEDBACK '"
+        + raw + "' unknown; treating as 'none'");
+    return "none";
   }
 
   @Override

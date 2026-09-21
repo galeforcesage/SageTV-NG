@@ -216,6 +216,18 @@ public class FFMPEGTranscoder implements TranscodeEngine
   private int surfaceTargetAudioChannels;
   public void setSurfaceTargetAudioCodec(String codec) { this.surfaceTargetAudioCodec = codec; }
   public void setSurfaceTargetAudioChannels(int ch) { this.surfaceTargetAudioChannels = ch; }
+  /**
+   * Client/bridge-seeded initial downstream link estimate in kbps (from the
+   * XCODE_SETUP ";bw=<kbps>" hint). Used ONLY to pick a conservative launch
+   * bitrate for an otherwise-unmetered browserhd pull-xcode session so a cold
+   * WAN/VPN start doesn't open at the full resolution anchor (e.g. 14 Mbps for
+   * 1080p) and overrun before the pull proxy's first goodput sample. 0 =
+   * unseeded (falls back to {@code media_server/wan_coldstart_kbps}). Never
+   * raises the ceiling; live {@code XCODE_ADJUST} still ramps up to the policy
+   * envelope.
+   */
+  private int seededLinkKbps;
+  public void setSeededLinkKbps(int kbps) { this.seededLinkKbps = Math.max(0, kbps); }
   // Winning surface's declared AUDIO_MAX_CHANNELS for the enhance AC-4 sidecar
   // (0 = legacy/undeclared). Drives the per-client 5.1-vs-stereo decision that
   // replaced the old playback/gpu_enhance/scale/ac4_sidecar_af global override.
@@ -2910,6 +2922,37 @@ public class FFMPEGTranscoder implements TranscodeEngine
       sage.media.BitratePolicy.Plan plan =
           sage.media.BitratePolicy.compute(outW, outH, fps, vcodec, motion, linkKbps, 0);
 
+      // Conservative WAN cold-start. An unmetered browserhd pull-xcode session
+      // (linkKbps==0 -> no link clamp) otherwise LAUNCHES at the full resolution
+      // anchor (14 Mbps for 1080p high-motion). Over a cold VPN that overruns and
+      // the client dies before the pull proxy's first ~5s goodput sample can send
+      // an XCODE_ADJUST. Trim ONLY the launch -b:v to a conservative estimate --
+      // the client/bridge-seeded ";bw=" when present, else media_server/wan_coldstart_kbps
+      // (~5 Mbps) -- while KEEPING the plan's high maxrate/bufsize ceiling so live
+      // XCODE_ADJUST can ramp straight back up to the policy envelope. Metered
+      // sessions (linkKbps>0) already clamp correctly and are left untouched.
+      if (linkKbps == 0 && Sage.getBoolean("media_server/wan_coldstart_cap", true))
+      {
+        int coldKbps = seededLinkKbps > 0
+            ? seededLinkKbps
+            : Sage.getInt("media_server/wan_coldstart_kbps", 5000);
+        if (coldKbps > 0)
+        {
+          sage.media.BitratePolicy.Plan launch =
+              sage.media.BitratePolicy.compute(outW, outH, fps, vcodec, motion, coldKbps, 0);
+          if (launch.targetKbps < plan.targetKbps)
+          {
+            if (Sage.DBG) System.out.println("browserhd WAN cold-start: launch b:v "
+                + plan.targetKbps + "k -> " + launch.targetKbps + "k (seed="
+                + (seededLinkKbps > 0 ? seededLinkKbps + "kbps"
+                    : "none, default " + Sage.getInt("media_server/wan_coldstart_kbps", 5000) + "kbps")
+                + "); ceiling kept maxrate=" + plan.maxrateKbps + "k for XCODE_ADJUST ramp");
+            plan = new sage.media.BitratePolicy.Plan(
+                launch.targetKbps, plan.maxrateKbps, plan.bufsizeKbps);
+          }
+        }
+      }
+
       int applied = sage.enhance.GpuEnhancePipeline.applyBitratePlan(
           xcodeParamsVec, plan, nvenc);
       if (applied > 0)
@@ -3057,7 +3100,58 @@ public class FFMPEGTranscoder implements TranscodeEngine
         asyncVal = floorVal;
       }
     }
+    else if (isBrowserFragmentedReencodePull()
+        && Sage.getBoolean("ffmpeg/browserpull_aresample_async_floor_enabled", true))
+    {
+      // Browser/PWA MSE fragmented-MP4 RE-ENCODE pull (native CMAF + "browserhd"
+      // H.264). Off-air DVR content routinely carries a mid-recording timestamp
+      // discontinuity from a brief signal dropout (observed live: AC-3
+      // "timestamp discontinuity ... new offset=412667"). Unlike a corrupt
+      // packet, the discontinuity's packets are VALID -- +discardcorrupt does not
+      // drop them -- so the jumped PTS reaches the AAC encoder, its input stalls
+      // across the gap, and the fragment/segment muxer (which must interleave
+      // both tracks per moof) never finalizes: "CMAF part N not available; abort"
+      // / DEMUXER_ERROR_COULD_NOT_PARSE on the native path, and a wedged/torn
+      // fragment on browserhd. async=1 (the legacy fixed-rate-placeshifter
+      // default) only corrects the INITIAL offset, not an ongoing discontinuity.
+      // Floor to a value that actively adds/drops samples to keep the AAC output
+      // contiguous across the gap (default 1000 -- the same working value the
+      // video-copy path above floors to), so the muxer always has interleavable
+      // audio and the fragment closes. Only raises a sub-floor value; a higher
+      // operator-configured async is respected. Opt out with
+      // ffmpeg/browserpull_aresample_async_floor_enabled=false.
+      double v;
+      try { v = Double.parseDouble(asyncVal); } catch (NumberFormatException e) { v = -1; }
+      String floorStr = Sage.get("ffmpeg/browserpull_aresample_async_floor", "1000");
+      double floor;
+      try { floor = Double.parseDouble(floorStr); } catch (NumberFormatException e) { floor = 1000; }
+      if (v < floor)
+      {
+        if (Sage.DBG) System.out.println("FFMPEGTranscoder: browser fMP4 re-encode pull —"
+            + " flooring aresample_async " + asyncVal + " -> " + floorStr + " so a source"
+            + " timestamp discontinuity is absorbed by the audio resampler (keeps the AAC"
+            + " track advancing so the fragment/segment muxer never wedges).");
+        asyncVal = floorStr;
+      }
+    }
     return asyncVal;
+  }
+
+  /**
+   * True for a browser/PWA MSE fragmented-MP4 <b>re-encode</b> pull: the native
+   * CMAF path ({@link #fmp4Mode}, ffmpeg's hls fMP4 muxer) or the {@code
+   * browserhd} H.264 fMP4 stream to stdout ({@code -f mp4}, no output file).
+   * Deliberately EXCLUDES {@link #isVideoCopyToFmp4()} — that copy-through path
+   * has its own dedicated async floor above (the copied video PTS is fixed by the
+   * source, a different failure mode). Used only to gate the audio-continuity
+   * floor that keeps the AAC encoder advancing across a source timestamp
+   * discontinuity so the fragment/segment muxer always finalizes.
+   */
+  boolean isBrowserFragmentedReencodePull()
+  {
+    if (isVideoCopyToFmp4()) return false;
+    if (fmp4Mode) return true; // native CMAF (hls fMP4 muxer)
+    return outputFile == null && xcodeParams != null && xcodeParams.indexOf("-f mp4") != -1;
   }
 
   /**
@@ -3353,7 +3447,22 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // packets and the decoders to skip past errors so the stream steps over the
     // damage instead of stalling on it. Input options (apply to the -i below);
     // live-tunable (property=false reverts without a rebuild).
-    if (httplsMode && Sage.getBoolean("httpls/input_error_resilience", true))
+    // The SAME off-air corruption also breaks the browser/PWA MSE pull path
+    // (xcodeMode "browserhd"* -> a fragmented "-f mp4" stream written to stdout),
+    // which is NOT httplsMode and so historically got NONE of this resilience.
+    // Observed live: on a mid-recording seek the source hands ffmpeg a corrupt
+    // MPEG-2/AC-3 packet ("invalid frame_pred_frame_dct", "invalid coupling
+    // range") that the decoder turns into a broken frame; the H.264 re-encode
+    // then emits a sample the browser MSE stack refuses with
+    // CHUNK_DEMUXER_ERROR_APPEND_FAILED / "Failed to prepare video sample for
+    // decode", and the client tears the connection down mid-fragment. Dropping
+    // the corrupt packet at the demuxer (so it never reaches the decoder) is the
+    // direct cure, exactly as on the CMAF path. A fragmented-MP4 pull is detected
+    // from the verbatim preset (streams to stdout, so outputMuxFormat()'s
+    // filename fallback is unavailable) — same key as isVideoCopyToFmp4().
+    boolean fragMp4PullStream = outputFile == null && xcodeParams != null
+        && xcodeParams.indexOf("-f mp4") != -1;
+    if ((httplsMode || fragMp4PullStream) && Sage.getBoolean("httpls/input_error_resilience", true))
     {
       xcodeParamsVec.add("-err_detect");
       xcodeParamsVec.add("ignore_err");
@@ -5982,6 +6091,101 @@ public class FFMPEGTranscoder implements TranscodeEngine
   public int getCurrentVideoBitrateKbps()
   {
     return currVideoBitrateKbps;
+  }
+
+  /**
+   * Server-side XCODE_ADJUST bitrate policy (Protocol 2.1, "client owns facts,
+   * server owns policy"). The pull bridge reports RAW measured delivered
+   * goodput; ALL smoothing/hysteresis/ramp/ceiling policy lives here (the bridge
+   * is deliberately dumb -- no bridge-side fast-down/slow-up). Pure and
+   * stateless: {@code currentKbps} (the already-applied video target) carries
+   * the only per-session memory, so this is directly unit-testable.
+   *
+   * <p>Given raw {@code goodputKbps} (total delivered throughput toward the
+   * client, video+audio+overhead) it derives the next applied VIDEO target:
+   * <ol>
+   *   <li><b>Reserve margin</b> -- candidate = {@code goodput * videoFraction}
+   *   (default 0.80), reserving audio + container/protocol overhead, mirroring
+   *   the {@code ;bw=} cold-start reserve.</li>
+   *   <li><b>Dead-band</b> -- a candidate within {@code deadbandFraction}
+   *   (default 0.05) of the current target is ignored (no churn).</li>
+   *   <li><b>Fast-down</b> -- a candidate below current is applied immediately
+   *   (protect against stalls the instant capacity falls).</li>
+   *   <li><b>Slow-up</b> -- a candidate above current rises by at most
+   *   {@code upStepFraction} (default 0.15) of current per tick, never jumping
+   *   straight to the candidate.</li>
+   *   <li><b>Clamp</b> -- final value bounded to {@code [minKbps, maxKbps]}
+   *   (maxKbps is the session policy ceiling).</li>
+   * </ol>
+   * Fractions are clamped to defensible ranges by the caller; a non-positive
+   * {@code currentKbps} (no launch target yet) falls back to a plain
+   * reserve+clamp so the loop still converges.
+   */
+  static int computeGoodputAdjustedVideoKbps(int goodputKbps, int currentKbps,
+      int minKbps, int maxKbps, double videoFraction, double upStepFraction,
+      double deadbandFraction)
+  {
+    if (maxKbps < minKbps) maxKbps = minKbps;
+    long candidate = Math.round(Math.max(0, goodputKbps) * videoFraction);
+    long target;
+    if (currentKbps <= 0)
+    {
+      target = candidate; // no prior applied target -> just reserve + clamp
+    }
+    else
+    {
+      long lo = Math.round(currentKbps * (1.0 - deadbandFraction));
+      long hi = Math.round(currentKbps * (1.0 + deadbandFraction));
+      if (candidate >= lo && candidate <= hi)
+        target = currentKbps;               // dead-band: no change
+      else if (candidate < currentKbps)
+        target = candidate;                 // fast-down: apply immediately
+      else
+      {
+        long maxUp = currentKbps + Math.round(currentKbps * upStepFraction);
+        target = Math.min(candidate, maxUp); // slow-up: bounded step
+      }
+    }
+    if (target < minKbps) target = minKbps;
+    if (target > maxKbps) target = maxKbps;
+    return (int) target;
+  }
+
+  /**
+   * Apply one raw measured-goodput sample from the pull bridge using
+   * {@link #computeGoodputAdjustedVideoKbps} and this session's policy ceiling,
+   * pushing the resulting delta into the live transcoder. Returns the actual
+   * applied video bitrate (kbps). Config knobs (all {@code media_server/*}):
+   * {@code xcode_adjust_min_kbps} (300), {@code xcode_adjust_max_kbps} (8000,
+   * raised to the session {@link #getPolicyCeilingKbps() ceiling}),
+   * {@code xcode_adjust_video_reserve_pct} (80),
+   * {@code xcode_adjust_up_step_pct} (15),
+   * {@code xcode_adjust_deadband_pct} (5).
+   */
+  public int applyMeasuredGoodputKbps(int goodputKbps)
+  {
+    int minKbps = Sage.getInt("media_server/xcode_adjust_min_kbps", 300);
+    int maxKbps = Sage.getInt("media_server/xcode_adjust_max_kbps", 8000);
+    int sessionCeil = getPolicyCeilingKbps();
+    if (sessionCeil > 0) maxKbps = Math.max(maxKbps, sessionCeil);
+    double videoFraction = clampFraction(
+        Sage.getInt("media_server/xcode_adjust_video_reserve_pct", 80) / 100.0, 0.10, 1.0);
+    double upStepFraction = clampFraction(
+        Sage.getInt("media_server/xcode_adjust_up_step_pct", 15) / 100.0, 0.0, 1.0);
+    double deadbandFraction = clampFraction(
+        Sage.getInt("media_server/xcode_adjust_deadband_pct", 5) / 100.0, 0.0, 0.5);
+    int newTarget = computeGoodputAdjustedVideoKbps(goodputKbps, getCurrentVideoBitrateKbps(),
+        minKbps, maxKbps, videoFraction, upStepFraction, deadbandFraction);
+    int delta = newTarget - getCurrentVideoBitrateKbps();
+    if (delta != 0) dynamicVideoRateAdjust(delta);
+    return getCurrentVideoBitrateKbps();
+  }
+
+  private static double clampFraction(double v, double lo, double hi)
+  {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
   }
 
   /**

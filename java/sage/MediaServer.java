@@ -1476,6 +1476,7 @@ public class MediaServer implements Runnable
             String xcodeMode = xcodeArg;
             String surfAcodec = null;
             int surfAc = 0;
+            int surfBw = 0; // ";bw=" seeded downstream link estimate (kbps); 0 = unseeded
             long surfSs = 0; // pull-xcode seek start position (ms); 0 = from start
             String surfEqGraph = null; // server audio-EQ v1 (";afeq="): url-encoded -af filtergraph
             String surfEqCodec = null; // server audio-EQ v1 (";afeqcodec="): echo of the audio-selection logic's target codec
@@ -1501,6 +1502,7 @@ public class MediaServer implements Runnable
                 String v = p.substring(eq + 1).trim();
                 if (k.equals("acodec")) surfAcodec = v;
                 else if (k.equals("ac")) { try { surfAc = Integer.parseInt(v); } catch (NumberFormatException nfe) {} }
+                else if (k.equals("bw")) { try { surfBw = Integer.parseInt(v); } catch (NumberFormatException nfe) {} }
                 else if (k.equals("ss")) { try { surfSs = Long.parseLong(v); } catch (NumberFormatException nfe) {} }
                 else if (k.equals("afeq"))
                 {
@@ -1549,6 +1551,11 @@ public class MediaServer implements Runnable
               fftc.setHwaccelDecode(hwDec);
             if (surfAcodec != null && surfAcodec.length() > 0) fftc.setSurfaceTargetAudioCodec(surfAcodec);
             if (surfAc > 0) fftc.setSurfaceTargetAudioChannels(surfAc);
+            // Seeded downstream link estimate (";bw=<kbps>") -> conservative WAN
+            // cold-start launch bitrate for browserhd pull-xcode; absent => the
+            // media_server/wan_coldstart_kbps default applies. Live XCODE_ADJUST
+            // still ramps up from there. No-op for metered/LAN sessions.
+            if (surfBw > 0) fftc.setSeededLinkKbps(surfBw);
             // Server-side Audio Equalizer / AudioProcessing (v1): the plan was
             // ALREADY resolved by MiniPlayer (which has the client's audio-EQ
             // state; MediaServer has no route back to it) and its filtergraph
@@ -1639,25 +1646,43 @@ public class MediaServer implements Runnable
               FFMPEGTranscoder fftc = (FFMPEGTranscoder) xcoder;
               try
               {
-                int targetKbps = Integer.parseInt(tempString.substring(13).trim());
-                int minKbps = Sage.getInt("media_server/xcode_adjust_min_kbps", 300);
-                int maxKbps = Sage.getInt("media_server/xcode_adjust_max_kbps", 8000);
-                // Standardize the live-adjust ceiling on THIS session's shared
-                // BitratePolicy envelope. The flat 8 Mbps default predates the
-                // policy and would throttle any high-resolution session (a 2160p
-                // enhance launches near 40 Mbps, a 1080p browserhd near 14 Mbps)
-                // the instant the pull proxy sent its first adjust. When the
-                // session carries a policy ceiling, allow adjustment up to it.
-                int sessionCeil = fftc.getPolicyCeilingKbps();
-                if (sessionCeil > 0) maxKbps = Math.max(maxKbps, sessionCeil);
-                targetKbps = Math.max(minKbps, Math.min(maxKbps, targetKbps));
-                int delta = targetKbps - fftc.getCurrentVideoBitrateKbps();
-                if (delta != 0)
-                  fftc.dynamicVideoRateAdjust(delta);
-                if (Sage.DBG) System.out.println("MediaServer XCODE_ADJUST target=" + targetKbps +
-                    "kbps -> new video=" + fftc.getCurrentVideoBitrateKbps() + "kbps");
-                commBufWrite.clear();
-                commBufWrite.put((fftc.getCurrentVideoBitrateKbps() + "\r\n").getBytes()).flip();
+                int measuredKbps = Integer.parseInt(tempString.substring(13).trim());
+                if (Sage.getBoolean("media_server/xcode_adjust_server_policy", true))
+                {
+                  // Server owns policy: the bridge reports RAW delivered goodput;
+                  // reserve margin + dead-band + fast-down/slow-up + ceiling all
+                  // live in FFMPEGTranscoder.applyMeasuredGoodputKbps. The bridge
+                  // is deliberately dumb (no bridge-side ramp policy).
+                  int applied = fftc.applyMeasuredGoodputKbps(measuredKbps);
+                  if (Sage.DBG) System.out.println("MediaServer XCODE_ADJUST measured=" + measuredKbps +
+                      "kbps -> applied video=" + applied + "kbps (server policy)");
+                  commBufWrite.clear();
+                  commBufWrite.put((applied + "\r\n").getBytes()).flip();
+                }
+                else
+                {
+                  // Legacy path: treat the value as an absolute target, clamp to
+                  // the session envelope, and apply verbatim (no smoothing).
+                  int targetKbps = measuredKbps;
+                  int minKbps = Sage.getInt("media_server/xcode_adjust_min_kbps", 300);
+                  int maxKbps = Sage.getInt("media_server/xcode_adjust_max_kbps", 8000);
+                  // Standardize the live-adjust ceiling on THIS session's shared
+                  // BitratePolicy envelope. The flat 8 Mbps default predates the
+                  // policy and would throttle any high-resolution session (a 2160p
+                  // enhance launches near 40 Mbps, a 1080p browserhd near 14 Mbps)
+                  // the instant the pull proxy sent its first adjust. When the
+                  // session carries a policy ceiling, allow adjustment up to it.
+                  int sessionCeil = fftc.getPolicyCeilingKbps();
+                  if (sessionCeil > 0) maxKbps = Math.max(maxKbps, sessionCeil);
+                  targetKbps = Math.max(minKbps, Math.min(maxKbps, targetKbps));
+                  int delta = targetKbps - fftc.getCurrentVideoBitrateKbps();
+                  if (delta != 0)
+                    fftc.dynamicVideoRateAdjust(delta);
+                  if (Sage.DBG) System.out.println("MediaServer XCODE_ADJUST target=" + targetKbps +
+                      "kbps -> new video=" + fftc.getCurrentVideoBitrateKbps() + "kbps");
+                  commBufWrite.clear();
+                  commBufWrite.put((fftc.getCurrentVideoBitrateKbps() + "\r\n").getBytes()).flip();
+                }
               }
               catch (NumberFormatException nfe)
               {

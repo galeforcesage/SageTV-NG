@@ -842,7 +842,8 @@ public class PlaybackDecisionEngine
   //   - Skip surfaces whose DELIVERY_MODES does not intersect what the
   //     server can actually serve (see SERVER_SERVABLE_DELIVERY_MODES).
   //   - Rank by (a) decision tier, (b) client-declared PRIORITY, (c) server
-  //     CPU cost proxy, (d) deterministic id order.
+  //     CPU cost proxy, (d) BANDWIDTH_FEEDBACK on the pull-xcode WAN route
+  //     (prefer xcode_adjust), (e) deterministic id order.
   //   - Surface path does NOT consult ClientProfile — the surface IS the
   //     honest capability report. Profile stays as a hard-cap policy layer
   //     for a separate future extension.
@@ -1907,13 +1908,22 @@ public class PlaybackDecisionEngine
             + ", surface delivery=" + declared + ")");
       return null;
     }
-    // Non-DIRECT: server must feed transformed bytes; raw pull cannot, but
-    // pull-xcode (a pull of a SERVER-TRANSCODED stream) can and is preferred --
+    // Non-DIRECT: server must feed transformed bytes; raw pull cannot.
+    //
+    // Native "hls" wins first when the surface declares it. A client advertises
+    // native "hls" ONLY when it genuinely consumes server-produced CMAF HLS
+    // natively -- today that is Apple WebKit/Safari, gated client-side to real
+    // native-HLS support. For such a surface native HLS is the honest, reliable
+    // route (Safari's MSE is not), so it must NOT be undercut by the MSE
+    // pull-xcode bridge. Blink/Gecko/Tizen never declare "hls", so they fall
+    // straight through to the unchanged pull-xcode-first order below.
+    //
+    // Otherwise pull-xcode (a pull of a SERVER-TRANSCODED stream) is preferred --
     // it rides the single control/HTTP port via the bridge's /msproxy and lets
-    // the PWA stop sniffing. Fall back to push (adaptive) then hls (segmented).
+    // the PWA stop sniffing. Fall back to push (adaptive).
+    if (declared.contains("hls"))  return "hls";
     if (declared.contains("pull-xcode")) return "pull-xcode";
     if (declared.contains("push")) return "push";
-    if (declared.contains("hls"))  return "hls";
     return null;
   }
 
@@ -1988,13 +1998,42 @@ public class PlaybackDecisionEngine
     return 3; // TRANSCODE
   }
 
+  /**
+   * Cross-surface delivery preference key (lower wins) used by
+   * {@link #SURFACE_DECISION_COMPARATOR} to break a tier/priority tie between
+   * two servable surfaces. It is a routing PREFERENCE order, not a literal
+   * server-CPU cost:
+   * <ul>
+   *   <li>{@code pull} (0) -- raw native pull, always cheapest/best when viable.</li>
+   *   <li>{@code hls} (1) -- native segmented HLS. Ranked ABOVE the MSE bridge
+   *   modes because a surface only advertises native {@code hls} when it
+   *   genuinely consumes native HLS (Apple WebKit/Safari, gated client-side);
+   *   honoring that is more reliable than pushing it through {@code pull-xcode}.
+   *   Only ever competes when an {@code hls} surface is present (Safari), so
+   *   Blink/Gecko/Tizen ordering is unchanged.</li>
+   *   <li>{@code pull-xcode} (2) -- server-transcoded stream over the /msproxy
+   *   bridge (Chromium/Firefox MSE).</li>
+   *   <li>{@code push} (3) -- adaptive server push.</li>
+   * </ul>
+   */
   private static int deliveryModeCpuRank(String mode)
   {
     if ("pull".equals(mode)) return 0;
-    if ("pull-xcode".equals(mode)) return 1;
-    if ("push".equals(mode)) return 2;
-    if ("hls".equals(mode))  return 3;
+    if ("hls".equals(mode))  return 1;
+    if ("pull-xcode".equals(mode)) return 2;
+    if ("push".equals(mode)) return 3;
     return 4;
+  }
+
+  /**
+   * Bandwidth-feedback ordering key (Protocol 2.1 tie-breaker): 0 when the
+   * surface can supply live delivered-goodput back via {@code XCODE_ADJUST}
+   * ({@code BANDWIDTH_FEEDBACK=xcode_adjust}) so it sorts ahead, else 1. A pure
+   * hint -- see {@link #SURFACE_DECISION_COMPARATOR}.
+   */
+  private static int surfaceFeedbackRank(PlaybackSurface s)
+  {
+    return (s != null && "xcode_adjust".equals(s.getBandwidthFeedback())) ? 0 : 1;
   }
 
   private static final java.util.Comparator<SurfaceDecision> SURFACE_DECISION_COMPARATOR =
@@ -2008,10 +2047,22 @@ public class PlaybackDecisionEngine
           int ap = a.surface == null ? 0 : a.surface.getPriority();
           int bp = b.surface == null ? 0 : b.surface.getPriority();
           if (ap != bp) return Integer.compare(bp, ap);
-          // Cheaper delivery wins.
+          // Preferred delivery wins (native pull/hls over the MSE bridge modes).
           int ac = deliveryModeCpuRank(a.chosenDeliveryMode);
           int bc = deliveryModeCpuRank(b.chosenDeliveryMode);
           if (ac != bc) return Integer.compare(ac, bc);
+          // Bandwidth-feedback tie-breaker (Protocol 2.1): among otherwise-equal
+          // surfaces on the WAN managed-transcode route (pull-xcode), prefer the
+          // one that can feed live goodput back via XCODE_ADJUST. Equal cpu rank
+          // implies the same delivery mode, so this only fires for pull-xcode vs
+          // pull-xcode; it NEVER reorders across tier/priority/cost and never
+          // touches native-HLS (Safari) or direct (Tizen) routes.
+          if ("pull-xcode".equals(a.chosenDeliveryMode))
+          {
+            int af = surfaceFeedbackRank(a.surface);
+            int bf = surfaceFeedbackRank(b.surface);
+            if (af != bf) return Integer.compare(af, bf);
+          }
           // Deterministic tiebreak.
           String aid = a.surface == null ? "" : a.surface.getId();
           String bid = b.surface == null ? "" : b.surface.getId();

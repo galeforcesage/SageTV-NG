@@ -4803,13 +4803,19 @@ public class MiniClientSageRenderer extends SageRenderer
                 sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_MAX_OUTPUT_WIDTH");
                 sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_MAX_OUTPUT_HEIGHT");
                 sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_MAX_FPS");
+                // Audio multichannel-decode + bandwidth-feedback dimensions
+                // (Protocol 2.1 additive; absent => 0 / "none"). Send order
+                // MUST match the props[] read order below (12 = AUDIO_MAX_CHANNELS,
+                // 13 = BANDWIDTH_FEEDBACK).
+                sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_MAX_CHANNELS");
+                sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_BANDWIDTH_FEEDBACK");
               }
               sendBufferNow();
               final java.util.Map<String, String[]> rawSurfaceProps =
                   new java.util.LinkedHashMap<String, String[]>();
               for (String sid : surfaceIds)
               {
-                String[] props = new String[12];
+                String[] props = new String[14];
                 props[0] = recvr.getStringReply();
                 props[1] = recvr.getStringReply();
                 props[2] = recvr.getStringReply();
@@ -4822,6 +4828,8 @@ public class MiniClientSageRenderer extends SageRenderer
                 props[9] = recvr.getStringReply();
                 props[10] = recvr.getStringReply();
                 props[11] = recvr.getStringReply();
+                props[12] = recvr.getStringReply();
+                props[13] = recvr.getStringReply();
                 rawSurfaceProps.put(sid, props);
               }
               playbackSurfaces = sage.client.PlaybackSurfaceSet.build(
@@ -8224,14 +8232,17 @@ public class MiniClientSageRenderer extends SageRenderer
         sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_MAX_OUTPUT_WIDTH");
         sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_MAX_OUTPUT_HEIGHT");
         sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_MAX_FPS");
+        // Index 12 = AUDIO_MAX_CHANNELS, 13 = BANDWIDTH_FEEDBACK (2.1 additive).
+        sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_AUDIO_MAX_CHANNELS");
+        sendGetPropertyAsync("PLAYBACK_SURFACE_" + sid + "_BANDWIDTH_FEEDBACK");
       }
       sendBufferNow();
       final java.util.Map<String, String[]> rawSurfaceProps =
           new java.util.LinkedHashMap<String, String[]>();
       for (String sid : surfaceIds)
       {
-        String[] props = new String[12];
-        for (int i = 0; i < 12; i++)
+        String[] props = new String[14];
+        for (int i = 0; i < 14; i++)
           props[i] = recvr.getStringReply();
         rawSurfaceProps.put(sid, props);
       }

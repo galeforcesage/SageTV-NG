@@ -841,8 +841,12 @@ public class FFMPEGTranscoderTest
       transcoder.xcodeParams = "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof"
           + " -frag_duration 500000 -c:v copy -tag:v hvc1 -acodec aac -ac 2 -ar 48000 -b:a 128k";
 
-      // Not a video-copy path: an explicit 0 override is honored verbatim (no floor).
-      transcoder.xcodeParams = "-f mp4 -c:v libx264 -acodec aac";
+      // Not a video-copy path AND not a fragmented-MP4 browser pull (legacy
+      // MPEG-TS re-encode): an explicit 0 override is honored verbatim (no floor).
+      // NOTE: -f mp4 stdout re-encode is now the browserhd pull path and IS
+      // floored (see resolveAudioResampleAsync_browserReencodePull_*), so this
+      // "no floor" probe must use a non-fragmented-MP4 mux to stay valid.
+      transcoder.xcodeParams = "-f mpegts -c:v libx264 -acodec aac";
       Sage.put("ffmpeg/aresample_async", "0");
       assertEquals(transcoder.resolveAudioResampleAsync(false), "0");
       Sage.remove("ffmpeg/aresample_async");
@@ -1427,5 +1431,176 @@ public class FFMPEGTranscoderTest
         "A negative rel index (legacy / unresolved) must map all audio (null token)");
     assertNull(FFMPEGTranscoder.serverSelectAudioMapToken(false, -1),
         "Both inactive and invalid must yield null");
+  }
+
+  // --- Server-side XCODE_ADJUST bitrate policy (Protocol 2.1). The bridge ---
+  // reports RAW delivered goodput; the server owns reserve + dead-band +
+  // fast-down/slow-up + ceiling. Pure function; currentKbps is the only state.
+  // Defaults exercised: reserve 0.80, up-step 0.15, dead-band 0.05.
+
+  @Test
+  public void xcodeAdjustPolicy_reserveMargin_appliesOnFirstSample()
+  {
+    // No prior applied target (currentKbps<=0): just reserve + clamp.
+    // 5000 goodput * 0.80 = 4000.
+    assertEquals(FFMPEGTranscoder.computeGoodputAdjustedVideoKbps(
+        5000, 0, 300, 40000, 0.80, 0.15, 0.05), 4000,
+        "First sample must apply the reserve fraction (0.80) with no prior target");
+  }
+
+  @Test
+  public void xcodeAdjustPolicy_fastDown_appliesImmediately()
+  {
+    // current=4000, goodput collapses to 2000 -> candidate 1600 (<current):
+    // fast-down applies the full drop immediately (no slow ramp on the way down).
+    assertEquals(FFMPEGTranscoder.computeGoodputAdjustedVideoKbps(
+        2000, 4000, 300, 40000, 0.80, 0.15, 0.05), 1600,
+        "A drop in measured capacity must be applied immediately (fast-down)");
+  }
+
+  @Test
+  public void xcodeAdjustPolicy_slowUp_stepsByAtMostUpFraction()
+  {
+    // current=4000, goodput jumps to 10000 -> candidate 8000 (>current), but
+    // slow-up caps the rise at +15% of current = 4600, not the full 8000.
+    assertEquals(FFMPEGTranscoder.computeGoodputAdjustedVideoKbps(
+        10000, 4000, 300, 40000, 0.80, 0.15, 0.05), 4600,
+        "An increase must rise by at most the up-step fraction (+15%), never jump to candidate");
+  }
+
+  @Test
+  public void xcodeAdjustPolicy_deadBand_ignoresSmallChange()
+  {
+    // current=4000, goodput 5100 -> candidate 4080, within +-5% of 4000
+    // ([3800,4200]) -> no change (dead-band suppresses churn).
+    assertEquals(FFMPEGTranscoder.computeGoodputAdjustedVideoKbps(
+        5100, 4000, 300, 40000, 0.80, 0.15, 0.05), 4000,
+        "A candidate within the dead-band must leave the applied target unchanged");
+  }
+
+  @Test
+  public void xcodeAdjustPolicy_ceilingAndFloor_clamp()
+  {
+    // Ceiling: huge goodput cannot exceed maxKbps even after slow-up headroom.
+    assertEquals(FFMPEGTranscoder.computeGoodputAdjustedVideoKbps(
+        999999, 39000, 300, 40000, 0.80, 0.15, 0.05), 40000,
+        "The applied target must never exceed the session policy ceiling");
+    // Floor: a near-zero goodput cannot fall below minKbps.
+    assertEquals(FFMPEGTranscoder.computeGoodputAdjustedVideoKbps(
+        100, 4000, 300, 40000, 0.80, 0.15, 0.05), 300,
+        "The applied target must never fall below the configured floor");
+  }
+
+  @Test
+  public void xcodeAdjustPolicy_slowUpNeverExceedsCandidate()
+  {
+    // current=4000, goodput 5500 -> candidate 4400 (above the +-5% dead-band top
+    // of 4200, below the +15% up-step ceiling of 4600); min(candidate, maxUp)
+    // = 4400 (never overshoot the measured candidate).
+    assertEquals(FFMPEGTranscoder.computeGoodputAdjustedVideoKbps(
+        5500, 4000, 300, 40000, 0.80, 0.15, 0.05), 4400,
+        "Slow-up must not overshoot the candidate when it is below the up-step ceiling");
+  }
+
+  // =======================================================================
+  // Corrupt-packet / timestamp-discontinuity resilience for the browser/PWA
+  // fragmented-MP4 pull paths (native CMAF + "browserhd" H.264 re-encode).
+  // =======================================================================
+
+  @Test
+  public void isBrowserFragmentedReencodePull_cmafAndBrowserhd_true() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+
+    // Native CMAF: fmp4Mode set, ffmpeg's hls fMP4 muxer writes the files.
+    FFMPEGTranscoder cmaf = new FFMPEGTranscoder();
+    cmaf.fmp4Mode = true;
+    assertTrue(cmaf.isBrowserFragmentedReencodePull(),
+        "Native CMAF (fmp4Mode) is a fragmented-MP4 re-encode pull");
+
+    // browserhd H.264 re-encode: -f mp4 streamed to stdout (no output file).
+    FFMPEGTranscoder browserhd = new FFMPEGTranscoder();
+    browserhd.xcodeParams = "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof"
+        + " -c:v h264_nvenc -b:v 3500k -acodec libfdk_aac -profile:a aac_low -b:a 128k -ac 2";
+    assertTrue(browserhd.isBrowserFragmentedReencodePull(),
+        "browserhd H.264 fMP4 stream-to-stdout is a fragmented-MP4 re-encode pull");
+  }
+
+  @Test
+  public void isBrowserFragmentedReencodePull_copyAndTsAndFile_false() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+
+    // Video-copy fMP4 (browserhd_remux/copyv) has its OWN async floor -> excluded.
+    FFMPEGTranscoder copyv = new FFMPEGTranscoder();
+    copyv.xcodeParams = "-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof -c:v copy -acodec aac";
+    assertFalse(copyv.isBrowserFragmentedReencodePull(),
+        "Video-copy fMP4 is handled by the dedicated videocopy floor, not this predicate");
+
+    // Legacy MPEG-TS push (iOS/HLS TS) is not an -f mp4 pull.
+    FFMPEGTranscoder ts = new FFMPEGTranscoder();
+    ts.xcodeParams = "-f mpegts -c:v libx264 -acodec aac";
+    assertFalse(ts.isBrowserFragmentedReencodePull(), "MPEG-TS is not a fragmented-MP4 pull");
+
+    // Offline transcode to a file (outputFile set) is not a stdout pull.
+    FFMPEGTranscoder offline = new FFMPEGTranscoder();
+    offline.xcodeParams = "-f mp4 -c:v libx264 -acodec aac";
+    offline.outputFile = new File("/tmp/out.mp4");
+    assertFalse(offline.isBrowserFragmentedReencodePull(), "A file-output transcode is not a pull");
+  }
+
+  @Test
+  public void resolveAudioResampleAsync_browserReencodePull_floorsSubFloorValue() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    Sage.put("ffmpeg/aresample_async", "1"); // legacy start-only default
+    Sage.put("ffmpeg/browserpull_aresample_async_floor_enabled", "true");
+    Sage.put("ffmpeg/browserpull_aresample_async_floor", "1000");
+    try
+    {
+      FFMPEGTranscoder cmaf = new FFMPEGTranscoder();
+      cmaf.fmp4Mode = true;
+      // async=1 only corrects the initial offset; a mid-stream discontinuity
+      // would stall the AAC encoder and wedge the fragment -> floor to 1000.
+      assertEquals(cmaf.resolveAudioResampleAsync(false), "1000",
+          "A sub-floor async on the browser fMP4 re-encode pull must be floored so the"
+          + " audio resampler bridges a source timestamp discontinuity");
+    }
+    finally
+    {
+      Sage.remove("ffmpeg/aresample_async");
+      Sage.remove("ffmpeg/browserpull_aresample_async_floor_enabled");
+      Sage.remove("ffmpeg/browserpull_aresample_async_floor");
+    }
+  }
+
+  @Test
+  public void resolveAudioResampleAsync_browserReencodePull_respectsHigherAndOptOut() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    try
+    {
+      FFMPEGTranscoder cmaf = new FFMPEGTranscoder();
+      cmaf.fmp4Mode = true;
+
+      // A higher operator-configured async is respected (never lowered).
+      Sage.put("ffmpeg/aresample_async", "2000");
+      Sage.put("ffmpeg/browserpull_aresample_async_floor_enabled", "true");
+      Sage.put("ffmpeg/browserpull_aresample_async_floor", "1000");
+      assertEquals(cmaf.resolveAudioResampleAsync(false), "2000",
+          "An already-higher async must not be lowered to the floor");
+
+      // Opt-out disables the floor entirely -> legacy value passes through.
+      Sage.put("ffmpeg/aresample_async", "1");
+      Sage.put("ffmpeg/browserpull_aresample_async_floor_enabled", "false");
+      assertEquals(cmaf.resolveAudioResampleAsync(false), "1",
+          "The floor opt-out must leave the configured async untouched");
+    }
+    finally
+    {
+      Sage.remove("ffmpeg/aresample_async");
+      Sage.remove("ffmpeg/browserpull_aresample_async_floor_enabled");
+      Sage.remove("ffmpeg/browserpull_aresample_async_floor");
+    }
   }
 }

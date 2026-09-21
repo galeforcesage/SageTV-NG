@@ -763,4 +763,83 @@ public class PlaybackDecisionEngineTest
     assertEquals(chosenDeliveryFor(set, "MPEG2-PS", "MPEG1-VIDEO", "AC3"), "push",
         "A PS source (advertised as MPEG1-PS) must still route over push");
   }
+
+  // -----------------------------------------------------------------------
+  // Native HLS routing (Safari/WebKit): a surface that advertises native "hls"
+  // must be delivered native HLS for a non-direct (conditioned) decision, not
+  // pulled into the MSE pull-xcode bridge. Only Apple WebKit/Safari advertises
+  // "hls" (gated client-side); Blink/Gecko/Tizen never do, so their routing is
+  // unchanged.
+  // -----------------------------------------------------------------------
+  private static PlaybackSurfaceSet buildTwoSurfaceSet(
+      final String idA, final String deliveryA,
+      final String idB, final String deliveryB,
+      final int priority, final String video, final String audio, final String containers)
+  {
+    return PlaybackSurfaceSet.build(idA + "," + idB,
+        new java.util.function.Function<String, String[]>()
+    {
+      public String[] apply(String sid)
+      {
+        String delivery = sid.equals(idA) ? deliveryA : deliveryB;
+        // [ROUTE, PRIORITY, DELIVERY_MODES, VIDEO_CODECS, AUDIO_CODECS, CONTAINERS]
+        return new String[] { "native", Integer.toString(priority), delivery, video, audio, containers };
+      }
+    });
+  }
+
+  @Test
+  public void hlsSurface_nonDirect_prefersNativeHlsOverPullXcode()
+  {
+    // Safari surface advertises pull,pull-xcode,hls. An HEVC source (surface
+    // decodes only H264) forces a full TRANSCODE -> non-direct. The server must
+    // deliver native "hls", NOT the cheaper-CPU "pull-xcode" MSE bridge.
+    PlaybackSurfaceSet set = buildSurfaceSet("pwa_safari", "pull,pull-xcode,hls",
+        "H264", "AAC", "MP4");
+    assertEquals(chosenDeliveryFor(set, "MP4", "HEVC", "AAC"), "hls",
+        "A surface declaring native hls must be delivered native HLS for a non-direct decision");
+  }
+
+  @Test
+  public void hlsSurface_directPlay_staysNativePull()
+  {
+    // Direct-playable content on the same Safari surface must still use the raw
+    // native "pull" -- advertising hls must NOT force segmented HLS onto a
+    // stream the client can direct-play.
+    PlaybackSurfaceSet set = buildSurfaceSet("pwa_safari", "pull,pull-xcode,hls",
+        "H264", "AAC", "MP4");
+    assertEquals(chosenDeliveryFor(set, "MP4", "H264", "AAC"), "pull",
+        "Direct-playable content on an hls-capable surface must stay on native pull");
+  }
+
+  @Test
+  public void nonHlsSurface_nonDirect_keepsPullXcode()
+  {
+    // Chromium/Firefox surface: pull,pull-xcode (no hls). A non-direct decision
+    // must keep the unchanged pull-xcode MSE bridge routing.
+    PlaybackSurfaceSet set = buildSurfaceSet("pwa_mse", "pull,pull-xcode",
+        "H264", "AAC", "MP4");
+    assertEquals(chosenDeliveryFor(set, "MP4", "HEVC", "AAC"), "pull-xcode",
+        "A surface without hls must keep pull-xcode routing for a non-direct decision");
+  }
+
+  @Test
+  public void hlsSurface_outranksPullXcodeSurface_crossSurface()
+  {
+    // Belt-and-suspenders: if Safari co-advertises a native hls surface AND an
+    // MSE pull-xcode surface at equal priority, the native-HLS surface must win
+    // the cross-surface tie (not be undercut by the cheaper-CPU pull-xcode).
+    PlaybackSurfaceSet set = buildTwoSurfaceSet(
+        "pwa_safari", "pull,hls",
+        "pwa_mse",    "pull,pull-xcode",
+        /*priority=*/10, "H264", "AAC", "MP4");
+    java.util.List<PlaybackDecisionEngine.SurfaceDecision> ranked =
+        PlaybackDecisionEngine.evaluateSurfaces(set, "MP4", "HEVC", "AAC",
+            1920, 1080, 0, 0, /*sourceInterlaced=*/false, null, null, null);
+    assertFalse(ranked.isEmpty(), "expected at least one servable surface");
+    assertEquals(ranked.get(0).chosenDeliveryMode, "hls",
+        "Native HLS must win the cross-surface tie over an equal-priority pull-xcode surface");
+    assertEquals(ranked.get(0).surface.getId(), "pwa_safari",
+        "The native-HLS Safari surface must be the selected winner");
+  }
 }

@@ -109,6 +109,17 @@ public final class PlaybackSurface
   private final int audioMaxChannels;
 
   /**
+   * Whether this surface can supply live delivered-goodput back to the server
+   * for a managed transcode: {@code "xcode_adjust"} (a pull-xcode browserhd
+   * session whose proxy sends {@code XCODE_ADJUST} on the control socket) or
+   * {@code "none"} (native HLS / direct-play / undeclared). A ranking + telemetry
+   * hint ONLY -- never a route selector; the decision engine never fabricates a
+   * route from it. Defaults to {@code "none"} for every legacy/silent client.
+   * (Protocol 2.1 additive dimension.)
+   */
+  private final String bandwidthFeedback;
+
+  /**
    * Backward-compatible constructor (pre-2.1.0006). Applies the conservative
    * track-access defaults: {@code audioTrackAccess="default_only"},
    * {@code audioTrackSelectionMode="client"}, no container rules.
@@ -206,7 +217,7 @@ public final class PlaybackSurface
 
   /**
    * Full constructor including the audio multichannel-decode dimension
-   * (Protocol 2.1).
+   * (Protocol 2.1). Delegates bandwidth-feedback to the default {@code "none"}.
    *
    * @param audioMaxChannels max audio channels this surface can decode/render;
    *   0 =&gt; undeclared (legacy), which resolves from the negotiated audio codec
@@ -223,6 +234,29 @@ public final class PlaybackSurface
       Set<String> interlacedUnsupportedCodecs,
       Map<String, boolean[]> containerTransports,
       int audioMaxChannels)
+  {
+    this(id, route, priority, deliveryModes, videoCodecs, audioCodecs, containers,
+        audioTrackAccess, audioTrackSelectionMode, audioContainerRules,
+        maxOutputWidth, maxOutputHeight, maxFps, interlacedUnsupportedCodecs,
+        containerTransports, audioMaxChannels, "none");
+  }
+
+  /**
+   * Full constructor including the bandwidth-feedback capability (Protocol 2.1
+   * additive). See {@link #getBandwidthFeedback()}.
+   *
+   * @param bandwidthFeedback {@code "xcode_adjust"} or {@code "none"};
+   *   null/empty =&gt; {@code "none"} (legacy/undeclared).
+   */
+  public PlaybackSurface(String id, String route, int priority,
+      List<String> deliveryModes, List<String> videoCodecs,
+      List<String> audioCodecs, List<String> containers,
+      String audioTrackAccess, String audioTrackSelectionMode,
+      Map<String, List<String>> audioContainerRules,
+      int maxOutputWidth, int maxOutputHeight, int maxFps,
+      Set<String> interlacedUnsupportedCodecs,
+      Map<String, boolean[]> containerTransports,
+      int audioMaxChannels, String bandwidthFeedback)
   {
     if (id == null || id.length() == 0)
       throw new IllegalArgumentException("PlaybackSurface id must be non-empty");
@@ -278,12 +312,16 @@ public final class PlaybackSurface
     }
     // Negative/nonsense channel counts collapse to "undeclared".
     this.audioMaxChannels = Math.max(0, audioMaxChannels);
+    this.bandwidthFeedback = (bandwidthFeedback == null || bandwidthFeedback.length() == 0)
+        ? "none" : bandwidthFeedback;
   }
 
   public String getId() { return id; }
   public String getRoute() { return route; }
   public int getPriority() { return priority; }
   public List<String> getDeliveryModes() { return deliveryModes; }
+  /** {@code "xcode_adjust"} if this surface can feed live goodput back (XCODE_ADJUST), else {@code "none"}. */
+  public String getBandwidthFeedback() { return bandwidthFeedback; }
   public List<String> getVideoCodecs() { return videoCodecs; }
   public List<String> getAudioCodecs() { return audioCodecs; }
   public List<String> getContainers() { return containers; }
@@ -531,6 +569,7 @@ public final class PlaybackSurface
         + " audioContainerRules=" + audioContainerRules
         + " maxOutput=" + maxOutputWidth + "x" + maxOutputHeight
         + " maxFps=" + maxFps
+        + " bwFeedback=" + bandwidthFeedback
         + " interlacedUnsupported=" + interlacedUnsupportedCodecs + "]";
   }
 }
