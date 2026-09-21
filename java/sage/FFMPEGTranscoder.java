@@ -3339,6 +3339,28 @@ public class FFMPEGTranscoder implements TranscodeEngine
       if (Sage.DBG) System.out.println("FFMPEGTranscoder: AC-4 in MPEG-TS — adding -copytb 0 (no AC-4 TS parser)");
     }
 
+    // Live OTA/cable source resilience. Off-air MPEG-2/AC-3 recordings routinely
+    // carry the occasional corrupt packet or a timestamp discontinuity from a
+    // brief signal dropout mid-programme. ffmpeg's default reaction is to error
+    // on the packet ("Error submitting packet to decoder: Invalid data" /
+    // "timestamp discontinuity") but keep it in play, which on the segmented
+    // muxer can wedge output: the audio stream stops advancing across the bad
+    // region, the muxer holds the ready video packets waiting to interleave, and
+    // a segment never finalizes while the ffmpeg process sits alive but idle
+    // (observed live: 5.1 AC-3 corruption near a segment boundary -> that .m4s
+    // never closes -> the pull client stalls "Loading" for the 30s wait, aborts
+    // and retries into the SAME bad spot). Tell the demuxer to drop corrupt
+    // packets and the decoders to skip past errors so the stream steps over the
+    // damage instead of stalling on it. Input options (apply to the -i below);
+    // live-tunable (property=false reverts without a rebuild).
+    if (httplsMode && Sage.getBoolean("httpls/input_error_resilience", true))
+    {
+      xcodeParamsVec.add("-err_detect");
+      xcodeParamsVec.add("ignore_err");
+      xcodeParamsVec.add("-fflags");
+      xcodeParamsVec.add("+discardcorrupt");
+    }
+
     // For live/active files, reduce probe time to minimize channel-change
     // latency. Default probesize (5MB) can take 5-11s on ATSC3 streams.
     // 1MB + 1.5s analyzeduration is enough for HEVC+AC-4 detection.
@@ -3715,6 +3737,20 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add(Sage.get("multimedia/hwaccel/nvenc/live_preset", "p4"));
       xcodeParamsVec.add("-rc:v");
       xcodeParamsVec.add("vbr");
+      // NVENC honors -force_key_frames ONLY when -forced-idr is enabled; without
+      // it the encoder silently drops the forced-IDR request and closes GOPs on
+      // its own -g cadence instead. On the CMAF path we add -force_key_frames at
+      // every segment boundary (segmentDur) above, so a missing -forced-idr made
+      // nvenc emit IDRs on the -g 250 GOP (~8.3s @30fps) rather than at 5s. The
+      // hls muxer then split on those GOP keyframes, producing ~8.3s .m4s files
+      // while the client (and our -output_ts_offset / part->time math) assume
+      // segmentDur. That mismatch drifts the live-edge estimate and provokes
+      // needless far-forward reseeks. Enabling forced-idr makes segment length
+      // equal segmentDur, so part N maps cleanly to N*segmentDur. Only meaningful
+      // when -force_key_frames is present (CMAF re-encode); a harmless no-op on
+      // the legacy TS path where no forced keyframes are requested.
+      xcodeParamsVec.add("-forced-idr");
+      xcodeParamsVec.add("1");
       xcodeParamsVec.add("-g");
       xcodeParamsVec.add("250");
       xcodeParamsVec.add("-keyint_min");
@@ -4623,6 +4659,40 @@ public class FFMPEGTranscoder implements TranscodeEngine
       bufferOutput = false;
       fmp4StartSegment = segmentTargetCounter;
       java.io.File dir = fmp4OutputDir;
+      // Timeline continuity across a seek-relaunch. A far-forward (or backward)
+      // reseek restarts ffmpeg with an INPUT "-ss <t>", which by default rebases
+      // the output timestamps to ~0. The hls fMP4 muxer then writes the new
+      // segment's baseMediaDecodeTime (tfdt) starting from 0 -- so e.g. part #30
+      // arrives on the wire carrying media time 0 instead of its true position.
+      // The browser MSE SourceBuffer already holds earlier content on the real
+      // timeline, so the reset segment overlaps it: the player rewinds/replays
+      // and, once the overlap confuses the demuxer badly enough, fails the append
+      // with DEMUXER_ERROR_COULD_NOT_PARSE. -start_number only renames the file;
+      // it does NOT move the media clock. Re-anchor the muxer clock to the seek
+      // position with -output_ts_offset so segment N's baseMediaDecodeTime lands
+      // at N*segmentDur -- exactly where the client maps part N -- keeping the
+      // MSE timeline monotonic and gap/overlap-free across the relaunch. Only on
+      // a seek relaunch; the initial launch already starts at 0.
+      if (transcodeStartSeekTime != 0)
+      {
+        xcodeParamsVec.add("-output_ts_offset");
+        xcodeParamsVec.add(String.format(java.util.Locale.US, "%d.%03d",
+            transcodeStartSeekTime / 1000, transcodeStartSeekTime % 1000));
+      }
+      // Anti-wedge experiment for a stalled/corrupt audio stream (borrowed from
+      // the Matroska live-push precedent above). DISABLED BY DEFAULT on CMAF: a
+      // 2-track fMP4 fragment must carry both video and audio every moof, but
+      // max_interleave_delta 0 + flush_packets 1 let ffmpeg emit VIDEO-ONLY
+      // fragments while the AC-3 decode is stalled, which the browser MSE rejects
+      // (audio SourceBuffer underflow -> MEDIA_ERR / "video element error"). It is
+      // the right cure for Matroska (single tolerant file) but wrong here. Left
+      // behind a live-tunable flag so it can be re-enabled for diagnosis without a
+      // rebuild; the real WAN fix is the server-goodput ramp-down in HTTPLSServer.
+      if (Sage.getBoolean("httpls/fmp4_flush_uninterleaved", false))
+      {
+        xcodeParamsVec.add("-max_interleave_delta"); xcodeParamsVec.add("0");
+        xcodeParamsVec.add("-flush_packets"); xcodeParamsVec.add("1");
+      }
       xcodeParamsVec.add("-f"); xcodeParamsVec.add("hls");
       xcodeParamsVec.add("-hls_time"); xcodeParamsVec.add(Long.toString(segmentDur / 1000));
       xcodeParamsVec.add("-hls_segment_type"); xcodeParamsVec.add("fmp4");

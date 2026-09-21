@@ -378,7 +378,10 @@ public class HTTPLSServer implements Runnable
               if (Sage.DBG) System.out.println("CMAF part " + streamPart + " not available for mf=" + mfId + "; abort");
               break;
             }
+            long cmafSendBytes = targetFile.length();
+            long cmafSendStart = Sage.time();
             sendBackMediaFile(targetFile, "video/mp4");
+            updateCmafGoodput(xcode, cmafSendBytes, Sage.time() - cmafSendStart);
             xcode.transcoder.markSegmentConsumed(streamPart);
             if (Sage.DBG) System.out.println("CMAF finished sending part " + streamPart + " for mf=" + mfId + " length=" + targetFile.length());
           }
@@ -3242,6 +3245,38 @@ public class HTTPLSServer implements Runnable
       // trying to do at that point.
 
       int targetVideoKbps = Math.max(64, bwkbps - 32);
+      // CMAF/fMP4 WAN ramp-down from server-measured goodput. The client's HLS
+      // player picks a variant (bwkbps) from the master playlist using its own
+      // optimistic ABR; over a thin VPN it keeps asking for the top variant and
+      // we obediently drive the encoder up toward it, but the link can't drain
+      // that, so the -stdinctrl encoder backs up to playback pace, the next .m4s
+      // arrives late, the client aborts the part and stalls. There is no client
+      // GOODPUT/XCODE_ADJUST loop on this path (that only exists via /msproxy), so
+      // measure it on the server: updateCmafGoodput() times each segment send. If
+      // the running EWMA says the link can't sustain the requested variant, cap
+      // the encoder BELOW measured capacity (with headroom). This only ever LOWERS
+      // the target -- the client's variant stays the ceiling -- and loosens back
+      // up automatically as goodput recovers. All thresholds are live-tunable.
+      if (fmp4 && Sage.getBoolean("httpls/cmaf_goodput_adapt", true)
+          && xcode.goodputSamples >= Sage.getInt("httpls/cmaf_goodput_min_samples", 2)
+          && xcode.goodputEwmaKbps > 0)
+      {
+        int headroomPct = Sage.getInt("httpls/cmaf_goodput_headroom_pct", 80);
+        // targetVideoKbps is video-only; the goodput budget covers the whole
+        // stream, so reserve the current audio + container overhead.
+        int nonVideoKbps = Math.max(0, xcode.transcoder.getCurrentStreamBitrateKbps()
+            - xcode.transcoder.getCurrentVideoBitrateKbps());
+        int goodputVideoCap = (int)(xcode.goodputEwmaKbps * headroomPct / 100.0) - nonVideoKbps - 32;
+        goodputVideoCap = Math.max(Sage.getInt("httpls/cmaf_goodput_min_video_kbps", 800), goodputVideoCap);
+        if (goodputVideoCap < targetVideoKbps)
+        {
+          if (Sage.DBG) System.out.println("CMAF GOODPUT cap: lowering targetVideoKbps from "
+              + targetVideoKbps + " to " + goodputVideoCap + " (ewmaGoodput="
+              + (int)xcode.goodputEwmaKbps + "kbps headroom=" + headroomPct + "% nonVideo="
+              + nonVideoKbps + "kbps samples=" + xcode.goodputSamples + ")");
+          targetVideoKbps = goodputVideoCap;
+        }
+      }
       if (xcode.transcoder.getCurrentVideoBitrateKbps() > targetVideoKbps)
       {
         // A bitrate DECREASE must not tear down + rebuild the transcoder on the
@@ -3286,6 +3321,46 @@ public class HTTPLSServer implements Runnable
 
   // Generalized segment sender (used by both the TS path, video/MP2T, and the
   // CMAF path, video/mp4 for init.mp4 + .m4s). Same zero-copy transferTo loop.
+  // Server-side delivered-goodput estimator for the CMAF/fMP4 pull path. Each
+  // finalized .m4s is drained to the client over a blocking socket, so the wall
+  // time to send it directly measures the client link's throughput at that
+  // moment: on a LAN the socket buffer swallows the whole segment instantly
+  // ("unconstrained"); over a thin VPN transferTo blocks until the client drains,
+  // so the elapsed time reflects real capacity. Each sample folds into an EWMA on
+  // the session, which setupTranscoder() uses to cap the encoder below measured
+  // capacity instead of chasing the client's optimistic HLS variant up to a rate
+  // the VPN cannot hold. This is the server-side bandwidth calculation the
+  // long-standing NOTE above asked for, and unlike the /msproxy GOODPUT loop it
+  // needs no client cooperation.
+  private void updateCmafGoodput(XCodeInfo info, long bytes, long sendMs)
+  {
+    if (info == null || bytes <= 0) return;
+    int minBytes = Sage.getInt("httpls/cmaf_goodput_min_bytes", 131072);
+    int floorMs = Sage.getInt("httpls/cmaf_goodput_floor_ms", 40);
+    double sampleKbps;
+    if (sendMs < floorMs)
+    {
+      // Sent effectively instantly: this segment did not constrain the link. Feed
+      // a high sample so a previously-throttled EWMA can recover toward the client
+      // ceiling. Skip tiny segments (too noisy to time meaningfully).
+      if (bytes < minBytes) return;
+      sampleKbps = Sage.getInt("httpls/cmaf_goodput_unconstrained_kbps", 100000);
+    }
+    else
+    {
+      sampleKbps = (bytes * 8.0) / sendMs; // bits / ms == kbps
+    }
+    double alpha = Sage.getInt("httpls/cmaf_goodput_alpha_pct", 40) / 100.0;
+    if (info.goodputSamples == 0)
+      info.goodputEwmaKbps = sampleKbps;
+    else
+      info.goodputEwmaKbps = alpha * sampleKbps + (1 - alpha) * info.goodputEwmaKbps;
+    info.goodputSamples++;
+    if (Sage.DBG) System.out.println("CMAF GOODPUT part bytes=" + bytes + " sendMs=" + sendMs
+        + " sampleKbps=" + (int)sampleKbps + " ewmaKbps=" + (int)info.goodputEwmaKbps
+        + " samples=" + info.goodputSamples);
+  }
+
   private void sendBackMediaFile(java.io.File theFile, String contentType) throws java.io.IOException
   {
     writeBuf.clear();
@@ -3481,6 +3556,11 @@ public class HTTPLSServer implements Runnable
     public FFMPEGTranscoder transcoder;
     public VideoFrame vf;
     public int lastRequestedPart;
+    // Server-measured delivered goodput (kbps), EWMA, for this CMAF/fMP4 session:
+    // derived from how long each .m4s took to drain to the client socket. 0 until
+    // the first usable sample. Drives the WAN ramp-down in setupTranscoder().
+    public double goodputEwmaKbps;
+    public int goodputSamples;
   }
 
   // Call this when playback of a file is closed so the transcoder can be killed for that client
