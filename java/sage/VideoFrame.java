@@ -6219,6 +6219,100 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     return true;
   }
 
+  /**
+   * EPG-boundary seam predicate, shared by every server-side continuation path
+   * (CMAF pull and MiniPlayer push). Returns true only when {@code next} is a
+   * genuinely seamless continuation of {@code prev}: same physical tuner, same
+   * station, and byte-contiguous ({@code prev.getRecordEnd() == next.getRecordTime()}).
+   * These are exactly the conditions {@link #areMediaFileFormatsSwitchable}
+   * enforces for a native fast-switch, factored out as a {@code static} so the
+   * transcode/CMAF layers (which have no VideoFrame instance) can gate on the
+   * identical rule. Deliberately omits the playlist-chain guard (server-side
+   * live continuation never runs inside a UI playlist) and the format compare
+   * (already dead code above -- the seam is defined by capture identity, and a
+   * same-tuner continuation cannot change codec/resolution mid-capture).
+   */
+  public static boolean isContiguousLiveSeam(MediaFile prev, MediaFile next)
+  {
+    if (prev == null || next == null || prev == next) return false;
+    if (!prev.isTV() || !next.isTV()) return false;
+    if (prev.getEncodedBy() == null || !prev.getEncodedBy().equals(next.getEncodedBy()))
+      return false;
+    if (prev.getRecordEnd() != next.getRecordTime()) return false;
+    Airing pa = prev.getContentAiring();
+    Airing na = next.getContentAiring();
+    if (pa == null || na == null) return false;
+    if (pa.getStationID() != na.getStationID()) return false;
+    CaptureDevice prevDev = prev.guessCaptureDeviceFromEncoding();
+    CaptureDevice newDev = next.guessCaptureDeviceFromEncoding();
+    if (prevDev == null || newDev == null || prevDev != newDev) return false;
+    return true;
+  }
+
+  /**
+   * Resolves the contiguous same-tuner live successor of {@code currFile}, or
+   * {@code null} when there is no safe seam yet. This is the single canonical
+   * "what plays next across the EPG boundary" walk, extracted from the live
+   * airing-transition handling in the main VideoFrame loop: step to the airing
+   * immediately after the current one, skipping missing airings until either a
+   * MediaFile materializes or we cross into the not-yet-recorded live edge, then
+   * confirm the seam with {@link #isContiguousLiveSeam}.
+   *
+   * <p>Covers all three live scenarios uniformly, because it keys off the
+   * MediaFile that backs the next airing regardless of WHY it exists: a live
+   * timeshift buffer segment (pure live watch, nothing scheduled) and a
+   * scheduled recording are both just the {@code getFileForAiring(nextAir)}
+   * result. Returns {@code null} (caller falls back to today's behavior --
+   * ENDLIST for CMAF, FULL SWITCH for MiniPlayer) whenever the successor has not
+   * been created yet or the seam is not byte-contiguous on the same tuner (e.g.
+   * a scheduling conflict moved the next airing to a different capture device).
+   */
+  public static MediaFile getContiguousLiveSuccessor(MediaFile currFile)
+  {
+    if (currFile == null || !currFile.isTV()) return null;
+    Airing currAiring = currFile.getContentAiring();
+    if (currAiring == null) return null;
+    Wizard wiz = Wizard.getInstance();
+    long now = Sage.time();
+    Airing nextAir = wiz.getTimeRelativeAiring(currAiring, 1);
+    MediaFile watchMe = null;
+    while (nextAir != null && nextAir != currAiring)
+    {
+      MediaFile f = wiz.getFileForAiring(nextAir);
+      if (f != null) { watchMe = f; break; }
+      // Crossed into the live edge with nothing recorded yet: no successor file
+      // exists to bridge to (pre-warm will retry once it appears).
+      if (nextAir.getSchedulingEnd() > now) break;
+      currAiring = nextAir;
+      nextAir = wiz.getTimeRelativeAiring(currAiring, 1);
+    }
+    if (!isContiguousLiveSeam(currFile, watchMe)) return null;
+    return watchMe;
+  }
+
+  /**
+   * Pure EPG-boundary seam policy: whether the server may bridge playback across
+   * a show boundary into the contiguous successor airing. Factored out as a
+   * {@code static} with primitive arguments so it can be unit-tested and so both
+   * server-side continuation paths (CMAF pull in HTTPLSServer, native push in
+   * MiniPlayer) enforce the identical rule.
+   *
+   * <p>The rule the user requires: bridge <b>only</b> for a live/unscheduled tune
+   * ({@code liveControl == true}); <b>never</b> for scheduled-recording playback.
+   * A 60-minute scheduled recording watched from its start must end at its own
+   * end (no bridge); a paused/timeshifted live tune must continue past the show's
+   * EPG end into the next airing (bridge). {@code featureEnabled} is the per-path
+   * kill-switch/capability (the {@code miniplayer/seam_fastswitch_transcoded}
+   * property for push, the {@code x-cmaf-seam} capability/default for pull). Each
+   * caller still separately requires an actual contiguous successor to exist
+   * ({@link #getContiguousLiveSuccessor} / a captured reconstructable plan);
+   * this method only decides the live-vs-scheduled policy gate.
+   */
+  static boolean liveSeamPermitted(boolean featureEnabled, boolean liveControl)
+  {
+    return featureEnabled && liveControl;
+  }
+
   public long getRealWatchStart()
   {
     return realWatchStart;

@@ -628,7 +628,41 @@ public class MiniPlayer implements DVDMediaPlayer
     // They'll be the same type because that's already checked in VideoFrame
     // 8/28/08 - Don't do fast loading at all; we don't properly setup the new MpegReader in the
     // fastLoad method below since we've customized it so much in the main load method.
-    return pushMode && !lowBandwidth && !serverSideTranscoding && downer == null;
+    //
+    // EPG-boundary seam (NG): the historical blanket !serverSideTranscoding block
+    // is what made a live airing rollover on a transcoded/remuxed session tear the
+    // player down (FULL SWITCH -> 15s player-socket deadline -> PlaybackException),
+    // even though the two airings are the same tuner/codec/station. fastLoad() now
+    // rebuilds the exact server-side pipeline (see fastLoadServerSideTranscoding
+    // capture in load()), so a server-side session may fast-switch -- but ONLY when
+    // we actually captured a reconstructable plan on the last load. Any other
+    // server-side path (no captured plan) still returns false and keeps today's
+    // FULL SWITCH behavior, so there is no regression. VideoFrame independently
+    // still requires areMediaFileFormatsSwitchable() (the same-tuner/same-station/
+    // contiguous seam predicate), so this can only ever engage on a genuine seam.
+    // Live-only gate (NG): the seam must bridge across an EPG boundary ONLY when
+    // the viewing is a live/unscheduled tune (isLiveControl()==true), NOT when
+    // playing back a scheduled recording. A 60-min scheduled recording watched
+    // from the start must END at its 60-min mark (no bridge); a live tune that is
+    // paused/timeshifted must continue past the show's EPG end into the next
+    // airing (bridge). isLiveControl() is precisely that viewing-mode signal.
+    // Fail safe: if we cannot resolve the VideoFrame, treat as NOT live -> no
+    // seam, so we never bridge a recording playback by accident.
+    boolean liveSeam = false;
+    if (fastLoadServerSideTranscoding)
+    {
+      try
+      {
+        VideoFrame seamVf = VideoFrame.getVideoFrameForPlayer(MiniPlayer.this);
+        liveSeam = seamVf != null && seamVf.isLiveControl();
+      }
+      catch (Throwable t) {}
+    }
+    boolean serverSideOK = !serverSideTranscoding
+        || (fastLoadServerSideTranscoding
+            && VideoFrame.liveSeamPermitted(
+                Sage.getBoolean("miniplayer/seam_fastswitch_transcoded", true), liveSeam));
+    return pushMode && !lowBandwidth && serverSideOK && downer == null;
   }
 
   public synchronized void fastLoad(byte majorTypeHint, byte minorTypeHint, String encodingHint, java.io.File file, String hostname, boolean timeshifted, long bufferSize, boolean waitUntilDone) throws PlaybackException
@@ -683,7 +717,33 @@ public class MiniPlayer implements DVDMediaPlayer
         sage.media.format.ContainerFormat currFileFormat = currMF.getFileFormat();
         if (currFileFormat != null && "true".equals(currFileFormat.getMetadataProperty("VARIED_FORMAT")))
           currFileFormat = sage.media.format.FormatParser.getFileFormat(file);
-        mpegSrc.setStreamTranscodeMode(null, currFileFormat);
+        if (fastLoadServerSideTranscoding
+            && Sage.getBoolean("miniplayer/seam_fastswitch_transcoded", true))
+        {
+          // EPG-boundary seam: rebuild the SAME server-side pipeline the main
+          // load() resolved for the prior (same-tuner) airing, so a live airing
+          // rollover fast-switches seamlessly instead of dropping the transcode
+          // to null-mode passthrough -- which made the client see an encoding
+          // change, forced a FULL SWITCH, and hit the 15s player-socket deadline
+          // (sage.PlaybackException). null mode + usingRemuxer == the TS->PS remux
+          // path; a non-null mode == the FFMPEGTranscoder transcode path (with its
+          // enhance tier, sidecar channel cap and resolved AC-4 audio codec). The
+          // seam predicate guarantees the successor is the same codec/resolution,
+          // so no re-probing is needed here.
+          if (Sage.DBG) System.out.println("MiniPlayer fast-switch rebuilding server-side plan mode="
+              + fastLoadPrefTranscodeMode + " remux=" + fastLoadUsingRemuxer
+              + " enhance=" + (fastLoadEnhanceTier == null ? "NONE" : fastLoadEnhanceTier.token())
+              + " ac4=" + fastLoadAc4AudioCodec);
+          mpegSrc.setStreamTranscodeMode(fastLoadPrefTranscodeMode, currFileFormat);
+          mpegSrc.setEnhancementTier(fastLoadEnhanceTier);
+          mpegSrc.setSidecarMaxAudioChannels(fastLoadSidecarMaxAudioChannels);
+          if (fastLoadAc4AudioCodec != null && fastLoadAc4AudioCodec.length() > 0)
+            mpegSrc.setAc4SourceAudioCodec(fastLoadAc4AudioCodec);
+          usingRemuxer = fastLoadUsingRemuxer;
+          serverSideTranscoding = true;
+        }
+        else
+          mpegSrc.setStreamTranscodeMode(null, currFileFormat);
         if (currFileFormat != null && Sage.getBoolean("miniplayer/align_iframes_on_seek", true))
           mpegSrc.setIFrameAlign(true);
       }
@@ -3413,7 +3473,15 @@ public class MiniPlayer implements DVDMediaPlayer
       currMute = !mediaExtender;
       serverSideTranscoding = false;
       usingRemuxer = false;
-      // --- GPU enhancement: PUSH direct-play upgrade ---
+      // EPG-boundary seam: clear any captured server-side plan from a prior tune
+      // so canFastLoad() never authorizes a transcoded fast-switch off a stale
+      // plan. Re-captured below only if this load takes a server-side branch.
+      fastLoadServerSideTranscoding = false;
+      fastLoadUsingRemuxer = false;
+      fastLoadPrefTranscodeMode = null;
+      fastLoadAc4AudioCodec = null;
+      fastLoadEnhanceTier = sage.enhance.EnhancementTier.NONE;
+      fastLoadSidecarMaxAudioChannels = 0;
       // A direct-play-capable NG push client with a 4K-class HEVC decoder is
       // otherwise left at the native source (e.g. an NVIDIA Shield direct-playing
       // 720p MPEG2) even when the advisor decided an active upscale tier and both
@@ -3609,6 +3677,11 @@ public class MiniPlayer implements DVDMediaPlayer
             // Per-client 5.1-vs-stereo capability for the enhance AC-4 sidecar
             // (0 = legacy/undeclared -> resolved from the chosen codec below).
             mpegSrc.setSidecarMaxAudioChannels(currentTuneSurfaceMaxAudioChannels);
+            // EPG-boundary seam: capture this resolved transcode plan for fastLoad.
+            fastLoadPrefTranscodeMode = prefTranscodeMode;
+            fastLoadEnhanceTier = currentTuneEnhanceTier;
+            fastLoadSidecarMaxAudioChannels = currentTuneSurfaceMaxAudioChannels;
+            fastLoadAc4AudioCodec = null;
             // If the source has Dolby AC-4 audio (ATSC 3.0), prefer E-AC-3 for
             // any client that advertises EAC3 (higher quality / 5.1 preserved).
             // Otherwise fall back to AC-3 (universal among legacy SageTV clients).
@@ -3660,11 +3733,13 @@ public class MiniPlayer implements DVDMediaPlayer
                 if (Sage.DBG) System.out.println("MiniPlayer: AC-4 source detected — selecting "
                     + pick + " (fallback ladder: eac3 -> ac3 -> aac -> mp2)");
                 mpegSrc.setAc4SourceAudioCodec(pick);
+                fastLoadAc4AudioCodec = pick;
               }
             }
             transcoded = false;
             serverSideTranscoding = true;
             this.timeshifted = timeshifted = true;
+            fastLoadServerSideTranscoding = true;
           }
         }
         else if (hdhrPrimeSpecial || (hostname != null && (hostname.equals(Sage.get("alternate_media_server", "")) ||
@@ -3711,6 +3786,9 @@ public class MiniPlayer implements DVDMediaPlayer
             transcoded = false;
             serverSideTranscoding = true;
             this.timeshifted = timeshifted = true;
+            fastLoadServerSideTranscoding = true;
+            fastLoadUsingRemuxer = true;
+            fastLoadPrefTranscodeMode = null;
             // NOTE: WE DO WANT TO USE IT; WE JUST DON'T KNOW WHERE IT'LL BE!!!!
             // NOTE: WE DO WANT TO USE IT; WE JUST DON'T KNOW WHERE IT'LL BE!!!!
             useOriginalAudioTrack = true;
@@ -8121,6 +8199,27 @@ public class MiniPlayer implements DVDMediaPlayer
   protected long lastPosDiagTime;
   protected boolean byteBasedSeeking;
   protected boolean serverSideTranscoding;
+
+  // EPG-boundary seam (server-side push continuation). When the main load() takes
+  // a server-side branch (FFMPEGTranscoder transcode OR TS->PS remux), it records
+  // the RESOLVED plan here so a same-tuner fast-switch across an EPG airing
+  // boundary can rebuild the identical server-side pipeline in fastLoad() instead
+  // of the historical setStreamTranscodeMode(null) passthrough (which silently
+  // dropped the transcode -> the client saw an encoding change -> FULL SWITCH ->
+  // 15s player-socket deadline -> PlaybackException). The seam predicate
+  // (VideoFrame.areMediaFileFormatsSwitchable: same tuner, same station,
+  // byte-contiguous, same capture device) guarantees the successor is the same
+  // codec/resolution/format, so replaying this exact plan is correct. Reset at the
+  // top of every load(); consulted by canFastLoad() so ONLY a captured,
+  // reconstructable server-side session is allowed to fast-switch (every other
+  // path keeps today's behavior, no regression).
+  protected boolean fastLoadServerSideTranscoding;
+  protected boolean fastLoadUsingRemuxer;
+  protected String fastLoadPrefTranscodeMode;
+  protected sage.enhance.EnhancementTier fastLoadEnhanceTier =
+      sage.enhance.EnhancementTier.NONE;
+  protected int fastLoadSidecarMaxAudioChannels;
+  protected String fastLoadAc4AudioCodec;
 
   protected boolean pushMode;
 

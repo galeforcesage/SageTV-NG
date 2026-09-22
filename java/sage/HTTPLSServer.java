@@ -335,16 +335,79 @@ public class HTTPLSServer implements Runnable
             long remTime = mf.getDuration(segmentNum) / 1000;
             int numParts = (int)Math.ceil((double)remTime / partDur);
             if (Sage.DBG) System.out.println("CMAF Request for fMP4 playlist at " + bwkbps + "kbps for mf=" + mfId + " seg=" + segmentNum + " clientMac=" + clientMac + " totalParts=" + numParts);
-            int i = 0;
-            while (remTime > 0)
+            appendFmp4Parts(sb, base, mf.getDuration(segmentNum));
+
+            // EPG-boundary seam (Path B, capability-gated). Legacy clients never
+            // send x-cmaf-seam, so `ended` stays true here and they get exactly
+            // today's #EXT-X-ENDLIST behavior -- zero change. A seam-capable client
+            // (PWA / Android NG; documented) gets the playlist bridged across a
+            // live airing boundary with standard HLS #EXT-X-DISCONTINUITY + a fresh
+            // #EXT-X-MAP, each successor's parts served under ITS OWN mediafile URL
+            // (its own per-file CMAF transcoder + init.mp4). No cross-file
+            // transcoder surgery, so the session cache / cleaner are untouched.
+            boolean ended = !mf.isRecording(segmentNum);
+            // Live-only gate (NG): bridge ONLY when this is a live/unscheduled
+            // tune (isLiveControl()==true), never when playing back a scheduled
+            // recording. Scenario: a 60-min scheduled recording watched from the
+            // start ends at its 60-min mark (no bridge); a paused live tune
+            // continues past the EPG end (bridge). Fail safe: no VideoFrame -> not
+            // live -> no seam, so a recording playback is never bridged.
+            boolean liveSeam = false;
+            try
             {
-              long currDur = Math.min(remTime, partDur);
-              remTime -= partDur;
-              sb.append("#EXTINF:" + currDur + ".0,\r\n");
-              sb.append(base + "_" + i++ + ".m4s\r\n");
+              VideoFrame seamVf = (uiMgr == null) ? null : uiMgr.getVideoFrame();
+              liveSeam = seamVf != null && seamVf.isLiveControl();
             }
-            if (!mf.isRecording(segmentNum))
+            catch (Throwable t) {}
+            boolean seamCapable = VideoFrame.liveSeamPermitted(
+                "1".equals(paramMap.get("x-cmaf-seam"))
+                    || Sage.getBoolean("httpls/fmp4_seam_default", false),
+                liveSeam);
+            if (ended && seamCapable)
+            {
+              MediaFile chainFile = mf;
+              int maxLinks = Sage.getInt("httpls/fmp4_seam_max_links", 32);
+              int links = 0;
+              while (!chainFile.isRecording() && links < maxLinks)
+              {
+                MediaFile succ = VideoFrame.getContiguousLiveSuccessor(chainFile);
+                if (succ == null) break;
+                String succBase = "http://" + myHost + "/iosstream_" + clientMac + "_"
+                    + succ.getID() + "_0_" + bwkbps;
+                sb.append("#EXT-X-DISCONTINUITY\r\n");
+                sb.append("#EXT-X-MAP:URI=\"" + succBase + "_init.mp4\"\r\n");
+                appendFmp4Parts(sb, succBase, succ.getDuration(0));
+                if (Sage.DBG) System.out.println("CMAF seam: bridging mf=" + chainFile.getID()
+                    + " -> successor mf=" + succ.getID() + " (link " + (links + 1) + ")");
+                chainFile = succ;
+                links++;
+              }
+              ended = !chainFile.isRecording();
+              // Tail of the chain has stopped recording but no successor exists
+              // YET: the successor MediaFile can lag the boundary by a moment.
+              // Suppress ENDLIST for a bounded grace window so the client keeps
+              // polling; only finalize once the drought outlasts the window.
+              if (ended)
+              {
+                long graceMs = Sage.getInt("httpls/fmp4_seam_grace_ms", 8000);
+                Long start = fmp4SeamGrace.putIfAbsent(sessionID, Long.valueOf(Sage.time()));
+                long began = (start == null) ? Sage.time() : start.longValue();
+                if (Sage.time() - began < graceMs)
+                {
+                  ended = false; // hold the playlist open, keep the client polling
+                  if (Sage.DBG) System.out.println("CMAF seam: no successor yet for mf="
+                      + chainFile.getID() + "; holding playlist open (grace "
+                      + (Sage.time() - began) + "/" + graceMs + "ms)");
+                }
+              }
+              else
+                fmp4SeamGrace.remove(sessionID); // live successor found; reset grace
+            }
+            if (ended)
+            {
               sb.append("#EXT-X-ENDLIST\r\n");
+              fmp4SeamGrace.remove(sessionID);
+            }
 
             // Warm up the transcoder + init + first part before returning the
             // playlist (mirrors the TS prebuffer @312 to avoid a cold start).
@@ -3547,6 +3610,16 @@ public class HTTPLSServer implements Runnable
 
   private static java.util.HashMap cachedXCodeMap = new java.util.HashMap();
 
+  // EPG-boundary seam (CMAF Path B) grace-window bookkeeping. Keyed by fMP4
+  // sessionID. When a session's current file stops recording but no contiguous
+  // live successor has appeared yet, we hold the playlist open (suppress ENDLIST)
+  // for a bounded window so a seam-capable client keeps polling until the
+  // successor materializes -- once an HLS client sees ENDLIST it stops forever.
+  // Records the wall time the drought was first observed; cleared when a live
+  // successor is found or the session ends.
+  private static final java.util.concurrent.ConcurrentHashMap<String, Long> fmp4SeamGrace =
+      new java.util.concurrent.ConcurrentHashMap<String, Long>();
+
   private static class XCodeInfo
   {
     public String sessionID;
@@ -3561,6 +3634,22 @@ public class HTTPLSServer implements Runnable
     // the first usable sample. Drives the WAN ramp-down in setupTranscoder().
     public double goodputEwmaKbps;
     public int goodputSamples;
+  }
+
+  // Append the #EXTINF + .m4s part lines for one CMAF file to the playlist under
+  // the given base URL, one part per partDur (last part may be shorter). Shared by
+  // the requested file and every EPG-boundary seam successor chained after it.
+  private void appendFmp4Parts(StringBuffer sb, String base, long durationMs)
+  {
+    long remTime = durationMs / 1000;
+    int i = 0;
+    while (remTime > 0)
+    {
+      long currDur = Math.min(remTime, partDur);
+      remTime -= partDur;
+      sb.append("#EXTINF:" + currDur + ".0,\r\n");
+      sb.append(base + "_" + i++ + ".m4s\r\n");
+    }
   }
 
   // Call this when playback of a file is closed so the transcoder can be killed for that client
