@@ -6578,6 +6578,15 @@ public class FFMPEGTranscoder implements TranscodeEngine
   // it will never reach).
   public java.io.File getFmp4SegmentFile(int segNum) throws java.io.IOException
   {
+    // Automatic wedge-recovery budget: how many times a single part request may
+    // relaunch a wedged-but-alive encoder past a corrupt/discontinuous source
+    // region before giving up (and letting the client fall back). See the
+    // wedge-detection block below.
+    return getFmp4SegmentFile(segNum, Sage.getInt("httpls_fmp4_wedge_max_relaunch", 2));
+  }
+
+  private java.io.File getFmp4SegmentFile(int segNum, int relaunchBudget) throws java.io.IOException
+  {
     if (fmp4OutputDir == null) return null;
     java.io.File seg = new java.io.File(fmp4OutputDir, "seg" + segNum + ".m4s");
     if (seg.isFile()) return seg; // already produced (encoder may have since exited)
@@ -6614,6 +6623,30 @@ public class FFMPEGTranscoder implements TranscodeEngine
       if (seg.isFile()) return seg;
     }
     long deadline = Sage.time() + Sage.getInt("httpls_fmp4_segment_wait_ms", 30000);
+    // Wedge self-heal. A continuously-running CMAF encoder can WEDGE on a corrupt
+    // source packet plus a multi-second timestamp discontinuity -- observed live
+    // on in-progress MPEG2-PS/AC3 recordings at a part boundary (the fallback
+    // process logs the same spot: ac3 "Invalid data ... Error submitting packet
+    // to decoder" + "timestamp discontinuity ... -667267"). The GPU decode/filter/
+    // encode pipeline stops emitting and the hls muxer never renames the
+    // in-progress seg<N>.m4s.tmp, so the part never appears even though the
+    // process is still alive. Simply waiting the full segment_wait then returning
+    // null hands the client to the browserhd fallback -- which recovers ONLY
+    // because it is a FRESH process seeking PAST the bad region. Give the CMAF
+    // path that same fresh start in place: if the finalized-part frontier makes
+    // no forward progress for wedgeMs while the process is alive, relaunch the
+    // encoder AT this part with -ss (exactly like a seek; -start_number +
+    // -output_ts_offset keep the file numbering and MSE timeline aligned) so it
+    // resyncs past the discontinuity on a clean IDR and keeps the client on the
+    // CMAF path instead of stalling for 30s and falling back. wedgeMs (12s) is
+    // long enough that ordinary live-edge micro-waits (sub-second, encoder
+    // following a growing recording) never trip it; only a genuine multi-second
+    // stall does. relaunchBudget bounds the retries so a corruption sitting
+    // exactly on the seek target can't thrash -- once exhausted we return null
+    // and today's fallback behavior is preserved as the final safety net.
+    long wedgeMs = Sage.getInt("httpls_fmp4_wedge_relaunch_ms", 12000);
+    int lastFrontier = highestProducedFmp4Segment();
+    long lastProgressTime = Sage.time();
     while (Sage.time() < deadline)
     {
       if (seg.isFile()) return seg;
@@ -6625,7 +6658,35 @@ public class FFMPEGTranscoder implements TranscodeEngine
         try { Thread.sleep(100); } catch (InterruptedException e){}
         break;
       }
+      int frontier = highestProducedFmp4Segment();
+      if (frontier > lastFrontier)
+      {
+        lastFrontier = frontier;
+        lastProgressTime = Sage.time();
+      }
+      else if (relaunchBudget > 0 && (Sage.time() - lastProgressTime) >= wedgeMs)
+      {
+        // Alive but no new finalized part for wedgeMs -> wedged on a bad region.
+        // Relaunch past it on a fresh IDR, exactly like the browserhd fallback.
+        if (Sage.DBG) System.out.println("XCODE_CMAF_WEDGE part #" + segNum
+            + " no frontier progress for " + (Sage.time() - lastProgressTime)
+            + "ms (frontier=" + frontier + " alive=true budget=" + relaunchBudget
+            + "); relaunching encoder at -ss " + ((long) segNum * segmentDur));
+        seekToTime((long) segNum * segmentDur);
+        return getFmp4SegmentFile(segNum, relaunchBudget - 1);
+      }
       try { Thread.sleep(50); } catch (InterruptedException e){}
+    }
+    // Full wait elapsed while the process is still alive: a wedge that never
+    // tripped the faster frontier check (e.g. a wedgeMs configured >= the total
+    // wait). Relaunch once past the bad region before giving up.
+    if (!seg.isFile() && relaunchBudget > 0 && xcodeProcess != null && xcodeProcess.isAlive())
+    {
+      if (Sage.DBG) System.out.println("XCODE_CMAF_WEDGE part #" + segNum
+          + " not finalized within segment_wait while alive (budget=" + relaunchBudget
+          + "); relaunching encoder at -ss " + ((long) segNum * segmentDur));
+      seekToTime((long) segNum * segmentDur);
+      return getFmp4SegmentFile(segNum, relaunchBudget - 1);
     }
     return seg.isFile() ? seg : null;
   }

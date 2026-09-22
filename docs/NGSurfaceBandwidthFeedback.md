@@ -226,9 +226,16 @@ MPEG-2/AC-3 packet or a timestamp discontinuity from a brief signal dropout,
 typically surfacing right after a mid-recording seek. Two symptoms were observed
 live and are both server-side, not bandwidth or routing:
 
-- **Native CMAF stall** — a source discontinuity stalls the AAC encoder's input,
-  so a fragment/segment never finalizes (`CMAF part N not available; abort`,
-  `DEMUXER_ERROR_COULD_NOT_PARSE`).
+- **Native CMAF stall** — a corrupt source packet plus a multi-second timestamp
+  discontinuity wedges the *continuously-running* CMAF encoder (GPU
+  decode→filter→encode goes silent, the hls muxer never renames the in-progress
+  `seg<N>.m4s.tmp`), so a fragment/segment never finalizes (`CMAF part N not
+  available; abort`, `DEMUXER_ERROR_COULD_NOT_PARSE`). Confirmed live on an
+  in-progress MPEG2-PS/AC-3 recording: the fallback process logs the same spot
+  (`ac3 … Error submitting packet to decoder: Invalid data`,
+  `timestamp discontinuity … -667267`). It is content-independent (recurs at
+  varying part numbers on different recordings) and *not* bandwidth (observed at
+  ~100 Mbps LAN goodput).
 - **`browserhd` invalid sample** — a corrupt packet decodes into a broken frame
   that the H.264 re-encode passes on to the browser, which the MSE stack refuses
   (`CHUNK_DEMUXER_ERROR_APPEND_FAILED` / "Failed to prepare video sample for
@@ -247,12 +254,30 @@ Two additive, live-tunable server hardenings (no client wire changes):
    value is floored to a working value (default **1000**) so a *timestamp
    discontinuity* — whose packets are valid and therefore not dropped by
    `+discardcorrupt` — is absorbed by `aresample` (adds/drops samples to keep the
-   AAC track contiguous). The muxer then always has interleavable audio and the
-   fragment finalizes instead of wedging. `async=1` (the legacy fixed-rate
+   AAC track contiguous). This helps the muxer keep interleavable audio for
+   *small* discontinuities. `async=1` (the legacy fixed-rate
    placeshifter default) only corrected the initial offset, not an ongoing gap.
    Mirrors the existing video-copy floor; only raises a sub-floor value, and a
    higher operator-configured async is respected. Gated by
-   `ffmpeg/browserpull_aresample_async_floor_enabled` (**default on**).
+   `ffmpeg/browserpull_aresample_async_floor_enabled` (**default on**). Note this
+   absorbs *small* discontinuities; a *multi-second* backward jump exceeds the
+   resampler's per-second correction budget and can still wedge the continuous
+   CMAF encoder — which is what hardening 3 recovers from.
+3. **CMAF wedge self-heal (relaunch past the bad region).** When the continuous
+   CMAF encoder wedges on a corruption/discontinuity it stops finalizing parts
+   while the process stays *alive*, so the old code just waited the full
+   `httpls_fmp4_segment_wait_ms` (30 s) and returned null → the client fell back
+   to `browserhd`. The `browserhd` fallback only recovers because it is a **fresh
+   process seeking past the bad region**, so `getFmp4SegmentFile` now gives the
+   CMAF path that same fresh start *in place*: if the finalized-part frontier
+   makes no forward progress for `httpls_fmp4_wedge_relaunch_ms` (default
+   **12000**) while the process is alive, it relaunches the encoder at the
+   requested part with `-ss` (`-start_number` + `-output_ts_offset` keep the file
+   numbering and MSE timeline aligned) so it resyncs on a clean IDR and the client
+   **stays on CMAF** instead of surface-switching. Bounded by
+   `httpls_fmp4_wedge_max_relaunch` (default **2**); once exhausted it returns
+   null and the pre-existing `browserhd` fallback remains the final safety net.
+   Emits a `XCODE_CMAF_WEDGE …` log line each time it fires.
 
 IDR-led fragments after a seek are already guaranteed on these paths: the
 `browserhd`/CMAF re-encode starts a fresh encoder (first output frame is an IDR),
@@ -351,6 +376,8 @@ Firefox may omit `bw` (log shows the configured `wan_coldstart_kbps` instead of
 | `httpls/input_error_resilience` | `true` | Drop corrupt source packets at the demuxer (`-err_detect ignore_err -fflags +discardcorrupt`) on the CMAF **and** `browserhd` fragmented-MP4 pulls (§5). |
 | `ffmpeg/browserpull_aresample_async_floor_enabled` | `true` | Master enable for the audio-continuity async floor on the fragmented-MP4 re-encode pulls (§5). |
 | `ffmpeg/browserpull_aresample_async_floor` | `1000` | Floor value for `aresample=async=N` on those paths; only raises a sub-floor value. |
+| `httpls_fmp4_wedge_relaunch_ms` | `12000` | CMAF wedge self-heal (§5, hardening 3): if the finalized-part frontier makes no forward progress for this long while the encoder is alive, relaunch it at the requested part (`-ss`) to resync past the bad region. Long enough that live-edge micro-waits never trip it. |
+| `httpls_fmp4_wedge_max_relaunch` | `2` | Max automatic wedge-relaunches per part request before returning null and letting the `browserhd` fallback take over. |
 
 ## Server-side references (galeforcesage/SageTV-NG)
 
