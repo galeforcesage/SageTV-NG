@@ -3378,7 +3378,32 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add(Long.toString(transcodeEditDuration/1000));
     }
 
-    if (activeFile)
+    // Pipe-fed live input decision. For a growing (recording) source on the CMAF
+    // path, letting ffmpeg tail the raw file with "-follow 1" WEDGES: the faster-
+    // than-realtime GPU encoder laps the live write frontier, ffmpeg hits EOF and
+    // the hls muxer never finalizes the part, producing the ~12s "Loading..."
+    // stall (self-healed only by a full relaunch). Instead we feed ffmpeg through
+    // a FIFO written by a Java pump (LiveFilePump) that tails the recording using
+    // the AUTHORITATIVE capture frontier (MMC.getRecordedBytes, exactly as
+    // MediaServer.readFile does) and BLOCKS -- never signalling EOF -- while more
+    // data is still coming. ffmpeg reads the FIFO as an ordinary blocking input,
+    // so it physically cannot outrun the writer and the wedge class is eliminated
+    // at the source. This is the deployable realisation of the removed stv://
+    // live protocol (dropped from the consolidated CUDA ffmpeg): same frontier-
+    // blocking follow, carried over a supported transport (file:/FIFO) instead.
+    boolean livePipeInput = useLivePipeInput();
+    if (livePipeInput)
+    {
+      // Create the FIFO BEFORE the child is spawned so ffmpeg's read-open can
+      // rendezvous with the pump's write-open. On failure fall back cleanly to
+      // the raw-file follow path below (playback still works, just without the
+      // wedge cure).
+      liveFifoPath = createLiveInputFifo();
+      if (liveFifoPath == null)
+        livePipeInput = false;
+    }
+
+    if (activeFile && !livePipeInput)
     {
       // Live-DVR follow mode: keep reading the input while the recorder is still
       // appending to it. Historically this was the SageTV-fork-only flag
@@ -3589,7 +3614,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
     }
 
     xcodeParamsVec.add("-i");
-    if (currServer == null || currServer.length() == 0)
+    if (livePipeInput)
+      xcodeParamsVec.add(IOUtils.getLibAVFilenameString(liveFifoPath));
+    else if (currServer == null || currServer.length() == 0)
       xcodeParamsVec.add(IOUtils.getLibAVFilenameString(currFile.toString()));
     else
       xcodeParamsVec.add(IOUtils.getLibAVFilenameString("stv://" + currServer + "/" + currFile.toString()));
@@ -4946,6 +4973,12 @@ public class FFMPEGTranscoder implements TranscodeEngine
     {
       xcodeProcess = xcodePb.start();
     }
+    // Pipe-fed live input: now that ffmpeg is spawned (and blocking on opening
+    // the FIFO for read), start the pump that opens the write end and tails the
+    // recording's authoritative frontier into it. Only on the plain single-
+    // process path -- the external-enhance pipeline builds its own decode input.
+    if (livePipeInput && liveFifoPath != null && !externalEnhanceActive)
+      startLiveFilePump(liveFifoPath);
     // Windows can't express priority reduction as a command prefix, so the
     // nice/ionice block above is POSIX-only. Apply the equivalent by PID here so
     // Windows hosts aren't left running transcodes at normal priority against
@@ -5825,6 +5858,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // Tear down the external-process enhancement sub-stages (decode + worker), if
     // any, alongside the encode process handled above.
     teardownExternalEnhance();
+    // Stop the pipe-fed live-input pump (if any) and unlink its FIFO. Done after
+    // the child is killed above so the pump's writes fail fast (broken pipe)
+    // rather than blocking on a still-open reader.
+    stopLiveFilePump();
     if (XCODE_DEBUG) System.out.println("Destroyed!");
     // Return any GPU-enhance capacity this session held, so VRAM/engine budget
     // is freed for the next admission the moment the stream ends.
@@ -5882,6 +5919,220 @@ public class FFMPEGTranscoder implements TranscodeEngine
     closeSpillQuietly();
 
     clearPreparedEmbeddedCcSubtitleFile();
+  }
+
+  // ==== Pipe-fed live input (LiveFilePump) ================================
+  // Deployable replacement for the removed stv:// live protocol. See the long
+  // comment at the livePipeInput decision in startTranscode() for the rationale.
+
+  /** Live-follow FIFO path currently feeding ffmpeg; null when not pipe-fed. */
+  private volatile String liveFifoPath;
+  /** Pump thread tailing the recording's frontier into {@link #liveFifoPath}. */
+  private volatile LiveFilePump liveFilePump;
+
+  /**
+   * True when this transcode should read its (still-recording) source through a
+   * Java-pumped FIFO instead of ffmpeg's raw-file {@code -follow}. Scoped to the
+   * CMAF/fMP4 pull path -- the only place the live-edge wedge is observed -- on
+   * POSIX, for a local source, with no active GPU enhancement (that path builds
+   * its own decode input). Reversible via {@code httpls/fmp4_live_pipe_input}.
+   */
+  private boolean useLivePipeInput()
+  {
+    if (!activeFile) return false;              // only a growing/recording source can wedge
+    if (!fmp4Mode) return false;                // CMAF path only (legacy TS HLS unchanged)
+    if (Sage.WINDOWS_OS) return false;          // mkfifo/FIFO is POSIX; the server is Linux
+    if (currFile == null) return false;
+    if (currServer != null && currServer.length() > 0) return false; // networked source
+    if (enhanceRequest != null && enhanceRequest.isActive()) return false; // enhance has own input
+    return Sage.getBoolean("httpls/fmp4_live_pipe_input", true);
+  }
+
+  /** Create a fresh per-session FIFO for the live pump; null on failure. */
+  private String createLiveInputFifo()
+  {
+    try
+    {
+      java.io.File dir = (fmp4OutputDir != null) ? fmp4OutputDir
+          : new java.io.File(System.getProperty("java.io.tmpdir"));
+      java.io.File fifo = new java.io.File(dir, "stvlivein-" + System.nanoTime() + ".fifo");
+      try { fifo.delete(); } catch (Throwable ignore) {}
+      int rc = -1;
+      try { rc = new ProcessBuilder("mkfifo", fifo.getAbsolutePath()).inheritIO().start().waitFor(); }
+      catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+      if (rc != 0)
+      {
+        if (Sage.DBG) System.out.println("XCODE_LIVE_PIPE mkfifo failed rc=" + rc + " for " + fifo);
+        return null;
+      }
+      fifo.deleteOnExit();
+      if (Sage.DBG) System.out.println("XCODE_LIVE_PIPE FIFO " + fifo.getAbsolutePath()
+          + " created for live-follow of " + currFile);
+      return fifo.getAbsolutePath();
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("XCODE_LIVE_PIPE FIFO create error: " + t);
+      return null;
+    }
+  }
+
+  /** Start the pump feeding {@code fifoPath} from the current source file. */
+  private void startLiveFilePump(String fifoPath)
+  {
+    LiveFilePump pump = new LiveFilePump(currFile, fifoPath, computeLivePumpStartOffset());
+    liveFilePump = pump;
+    pump.start();
+  }
+
+  /**
+   * Byte offset the pump should start streaming from. Default 0: the pump streams
+   * the whole file and ffmpeg's {@code -ss} discards to the exact seek point,
+   * which keeps CMAF part alignment identical to the raw-file path and is cheap
+   * because a live buffer is bounded. The optional proportional undershoot
+   * (default OFF) skips most of a large in-progress-join seek to bound ffmpeg's
+   * discard work; it is approximate and unaligned, hence gated for tuning only.
+   */
+  private long computeLivePumpStartOffset()
+  {
+    long seekMs = transcodeStartSeekTime;
+    if (seekMs <= 0) return 0;
+    if (!Sage.getBoolean("httpls/fmp4_live_pipe_seek_offset", false)) return 0;
+    try
+    {
+      long guardMs = Sage.getLong("httpls/fmp4_live_pipe_seek_guard_ms", 60000);
+      long targetMs = seekMs - guardMs;
+      if (targetMs <= 0) return 0;
+      long avail = MMC.getInstance().getRecordedBytes(currFile);
+      if (avail <= 0) avail = currFile.length();
+      MediaFile mf = Wizard.getInstance().getFileForFilePath(currFile);
+      long durMs = (mf != null) ? mf.getRecordDuration() : 0;
+      if (durMs <= 0 || avail <= 0) return 0;
+      long off = (long) ((double) targetMs / (double) durMs * (double) avail);
+      if (off < 0 || off >= avail) return 0;
+      return off;
+    }
+    catch (Throwable t) { return 0; }
+  }
+
+  /** Stop the live pump (if any) and unlink its FIFO. Idempotent. */
+  private void stopLiveFilePump()
+  {
+    LiveFilePump pump = liveFilePump;
+    liveFilePump = null;
+    if (pump != null)
+    {
+      pump.shutdown();
+      try { pump.join(2000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+    }
+    String fifo = liveFifoPath;
+    liveFifoPath = null;
+    if (fifo != null) { try { new java.io.File(fifo).delete(); } catch (Throwable ignore) {} }
+  }
+
+  /**
+   * Tails a still-recording source file into a FIFO for ffmpeg. Mirrors the
+   * frontier-blocking follow of {@link MediaServer}'s {@code readFile}: it only
+   * ever writes bytes that the capture has actually committed
+   * ({@code MMC.getRecordedBytes}), and when caught up it BLOCKS (sleep+recheck)
+   * rather than closing the pipe, so ffmpeg's read simply stalls instead of
+   * seeing EOF. It closes the FIFO (clean EOF) only once the recording has ended
+   * and every committed byte has been drained.
+   */
+  private final class LiveFilePump extends Thread
+  {
+    private final java.io.File src;
+    private final String fifoPath;
+    private final long startOffset;
+    private volatile boolean stopped;
+
+    LiveFilePump(java.io.File src, String fifoPath, long startOffset)
+    {
+      super("LiveFilePump-" + (src != null ? src.getName() : "?"));
+      setDaemon(true);
+      this.src = src;
+      this.fifoPath = fifoPath;
+      this.startOffset = Math.max(0, startOffset);
+    }
+
+    void shutdown() { stopped = true; interrupt(); }
+
+    public void run()
+    {
+      final int pollMs = Math.max(20, Sage.getInt("httpls/fmp4_live_pipe_poll_ms", 100));
+      final long maxIdleMs = Math.max(1000L, Sage.getLong("httpls/fmp4_live_pipe_max_idle_ms", 30000));
+      final byte[] buf = new byte[Math.max(16 * 1024, Sage.getInt("httpls/fmp4_live_pipe_chunk", 128 * 1024))];
+      java.io.RandomAccessFile raf = null;
+      java.io.OutputStream out = null;
+      long pos = startOffset;
+      long knownAvail = -1;
+      long idleSince = 0;
+      try
+      {
+        raf = new java.io.RandomAccessFile(src, "r");
+        // Opening the FIFO for write BLOCKS until ffmpeg opens the read end. The
+        // child was spawned just before this pump started, so they rendezvous.
+        out = new java.io.FileOutputStream(fifoPath);
+        if (Sage.DBG) System.out.println("XCODE_LIVE_PIPE pump started off=" + startOffset + " src=" + src);
+        while (!stopped)
+        {
+          if (knownAvail < 0 || pos >= knownAvail)
+          {
+            boolean recording = MMC.getInstance().isRecording(src);
+            long avail = recording ? MMC.getInstance().getRecordedBytes(src) : raf.length();
+            if (avail < 0) avail = raf.length();
+            knownAvail = avail;
+            if (pos >= knownAvail)
+            {
+              if (!recording)
+                break;                // recording ended and fully drained -> clean EOF
+              if (idleSince == 0) idleSince = Sage.time();
+              else if (Sage.time() - idleSince > maxIdleMs)
+              {
+                // Committed frontier hasn't advanced for a long time while still
+                // "recording" -- a genuine capture stall. End the stream so the
+                // client fails over instead of hanging forever. Bounded exactly
+                // like MediaServer.readFile's wait, just longer here.
+                if (Sage.DBG) System.out.println("XCODE_LIVE_PIPE idle > " + maxIdleMs
+                    + "ms; ending pump for " + src);
+                break;
+              }
+              try { Thread.sleep(pollMs); } catch (InterruptedException ie) { if (stopped) break; }
+              continue;
+            }
+          }
+          idleSince = 0;
+          int toRead = (int) Math.min((long) buf.length, knownAvail - pos);
+          raf.seek(pos);
+          int n = raf.read(buf, 0, toRead);
+          if (n <= 0)
+          {
+            // Frontier claimed data but the write isn't visible yet; re-query.
+            knownAvail = -1;
+            try { Thread.sleep(pollMs); } catch (InterruptedException ie) { if (stopped) break; }
+            continue;
+          }
+          out.write(buf, 0, n);
+          out.flush();
+          pos += n;
+        }
+      }
+      catch (java.io.IOException ioe)
+      {
+        // Broken pipe = ffmpeg closed the read end (normal on stop/relaunch).
+        if (Sage.DBG && !stopped) System.out.println("XCODE_LIVE_PIPE pump IO end: " + ioe);
+      }
+      catch (Throwable t)
+      {
+        if (Sage.DBG) System.out.println("XCODE_LIVE_PIPE pump error: " + t);
+      }
+      finally
+      {
+        if (out != null) { try { out.close(); } catch (Throwable ignore) {} }
+        if (raf != null) { try { raf.close(); } catch (Throwable ignore) {} }
+        if (Sage.DBG) System.out.println("XCODE_LIVE_PIPE pump exit pos=" + pos + " src=" + src);
+      }
+    }
   }
 
   /**
