@@ -1645,8 +1645,47 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
           if (!currJob.file.verifyFiles(true))
           {
             if (Sage.DBG) System.out.println("VF Removing LOAD_MF request because its files failed verification");
-            currJob.file.cleanupLocalFile();
+            MediaFile failedFile = currJob.file;
             watchQueue.remove(currJob);
+            failedFile.cleanupLocalFile();
+            // NG live-tune EPG-boundary recovery. A live tune issued within a
+            // second or two of an airing boundary can land on a file that never
+            // received committed bytes: the tuner lock straddled the boundary, the
+            // airing ended, the tuner rolled to the contiguous successor, and this
+            // now-closed zero-length predecessor (isRecording()==false) fails
+            // verification right here. The historical behavior simply dropped the
+            // load -> the media player never started and the client sat on a
+            // permanent black screen, even though the successor the user actually
+            // wants IS already recording on the same tuner. Under live control,
+            // ask the Seeker what this client is now recording and, if it's a real,
+            // different, contiguous file, re-issue the watch for it instead of
+            // abandoning playback. Strictly gated to liveControl (scheduled-
+            // recording loads keep the original drop-on-verify-fail behavior) and
+            // to a successor that differs from the failed file, so it cannot loop.
+            if (liveControl && Sage.getBoolean("videoframe/live_tune_boundary_recover", true))
+            {
+              MediaFile succ = seek.getCurrRecordFileForClient(uiMgr);
+              if (succ == null || succ == failedFile)
+                succ = getContiguousLiveSuccessor(failedFile);
+              if (succ != null && succ != failedFile &&
+                  Math.abs(succ.getRecordTime() - failedFile.getRecordEnd()) < 30*60*1000 &&
+                  pcAiringCheck(succ.getContentAiring()))
+              {
+                if (Sage.DBG) System.out.println("VF live-tune boundary recovery: predecessor had no committed "
+                    + "data at the seam; rolling to the successor now recording on this tuner succ=" + succ);
+                int[] recoverErr = new int[1];
+                seek.requestWatch(succ.getContentAiring(), recoverErr, uiMgr);
+                if (recoverErr[0] == WATCH_FAILED_PARENTAL_CHECK_FAILED)
+                  watchQueue.insertElementAt(new VFJob(STD_COMPLETE), 0);
+                else
+                {
+                  watchQueue.insertElementAt(new VFJob(TIME_SET, succ.getRecordTime()), 0);
+                  watchQueue.insertElementAt(new VFJob(WATCH_MF, succ, playlistChain.isEmpty() ?
+                      null : ((Playlist) playlistChain.firstElement())), 0);
+                }
+                waitTime = -1;
+              }
+            }
             continue;
           }
         }
