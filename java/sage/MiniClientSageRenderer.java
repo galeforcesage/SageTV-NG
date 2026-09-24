@@ -6146,6 +6146,8 @@ public class MiniClientSageRenderer extends SageRenderer
         sockBuf.putInt(imageFormat);
       sendBufferNow();
       long rv = recvr.getIntReply();
+      if (rv == 0 && !recvr.isReceiverAlive())
+        return -1; // receiver torn down (unresponsive client); signal dead connection so the caller bails
       return rv;
     }catch(Exception e)
     {
@@ -7112,6 +7114,30 @@ public class MiniClientSageRenderer extends SageRenderer
         uiMgr.goodbye();
       }
     }, "KillUIMgr");
+  }
+
+  private volatile boolean forcedUnresponsiveKill = false;
+  // Called when the client has stopped answering UI replies entirely (frozen MiniClient
+  // that never closed its socket). Close the transport so the receiver's blocking read
+  // unblocks, then tear the UI session down. This releases the render lock that the
+  // FinalRender thread holds while waiting on getReply, so the EventThread stops hanging
+  // instead of relooping a dead client. The work runs on a pooled thread: the caller
+  // holds the receiver's replyQueue monitor, and closeMiniUITransportForReconnect()
+  // synchronizes on this renderer, so doing it inline could deadlock against another
+  // thread that holds this renderer and is waiting on replyQueue.
+  private void handleUnresponsiveClient()
+  {
+    if (forcedUnresponsiveKill) return;
+    forcedUnresponsiveKill = true;
+    if (Sage.DBG) System.out.println("MCSR: client unresponsive to UI replies; forcing session teardown to release the render lock");
+    Pooler.execute(new Runnable()
+    {
+      public void run()
+      {
+        try { closeMiniUITransportForReconnect(); } catch (Throwable t) {}
+        killUIMgrAsync();
+      }
+    }, "KillUnresponsiveMiniClient");
   }
 
   private boolean startedReconnectDaemon = false;
@@ -11227,6 +11253,7 @@ public class MiniClientSageRenderer extends SageRenderer
         }
         if (!replyQueue.isEmpty())
         {
+          consecutiveReplyTimeouts = 0;
           return (ReplyPacket)replyQueue.remove(0);
         }
         long startWait = Sage.eventTime();
@@ -11251,12 +11278,29 @@ public class MiniClientSageRenderer extends SageRenderer
         }
         if (alive && replyQueue.isEmpty())
         {
-          if (Sage.DBG) System.out.println("ERROR: MiniUIClient receiver timed out waiting for response from the MiniClient!");
+          // The client did not answer within waitMax. A frozen MiniClient that never
+          // FIN/RST's its socket would otherwise leave us re-issuing the same request
+          // forever (holding the render lock and wedging the UI EventThread). After a
+          // few consecutive full timeouts, treat the client as dead and tear the session
+          // down so the render lock is released instead of relooping a corpse.
+          consecutiveReplyTimeouts++;
+          if (Sage.DBG) System.out.println("ERROR: MiniUIClient receiver timed out waiting for response from the MiniClient! (consecutive=" + consecutiveReplyTimeouts + ")");
+          int maxTimeouts = Sage.getInt("ui/miniclient_unresponsive_reply_timeouts", 2);
+          if (maxTimeouts > 0 && consecutiveReplyTimeouts >= maxTimeouts)
+          {
+            alive = false;
+            MiniClientSageRenderer.this.handleUnresponsiveClient();
+          }
         }
         if (DEBUG_NATIVE2D) System.out.println("Returned reply from queue, size before=" + replyQueue.size());
         // If the queue is still empty after timeout/discard handling, return null
         // instead of throwing an ArrayIndexOutOfBoundsException on remove(0).
-        return (alive && !replyQueue.isEmpty()) ? (ReplyPacket) replyQueue.remove(0) : null;
+        if (alive && !replyQueue.isEmpty())
+        {
+          consecutiveReplyTimeouts = 0;
+          return (ReplyPacket) replyQueue.remove(0);
+        }
+        return null;
       }
     }
     public int getIntReply()
@@ -11321,6 +11365,7 @@ public class MiniClientSageRenderer extends SageRenderer
     {
       alive = false;
     }
+    boolean isReceiverAlive() { return alive; }
     public void nextReplyIsCryptoStatus(boolean turnedOn)
     {
       nextReplyCryptoToggle = new Boolean(turnedOn);
@@ -11341,6 +11386,7 @@ public class MiniClientSageRenderer extends SageRenderer
     private boolean encryptionOn;
     private byte[] decryptBuff;
     private int intRepliesToDiscard;
+    private int consecutiveReplyTimeouts;
   }
   private static class ReplyPacket
   {
