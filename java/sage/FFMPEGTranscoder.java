@@ -6095,6 +6095,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
     private final String fifoPath;
     private final long startOffset;
     private volatile boolean stopped;
+    private volatile long fedPos;
+
+    /** Bytes fed to the FIFO so far (the committed source offset the encoder has been given). */
+    long fedBytes() { return fedPos; }
 
     LiveFilePump(java.io.File src, String fifoPath, long startOffset)
     {
@@ -6115,6 +6119,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
       java.io.RandomAccessFile raf = null;
       java.io.OutputStream out = null;
       long pos = startOffset;
+      fedPos = pos;
       long knownAvail = -1;
       long idleSince = 0;
       try
@@ -6165,6 +6170,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
           out.write(buf, 0, n);
           out.flush();
           pos += n;
+          fedPos = pos;
         }
       }
       catch (java.io.IOException ioe)
@@ -6867,6 +6873,46 @@ public class FFMPEGTranscoder implements TranscodeEngine
     return init.isFile() ? init : null;
   }
 
+  /**
+   * True when the live-pipe encoder has been fed essentially everything the
+   * capture has COMMITTED ({@code MMC.getRecordedBytes}) and is therefore idle
+   * waiting for more source at the live edge -- NOT wedged on a bad region.
+   * <p>
+   * The CMAF wedge watchdog treats "no finalized part for wedgeMs while alive" as
+   * a wedge and relaunches past it. At the committed live edge that reading is
+   * wrong: there is no committed data to seek forward to, so a relaunch cannot
+   * produce the part any sooner, and because {@link #computeLivePumpStartOffset}
+   * deliberately undershoots by a guard it forces a ~guard-second on-screen
+   * REPLAY every time. The observed periodic "Loading..." + short replay was
+   * exactly this false positive firing each time the committed frontier paused at
+   * the live edge. When this returns true the watchdog must wait, not relaunch;
+   * the finalized part appears on its own as soon as the committed frontier moves.
+   * Only applies on the live pipe path; false everywhere else preserves the
+   * original wedge-recovery behavior for genuine mid-file stalls.
+   */
+  private boolean isLiveEdgeStarved()
+  {
+    LiveFilePump lp = liveFilePump;
+    if (lp == null || currFile == null) return false; // not the live pipe path
+    try
+    {
+      long committed = MMC.getInstance().getRecordedBytes(currFile);
+      if (committed <= 0) return false;
+      long lead = committed - lp.fedBytes();
+      if (lead < 0) lead = 0;
+      // One output segment's worth of source bytes, from the running average
+      // bitrate; if the encoder has not even been handed that much un-fed
+      // committed source it physically cannot finalize the next part yet.
+      long oneSegBytes = 0;
+      MediaFile mf = Wizard.getInstance().getFileForFilePath(currFile);
+      long durMs = (mf != null) ? mf.getRecordDuration() : 0;
+      if (durMs > 0) oneSegBytes = (long) ((double) committed / (double) durMs * (double) segmentDur);
+      long minLead = Math.max(Sage.getLong("httpls/fmp4_wedge_min_source_lead_bytes", 1500000L), oneSegBytes);
+      return lead < minLead;
+    }
+    catch (Throwable t) { return false; }
+  }
+
   // Return the finalized seg<segNum>.m4s. temp_file makes each .m4s appear
   // atomically (rename on segment close), so the file merely EXISTING means it is
   // complete and safe to serve -- this is the source of truth, checked FIRST and
@@ -6946,8 +6992,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // exactly on the seek target can't thrash -- once exhausted we return null
     // and today's fallback behavior is preserved as the final safety net.
     long wedgeMs = Sage.getInt("httpls_fmp4_wedge_relaunch_ms", 12000);
+    long maxLiveEdgeWaitMs = Sage.getLong("httpls/fmp4_wedge_live_edge_wait_ms", 45000);
     int lastFrontier = highestProducedFmp4Segment();
     long lastProgressTime = Sage.time();
+    long liveEdgeWaitStart = 0; // when the current run of live-edge starvation began (0 = not starved)
     while (Sage.time() < deadline)
     {
       if (seg.isFile()) return seg;
@@ -6964,24 +7012,59 @@ public class FFMPEGTranscoder implements TranscodeEngine
       {
         lastFrontier = frontier;
         lastProgressTime = Sage.time();
+        liveEdgeWaitStart = 0;
       }
       else if (relaunchBudget > 0 && (Sage.time() - lastProgressTime) >= wedgeMs)
       {
-        // Alive but no new finalized part for wedgeMs -> wedged on a bad region.
-        // Relaunch past it on a fresh IDR, exactly like the browserhd fallback.
-        if (Sage.DBG) System.out.println("XCODE_CMAF_WEDGE part #" + segNum
-            + " no frontier progress for " + (Sage.time() - lastProgressTime)
-            + "ms (frontier=" + frontier + " alive=true budget=" + relaunchBudget
-            + "); relaunching encoder at -ss " + ((long) segNum * segmentDur));
-        seekToTime((long) segNum * segmentDur);
-        return getFmp4SegmentFile(segNum, relaunchBudget - 1);
+        if (isLiveEdgeStarved())
+        {
+          // Not wedged: the encoder has consumed all COMMITTED source and is
+          // idling at the live edge. Relaunching cannot conjure data the capture
+          // has not committed yet and would only force the guard-undershoot
+          // replay, so keep waiting -- the finalized part appears as soon as the
+          // committed frontier advances. Bounded so a genuinely frozen capture
+          // still falls through to the safety net below.
+          if (liveEdgeWaitStart == 0) liveEdgeWaitStart = Sage.time();
+          boolean stillRecording;
+          try { stillRecording = MMC.getInstance().isRecording(currFile); }
+          catch (Throwable t) { stillRecording = false; }
+          if (stillRecording && (Sage.time() - liveEdgeWaitStart) < maxLiveEdgeWaitMs)
+          {
+            if (XCODE_DEBUG) System.out.println("XCODE_CMAF_WEDGE part #" + segNum
+                + " suppressed: live-edge source starvation, not a wedge (waited "
+                + (Sage.time() - liveEdgeWaitStart) + "ms); awaiting committed frontier");
+            lastProgressTime = Sage.time();               // defer next wedge check
+            deadline = Math.max(deadline, Sage.time() + wedgeMs); // don't fall through prematurely
+          }
+          else
+          {
+            // Starved too long, or the recording ended -> stop suppressing.
+            // Do NOT relaunch (that only replays); let the loop drain and the
+            // trailing safety net / fallback take over for a truly dead source.
+            break;
+          }
+        }
+        else
+        {
+          // Alive, no new finalized part for wedgeMs, AND committed source is
+          // available ahead -> genuinely wedged on a bad region. Relaunch past
+          // it on a fresh IDR, exactly like the browserhd fallback.
+          if (Sage.DBG) System.out.println("XCODE_CMAF_WEDGE part #" + segNum
+              + " no frontier progress for " + (Sage.time() - lastProgressTime)
+              + "ms (frontier=" + frontier + " alive=true budget=" + relaunchBudget
+              + "); relaunching encoder at -ss " + ((long) segNum * segmentDur));
+          seekToTime((long) segNum * segmentDur);
+          return getFmp4SegmentFile(segNum, relaunchBudget - 1);
+        }
       }
       try { Thread.sleep(50); } catch (InterruptedException e){}
     }
     // Full wait elapsed while the process is still alive: a wedge that never
     // tripped the faster frontier check (e.g. a wedgeMs configured >= the total
-    // wait). Relaunch once past the bad region before giving up.
-    if (!seg.isFile() && relaunchBudget > 0 && xcodeProcess != null && xcodeProcess.isAlive())
+    // wait). Relaunch once past the bad region before giving up -- but never for
+    // mere live-edge starvation, where a relaunch only causes the guard replay.
+    if (!seg.isFile() && relaunchBudget > 0 && xcodeProcess != null && xcodeProcess.isAlive()
+        && !isLiveEdgeStarved())
     {
       if (Sage.DBG) System.out.println("XCODE_CMAF_WEDGE part #" + segNum
           + " not finalized within segment_wait while alive (budget=" + relaunchBudget
