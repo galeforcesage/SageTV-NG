@@ -185,6 +185,18 @@ public class Scheduler implements SchedulerInterface
           {
             if (ds.canViewStation(allStats[j]))
             {
+              // Tuner resilience: a station this tuner is currently in a
+              // no-signal (zero-data) cooldown for is treated as un-viewable on
+              // this device for the duration, so the scheduler routes the
+              // recording to a healthy station-capable tuner instead of
+              // reassigning it straight back to the tuner that gets no signal.
+              // Per-station, so the tuner still serves every other channel.
+              if (capdev.isInNoSignalCooldownForStation(allStats[j]))
+              {
+                if (Sage.DBG) System.out.println("Schedule excluding station " + allStats[j]
+                    + " from encoder " + capdev.getName() + " (in no-signal cooldown)");
+                continue;
+              }
               int currQualValue = currInputType;
               Integer statInt = allStats[j];
               es.stationSet.add(statInt);

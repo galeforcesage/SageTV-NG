@@ -2713,6 +2713,53 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
                   System.out.println("SEEKER wants to migrate recording off dead tuner "
                       + encState.capDev.getName() + " but no healthy station-capable tuner is available; will keep retrying");
               }
+
+              // Phase 2 tuner resilience: no-signal (zero-data) migration. The
+              // device reloaded/restarted cleanly (loadedOK) but has produced
+              // ZERO bytes across repeated halt resets -- a marginal/undecodable
+              // lock (seq=0), stale RF map, or a form this tuner can't receive.
+              // This never trips the load cooldown above, so without this the
+              // halt-detector would relaunch the same dead tuner forever ("No
+              // Signal" loop). Arm a per-station no-signal cooldown so the
+              // scheduler routes around THIS tuner for THIS station only, then
+              // migrate the airing to a healthy station-capable alternate (which
+              // may receive the station fine). If no alternate exists we leave
+              // the cooldown armed but keep retrying here. Disabled when <= 0.
+              long zeroDataMigrateAfter = Sage.getLong("mmc/zero_data_halts_before_recording_migration", 2L);
+              if (loadedOK && recLength == 0 && zeroDataMigrateAfter > 0
+                  && encState.currRecord != null
+                  && encState.resetCount >= zeroDataMigrateAfter)
+              {
+                int migStation = encState.currRecord.getStationID();
+                // Quarantine this tuner for this station so selection avoids it.
+                encState.capDev.noteNoSignalFailure(migStation);
+                boolean healthyAlternate = false;
+                for (EncoderState alt : encoderStateMap.values())
+                {
+                  if (alt != encState && alt.capDev.isFunctioning() && alt.capDev.canEncode()
+                      && !alt.capDev.isInLoadCooldown()
+                      && !alt.capDev.isInNoSignalCooldownForStation(migStation)
+                      && alt.stationSet.contains(migStation))
+                  {
+                    healthyAlternate = true;
+                    break;
+                  }
+                }
+                if (healthyAlternate)
+                {
+                  Airing migAir = encState.currRecord;
+                  if (Sage.DBG) System.out.println("SEEKER migrating no-signal recording off tuner "
+                      + encState.capDev.getName() + " (zero data after " + encState.resetCount
+                      + " halt resets) station=" + migStation + " airing=" + migAir);
+                  endRecord(encState, Sage.time(), false);
+                  // Reassign the still-desired airing to a healthy tuner on the next pass.
+                  sched.kick(true);
+                }
+                else if (Sage.DBG)
+                  System.out.println("SEEKER wants to migrate no-signal recording off tuner "
+                      + encState.capDev.getName() + " (station=" + migStation
+                      + ") but no healthy station-capable alternate is available; will keep retrying");
+              }
             }
           }
           else if (encState.lastCheckedSize != recLength)
@@ -2720,6 +2767,10 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
             encState.resetCount = 0;
             encState.lastSizeCheckTime = Sage.time();
             encState.lastCheckedSize = recLength;
+            // Data is flowing again -- clear any no-signal quarantine we armed
+            // for the station currently recording on this tuner.
+            if (encState.currRecord != null)
+              encState.capDev.noteSignalOK(encState.currRecord.getStationID());
           }
         }
         else
@@ -4738,7 +4789,8 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
     {
       for (EncoderState es : tryUs)
       {
-        if (es.stationSet.contains(theAir.stationID) && !es.capDev.isInLoadCooldown())
+        if (es.stationSet.contains(theAir.stationID) && !es.capDev.isInLoadCooldown()
+            && !es.capDev.isInNoSignalCooldownForStation(theAir.stationID))
         {
           haveHealthyForStation = true;
           break;
@@ -4764,10 +4816,11 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
           walker.remove();
           continue;
         }
-        if (haveHealthyForStation && es.capDev.isInLoadCooldown())
+        if (haveHealthyForStation && (es.capDev.isInLoadCooldown()
+            || es.capDev.isInNoSignalCooldownForStation(theAir.stationID)))
         {
           if (Sage.DBG) System.out.println("findBestEncoderForNow: skipping " + es.capDev.getName()
-              + " (in load-failure cooldown; a healthy tuner can serve this station)");
+              + " (in load-failure or no-signal cooldown; a healthy tuner can serve this station)");
           walker.remove();
           continue;
         }

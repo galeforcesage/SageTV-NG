@@ -926,6 +926,46 @@ public abstract class CaptureDevice
   private volatile long loadFailureCooldownUntil = 0L;
   private volatile int consecutiveLoadFailures = 0;
 
+  // ---- per-station no-signal / zero-data quarantine (tuner resilience) ----
+  // A tuner can load and (re)start encoding perfectly yet produce ZERO bytes
+  // for a particular station -- e.g. a marginal RF lock (seq=0), a stale
+  // virtual->RF map, or a station that only broadcasts a form this tuner can't
+  // decode. That is not a load failure, so it never armed the load cooldown,
+  // and the halt-detector would relaunch the same dead tuner forever ("No
+  // Signal" loop). We track it PER STATION (keyed by stationID) because the
+  // same tuner usually receives every OTHER station fine -- only the one
+  // station is un-tunable on it. The Seeker arms this after repeated zero-data
+  // halt resets and both the scheduler and live selection route around a tuner
+  // that is cooling down for the specific station being requested.
+  private final java.util.Map<Integer,Long> noSignalCooldownUntilByStation =
+      new java.util.concurrent.ConcurrentHashMap<Integer,Long>();
+
+  private static long noSignalCooldownMs()
+  {
+    return Sage.getLong("mmc/device_no_signal_cooldown_seconds", 300L) * 1000L;
+  }
+
+  /** True if this device recently produced no data for the given station and is still cooling down. */
+  public boolean isInNoSignalCooldownForStation(int stationID)
+  {
+    Long until = noSignalCooldownUntilByStation.get(Integer.valueOf(stationID));
+    return until != null && until.longValue() > 0 && Sage.time() < until.longValue();
+  }
+
+  /** Record a zero-data (no-signal) failure for a station and arm its cooldown. */
+  public void noteNoSignalFailure(int stationID)
+  {
+    long window = noSignalCooldownMs();
+    if (window > 0)
+      noSignalCooldownUntilByStation.put(Integer.valueOf(stationID), Long.valueOf(Sage.time() + window));
+  }
+
+  /** Data is flowing again for a station; clear any no-signal cooldown on it. */
+  public void noteSignalOK(int stationID)
+  {
+    noSignalCooldownUntilByStation.remove(Integer.valueOf(stationID));
+  }
+
   protected int captureFeatureBits;
 
   protected String captureDeviceName = "";
