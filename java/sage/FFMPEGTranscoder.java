@@ -3237,7 +3237,27 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // To specify stream mapping, we list the streams we want in the output. Each stream needs a -map parameter.
     // The video should be first, and then the audio.
 
-    if (transcodeStartSeekTime != 0)
+    // Decide the live-pipe input mode NOW (fuller rationale at the block below),
+    // because it changes how a seek must be realized. On the live-pipe path
+    // ffmpeg is fed by a NON-seekable FIFO, so an INPUT -ss (emitted before -i)
+    // cannot work: it fails with "could not seek to position ..." and -- unlike
+    // an OUTPUT -ss -- has no decode-discard fallback, so ffmpeg simply streams
+    // from byte 0. With -output_ts_offset/-start_number still labeling that as
+    // the live segment, the client re-appends the recording's OPENING under the
+    // live timeline and replays the same scene on every wedge-relaunch/seek.
+    // Therefore, on this path we SUPPRESS the input -ss and instead have the
+    // LiveFilePump seek the SEEKABLE source file to the requested point
+    // (computeLivePumpStartOffset); ffmpeg normalizes the first-seen PTS to ~0
+    // (no -copyts) and -output_ts_offset re-anchors the client timeline.
+    boolean livePipeInput = useLivePipeInput();
+    if (livePipeInput)
+    {
+      liveFifoPath = createLiveInputFifo();
+      if (liveFifoPath == null)
+        livePipeInput = false;
+    }
+
+    if (transcodeStartSeekTime != 0 && !livePipeInput)
     {
       xcodeParamsVec.add("-ss");
       // Fractional seconds. The old integer truncation (transcodeStartSeekTime/1000)
@@ -3391,17 +3411,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // at the source. This is the deployable realisation of the removed stv://
     // live protocol (dropped from the consolidated CUDA ffmpeg): same frontier-
     // blocking follow, carried over a supported transport (file:/FIFO) instead.
-    boolean livePipeInput = useLivePipeInput();
-    if (livePipeInput)
-    {
-      // Create the FIFO BEFORE the child is spawned so ffmpeg's read-open can
-      // rendezvous with the pump's write-open. On failure fall back cleanly to
-      // the raw-file follow path below (playback still works, just without the
-      // wedge cure).
-      liveFifoPath = createLiveInputFifo();
-      if (liveFifoPath == null)
-        livePipeInput = false;
-    }
+    //
+    // NOTE: livePipeInput and the FIFO were already decided/created earlier (just
+    // before the -ss block) so the impossible input -ss could be suppressed on
+    // this path; the pump started below seeks the source file to the requested
+    // point instead. Do not re-declare it here.
 
     if (activeFile && !livePipeInput)
     {
@@ -4815,18 +4829,37 @@ public class FFMPEGTranscoder implements TranscodeEngine
         xcodeParamsVec.add(String.format(java.util.Locale.US, "%d.%03d",
             transcodeStartSeekTime / 1000, transcodeStartSeekTime % 1000));
       }
-      // Anti-wedge experiment for a stalled/corrupt audio stream (borrowed from
-      // the Matroska live-push precedent above). DISABLED BY DEFAULT on CMAF: a
-      // 2-track fMP4 fragment must carry both video and audio every moof, but
-      // max_interleave_delta 0 + flush_packets 1 let ffmpeg emit VIDEO-ONLY
-      // fragments while the AC-3 decode is stalled, which the browser MSE rejects
-      // (audio SourceBuffer underflow -> MEDIA_ERR / "video element error"). It is
-      // the right cure for Matroska (single tolerant file) but wrong here. Left
-      // behind a live-tunable flag so it can be re-enabled for diagnosis without a
-      // rebuild; the real WAN fix is the server-goodput ramp-down in HTTPLSServer.
-      if (Sage.getBoolean("httpls/fmp4_flush_uninterleaved", false))
+      // Bound the fMP4 muxer's cross-stream interleave wait so a stalled/corrupt
+      // AUDIO region can no longer freeze the VIDEO track (item #2 wedge repair).
+      //
+      // ffmpeg semantics are the OPPOSITE of what the old flag name implied:
+      // -max_interleave_delta 0 does NOT flush uninterleaved -- it means "buffer
+      // until EVERY stream has a packet, no matter how long". So when the AC-3
+      // decoder errors across a source timestamp discontinuity (observed live at
+      // t~=545s: "ac3 Error submitting packet to decoder: Invalid data" then
+      // "timestamp discontinuity (stream id=128): -595033"), audio stops emitting
+      // and the segment muxer -- holding for that missing audio -- wedges the
+      // whole output for ~12s until the wedge self-heal relaunches the demuxer.
+      // The audio async floor (resolveAudioResampleAsync -> async=1000) only
+      // soft-corrects ~1000 samples/sec, i.e. ~28s to absorb a 0.6s jump, so it
+      // cannot rescue the muxer on its own.
+      //
+      // A small POSITIVE bound lets the muxer keep finalizing segments on time:
+      // during healthy play A/V packets arrive within milliseconds (far under the
+      // bound) so interleaving is unchanged; only a genuine multi-hundred-ms
+      // stall trips it, and the async floor realigns the AAC track within the
+      // window for the typical sub-second discontinuity -- so no video-only
+      // fragment is emitted in the common case and MSE never underflows. Tunable
+      // via httpls/fmp4_max_interleave_delta_us (default 1s); 0 restores the
+      // legacy "wait forever" behavior and a negative value omits the flag
+      // entirely (ffmpeg's own 10s default). The retired httpls/fmp4_flush_
+      // uninterleaved flag, if still set, maps onto the legacy 0 for diagnosis.
+      long maxInterleaveUs = Sage.getBoolean("httpls/fmp4_flush_uninterleaved", false)
+          ? 0L
+          : Sage.getLong("httpls/fmp4_max_interleave_delta_us", 1000000L);
+      if (maxInterleaveUs >= 0L)
       {
-        xcodeParamsVec.add("-max_interleave_delta"); xcodeParamsVec.add("0");
+        xcodeParamsVec.add("-max_interleave_delta"); xcodeParamsVec.add(Long.toString(maxInterleaveUs));
         xcodeParamsVec.add("-flush_packets"); xcodeParamsVec.add("1");
       }
       xcodeParamsVec.add("-f"); xcodeParamsVec.add("hls");
@@ -5986,30 +6019,47 @@ public class FFMPEGTranscoder implements TranscodeEngine
   }
 
   /**
-   * Byte offset the pump should start streaming from. Default 0: the pump streams
-   * the whole file and ffmpeg's {@code -ss} discards to the exact seek point,
-   * which keeps CMAF part alignment identical to the raw-file path and is cheap
-   * because a live buffer is bounded. The optional proportional undershoot
-   * (default OFF) skips most of a large in-progress-join seek to bound ffmpeg's
-   * discard work; it is approximate and unaligned, hence gated for tuning only.
+   * Byte offset the pump should start streaming from. When not seeking
+   * ({@code transcodeStartSeekTime <= 0}) the pump streams the whole file from 0.
+   * <p>
+   * When seeking, this path CANNOT rely on ffmpeg's input {@code -ss}: the pump
+   * feeds ffmpeg through a non-seekable FIFO, so an input seek fails ("could not
+   * seek to position ...") and ffmpeg -- having no input-seek decode-discard
+   * fallback -- streams from byte 0, replaying the recording's opening under the
+   * live segment numbers (the "same scene repeats on a live timeline" bug). So we
+   * suppress the input {@code -ss} (see {@code startTranscode}) and realize the
+   * seek HERE by positioning the SEEKABLE source file: estimate the byte offset
+   * for {@code transcodeStartSeekTime} from the recording's committed capture
+   * frontier ({@code MMC.getRecordedBytes}) and recorded-so-far duration
+   * ({@code MediaFile.getRecordDuration}). We deliberately UNDERSHOOT by a small
+   * guard ({@code httpls/fmp4_live_pipe_seek_guard_ms}, default 4s) so a
+   * proportional-estimate error lands at/just before the target -- a brief repeat
+   * is tolerable, silently skipping unseen live content is not. Pack-exact
+   * alignment is unnecessary: ffmpeg's demuxer resyncs to the next pack/start
+   * code and {@code -output_ts_offset} re-anchors the client timeline.
    */
   private long computeLivePumpStartOffset()
   {
     long seekMs = transcodeStartSeekTime;
     if (seekMs <= 0) return 0;
-    if (!Sage.getBoolean("httpls/fmp4_live_pipe_seek_offset", false)) return 0;
     try
     {
-      long guardMs = Sage.getLong("httpls/fmp4_live_pipe_seek_guard_ms", 60000);
-      long targetMs = seekMs - guardMs;
-      if (targetMs <= 0) return 0;
       long avail = MMC.getInstance().getRecordedBytes(currFile);
       if (avail <= 0) avail = currFile.length();
       MediaFile mf = Wizard.getInstance().getFileForFilePath(currFile);
       long durMs = (mf != null) ? mf.getRecordDuration() : 0;
       if (durMs <= 0 || avail <= 0) return 0;
+      long guardMs = Sage.getLong("httpls/fmp4_live_pipe_seek_guard_ms", 4000);
+      long targetMs = Math.max(0, seekMs - guardMs);
+      if (targetMs <= 0) return 0;
       long off = (long) ((double) targetMs / (double) durMs * (double) avail);
-      if (off < 0 || off >= avail) return 0;
+      if (off < 0) off = 0;
+      // Target is at/after the committed frontier (seek to the live edge): start
+      // from 0 and let the pump's frontier-blocking follow carry us forward.
+      if (off >= avail) return 0;
+      if (Sage.DBG) System.out.println("XCODE_LIVE_PIPE seek: positioning pump to byte " + off
+          + " for seekMs=" + seekMs + " (guardMs=" + guardMs + " availBytes=" + avail
+          + " recordedMs=" + durMs + " src=" + (currFile != null ? currFile.getName() : "?") + ")");
       return off;
     }
     catch (Throwable t) { return 0; }

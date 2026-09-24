@@ -937,6 +937,36 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
                 // override our default selection of what to watch next. We now receive the InactiveFile message
                 // very quickly so we may hit this if they just pick something else to watch.
                 if (Sage.DBG) System.out.println("VideoFrame watching a live old airing, fixing it.");
+                // NG pull-CMAF EPG-seam deferral. When the client pulls its media
+                // over HTTP CMAF and the server is bridging the playlist across the
+                // airing boundary (HTTPLSServer Path B: #EXT-X-DISCONTINUITY + a
+                // fresh #EXT-X-MAP for the contiguous successor), the client's
+                // player is ALREADY decoding into the next airing off one
+                // continuous playlist. Reloading the server-side player here would
+                // tear that down: a live pull session cannot fast-load
+                // (pushMode==false), so it takes a FULL SWITCH -> player.load ->
+                // initDriver0 on a player socket the PWA has not re-established ->
+                // the 15s playback deadline -> sage.PlaybackException (the recurring
+                // EPG-border "playback error"). So when the pull seam is enabled and
+                // a real contiguous live successor exists, DEFER: keep the current
+                // player as-is and let the bridged playlist carry the boundary. The
+                // inactive-file flag is consumed so we do not busy-spin; playback
+                // continues on the client without a reload. Strictly gated + fully
+                // reversible -- never engages for push clients, non-live tunes, when
+                // the bridge is off, or when no successor exists.
+                if (Sage.getBoolean("videoframe/pull_seam_defer_reload", false)
+                    && Sage.getBoolean("httpls/fmp4_seam_default", false)
+                    && (player instanceof MiniPlayer)
+                    && ((MiniPlayer) player).isServerPullDelivery()
+                    && getContiguousLiveSuccessor(currFile) != null)
+                {
+                  if (Sage.DBG) System.out.println("VideoFrame: pull-CMAF live seam is bridged in the client "
+                      + "playlist (contiguous successor exists); deferring the boundary reload to avoid a "
+                      + "FULL SWITCH / player-socket deadline. currFile=" + currFile);
+                  liveFileInactivated = false;
+                  waitTime = LOAD_FILE_WAIT;
+                  continue;
+                }
                 boolean skipThisOne = false;
                 for (int i = watchQueue.size() - 1; i >= 0; i--)
                 {

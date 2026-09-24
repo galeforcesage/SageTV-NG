@@ -665,6 +665,27 @@ public class MiniPlayer implements DVDMediaPlayer
     return pushMode && !lowBandwidth && serverSideOK && downer == null;
   }
 
+  /**
+   * True when this MiniClient session delivers its media by <b>pull</b> -- the
+   * client fetches the stream over HTTP (the NG CMAF / hls.js path) rather than
+   * the server pushing packets down the media socket ({@code pushMode}). The
+   * media socket therefore is NOT on the media data path for a pull session.
+   * <p>
+   * VideoFrame uses this to make the EPG-boundary decision correctly: a pull
+   * session whose playlist is being bridged across the airing boundary by
+   * HTTPLSServer (Path B: {@code #EXT-X-DISCONTINUITY} + a fresh {@code
+   * #EXT-X-MAP} for the contiguous successor) is already playing into the next
+   * airing off one continuous playlist, so it must NOT be torn down and reloaded
+   * at the seam -- a live pull session can't {@code canFastLoad()} ({@code
+   * pushMode==false}) so a reload becomes a FULL SWITCH -> {@code initDriver0()}
+   * on a player socket the PWA has not re-established -> the 15s deadline ->
+   * {@code sage.PlaybackException}. See VideoFrame's pull-seam deferral.
+   */
+  boolean isServerPullDelivery()
+  {
+    return !pushMode;
+  }
+
   public synchronized void fastLoad(byte majorTypeHint, byte minorTypeHint, String encodingHint, java.io.File file, String hostname, boolean timeshifted, long bufferSize, boolean waitUntilDone) throws PlaybackException
   {
     if (Sage.DBG) System.out.println("Mini Fast Load");
