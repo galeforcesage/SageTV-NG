@@ -1937,6 +1937,58 @@ public class FFMPEGTranscoder implements TranscodeEngine
   }
 
   /**
+   * AC-3-into-fragmented-MP4 fix: when the finalized audio ENCODER is AC-3 or
+   * E-AC-3 and the container is a fragmented MP4 built with {@code +empty_moov}
+   * (the browserhd/PWA fMP4 family), ensure the {@code -movflags} token also
+   * carries {@code +delay_moov}. movenc cannot write the {@code moov}'s AC-3
+   * {@code dac3}/{@code dec3} descriptor until it has parsed the first AC-3
+   * packet, so with {@code +empty_moov} but no {@code +delay_moov} it aborts at
+   * header-write time with "Cannot write moov atom before AC3 packets" /
+   * "Could not write header (incorrect codec parameters ?): Invalid argument",
+   * writes ZERO bytes, and the PWA hangs forever on "loading". This surfaces
+   * only when a client reports {@code AUDIO_MAX_CHANNELS>=6} and the surface
+   * audio contract switches the browserhd audio floor from AAC to 5.1 AC-3.
+   * ffmpeg's own error text prescribes exactly this flag. No-op for AAC/copy
+   * outputs and for non-empty_moov containers, so the working stereo-AAC CMAF
+   * path is untouched.
+   */
+  @SuppressWarnings({"rawtypes"})
+  void maybeAddDelayMoovForAc3(java.util.ArrayList xcodeParamsVec)
+  {
+    if (xcodeParamsVec == null) return;
+    if (isAudioCopySelected(xcodeParamsVec)) return; // copy: source codec, not our AC-3 re-encode
+    String codec = null;
+    int movflagsIdx = -1;
+    for (int i = 0; i < xcodeParamsVec.size() - 1; i++)
+    {
+      Object o = xcodeParamsVec.get(i);
+      if (!(o instanceof String)) continue;
+      String tok = (String) o;
+      if (tok.equals("-acodec") || tok.equals("-c:a") || tok.equals("-codec:a"))
+      {
+        Object v = xcodeParamsVec.get(i + 1);
+        if (v instanceof String) codec = (String) v;
+      }
+      else if (tok.equals("-movflags")) movflagsIdx = i + 1;
+    }
+    if (codec == null) return;
+    String c = codec.trim().toLowerCase(java.util.Locale.ROOT);
+    boolean ac3Family = c.equals("ac3") || c.equals("a_ac3") || c.equals("eac3")
+        || c.equals("e-ac-3") || c.equals("ec-3") || c.equals("ec3");
+    if (!ac3Family) return;
+    if (movflagsIdx < 0 || movflagsIdx >= xcodeParamsVec.size()) return;
+    Object fo = xcodeParamsVec.get(movflagsIdx);
+    if (!(fo instanceof String)) return;
+    String flags = (String) fo;
+    if (flags.indexOf("empty_moov") < 0) return; // only the empty_moov fMP4 family needs this
+    if (flags.indexOf("delay_moov") >= 0) return; // already present
+    xcodeParamsVec.set(movflagsIdx, flags + "+delay_moov");
+    if (Sage.DBG) System.out.println("FFMPEGTranscoder: added +delay_moov for " + codec
+        + " into fragmented MP4 (AC-3 dac3/dec3 descriptor needs the first packet before"
+        + " the moov can be written; otherwise ffmpeg aborts header-write and the client hangs)");
+  }
+
+  /**
    * Returns true when {@code -acodec copy} (or the equivalent {@code -c:a} /
    * {@code -codec:a} spelling) has already been added to {@code xcodeParamsVec}.
    * Modern ffmpeg (6.1+ / the elliotclee fork) refuses {@code -af} together
@@ -3674,6 +3726,48 @@ public class FFMPEGTranscoder implements TranscodeEngine
           + xcodeModeName + "] — probesize=" + probeSize + " analyzeduration=" + analyzeDur);
     }
 
+    // A/V-origin alignment for the browser/PWA fragmented-MP4 RE-ENCODE pull of a
+    // completed recording (VOD). Same failure mode as the video-copy fMP4 path in
+    // the activeFile branch above, and the same data-driven fix — but that path is
+    // gated to isVideoCopyToFmp4(), so a full re-encode (e.g. the 5.1 AC-3 browserhd
+    // pull, mpeg2video->h264_nvenc) never qualified and got NO correction.
+    //
+    // An off-air MPEG-PS/TS recording routinely begins mid-GOP: the muxer starts
+    // emitting audio packets immediately but the first DECODABLE video frame is the
+    // next I-frame, ~1 GOP later (observed live: audio start ~0.16s, first video
+    // ~1.59s). That leading ~1.4s is genuine audio-only orphan content with no
+    // matching video. movenc (+empty_moov+default_base_moof) then zeroes EACH
+    // track's first-fragment tfdt INDEPENDENTLY, so the offset between audio-start
+    // and the first video keyframe is dropped: every audio sample is stamped ~1.4s
+    // early relative to the video it belongs with — the reported "audio out of sync
+    // (ahead)" on AC-3 5.1 recordings. This is NOT a constant we estimate: the
+    // anchor is the real first video keyframe carried in the source.
+    //
+    // -ss <v> -noaccurate_seek snaps ffmpeg's input to that first video keyframe and
+    // discards the orphan pre-keyframe audio, so BOTH tracks share the keyframe as a
+    // common origin and the whole recording plays in sync (the dropped head was
+    // audio-only intro no player would show anyway). -noaccurate_seek snaps to the
+    // keyframe (not the exact -ss time) so an already-aligned recording loses
+    // nothing. VOD only (!activeFile — the working live path is untouched) and only
+    // when not already seeking (transcodeStartSeekTime == 0; a mid-file seek already
+    // re-interleaves both tracks at the seek point). Disable with
+    // ffmpeg/browserpull_kf_align_seek=0.
+    if (!activeFile && transcodeStartSeekTime == 0 && isBrowserFragmentedReencodePull())
+    {
+      String kfAlign = Sage.get("ffmpeg/browserpull_kf_align_seek", "0.1");
+      double kfAlignVal;
+      try { kfAlignVal = Double.parseDouble(kfAlign); } catch (NumberFormatException e) { kfAlignVal = -1; }
+      if (kfAlignVal > 0)
+      {
+        xcodeParamsVec.add("-ss");
+        xcodeParamsVec.add(kfAlign);
+        xcodeParamsVec.add("-noaccurate_seek");
+        if (Sage.DBG) System.out.println("FFMPEGTranscoder: browser fMP4 re-encode VOD — adding -ss "
+            + kfAlign + " -noaccurate_seek to anchor audio to the first video keyframe (drops leading"
+            + " pre-keyframe orphan audio that would otherwise play ahead of video on a mid-GOP recording)");
+      }
+    }
+
     xcodeParamsVec.add("-i");
     if (livePipeInput)
       xcodeParamsVec.add(IOUtils.getLibAVFilenameString(liveFifoPath));
@@ -4982,6 +5076,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // Downmix any layout wider than the chosen AC-3-family encoder can emit
     // (7.1 -> 5.1); otherwise ffmpeg aborts and the client sees "no signal".
     clampAudioChannelsToEncoder(xcodeParamsVec);
+    // AC-3/E-AC-3 into fragmented MP4 needs +delay_moov, or movenc aborts at
+    // header-write time ("Cannot write moov atom before AC3 packets") and the
+    // client hangs on a zero-byte stream. Runs AFTER the audio overrides so it
+    // sees the final codec.
+    maybeAddDelayMoovForAc3(xcodeParamsVec);
     maybeStripInapplicableHvc1Tag(xcodeParamsVec);
     // GPU enhancement (upscale/deinterlace) — the LAST argv edit, so it operates
     // on the final copy-family command and can never be undone by an audio
