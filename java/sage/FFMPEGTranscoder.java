@@ -1967,6 +1967,36 @@ public class FFMPEGTranscoder implements TranscodeEngine
   }
 
   /**
+   * Recognize an ffmpeg stderr line that means an NVENC video encoder could not
+   * initialize — the class of failure that used to black-screen the client when a
+   * lost admission race launched a second NVENC encoder on one GPU session
+   * ({@code -22 Invalid argument}). Callers gate on "this child selected NVENC",
+   * so a match routes the relaunch to software libx264 via {@link
+   * sage.HwEncoder#noteNvencFailure()}. Matches the encoder-tagged init errors and
+   * the generic "Error initializing output stream" ffmpeg prints on an NVENC
+   * open failure.
+   */
+  private static boolean isNvencInitFailureLine(CharSequence line)
+  {
+    if (line == null) return false;
+    String l = line.toString().toLowerCase(java.util.Locale.ROOT);
+    if (l.indexOf("nvenc") >= 0
+        && (l.indexOf("failed") >= 0 || l.indexOf("invalid") >= 0
+            || l.indexOf("cannot load") >= 0 || l.indexOf("no capable devices") >= 0
+            || l.indexOf("not supported") >= 0 || l.indexOf("openencodesession") >= 0))
+      return true;
+    if (l.indexOf("openencodesessionex failed") >= 0) return true;
+    if (l.indexOf("cannot load nvcuda") >= 0) return true;
+    if (l.indexOf("cannot load libnvidia-encode") >= 0) return true;
+    if (l.indexOf("no capable devices found") >= 0) return true;
+    if (l.indexOf("driver does not support the required nvenc api") >= 0) return true;
+    // Generic ffmpeg output-open failure; the caller already knows this child
+    // selected NVENC, so this is the -22/Invalid-argument encoder open.
+    if (l.indexOf("error initializing output stream") >= 0) return true;
+    return false;
+  }
+
+  /**
    * True when this transcode COPIES the video track into an MP4-family
    * (fragmented) output — i.e. the {@code browserhd_copyv} / {@code browserhd_remux}
    * pull-xcode modes. On these paths the output track's width/height and the
@@ -3185,6 +3215,23 @@ public class FFMPEGTranscoder implements TranscodeEngine
   }
 
   public void startTranscode() throws java.io.IOException
+  {
+    // Serialize (re)launch so a concurrent "ensure running" caller can never spawn
+    // a second ffmpeg — and thus a rival NVENC session — for one transcode. The
+    // only callers that legitimately want a FRESH child first call stopTranscode()
+    // (which nulls xcodeProcess); a live child seen here means another thread has
+    // already (re)started us, so no-op instead of double-launching. That
+    // double-launch is the governor denied-then-admitted race that left the second
+    // encoder to die with "-22 Invalid argument" and black-screen the client.
+    synchronized (xcodeLaunchLock)
+    {
+      if (xcodeProcess != null && xcodeProcess.isAlive())
+        return;
+      startTranscodeImpl();
+    }
+  }
+
+  private void startTranscodeImpl() throws java.io.IOException
   {
     // Never orphan a still-running child by overwriting xcodeProcess below. The
     // normal restart path calls stopTranscode() first (which nulls xcodeProcess),
@@ -5006,6 +5053,14 @@ public class FFMPEGTranscoder implements TranscodeEngine
     {
       xcodeProcess = xcodePb.start();
     }
+    // Runtime software-fallback bookkeeping: record when this child launched and
+    // whether it selected an NVENC video encoder, so the stderr consumer can spot
+    // an NVENC encoder-init failure and (via HwEncoder's cooldown) route the
+    // client-driven relaunch to software libx264 instead of re-failing on the GPU.
+    xcodeLaunchTime = Sage.time();
+    xcodeSawNvencInitFailure = false;
+    xcodeUsedNvenc = (videoCodec != null
+        && videoCodec.toLowerCase(java.util.Locale.ROOT).indexOf("nvenc") >= 0);
     // Pipe-fed live input: now that ffmpeg is spawned (and blocking on opening
     // the FIFO for read), start the pump that opens the write end and tails the
     // recording's authoritative frontier into it. Only on the plain single-
@@ -5091,6 +5146,18 @@ public class FFMPEGTranscoder implements TranscodeEngine
             if (c == '\n')
             {
               if (XCODE_DEBUG) System.out.println(sb.toString().trim());
+              // Runtime NVENC→software fallback: if this child selected an NVENC
+              // encoder and ffmpeg reports an encoder-init failure, mark NVENC
+              // unhealthy so the (client-driven) relaunch picks software libx264.
+              if (xcodeUsedNvenc && !xcodeSawNvencInitFailure
+                  && isNvencInitFailureLine(sb))
+              {
+                xcodeSawNvencInitFailure = true;
+                sage.HwEncoder.noteNvencFailure();
+                System.out.println("XCODE_NVENC_FALLBACK: NVENC encoder init failed ('"
+                    + sb.toString().trim() + "'); relaunches use software libx264 for the "
+                    + "cooldown window so the client still gets a stream");
+              }
               sb.setLength(0);
             }
             else if (c == '\r')
@@ -7272,6 +7339,15 @@ public class FFMPEGTranscoder implements TranscodeEngine
   protected long transcodeStartSeekTime;
   protected java.io.FileInputStream fileStream;
   protected java.nio.channels.FileChannel fileChannel;
+
+  /** Serializes startTranscode() so one session can never spawn two ffmpeg (rival NVENC) children. */
+  private final Object xcodeLaunchLock = new Object();
+  /** Wall-clock ms when the current ffmpeg child was spawned (fast-failure window). */
+  private volatile long xcodeLaunchTime;
+  /** True when the current child selected an NVENC video encoder (runtime software fallback). */
+  private volatile boolean xcodeUsedNvenc;
+  /** Set by the stderr consumer when it observes an NVENC encoder-init failure. */
+  private volatile boolean xcodeSawNvencInitFailure;
 
   protected boolean bufferOutput;
 

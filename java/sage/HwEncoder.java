@@ -960,6 +960,10 @@ public final class HwEncoder
    */
   public static boolean gpuEnhanceSupported()
   {
+    // Runtime NVENC backoff: after a live encoder-init failure, report the whole
+    // GPU-enhance pipeline unavailable for the cooldown so a tune falls back to
+    // the plain software/copy path instead of re-attempting a GPU that just failed.
+    if (!nvencHealthy()) return false;
     String bin = Sage.get(PROP_PROBE_FFMPEG, DEFAULT_PROBE_FF);
     String missing = null;
     if (cudaScaler() == null)
@@ -993,6 +997,41 @@ public final class HwEncoder
     unsupportedReasonLogged.clear();
   }
 
+  /** Property: ms to avoid NVENC after a runtime encoder-init failure (self-healing). */
+  private static final String PROP_NVENC_COOLDOWN_MS =
+      "multimedia/hwaccel/nvenc/runtime_failure_cooldown_ms";
+  private static final long DEFAULT_NVENC_COOLDOWN_MS = 60000L;
+  /** When &gt; now, NVENC is treated as unavailable (runtime-failure backoff window). */
+  private static volatile long nvencUnhealthyUntil = 0L;
+
+  /**
+   * Record a runtime NVENC failure: an ffmpeg child that selected an NVENC
+   * encoder died at/near launch with an encoder-init error (e.g. {@code -22
+   * Invalid argument}, {@code OpenEncodeSessionEx failed}, {@code Cannot load
+   * nvcuda}). For a cooldown window {@link #pick} stops returning NVENC and
+   * {@link #gpuEnhanceSupported} reports unsupported, so every new/relaunched
+   * transcode falls back to the software {@code libx264} path every stock SageTV
+   * server uses — rather than black-screening on a GPU that momentarily cannot be
+   * accessed. Self-heals when the window elapses, so a transient fault (driver
+   * reload, encode-engine exhaustion, a lost admission race) never disables the
+   * GPU until a JVM restart.
+   */
+  public static void noteNvencFailure()
+  {
+    long cd = Sage.getLong(PROP_NVENC_COOLDOWN_MS, DEFAULT_NVENC_COOLDOWN_MS);
+    if (cd <= 0) return;
+    nvencUnhealthyUntil = Sage.time() + cd;
+    System.out.println("HwEncoder: NVENC runtime failure noted; routing (re)launches to "
+        + "software libx264 for " + cd + "ms");
+  }
+
+  /** False while a recent runtime NVENC failure keeps us in the software-fallback window. */
+  public static boolean nvencHealthy()
+  {
+    long until = nvencUnhealthyUntil;
+    return until == 0L || Sage.time() >= until;
+  }
+
   /**
    * Choose the best available HW encoder for a target codec, honoring
    * {@code multimedia/hwaccel/preferred} order. Returns {@link Kind#NONE} if
@@ -1015,6 +1054,9 @@ public final class HwEncoder
       Kind k = Kind.fromToken(tok);
       if (k == null) continue;
       if (k == Kind.NONE) return Kind.NONE; // explicit software request
+      // Runtime NVENC backoff: after a live encoder-init failure, skip NVENC (try
+      // the next preference, ultimately software) until the cooldown elapses.
+      if (k == Kind.NVENC && !nvencHealthy()) continue;
       if (avail.contains(k) && encoderName(k, codec) != null) return k;
     }
     return Kind.NONE;
