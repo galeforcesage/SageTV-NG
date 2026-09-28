@@ -144,7 +144,34 @@ public final class GpuGovernor
   private final AtomicLong grants = new AtomicLong();
   private final AtomicBoolean reaperRunning = new AtomicBoolean(false);
 
+  /**
+   * Optional machine-wide arbiter. Null in the stock build (behavior is then
+   * byte-identical to before). Installed at startup by a privately-shipped
+   * adapter; see {@link ExternalAdmissionAuthority}.
+   */
+  private volatile ExternalAdmissionAuthority externalAuthority;
+
   private GpuGovernor() { }
+
+  /**
+   * Install (or replace) the external admission authority. Passing null restores
+   * the pure in-process behavior. Intended to be called once at startup from a
+   * separately-installed adapter (e.g. via {@code load_at_startup_runnable_classes}).
+   */
+  public void setExternalAuthority(ExternalAdmissionAuthority authority)
+  {
+    this.externalAuthority = authority;
+    if (Sage.DBG) System.out.println("GpuGovernor: external admission authority "
+        + (authority == null ? "cleared" : "installed: " + safeName(authority)));
+  }
+
+  /** The installed external authority, or null when none. */
+  public ExternalAdmissionAuthority getExternalAuthority() { return externalAuthority; }
+
+  private static String safeName(ExternalAdmissionAuthority a)
+  {
+    try { return a.name(); } catch (Throwable t) { return a.getClass().getName(); }
+  }
 
   /** Master switch. Defaults off; enhancement is opt-in. */
   public boolean isEnabled() { return Sage.getBoolean(PROP_ENABLED, false); }
@@ -206,29 +233,118 @@ public final class GpuGovernor
 
     int gpuIndex = Sage.getInt(PROP_GPU_INDEX, 0);
     GpuSnapshot snap = GpuMonitor.getInstance().getSnapshot(gpuIndex);
+    EnhancementTier startTier = tier;
 
-    // (3-6) Walk the ladder until a tier fits every remaining budget.
+    ExternalAdmissionAuthority auth = externalAuthority;
+    if (auth == null)
+    {
+      // (3-6) Stock path: walk the ladder locally, concurrency ceiling included.
+      Ladder walk = walkLadder(startTier, snap, load, estBitrateKbps, offline, true);
+      whyNot.addAll(walk.whyNot);
+      if (!walk.tier.isActive())
+        return deny(sessionId, "no tier fits (" + join(whyNot) + ")");
+      return registerGrant(sessionId, walk.tier, desired, gpuIndex, estBitrateKbps,
+          offline, snap, load, whyNot, null);
+    }
+
+    // Authority present. The local physical budgets (disk, VRAM, engine pressure)
+    // still bound what the box can sustain, so walk the ladder WITHOUT the local
+    // concurrency ceiling: cross-application concurrency is precisely the decision
+    // we are delegating. The resulting tier is the most the hardware allows.
+    Ladder uncapped = walkLadder(startTier, snap, load, estBitrateKbps, offline, false);
+    whyNot.addAll(uncapped.whyNot);
+    if (!uncapped.tier.isActive())
+      return deny(sessionId, "no tier fits local budgets (" + join(whyNot) + ")");
+
+    ExternalAdmissionAuthority.Decision decision;
+    try
+    {
+      decision = auth.admit(sessionId, uncapped.tier, sourceHeight, estBitrateKbps, offline);
+      if (decision == null) decision = ExternalAdmissionAuthority.Decision.deferToLocal("null decision");
+    }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("GpuGovernor: external authority "
+          + safeName(auth) + " threw " + t + " -> fail-open to local ceiling");
+      decision = ExternalAdmissionAuthority.Decision.deferToLocal("authority threw " + t);
+    }
+
+    if (decision.isDeferToLocal())
+    {
+      // Fail-open: the arbiter had no answer. Fall back to the ordinary local
+      // decision WITH the concurrency ceiling, so a partitioned box behaves
+      // exactly as an un-brokered one rather than oversubscribing the GPU.
+      Ladder capped = walkLadder(startTier, snap, load, estBitrateKbps, offline, true);
+      if (!capped.tier.isActive())
+        return deny(sessionId, "authority deferred (" + decision.getReason()
+            + "); local ceiling denies (" + join(capped.whyNot) + ")");
+      return registerGrant(sessionId, capped.tier, desired, gpuIndex, estBitrateKbps,
+          offline, snap, load, whyNot, "authority deferred: " + decision.getReason());
+    }
+
+    if (decision.isDeny())
+      return deny(sessionId, "external authority (" + safeName(auth) + ") denied: "
+          + decision.getReason());
+
+    // Granted. Never let the arbiter push us above the physical budget: clamp the
+    // granted tier down until it fits the local no-concurrency budgets.
+    EnhancementTier granted = decision.getTier();
+    while (granted.isActive() && checkBudgets(granted, snap, load, estBitrateKbps, offline, false) != null)
+      granted = granted.downgrade();
+    if (!granted.isActive())
+      return deny(sessionId, "authority grant " + decision.getTier().token()
+          + " exceeds local budgets");
+    return registerGrant(sessionId, granted, desired, gpuIndex, estBitrateKbps,
+        offline, snap, load, whyNot, "authority: " + safeName(auth));
+  }
+
+  /** Result of a ladder walk: the best admissible tier and why higher tiers failed. */
+  private static final class Ladder
+  {
+    final EnhancementTier tier;
+    final List<String> whyNot;
+    Ladder(EnhancementTier tier, List<String> whyNot) { this.tier = tier; this.whyNot = whyNot; }
+  }
+
+  /**
+   * Step {@code start} down the degradation ladder until a tier clears every
+   * checked budget, or bottom out at {@link EnhancementTier#NONE}. Pure: registers
+   * nothing.
+   */
+  private Ladder walkLadder(EnhancementTier start, GpuSnapshot snap,
+                            RecordingGuard.CaptureLoad load, long estBitrateKbps,
+                            boolean offline, boolean enforceConcurrency)
+  {
+    List<String> whyNot = new ArrayList<String>();
+    EnhancementTier tier = start;
     while (tier.isActive())
     {
-      String failure = checkBudgets(tier, snap, load, estBitrateKbps, offline);
-      if (failure == null)
-      {
-        Session s = new Session(sessionId, tier, gpuIndex,
-            effectiveBitrateKbps(tier, estBitrateKbps), offline);
-        trackSession(s);
-        grants.incrementAndGet();
-        String reason = (tier == desired)
-            ? "admitted " + tier.token()
-            : "admitted " + tier.token() + " (stepped down from " + desired.token() + ": "
-              + join(whyNot) + ")";
-        if (Sage.DBG) System.out.println("GpuGovernor: " + sessionId + " " + reason
-            + " [" + snap + ", " + load + "]");
-        return new Admission(sessionId, tier, gpuIndex, reason);
-      }
+      String failure = checkBudgets(tier, snap, load, estBitrateKbps, offline, enforceConcurrency);
+      if (failure == null) break;
       whyNot.add(tier.token() + ": " + failure);
       tier = tier.downgrade();
     }
-    return deny(sessionId, "no tier fits (" + join(whyNot) + ")");
+    return new Ladder(tier, whyNot);
+  }
+
+  /** Register a granted tier as a live session and build its telemetry reason. */
+  private Admission registerGrant(String sessionId, EnhancementTier tier, EnhancementTier desired,
+                                  int gpuIndex, long estBitrateKbps, boolean offline,
+                                  GpuSnapshot snap, RecordingGuard.CaptureLoad load,
+                                  List<String> whyNot, String extraNote)
+  {
+    Session s = new Session(sessionId, tier, gpuIndex,
+        effectiveBitrateKbps(tier, estBitrateKbps), offline);
+    trackSession(s);
+    grants.incrementAndGet();
+    String reason = (tier == desired)
+        ? "admitted " + tier.token()
+        : "admitted " + tier.token() + " (stepped down from " + desired.token() + ": "
+          + join(whyNot) + ")";
+    if (extraNote != null && extraNote.length() > 0) reason += " [" + extraNote + "]";
+    if (Sage.DBG) System.out.println("GpuGovernor: " + sessionId + " " + reason
+        + " [" + snap + ", " + load + "]");
+    return new Admission(sessionId, tier, gpuIndex, reason);
   }
 
   /**
@@ -237,33 +353,37 @@ public final class GpuGovernor
    */
   private String checkBudgets(EnhancementTier tier, GpuSnapshot snap,
                               RecordingGuard.CaptureLoad load, long estBitrateKbps,
-                              boolean offline)
+                              boolean offline, boolean enforceConcurrency)
   {
     // Concurrency ceiling: explicit admin cap wins if set, else calibrated,
-    // else the blind fallback.
-    int liveCount = countLiveSessions();
-    int adminMax = Sage.getInt(PROP_MAX_SESSIONS, DEFAULT_MAX_SESSIONS);
-    int ceiling;
-    if (adminMax > 0)
+    // else the blind fallback. Skipped entirely when an external authority owns
+    // cross-application concurrency (enforceConcurrency == false).
+    if (enforceConcurrency)
     {
-      ceiling = adminMax;
+      int liveCount = countLiveSessions();
+      int adminMax = Sage.getInt(PROP_MAX_SESSIONS, DEFAULT_MAX_SESSIONS);
+      int ceiling;
+      if (adminMax > 0)
+      {
+        ceiling = adminMax;
+      }
+      else if (snap.isKnown())
+      {
+        ceiling = CapacityCalibrator.getInstance().concurrencyCeiling(tier);
+      }
+      else
+      {
+        ceiling = Math.max(1, Sage.getInt(PROP_FALLBACK_MAX, DEFAULT_BLIND_MAX));
+      }
+      // The recording reserve is subtracted from the calibrated budget, so the
+      // "1 or 2 concurrent sessions?" answer emerges from measurement plus current
+      // load rather than being hand-set per GPU model. Skipped under the COEXIST
+      // posture, where a non-GPU capture holds no enhancement slot.
+      if (load != null && RecordingGuard.getInstance().reservesGpuSlotForTuners())
+        ceiling -= load.getReservedTuners();
+      if (!offline && liveCount >= Math.max(0, ceiling))
+        return "concurrency ceiling " + ceiling + " (active " + liveCount + ")";
     }
-    else if (snap.isKnown())
-    {
-      ceiling = CapacityCalibrator.getInstance().concurrencyCeiling(tier);
-    }
-    else
-    {
-      ceiling = Math.max(1, Sage.getInt(PROP_FALLBACK_MAX, DEFAULT_BLIND_MAX));
-    }
-    // The recording reserve is subtracted from the calibrated budget, so the
-    // "1 or 2 concurrent sessions?" answer emerges from measurement plus current
-    // load rather than being hand-set per GPU model. Skipped under the COEXIST
-    // posture, where a non-GPU capture holds no enhancement slot.
-    if (load != null && RecordingGuard.getInstance().reservesGpuSlotForTuners())
-      ceiling -= load.getReservedTuners();
-    if (!offline && liveCount >= Math.max(0, ceiling))
-      return "concurrency ceiling " + ceiling + " (active " + liveCount + ")";
 
     // Disk write budget. Counted for every session, live or offline, because the
     // array doesn't care which process is filling it.
@@ -309,6 +429,13 @@ public final class GpuGovernor
   {
     if (sessionId == null) return;
     Session s = sessions.remove(sessionId);
+    ExternalAdmissionAuthority auth = externalAuthority;
+    if (auth != null)
+    {
+      // Always forward: the local session may already be gone (idempotent teardown),
+      // but the arbiter still needs the release so it doesn't hold a phantom lease.
+      try { auth.release(sessionId); } catch (Throwable ignore) {}
+    }
     if (s != null)
     {
       // Invalidate so the next admission sees the freed VRAM immediately rather
@@ -323,7 +450,28 @@ public final class GpuGovernor
   public void heartbeat(String sessionId)
   {
     Session s = sessions.get(sessionId);
-    if (s != null) s.lastHeartbeat = Sage.time();
+    if (s != null)
+    {
+      s.lastHeartbeat = Sage.time();
+      ExternalAdmissionAuthority auth = externalAuthority;
+      // Forwarded as a keep-alive. Called very frequently (per ffmpeg progress
+      // line), so the authority is contractually required to throttle internally.
+      if (auth != null) { try { auth.renew(sessionId); } catch (Throwable ignore) {} }
+    }
+  }
+
+  /**
+   * True when an installed external authority has revoked this still-running
+   * session's grant (e.g. reclaimed for a higher-priority tenant). Always false
+   * in the stock build. Cheap and non-blocking; a transcoder may poll it to tear
+   * an enhanced session down and fall back to a plain stream.
+   */
+  public boolean isReclaimed(String sessionId)
+  {
+    if (sessionId == null) return false;
+    ExternalAdmissionAuthority auth = externalAuthority;
+    if (auth == null) return false;
+    try { return auth.isReclaimed(sessionId); } catch (Throwable ignore) { return false; }
   }
 
   /** Update a running session's measured output bitrate. */
