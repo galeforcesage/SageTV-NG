@@ -686,6 +686,18 @@ public class MiniPlayer implements DVDMediaPlayer
     return !pushMode;
   }
 
+  /**
+   * True only when this tune is delivered as server-side finalized-segment
+   * fMP4/CMAF over HLS (the "hls" delivery). Unlike {@link #isServerPullDelivery()}
+   * (which is any non-push pull, including the browserhd msproxy ring), this is
+   * the ONLY delivery whose client playlist bridges an airing boundary, so it is
+   * the correct gate for the VideoFrame EPG-seam reload deferral.
+   */
+  boolean isCmafPullDelivery()
+  {
+    return httplsDelivery;
+  }
+
   public synchronized void fastLoad(byte majorTypeHint, byte minorTypeHint, String encodingHint, java.io.File file, String hostname, boolean timeshifted, long bufferSize, boolean waitUntilDone) throws PlaybackException
   {
     if (Sage.DBG) System.out.println("Mini Fast Load");
@@ -2960,6 +2972,14 @@ public class MiniPlayer implements DVDMediaPlayer
         clientDoesPull = false;
       }
 
+      // Persist the final CMAF/hls-delivery decision to an instance flag so the
+      // VideoFrame EPG-seam deferral can gate on TRUE CMAF delivery (bridged
+      // client playlist) rather than the generic pull flag. httpls is settled by
+      // this point (early negotiation + the Phase-1 CMAF reroute above); no later
+      // code flips it. Re-set on every tune so a re-tune to a non-CMAF mode
+      // clears it.
+      this.httplsDelivery = httpls;
+
       // --- NG-first Gate #6: Pull-vs-push mode selection ---
       // For NG sessions, honor the surface's chosen delivery mode directly rather
       // than the legacy compound condition (clientDoesPull && (httpls||...)).
@@ -3345,7 +3365,32 @@ public class MiniPlayer implements DVDMediaPlayer
           useOriginalAudioTrack = true;
         }
 
-        if (!transcoded
+        // Fix A: the legacy format-selection path (the "MPEG4 transcoder" branch
+        // ~line 3118) can set transcoded=true with an MPEG4/MP2 push mode
+        // ("dynamic") even when the authoritative profile decision selected
+        // H.264 — because that legacy path keys off the raw MiniClient probe
+        // h264PushOK (false for legacy desktop clients) instead of the profile.
+        // The client is then handed codecs its profile forbids → black screen,
+        // frozen lastParserTs. Detect that contradiction so the authoritative
+        // override below can re-drive the mode from the decision even though a
+        // mode was already chosen. (REMUX-with-transcoded=true, e.g. an
+        // android_media3 REMUX, is deliberately NOT flagged — only a TRANSCODE
+        // decision whose H.264 target the legacy mode fails to emit.)
+        boolean _profDecTranscodeFamily =
+            profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.REMUX
+            || profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.TRANSCODE
+            || profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.AUDIO_TRANSCODE;
+        boolean _legacyModeContradictsDecision = transcoded
+            && profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.TRANSCODE
+            && isH264TargetVideo(profileDecision.targetVideoCodec)
+            && !pushModeEmitsH264(prefTranscodeMode);
+        if (_legacyModeContradictsDecision && Sage.DBG)
+          System.out.println("MiniPlayer: legacy push mode '" + prefTranscodeMode
+              + "' contradicts profile decision TRANSCODE targetV=" + profileDecision.targetVideoCodec
+              + " — authoritative override will re-drive the mode from the decision");
+
+        if ((!transcoded || _legacyModeContradictsDecision)
+            && _profDecTranscodeFamily
             && pushMode && mcsr != null
             && majorTypeHint == MediaFile.MEDIATYPE_VIDEO)
         {
@@ -3474,10 +3519,33 @@ public class MiniPlayer implements DVDMediaPlayer
             }
             else
             {
-              prefTranscodeMode = h264PushOK ? "dynamich264"
-                  : (mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS) ? "dynamic" : "dynamicts");
+              // Fix A: drive the push mode from the DECISION's target video codec
+              // (authoritative, profile-derived) rather than the raw MiniClient
+              // probe h264PushOK. h264PushOK is false for legacy desktop clients
+              // whose profile nonetheless allows (and the decision selected)
+              // H.264; using it here re-emitted MPEG4 ("dynamic") and contradicted
+              // the decision → client rejected the codec → black screen.
+              if (isH264TargetVideo(profileDecision.targetVideoCodec))
+              {
+                // H.264 target → emit H.264 in MPEG2-TS (dynamich264, the mode
+                // the openURL descriptor synth already advertises as
+                // f=MPEG2-TS;bf=vid;f=H.264;bf=aud;f=AAC). Fall back to dynamicts
+                // only if the client can't take a plain TS push container.
+                prefTranscodeMode =
+                    (mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_TS)
+                     || mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS))
+                    ? "dynamich264" : "dynamicts";
+                pathTaken = "decision-h264";
+              }
+              else
+              {
+                // Non-H.264 target (e.g. MPEG-2) or unknown target → preserve the
+                // probe-based legacy fallback.
+                prefTranscodeMode = h264PushOK ? "dynamich264"
+                    : (mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS) ? "dynamic" : "dynamicts");
+                pathTaken = h264PushOK ? "dynamic-h264-fallback" : "dynamic-fallback";
+              }
               dynamicRateAdjust = true;
-              pathTaken = h264PushOK ? "dynamic-h264-fallback" : "dynamic-fallback";
             }
             if (Sage.DBG) System.out.println("MiniPlayer: profile-authoritative override forces TRANSCODE (legacy missed it) path="
                 + pathTaken + " mode=" + prefTranscodeMode + " srcVCodec=" + _srcVCodec
@@ -3936,8 +4004,22 @@ public class MiniPlayer implements DVDMediaPlayer
             formatString = fb.toString();
             if (Sage.DBG) System.out.println("MiniPlayer: mpeg2psremux push format hint -> " + formatString);
           }
-          else if (serverSideTranscoding && mediaExtender)
+          else if (serverSideTranscoding && (mediaExtender
+              || (profileDecision != null
+                  && (profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.TRANSCODE
+                      || profileDecision.decision == sage.client.PlaybackDecisionEngine.Decision.AUDIO_TRANSCODE))))
           {
+            // TRANSCODE/AUDIO_TRANSCODE: the wire bytes are the transcoder's
+            // OUTPUT, never the source. Previously only mediaExtender sessions
+            // reached this synth block; a non-extender push client (e.g.
+            // android_modern) under a profile-authoritative TRANSCODE fell
+            // through to "cf.getFullPropertyString()" below and advertised the
+            // SOURCE codecs the client cannot decode (the "openURL bf=vid=
+            // MPEG2-Video contradicting the TRANSCODE decision" case that only
+            // tripped the INVARIANT VIOLATION warning). Null the source cf so
+            // the descriptor is built from the transcode plan (prefTranscodeMode)
+            // by these mode branches, or by the property-string / xcode_qualities
+            // synth further below for custom/named modes.
             cf = null; // don't set the format since it'll be a base MPEG2 format
             // But if we're doing placeshifting then we need the format string
             if ("dynamic".equals(prefTranscodeMode))
@@ -3947,6 +4029,13 @@ public class MiniPlayer implements DVDMediaPlayer
             else if ("dynamicts".equals(prefTranscodeMode))
             {
               formatString = "f=MPEG2-TS;[bf=vid;f=MPEG4;][bf=aud;f=AAC]";
+            }
+            else if ("dynamich264".equals(prefTranscodeMode))
+            {
+              // Modern H.264/MPEG2-TS push (FFMPEGTranscoder pushH264 shape),
+              // AAC audio -- describe the OUTPUT so NG clients set up an H.264
+              // TS extractor instead of sniffing (or hanging on an empty hint).
+              formatString = "f=MPEG2-TS;[bf=vid;f=H.264;][bf=aud;f=AAC]";
             }
             else if ("music".equals(prefTranscodeMode) || "music128".equals(prefTranscodeMode))
             {
@@ -4240,22 +4329,31 @@ public class MiniPlayer implements DVDMediaPlayer
           sage.client.ClientProfile _prof = (mcsr != null) ? mcsr.getResolvedProfile() : null;
           if (_prof != null)
           {
-            if (_srcVf != null && _srcVf.getFormatName() != null
-                && !_prof.isVideoCodecAllowed(_srcVf.getFormatName())
-                && formatString.indexOf("bf=vid;f=" + _srcVf.getFormatName() + ";") >= 0)
+            // Fix B: validate the codec the descriptor ACTUALLY advertises
+            // (parsed from bf=vid;f=/bf=aud;f=), not merely the narrow case where
+            // it echoes the SOURCE codec. A TRANSCODE decision that still hands
+            // the client a profile-forbidden codec — however that codec got into
+            // the descriptor (a legacy mode that ignored the decision, a stale
+            // template, etc.) — is exactly the black-screen bug class this guard
+            // exists to surface. The prior check only fired when advertised ==
+            // source, so a wrong-but-not-source codec (e.g. MPEG4 emitted while
+            // the profile only allows H.264) slipped through silently.
+            String _advVid = extractDescriptorCodec(formatString, "vid");
+            String _advAud = extractDescriptorCodec(formatString, "aud");
+            if (_advVid != null && !_prof.isVideoCodecAllowed(_advVid))
             {
               System.out.println("MiniPlayer: WARNING INVARIANT VIOLATION — TRANSCODE decision but openURL"
-                  + " descriptor still advertises unsupported source video codec '" + _srcVf.getFormatName()
+                  + " descriptor advertises profile-forbidden video codec '" + _advVid
                   + "' (profile=" + _prof.getProfileId() + " reason=" + profileDecision.reason
+                  + " srcVideo=" + (_srcVf != null && _srcVf.getFormatName() != null ? _srcVf.getFormatName() : "n/a")
                   + " formatString=" + formatString + " prefTranscodeMode=" + prefTranscodeMode + ")");
             }
-            if (_srcAf != null && _srcAf.getFormatName() != null
-                && !_prof.isAudioCodecAllowed(_srcAf.getFormatName())
-                && formatString.indexOf("bf=aud;f=" + _srcAf.getFormatName() + ";") >= 0)
+            if (_advAud != null && !_prof.isAudioCodecAllowed(_advAud))
             {
               System.out.println("MiniPlayer: WARNING INVARIANT VIOLATION — TRANSCODE decision but openURL"
-                  + " descriptor still advertises unsupported source audio codec '" + _srcAf.getFormatName()
+                  + " descriptor advertises profile-forbidden audio codec '" + _advAud
                   + "' (profile=" + _prof.getProfileId() + " reason=" + profileDecision.reason
+                  + " srcAudio=" + (_srcAf != null && _srcAf.getFormatName() != null ? _srcAf.getFormatName() : "n/a")
                   + " formatString=" + formatString + " prefTranscodeMode=" + prefTranscodeMode + ")");
             }
           }
@@ -8190,6 +8288,61 @@ public class MiniPlayer implements DVDMediaPlayer
     return null;
   }
 
+  /**
+   * Fix A: true when the profile decision's target video codec is H.264/AVC in
+   * any spelling. The authoritative override uses this to drive the push mode
+   * from the DECISION (profile-derived) rather than the raw MiniClient probe
+   * {@code h264PushOK}, which is false for legacy desktop clients whose profile
+   * nonetheless allows H.264.
+   */
+  private static boolean isH264TargetVideo(String targetVideoCodec)
+  {
+    if (targetVideoCodec == null) return false;
+    String c = targetVideoCodec.trim();
+    return c.equalsIgnoreCase("H.264") || c.equalsIgnoreCase("H264")
+        || c.equalsIgnoreCase("AVC") || c.equalsIgnoreCase("x264");
+  }
+
+  /**
+   * Fix A: true when a push transcode mode string emits an H.264 video track —
+   * the named H.264 push modes ("dynamich264"/"dynamicts") or a custom
+   * {@code container=...} spec that copies or explicitly selects H.264 video.
+   * Used to tell whether the legacy-selected mode already satisfies an H.264
+   * decision (leave it) or contradicts it (e.g. "dynamic" = MPEG4/MP2 → re-drive
+   * from the decision).
+   */
+  private static boolean pushModeEmitsH264(String mode)
+  {
+    if (mode == null) return false;
+    String m = mode.toLowerCase(java.util.Locale.ROOT);
+    if (m.equals("dynamich264") || m.equals("dynamicts")) return true;
+    if (m.indexOf('=') >= 0
+        && (m.indexOf("videocodec=h264") >= 0 || m.indexOf("videocodec=copy") >= 0))
+      return true;
+    return false;
+  }
+
+  /**
+   * Fix B: extract the codec name a push descriptor {@code formatString}
+   * advertises for a given block ("vid" or "aud"), i.e. the value of
+   * {@code bf=<blk>;f=<codec>;}. Returns null when the block or codec token is
+   * absent. Lets the invariant guard check the ACTUALLY-ADVERTISED codec against
+   * the client profile, instead of only catching the narrow case where the
+   * descriptor happens to echo the SOURCE codec.
+   */
+  private static String extractDescriptorCodec(String formatString, String block)
+  {
+    if (formatString == null || block == null) return null;
+    String needle = "bf=" + block + ";f=";
+    int i = formatString.indexOf(needle);
+    if (i < 0) return null;
+    int start = i + needle.length();
+    int end = formatString.indexOf(';', start);
+    if (end < 0) end = formatString.length();
+    String codec = formatString.substring(start, end).trim();
+    return (codec.length() > 0) ? codec : null;
+  }
+
 
   protected final Object decoderLock = new Object();
 
@@ -8243,6 +8396,17 @@ public class MiniPlayer implements DVDMediaPlayer
   protected String fastLoadAc4AudioCodec;
 
   protected boolean pushMode;
+  // True only when THIS tune is delivered as server-side finalized-segment
+  // fMP4/CMAF over HLS (the "hls" delivery: init.mp4 + seg%d.m4s served by
+  // HTTPLSServer, OPENURL _fmp4.m3u8). Distinct from the generic pull flag
+  // (isServerPullDelivery()==!pushMode) which is ALSO true for the browserhd
+  // msproxy ring and other pull-xcode modes. The EPG-seam deferral in
+  // VideoFrame must gate on THIS, not the generic pull flag: only the CMAF/hls
+  // path bridges the airing boundary in the client playlist (Path B
+  // EXT-X-DISCONTINUITY + fresh EXT-X-MAP), so deferring the server reload is
+  // only safe here. Deferring for a browserhd ring session strands the client
+  // at the boundary with no successor source -> hard stall (observed live).
+  protected boolean httplsDelivery;
 
   protected boolean currMute;
 

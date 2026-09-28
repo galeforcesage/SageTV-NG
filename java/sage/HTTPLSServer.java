@@ -79,6 +79,17 @@ public class HTTPLSServer implements Runnable
       }
     }
     partDur = Sage.getInt("httpls_part_duration_sec", 5);
+    // LL-HLS (opt-in, default OFF). When enabled, the CMAF/fMP4 path uses a
+    // smaller effective segment duration and advertises each segment as a
+    // single-part EXT-X-PART (segment==part model). The bundled ffmpeg fork's
+    // hls muxer emits exactly ONE moof fragment per .m4s and ignores
+    // -frag_duration, so byte-range parts inside a segment are impossible;
+    // driving the segment size down to the part size is the only way to get
+    // sub-segment addressability. Every fMP4 path (production, seek math,
+    // playlist indexing) uses fmp4PartDur so they stay consistent. When OFF,
+    // fmp4PartDur == partDur and the emitted playlist is byte-identical to today.
+    llhlsEnabled = Sage.getBoolean("httpls/llhls_enabled", false);
+    fmp4PartDur = llhlsEnabled ? Math.max(1, Sage.getInt("httpls/llhls_part_dur_sec", 1)) : partDur;
     synchronized (cleanerLock)
     {
       if (!builtCleaner)
@@ -213,6 +224,21 @@ public class HTTPLSServer implements Runnable
           if (Sage.DBG) System.out.println("Invalid page request-1 made for iOS HTTP server of: \"" + pageRequest + "\" abort connection!");
           break;
         }
+        // LL-HLS blocking reload: hls.js appends ?_HLS_msn=<n>&_HLS_part=<k> to
+        // the playlist URL to long-poll the live edge. Split the query off BEFORE
+        // the extension/token checks below (which assume a bare "..._fmp4.m3u8"
+        // path and would otherwise reject the "?"-suffixed form) and stash it so
+        // the fMP4 playlist branch can honor the block. Legacy clients never send
+        // a query, so httpQuery stays null and every path below is unchanged.
+        String httpQuery = null;
+        {
+          int qStrip = pageRequest.indexOf('?');
+          if (qStrip >= 0)
+          {
+            httpQuery = pageRequest.substring(qStrip + 1);
+            pageRequest = pageRequest.substring(0, qStrip);
+          }
+        }
         boolean isPlaylistRequest = pageRequest.endsWith(".m3u8");
         // Phase 1 CMAF/fMP4 (Option A) request forms. These are STRICTLY
         // ADDITIVE: legacy iOS/Mac clients only ever emit ".m3u8" (4 tokens) and
@@ -326,16 +352,103 @@ public class HTTPLSServer implements Runnable
           {
             // fMP4 variant playlist (HLS v7 + CMAF). Mirrors the TS variant
             // playlist (@288) but with EXT-X-MAP + .m4s parts.
+            //
+            // LL-HLS blocking reload (live only): when the client long-polls with
+            // ?_HLS_msn=<n>, hold the response until segment n is available (its
+            // source has been recorded) so the client receives the next segment
+            // the instant it exists instead of polling every target-duration.
+            // Bounded by httpls/llhls_block_timeout_ms so a stalled/ended source
+            // never hangs the connection. No-op unless llhlsEnabled AND the client
+            // actually sent _HLS_msn, so VOD and legacy fetches are unaffected.
+            if (llhlsEnabled && httpQuery != null)
+            {
+              String msnStr = getQueryParam(httpQuery, "_HLS_msn");
+              if (msnStr != null && msnStr.length() > 0)
+              {
+                try
+                {
+                  int wantMsn = Integer.parseInt(msnStr.trim());
+                  long blockDeadline = Sage.time() + Sage.getInt("httpls/llhls_block_timeout_ms", 8000);
+                  int pollMs = Sage.getInt("httpls/llhls_block_poll_ms", 100);
+                  while (Sage.time() < blockDeadline)
+                  {
+                    int available = (int)Math.ceil((double)(mf.getDuration(segmentNum) / 1000) / fmp4PartDur);
+                    if (available > wantMsn || !mf.isRecording(segmentNum))
+                      break;
+                    try { Thread.sleep(pollMs); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+                  }
+                }
+                catch (NumberFormatException nfe) { /* malformed _HLS_msn: fall through, serve current playlist */ }
+              }
+            }
             sb.setLength(0);
-            sb.append("#EXTM3U\r\n");
-            sb.append("#EXT-X-VERSION:7\r\n");
-            sb.append("#EXT-X-MEDIA-SEQUENCE:0\r\n");
-            sb.append("#EXT-X-TARGETDURATION:" + partDur + "\r\n");
-            sb.append("#EXT-X-MAP:URI=\"" + base + "_init.mp4\"\r\n");
+
+            // Total finalized parts available for this segment right now.
             long remTime = mf.getDuration(segmentNum) / 1000;
-            int numParts = (int)Math.ceil((double)remTime / partDur);
-            if (Sage.DBG) System.out.println("CMAF Request for fMP4 playlist at " + bwkbps + "kbps for mf=" + mfId + " seg=" + segmentNum + " clientMac=" + clientMac + " totalParts=" + numParts);
-            appendFmp4Parts(sb, base, mf.getDuration(segmentNum));
+            int numParts = (int)Math.ceil((double)remTime / fmp4PartDur);
+
+            // LL-HLS sliding window (live only): bound the advertised playlist so
+            // it does not grow without limit as a live tune runs. Only the last
+            // llhls_window_sec seconds of parts are listed and #EXT-X-MEDIA-SEQUENCE
+            // advances to the first listed part, so the client tracks the moving
+            // live edge instead of re-parsing an ever-growing list. window<=0
+            // disables windowing (full list). Gated by llhlsEnabled, so the
+            // default-off path lists the full playlist with MEDIA-SEQUENCE:0,
+            // byte-identical to pre-LL-HLS output.
+            int windowStart = 0;
+            if (llhlsEnabled)
+            {
+              int windowSec = Sage.getInt("httpls/llhls_window_sec", 120);
+              if (windowSec > 0)
+              {
+                int windowParts = (int)Math.ceil((double)windowSec / fmp4PartDur);
+                if (numParts > windowParts)
+                  windowStart = numParts - windowParts;
+              }
+            }
+
+            // LL-HLS delta playlist (EXT-X-SKIP): when a low-latency client asks
+            // for a delta (?_HLS_skip=YES|v2) replace the parts older than the skip
+            // boundary with a single #EXT-X-SKIP:SKIPPED-SEGMENTS count, so each
+            // blocking reload carries only the handful of parts near the edge
+            // instead of the whole window. CAN-SKIP-UNTIL must be >= 6x PART-TARGET
+            // (RFC 8216bis); advertised only when llhlsEnabled, and SKIP is emitted
+            // only when the client asked for it AND there is something to skip.
+            int skipUntilSec = Math.max(6 * fmp4PartDur, Sage.getInt("httpls/llhls_skip_boundary_sec", 12));
+            boolean wantSkip = false;
+            if (llhlsEnabled && httpQuery != null)
+              wantSkip = getQueryParam(httpQuery, "_HLS_skip").length() > 0;
+            int firstListedPart = windowStart;
+            if (wantSkip)
+            {
+              int keepRecent = (int)Math.ceil((double)skipUntilSec / fmp4PartDur);
+              int deltaFirst = Math.max(windowStart, numParts - keepRecent);
+              if (deltaFirst > windowStart)
+                firstListedPart = deltaFirst;
+            }
+            int skippedSegments = firstListedPart - windowStart;
+
+            sb.append("#EXTM3U\r\n");
+            // EXT-X-SKIP and the low-latency tags require HLS compatibility v9.
+            sb.append("#EXT-X-VERSION:" + (llhlsEnabled ? 9 : 7) + "\r\n");
+            sb.append("#EXT-X-MEDIA-SEQUENCE:" + windowStart + "\r\n");
+            if (llhlsEnabled)
+            {
+              // Low-latency control tags. CAN-BLOCK-RELOAD lets a client long-poll
+              // the live edge (honored by the blocking-reload wait above).
+              // CAN-SKIP-UNTIL advertises the delta-playlist boundary implemented
+              // via #EXT-X-SKIP below. On a completed VOD the #EXT-X-ENDLIST below
+              // makes hls.js treat it as VOD and ignore blocking, but the tags
+              // still parse cleanly. PART-HOLD-BACK must be >= 3x PART-TARGET.
+              sb.append("#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=" + (3 * fmp4PartDur) + ".0,CAN-SKIP-UNTIL=" + skipUntilSec + ".0\r\n");
+              sb.append("#EXT-X-PART-INF:PART-TARGET=" + fmp4PartDur + ".0\r\n");
+            }
+            sb.append("#EXT-X-TARGETDURATION:" + fmp4PartDur + "\r\n");
+            sb.append("#EXT-X-MAP:URI=\"" + base + "_init.mp4\"\r\n");
+            if (skippedSegments > 0)
+              sb.append("#EXT-X-SKIP:SKIPPED-SEGMENTS=" + skippedSegments + "\r\n");
+            if (Sage.DBG) System.out.println("CMAF Request for fMP4 playlist at " + bwkbps + "kbps for mf=" + mfId + " seg=" + segmentNum + " clientMac=" + clientMac + " totalParts=" + numParts + " windowStart=" + windowStart + " firstListed=" + firstListedPart + (wantSkip ? " (delta skip=" + skippedSegments + ")" : ""));
+            appendFmp4Parts(sb, base, mf.getDuration(segmentNum), firstListedPart);
 
             // EPG-boundary seam (Path B, capability-gated). Legacy clients never
             // send x-cmaf-seam, so `ended` stays true here and they get exactly
@@ -403,6 +516,11 @@ public class HTTPLSServer implements Runnable
               else
                 fmp4SeamGrace.remove(sessionID); // live successor found; reset grace
             }
+            // LL-HLS: at the live edge, hint the next not-yet-complete part so a
+            // low-latency client issues a blocking GET for it ahead of time (the
+            // server produces it on demand). Live only (never past #EXT-X-ENDLIST).
+            if (llhlsEnabled && !ended)
+              sb.append("#EXT-X-PRELOAD-HINT:TYPE=PART,URI=\"" + base + "_" + numParts + ".m4s\"\r\n");
             if (ended)
             {
               sb.append("#EXT-X-ENDLIST\r\n");
@@ -3274,11 +3392,11 @@ public class HTTPLSServer implements Runnable
           fmp4Dir.delete();
           fmp4Dir.mkdirs();
           fmp4Dir.deleteOnExit();
-          xcode.transcoder.enableFmp4SegmentedOutput(partDur * 1000, fmp4Dir);
+          xcode.transcoder.enableFmp4SegmentedOutput(fmp4PartDur * 1000, fmp4Dir);
           xcode.transcoder.setActiveFile(mf.isRecording(segmentNum));
           xcode.transcoder.setSourceFile(null, mf.getFile(segmentNum));
           xcode.transcoder.setTranscodeFormat("dynamicfmp4", mf.getFileFormat());
-          xcode.transcoder.seekToTime(streamPart * partDur * 1000);
+          xcode.transcoder.seekToTime(streamPart * fmp4PartDur * 1000);
           cachedXCodeMap.put(sessionID, xcode);
           return true;
         }
@@ -3606,6 +3724,10 @@ public class HTTPLSServer implements Runnable
   private long timeout;
   private int[] bandwidths;
   private int partDur;
+  // LL-HLS opt-in state (see constructor). fmp4PartDur is the effective CMAF
+  // segment/part duration in seconds; equals partDur when llhlsEnabled is false.
+  private boolean llhlsEnabled;
+  private int fmp4PartDur;
   private XCodeInfo xcode;
 
   private static java.util.HashMap cachedXCodeMap = new java.util.HashMap();
@@ -3641,14 +3763,37 @@ public class HTTPLSServer implements Runnable
   // the requested file and every EPG-boundary seam successor chained after it.
   private void appendFmp4Parts(StringBuffer sb, String base, long durationMs)
   {
-    long remTime = durationMs / 1000;
+    appendFmp4Parts(sb, base, durationMs, 0);
+  }
+
+  private void appendFmp4Parts(StringBuffer sb, String base, long durationMs, int startIndex)
+  {
+    long totalSecs = durationMs / 1000;
+    int total = (int)Math.ceil((double)totalSecs / fmp4PartDur);
+    // EXT-X-PART is only useful near the live edge (the PART-HOLD-BACK region),
+    // so expose it for the last few parts and list the rest as plain #EXTINF
+    // segments. This keeps the advertised playlist compact even for a long tune.
+    // PART-HOLD-BACK is 3x PART-TARGET (3 parts); a small cushion beyond that
+    // keeps blocking reloads smooth.
+    int edgeParts = 5;
+    long remTime = totalSecs;
     int i = 0;
     while (remTime > 0)
     {
-      long currDur = Math.min(remTime, partDur);
-      remTime -= partDur;
-      sb.append("#EXTINF:" + currDur + ".0,\r\n");
-      sb.append(base + "_" + i++ + ".m4s\r\n");
+      long currDur = Math.min(remTime, fmp4PartDur);
+      remTime -= fmp4PartDur;
+      // LL-HLS: advertise a .m4s near the edge as a single-part segment. The PART
+      // URI is the segment URI itself (segment==part), so no separate part files
+      // or concat endpoint are needed. Emitted only when llhlsEnabled; otherwise
+      // this loop is byte-identical to the pre-LL-HLS output.
+      if (i >= startIndex)
+      {
+        if (llhlsEnabled && i >= total - edgeParts)
+          sb.append("#EXT-X-PART:DURATION=" + currDur + ".0,URI=\"" + base + "_" + i + ".m4s\"\r\n");
+        sb.append("#EXTINF:" + currDur + ".0,\r\n");
+        sb.append(base + "_" + i + ".m4s\r\n");
+      }
+      i++;
     }
   }
 

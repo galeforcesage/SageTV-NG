@@ -957,7 +957,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
                 if (Sage.getBoolean("videoframe/pull_seam_defer_reload", false)
                     && Sage.getBoolean("httpls/fmp4_seam_default", false)
                     && (player instanceof MiniPlayer)
-                    && ((MiniPlayer) player).isServerPullDelivery()
+                    && ((MiniPlayer) player).isCmafPullDelivery()
                     && getContiguousLiveSuccessor(currFile) != null)
                 {
                   if (Sage.DBG) System.out.println("VideoFrame: pull-CMAF live seam is bridged in the client "

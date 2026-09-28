@@ -4688,8 +4688,22 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // -1 and fall through to the all-audio / language-select logic below).
     if (!usedExplicitStreamMapping && currVideoBitrateKbps > 0 && currAudioBitrateKbps > 0)
     {
-      String serverAudioMap = serverSelectAudioMapToken(
-          httplsSurfaceServerAudioRelIndex >= 0, httplsSurfaceServerAudioRelIndex);
+      String serverAudioMap = null;
+      if (httplsSurfaceServerAudioRelIndex >= 0)
+      {
+        // Prefer a stable ffmpeg stream-id map (0:i:0x<id>) so a CMAF wedge
+        // relaunch at -ss (which re-probes the seeked source and can enumerate
+        // the AC-3 substreams in a different order) can't silently flip the
+        // selected track (observed live: English 5.1 -> Spanish stereo). Falls
+        // back to the positional 0:a:<rel> token when a reliable stream id
+        // can't be derived, preserving prior behavior for those sessions.
+        serverAudioMap = serverSelectAudioMapTokenById(httplsSurfaceServerAudioRelIndex);
+      }
+      if (serverAudioMap == null)
+      {
+        serverAudioMap = serverSelectAudioMapToken(
+            httplsSurfaceServerAudioRelIndex >= 0, httplsSurfaceServerAudioRelIndex);
+      }
       if (serverAudioMap != null)
       {
         xcodeParamsVec.add("-map");
@@ -5158,8 +5172,30 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // client-driven relaunch to software libx264 instead of re-failing on the GPU.
     xcodeLaunchTime = Sage.time();
     xcodeSawNvencInitFailure = false;
-    xcodeUsedNvenc = (videoCodec != null
+    // Detect NVENC from the FINAL argv, not the pre-enhancement videoCodec local.
+    // GPU enhancement (maybeApplyGpuEnhancement, above) injects scale_cuda +
+    // hevc_nvenc into the command AFTER videoCodec was settled to the base mode
+    // (e.g. "copy" for mpeg2tsremux). Keying xcodeUsedNvenc solely off videoCodec
+    // left it false for exactly the enhance sessions that DO run NVENC, so an
+    // NVENC runtime failure (e.g. "Failed locking bitstream buffer: out of memory")
+    // never armed the software-fallback cooldown and the client was left on a dead
+    // stream. Scan the emitted tokens so both the plain (h264_nvenc) and the
+    // enhance-injected (hevc_nvenc) encoders are recognized.
+    boolean usedNvenc = (videoCodec != null
         && videoCodec.toLowerCase(java.util.Locale.ROOT).indexOf("nvenc") >= 0);
+    if (!usedNvenc && xcodeParamArray != null)
+    {
+      for (int i = 0; i < xcodeParamArray.length; i++)
+      {
+        String tok = xcodeParamArray[i];
+        if (tok != null && tok.toLowerCase(java.util.Locale.ROOT).indexOf("nvenc") >= 0)
+        {
+          usedNvenc = true;
+          break;
+        }
+      }
+    }
+    xcodeUsedNvenc = usedNvenc;
     // Pipe-fed live input: now that ffmpeg is spawned (and blocking on opening
     // the FIFO for read), start the pump that opens the write end and tails the
     // recording's authoritative frontier into it. Only on the plain single-
@@ -7079,6 +7115,19 @@ public class FFMPEGTranscoder implements TranscodeEngine
     catch (Throwable t) { return false; }
   }
 
+  /**
+   * Bytes the live pump has fed to the encoder so far, or -1 when this session
+   * is not on the live-pipe path (no pump). The wedge detector uses a frozen
+   * value (while committed source is available ahead) as the "encoder stopped
+   * consuming input" signal that distinguishes a true hang (relaunch fast) from
+   * grinding through a corrupt region (stay patient).
+   */
+  private long liveFedBytes()
+  {
+    LiveFilePump lp = liveFilePump;
+    return (lp != null) ? lp.fedBytes() : -1L;
+  }
+
   // Return the finalized seg<segNum>.m4s. temp_file makes each .m4s appear
   // atomically (rename on segment close), so the file merely EXISTING means it is
   // complete and safe to serve -- this is the source of truth, checked FIRST and
@@ -7157,10 +7206,28 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // stall does. relaunchBudget bounds the retries so a corruption sitting
     // exactly on the seek target can't thrash -- once exhausted we return null
     // and today's fallback behavior is preserved as the final safety net.
-    long wedgeMs = Sage.getInt("httpls_fmp4_wedge_relaunch_ms", 12000);
+    // Two-tier wedge timeout that follows what the resilient streaming clients do
+    // (they ride through a corrupt region instead of tearing the pipeline down):
+    //   wedgeMs (patient)  -- encoder is STILL consuming input (the live pump's
+    //                         fed offset keeps advancing). It may be grinding
+    //                         through a corrupt region and recover on its own, so
+    //                         only pay for a disruptive -ss relaunch after this
+    //                         longer bound.
+    //   feedStallMs (fast) -- the encoder has STOPPED consuming input (fed offset
+    //                         frozen) while committed source is available ahead.
+    //                         That is a genuine hang the -ss relaunch past the bad
+    //                         region is the only cure for, so fire quickly instead
+    //                         of stalling the client for the full 12s.
+    // Both are live-tunable; feedStallMs defaults below wedgeMs so a true hang
+    // recovers in a few seconds. The feed signal only exists on the live-pipe
+    // path; elsewhere liveFedBytes() is -1 and only the patient bound applies.
+    long wedgeMs = Sage.getInt("httpls_fmp4_wedge_relaunch_ms", 6000);
+    long feedStallMs = Sage.getLong("httpls_fmp4_wedge_feed_stall_ms", 4000);
     long maxLiveEdgeWaitMs = Sage.getLong("httpls/fmp4_wedge_live_edge_wait_ms", 45000);
     int lastFrontier = highestProducedFmp4Segment();
     long lastProgressTime = Sage.time();
+    long lastFedBytes = liveFedBytes();
+    long lastFedProgressTime = Sage.time();
     long liveEdgeWaitStart = 0; // when the current run of live-edge starvation began (0 = not starved)
     while (Sage.time() < deadline)
     {
@@ -7173,6 +7240,14 @@ public class FFMPEGTranscoder implements TranscodeEngine
         try { Thread.sleep(100); } catch (InterruptedException e){}
         break;
       }
+      // Track how far the live pump has fed the encoder; a frozen fed offset
+      // (while source is available) is the "encoder stopped consuming" signal.
+      long fedNow = liveFedBytes();
+      if (fedNow > lastFedBytes)
+      {
+        lastFedBytes = fedNow;
+        lastFedProgressTime = Sage.time();
+      }
       int frontier = highestProducedFmp4Segment();
       if (frontier > lastFrontier)
       {
@@ -7180,9 +7255,18 @@ public class FFMPEGTranscoder implements TranscodeEngine
         lastProgressTime = Sage.time();
         liveEdgeWaitStart = 0;
       }
-      else if (relaunchBudget > 0 && (Sage.time() - lastProgressTime) >= wedgeMs)
+      else if (relaunchBudget > 0 && (Sage.time() - lastProgressTime) >= feedStallMs)
       {
-        if (isLiveEdgeStarved())
+        // Encoder stopped consuming input entirely -> true hang, relaunch fast.
+        // Still consuming (or non-live path) -> stay patient up to wedgeMs.
+        boolean feedFrozen = (lastFedBytes >= 0) && (Sage.time() - lastFedProgressTime) >= feedStallMs;
+        long frontierStallMs = Sage.time() - lastProgressTime;
+        if (!feedFrozen && frontierStallMs < wedgeMs)
+        {
+          // Still pulling input and under the patient bound -- keep waiting; it
+          // may be working through a corrupt region and recover without a tear-down.
+        }
+        else if (isLiveEdgeStarved())
         {
           // Not wedged: the encoder has consumed all COMMITTED source and is
           // idling at the live edge. Relaunching cannot conjure data the capture
@@ -7853,6 +7937,78 @@ public class FFMPEGTranscoder implements TranscodeEngine
   {
     if (!serverAudioSelect || audioRelativeIndex < 0) return null;
     return "0:a:" + audioRelativeIndex;
+  }
+
+  /**
+   * Item 2 (stream-id stable): resolve a stable ffmpeg stream-id {@code -map}
+   * token ("0:i:0x&lt;id&gt;") for the server-preselected audio track, immune
+   * to ffmpeg's seek-dependent audio discovery order. A CMAF wedge relaunch
+   * restarts ffmpeg at "-ss &lt;n&gt;", which re-probes the seeked MPEG program
+   * stream and can enumerate the AC-3 substreams in a different order than the
+   * initial run; a positional "0:a:&lt;rel&gt;" map silently follows that
+   * reorder and can flip the selected track (observed live: English 5.1 -&gt;
+   * Spanish stereo). Mapping by ffmpeg's stream id (the value shown in
+   * {@code Stream #0:N[0x80]}) pins the exact substream regardless of probe
+   * order.
+   *
+   * <p>Returns {@code null} when a reliable stream id can't be derived (the
+   * chosen stream isn't an MPEG-PS private substream, the id doesn't parse, or
+   * the derived id isn't unique among the source's audio streams), so the
+   * caller falls back to the positional token and behavior is unchanged for
+   * those sessions.
+   *
+   * @param audioRelativeIndex 0-based index into the source's UNSORTED audio
+   *   streams -- the same basis {@code MiniPlayer.audioRelativeIndexOf} uses
+   *   ({@code getAudioFormats(false)}) when it computes this index.
+   * @return the ffmpeg map token, or null to fall back to the positional map
+   */
+  private String serverSelectAudioMapTokenById(int audioRelativeIndex)
+  {
+    if (audioRelativeIndex < 0 || sourceFormat == null) return null;
+    sage.media.format.AudioFormat[] afs = sourceFormat.getAudioFormats(false);
+    if (afs == null || audioRelativeIndex >= afs.length) return null;
+    int chosenId = ffmpegStreamIdOf(afs[audioRelativeIndex]);
+    if (chosenId < 0) return null;
+    // Require the derived stream id to be unique across the source's audio
+    // streams, otherwise "0:i:0x<id>" would be ambiguous -- fall back.
+    int matches = 0;
+    for (int i = 0; i < afs.length; i++)
+      if (ffmpegStreamIdOf(afs[i]) == chosenId) matches++;
+    if (matches != 1) return null;
+    String token = "0:i:0x" + Integer.toHexString(chosenId);
+    if (sage.Sage.DBG)
+      System.out.println("FFMPEGTranscoder: Item 2 server audio preselect stable stream-id map "
+          + token + " (relIndex=" + audioRelativeIndex + " id=" + afs[audioRelativeIndex].getId()
+          + ")");
+    return token;
+  }
+
+  /**
+   * Derive the ffmpeg stream id (the value ffmpeg prints in
+   * {@code Stream #0:N[0xNN]}) from a SageTV-parsed audio format id, for the
+   * MPEG program-stream live-TV case. AC-3/DTS/LPCM audio rides PES
+   * private_stream_1 (0xBD); SageTV stores the id as {@code "bd-<hh>........"}
+   * where {@code <hh>} is exactly the substream id ffmpeg exposes as the stream
+   * id (0x80, 0x81, ...). Only that private-stream form is trusted; everything
+   * else (TS PIDs, MP4 track ids, plain AAC-in-PS, ...) returns -1 so callers
+   * keep the positional map.
+   */
+  static int ffmpegStreamIdOf(sage.media.format.AudioFormat af)
+  {
+    if (af == null) return -1;
+    String id = af.getId();
+    if (id == null) return -1;
+    id = id.trim().toLowerCase();
+    if (id.startsWith("bd-") && id.length() >= 5)
+    {
+      try
+      {
+        int sub = Integer.parseInt(id.substring(3, 5), 16);
+        if (sub >= 0x80 && sub <= 0xff) return sub;
+      }
+      catch (NumberFormatException nfe) { /* not a mappable id */ }
+    }
+    return -1;
   }
 
   /** HLS / MPEG-TS segments may only carry AAC, AC-3 or E-AC-3 audio. */
