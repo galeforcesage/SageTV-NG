@@ -91,6 +91,48 @@ sha256sum /opt/sagetv/jars/java21/Sage.jar
 The two SHA-256 values must match. This check avoids confusing the inactive
 host `/opt/sagetv/server/Sage.jar` with the container's active materialized jar.
 
+### GPU broker / warm-resident VSR rollout order
+
+For the coordinated GPU broker, core, and VSR plugin release, use this order:
+
+1. Deploy broker commit `e58` first, with the warm-resident policy still
+   disabled.
+2. Disable the legacy adapter so there is only one authority and lease owner:
+   edit only `/opt/sagetv/state/mine/Sage.properties` and remove the exact
+   comma-list member `deploy.gpu.broker.GpuBrokerBootstrap` from
+   `load_at_startup_runnable_classes`, preserving every other member and its
+   order. Do not edit `/opt/sagetv/server/Sage.properties`. Move (do not delete)
+   `/opt/sagetv/jars/java21/gpu-broker-adapter.jar` outside the `JARs/*`
+   classpath, for example to
+   `/opt/sagetv/state/mine/disabled-jars/gpu-broker-adapter.jar.pre-warm-resident`,
+   preserving its metadata and hash.
+   The final worker has no broker client/imports, broker URL/token command-line
+   options, or disable key; broker ownership is structural in the plugin Java.
+   Confirm `vsr/worker_extra_args` contains no legacy broker flags. The plugin
+   reads `SAGETV_VSR_BROKER_*`; the worker does not.
+3. Stage core commit `53fd4e20` and the matching final VSR plugin together.
+   Install the complete matching `Sage.jar` + `JARs/` overlay under the
+   authoritative host path `/opt/sagetv/jars/java21/`.
+4. Restart Sage exactly once so the state-managed entrypoint materializes the
+   staged payload.
+5. Verify the running command, ports, logs, and the materialized core hash:
+
+   ```sh
+   pid="$(pgrep -f 'sage\.Sage')"
+   tr '\0' ' ' < "/proc/$pid/cmdline"  # must show -cp Sage.jar:JARs/*
+   sha256sum /opt/sagetv/jars/java21/Sage.jar
+   sha256sum "/proc/$pid/root/opt/sagetv/server/Sage.jar"
+   ```
+
+   The host and `/proc/$pid/root` hashes must be identical before proceeding.
+6. Only after verification, enable the broker's 3072 MiB warm-resident policy.
+
+For rollback, first disable and unload the warm-resident policy so no lease or
+resident worker depends on the new clients. Then restore the previous plugin
+and the backed-up `/opt/sagetv/jars/java21/{Sage.jar,JARs/}` pair, restart Sage
+once, and repeat the `/proc/$pid/root` hash and health checks. Never restore the
+JARs while the new policy remains active.
+
 ## Restart mechanism (do NOT use `startsage`)
 
 The state-managed `entrypoint-state.sh` runs java as its child (PPID = the
