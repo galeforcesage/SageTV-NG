@@ -18,6 +18,70 @@ public class FFMPEGTranscoderTest
 {
 
   @Test
+  public void enhancementTelemetrySeparatesGrantAvailabilityAndActivePath()
+  {
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.enhanceBrokerGrantedVsr = true;
+    t.enhanceLanczosFallbackAvailable = true;
+    assertTrue(t.isEnhanceBrokerGrantedVsr());
+    assertTrue(t.isEnhanceLanczosFallbackAvailable());
+    assertFalse(t.isEnhanceLanczosFallbackActive());
+    assertEquals(t.getEnhancementActualPath(), "unenhanced");
+
+    t.enhanceVsrWorkerActive = true;
+    assertEquals(t.getEnhancementActualPath(), "vsr");
+    t.enhanceVsrWorkerActive = false;
+    t.enhanceLanczosFallbackActive = true;
+    assertEquals(t.getEnhancementActualPath(), "cuda-lanczos");
+  }
+
+  @Test
+  public void workerStartupFailureReleasesSpecializedLeaseAndKeepsLanczosAvailable()
+      throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    sage.enhance.spi.ScaleGovernor scaleGov =
+        sage.enhance.spi.ScaleGovernor.getInstance();
+    scaleGov.resetForTest();
+    sage.enhance.spi.ScaleRequest req = new sage.enhance.spi.ScaleRequest(
+        sage.enhance.EnhancementTier.ENHANCE_2160P, 3840, 2160,
+        1920, 1080, false, "scale_npp",
+        sage.enhance.spi.ScaleRequest.Purpose.LIVE);
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.enhanceScaleLease = scaleGov.acquire("nvidia-vsr", req);
+    t.enhanceLanczosFallbackAvailable = true;
+    t.enhanceLanczosFallbackStaged = true;
+    assertNotNull(t.enhanceScaleLease);
+    assertEquals(scaleGov.activeCount(), 1);
+
+    t.abandonExternalEnhance("test-startup-failure");
+
+    assertEquals(scaleGov.activeCount(), 0);
+    assertTrue(t.isEnhanceLanczosFallbackAvailable());
+    assertFalse(t.isEnhanceVsrWorkerActive());
+    scaleGov.resetForTest();
+  }
+
+  @Test
+  public void reclaimedLeaseKeepsStagedLanczosFallback()
+  {
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.enhanceSessionId = "reclaimed-session";
+    t.enhanceBrokerGrantedVsr = true;
+    t.enhanceLanczosFallbackAvailable = true;
+    t.enhanceLanczosFallbackStaged = true;
+
+    t.abandonExternalEnhance("broker-reclaimed");
+
+    assertEquals(t.enhanceSessionId, "reclaimed-session",
+        "the deterministic fallback keeps the ordinary GPU reservation");
+    assertFalse(t.isEnhanceVsrWorkerActive());
+    assertTrue(t.isEnhanceLanczosFallbackAvailable());
+    assertEquals(t.getEnhancementActualPath(), "unenhanced",
+        "availability is not reported as activation before fallback launch");
+  }
+
+  @Test
   public void testParseFrameSize() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();

@@ -116,6 +116,35 @@ public class GpuGovernorExternalAuthorityTest
     assertFalse(defer.isGranted());
   }
 
+  @Test
+  public void testAdmissionPolicyRequiresExplicitExternalGrant()
+  {
+    GpuGovernor.Admission grant = new GpuGovernor.Admission(
+        "grant", EnhancementTier.ENHANCE_2160P, 0, "test", true, true, false);
+    assertTrue(grant.isExternalAuthorityPresent());
+    assertTrue(grant.isExternalGrant());
+    assertFalse(grant.isExternalDeny());
+    assertTrue(grant.permitsSpecializedScale());
+
+    GpuGovernor.Admission deny = new GpuGovernor.Admission(
+        "deny", EnhancementTier.ENHANCE_2160P, 0, "test", true, false, true);
+    assertTrue(deny.isGranted(), "denial retains a tier for deterministic fallback");
+    assertFalse(deny.isExternalGrant(), "fallback admission is not a broker grant");
+    assertTrue(deny.isExternalDeny());
+    assertFalse(deny.permitsSpecializedScale());
+
+    GpuGovernor.Admission defer = new GpuGovernor.Admission(
+        "defer", EnhancementTier.ENHANCE_2160P, 0, "test", true, false, false);
+    assertFalse(defer.isExternalGrant());
+    assertFalse(defer.permitsSpecializedScale(),
+        "fail-open local admission must not become unmanaged neural VSR");
+
+    GpuGovernor.Admission legacy = new GpuGovernor.Admission(
+        "legacy", EnhancementTier.ENHANCE_2160P, 0, "test");
+    assertFalse(legacy.isExternalAuthorityPresent());
+    assertTrue(legacy.permitsSpecializedScale(), "no-authority behavior remains unchanged");
+  }
+
   // ---- Governor forwarding ------------------------------------------------
 
   @Test
@@ -170,6 +199,20 @@ public class GpuGovernorExternalAuthorityTest
     gov.heartbeat("s-hb");
     gov.heartbeat("s-hb");
     assertEquals(auth.renews.get(), 2, "each heartbeat of a live session renews the lease");
+  }
+
+  @Test
+  public void testFallbackSessionDoesNotRenewDeniedLease()
+  {
+    RecordingAuthority auth = new RecordingAuthority();
+    gov.setExternalAuthority(auth);
+    gov.trackSession(new GpuGovernor.Session(
+        "s-fallback", EnhancementTier.ENHANCE_2160P, 0, 30000, false, false));
+
+    gov.heartbeat("s-fallback");
+
+    assertEquals(auth.renews.get(), 0,
+        "a deterministic fallback must not masquerade as a granted broker lease");
   }
 
   @Test

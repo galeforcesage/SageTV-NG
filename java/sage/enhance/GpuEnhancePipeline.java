@@ -93,6 +93,17 @@ public final class GpuEnhancePipeline
   public static EnhancementPlan buildPlan(EnhancementTier tier, boolean sourceInterlaced,
                                           int sourceWidth, int sourceHeight, long bitrateKbps)
   {
+    return buildPlan(tier, sourceInterlaced, sourceWidth, sourceHeight, bitrateKbps, true);
+  }
+
+  /**
+   * Build a plan while enforcing whether specialized providers are authorized.
+   * Passing false skips their probe, permit acquisition, plan, and worker startup.
+   */
+  public static EnhancementPlan buildPlan(EnhancementTier tier, boolean sourceInterlaced,
+                                          int sourceWidth, int sourceHeight, long bitrateKbps,
+                                          boolean allowSpecializedProviders)
+  {
     if (tier == null || !tier.isActive())
       return EnhancementPlan.NONE;
 
@@ -138,16 +149,19 @@ public final class GpuEnhancePipeline
     // but contributes no scale fragment.
     sage.enhance.spi.ScaleExecutionPlan scaleExec = null;
     sage.enhance.spi.ScaleGovernor.Lease scaleLease = null;
+    String scaleProviderId = null;
     {
       sage.enhance.spi.ScaleRequest req = new sage.enhance.spi.ScaleRequest(
           tier, tier.getTargetWidth(), tier.getTargetHeight(), sourceWidth, sourceHeight,
           sourceInterlaced, scaler, sage.enhance.spi.ScaleRequest.Purpose.LIVE);
       sage.enhance.spi.ScaleSelection sel =
-          sage.enhance.spi.ScaleProviderRegistry.getInstance().select(req);
+          sage.enhance.spi.ScaleProviderRegistry.getInstance().select(
+              req, allowSpecializedProviders);
       if (sel != null)
       {
         scaleExec = sel.getExecutionPlan();
         scaleLease = sel.getLease();
+        scaleProviderId = sel.getProviderId();
       }
     }
 
@@ -173,7 +187,7 @@ public final class GpuEnhancePipeline
 
     return new EnhancementPlan(tier, deint != null, deint, scaler,
         tier.getTargetWidth(), tier.getTargetHeight(), rate, cap, "built",
-        scaleExec, scaleLease);
+        scaleExec, scaleLease, scaleProviderId);
   }
 
   /**

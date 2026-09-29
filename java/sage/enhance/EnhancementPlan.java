@@ -56,19 +56,30 @@ public final class EnhancementPlan
    * capturing session releases it exactly once via {@link #releaseScaleLease()}.
    */
   private final ScaleGovernor.Lease scaleLease;
+  private final String scaleProviderId;
 
   public EnhancementPlan(EnhancementTier tier, boolean deinterlace, String deinterlacer,
                          String scaler, int targetWidth, int targetHeight,
                          long bitrateKbps, long bitrateCapKbps, String reason)
   {
     this(tier, deinterlace, deinterlacer, scaler, targetWidth, targetHeight,
-        bitrateKbps, bitrateCapKbps, reason, null, null);
+        bitrateKbps, bitrateCapKbps, reason, null, null, null);
   }
 
   public EnhancementPlan(EnhancementTier tier, boolean deinterlace, String deinterlacer,
                          String scaler, int targetWidth, int targetHeight,
                          long bitrateKbps, long bitrateCapKbps, String reason,
                          ScaleExecutionPlan scaleExec, ScaleGovernor.Lease scaleLease)
+  {
+    this(tier, deinterlace, deinterlacer, scaler, targetWidth, targetHeight,
+        bitrateKbps, bitrateCapKbps, reason, scaleExec, scaleLease, null);
+  }
+
+  public EnhancementPlan(EnhancementTier tier, boolean deinterlace, String deinterlacer,
+                         String scaler, int targetWidth, int targetHeight,
+                         long bitrateKbps, long bitrateCapKbps, String reason,
+                         ScaleExecutionPlan scaleExec, ScaleGovernor.Lease scaleLease,
+                         String scaleProviderId)
   {
     this.tier = (tier == null) ? EnhancementTier.NONE : tier;
     this.deinterlace = deinterlace;
@@ -81,6 +92,7 @@ public final class EnhancementPlan
     this.reason = (reason == null) ? "" : reason;
     this.scaleExec = scaleExec;
     this.scaleLease = scaleLease;
+    this.scaleProviderId = scaleProviderId;
   }
 
   public EnhancementTier getTier() { return tier; }
@@ -101,6 +113,8 @@ public final class EnhancementPlan
 
   /** The specialized permit held by this plan, or null for the built-in path. */
   public ScaleGovernor.Lease getScaleLease() { return scaleLease; }
+  /** Provider captured for this scale stage, or null for legacy direct plans. */
+  public String getScaleProviderId() { return scaleProviderId; }
 
   /** Release the specialized permit, if any, exactly once. Safe to call from
    *  multiple lifecycle unwinds and safe when there is no permit. */
@@ -125,7 +139,7 @@ public final class EnhancementPlan
   public EnhancementPlan withBitrate(long kbps)
   {
     return new EnhancementPlan(tier, deinterlace, deinterlacer, scaler, targetWidth,
-        targetHeight, kbps, bitrateCapKbps, reason, scaleExec, null);
+        targetHeight, kbps, bitrateCapKbps, reason, scaleExec, null, scaleProviderId);
   }
 
   @Override

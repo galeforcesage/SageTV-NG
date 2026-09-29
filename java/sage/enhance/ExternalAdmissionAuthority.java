@@ -39,9 +39,10 @@ package sage.enhance;
  * {@link RuntimeException} thrown from {@link #admit}, or a {@link Decision}
  * marked {@link Decision#isDeferToLocal() defer-to-local}, is treated as "no
  * answer": the governor falls back to its ordinary local concurrency-ceiling
- * decision. Only an explicit {@link Decision#deny(String) deny} suppresses
- * enhancement, and that is honoured because it represents a real cross-tenant
- * conflict (someone with higher priority holds the GPU).
+ * decision. Neither path is an external grant, so specialized/neural scaling
+ * remains forbidden while an authority is installed. An explicit
+ * {@link Decision#deny(String) deny} authoritatively suppresses specialized
+ * scaling, while still allowing the core's deterministic CUDA-Lanczos fallback.
  *
  * <h2>Lifecycle mapping</h2>
  * <ul>
@@ -104,8 +105,8 @@ public interface ExternalAdmissionAuthority
    * <ul>
    *   <li>{@link #grant(EnhancementTier)} &mdash; run at this tier (clamped down
    *       locally if it somehow exceeds the physical budget).</li>
-   *   <li>{@link #deny(String)} &mdash; a real cross-tenant refusal; enhancement
-   *       is suppressed for this session.</li>
+   *   <li>{@link #deny(String)} &mdash; a real cross-tenant refusal; specialized
+   *       scaling is suppressed, but deterministic fallback remains eligible.</li>
    *   <li>{@link #deferToLocal(String)} &mdash; "no answer"; the governor uses its
    *       ordinary local concurrency-ceiling decision (the fail-open path).</li>
    * </ul>
@@ -133,7 +134,11 @@ public interface ExternalAdmissionAuthority
       return new Decision(tier, false, false, "granted " + tier.token());
     }
 
-    /** Refuse enhancement for this session; honoured by the governor. */
+    /**
+     * Refuse specialized/neural enhancement for this session. The governor
+     * honours the refusal without treating it as a grant, while allowing its
+     * deterministic CUDA-Lanczos fallback when locally buildable.
+     */
     public static Decision deny(String reason)
     {
       return new Decision(null, true, false, reason);

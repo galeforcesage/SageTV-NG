@@ -87,13 +87,25 @@ public final class GpuGovernor
     private final String reason;
     private final int gpuIndex;
     private final String sessionId;
+    private final boolean externalAuthorityPresent;
+    private final boolean externalGrant;
+    private final boolean externalDeny;
 
     Admission(String sessionId, EnhancementTier granted, int gpuIndex, String reason)
+    {
+      this(sessionId, granted, gpuIndex, reason, false, false, false);
+    }
+
+    Admission(String sessionId, EnhancementTier granted, int gpuIndex, String reason,
+              boolean externalAuthorityPresent, boolean externalGrant, boolean externalDeny)
     {
       this.sessionId = sessionId;
       this.granted = granted;
       this.gpuIndex = gpuIndex;
       this.reason = reason;
+      this.externalAuthorityPresent = externalAuthorityPresent;
+      this.externalGrant = externalGrant;
+      this.externalDeny = externalDeny;
     }
 
     /** True when some enhancement was granted. */
@@ -103,11 +115,27 @@ public final class GpuGovernor
     /** Always populated, including on success — this is the telemetry record. */
     public String getReason() { return reason; }
     public String getSessionId() { return sessionId; }
+    /** True when an external authority participated in this admission. */
+    public boolean isExternalAuthorityPresent() { return externalAuthorityPresent; }
+    /** True only for an explicit external grant, not merely active enhancement. */
+    public boolean isExternalGrant() { return externalGrant; }
+    /** True when the authority explicitly denied specialized/neural scaling. */
+    public boolean isExternalDeny() { return externalDeny; }
+    /**
+     * Whether a specialized scale provider may be selected. With an installed
+     * authority, only its explicit grant permits neural/external scaling.
+     */
+    public boolean permitsSpecializedScale()
+    {
+      return !externalAuthorityPresent || externalGrant;
+    }
 
     @Override
     public String toString()
     {
       return "Admission[" + (isGranted() ? getTier().token() : "denied") + " gpu=" + gpuIndex
+          + " externalAuthority=" + externalAuthorityPresent
+          + " externalGrant=" + externalGrant + " externalDeny=" + externalDeny
           + " reason=" + reason + "]";
     }
   }
@@ -122,14 +150,22 @@ public final class GpuGovernor
     volatile long estBitrateKbps;
     volatile long lastHeartbeat;
     volatile boolean offline;
+    final boolean externalLeaseGranted;
 
     Session(String id, EnhancementTier tier, int gpuIndex, long estBitrateKbps, boolean offline)
+    {
+      this(id, tier, gpuIndex, estBitrateKbps, offline, true);
+    }
+
+    Session(String id, EnhancementTier tier, int gpuIndex, long estBitrateKbps,
+            boolean offline, boolean externalLeaseGranted)
     {
       this.id = id;
       this.tier = tier;
       this.gpuIndex = gpuIndex;
       this.estBitrateKbps = estBitrateKbps;
       this.offline = offline;
+      this.externalLeaseGranted = externalLeaseGranted;
       this.startedAt = Sage.time();
       this.lastHeartbeat = this.startedAt;
     }
@@ -244,7 +280,7 @@ public final class GpuGovernor
       if (!walk.tier.isActive())
         return deny(sessionId, "no tier fits (" + join(whyNot) + ")");
       return registerGrant(sessionId, walk.tier, desired, gpuIndex, estBitrateKbps,
-          offline, snap, load, whyNot, null);
+          offline, snap, load, whyNot, null, false, false, false);
     }
 
     // Authority present. The local physical budgets (disk, VRAM, engine pressure)
@@ -279,12 +315,27 @@ public final class GpuGovernor
         return deny(sessionId, "authority deferred (" + decision.getReason()
             + "); local ceiling denies (" + join(capped.whyNot) + ")");
       return registerGrant(sessionId, capped.tier, desired, gpuIndex, estBitrateKbps,
-          offline, snap, load, whyNot, "authority deferred: " + decision.getReason());
+          offline, snap, load, whyNot, "authority deferred: " + decision.getReason(),
+          true, false, false);
     }
 
     if (decision.isDeny())
-      return deny(sessionId, "external authority (" + safeName(auth) + ") denied: "
-          + decision.getReason());
+    {
+      // An authoritative refusal forbids the scarce specialized/neural path, but
+      // does not erase deterministic fallback. Re-apply the ordinary local
+      // concurrency ceiling because the authority granted no externally managed
+      // capacity; then constrain provider selection to CUDA-Lanczos. If either
+      // local admission or plan construction fails, playback remains unenhanced.
+      Ladder capped = walkLadder(startTier, snap, load, estBitrateKbps, offline, true);
+      if (!capped.tier.isActive())
+        return deny(sessionId, "external authority (" + safeName(auth)
+            + ") denied specialized scaling (" + decision.getReason()
+            + "); local fallback ceiling denies (" + join(capped.whyNot) + ")");
+      return registerGrant(sessionId, capped.tier, desired, gpuIndex, estBitrateKbps,
+          offline, snap, load, capped.whyNot, "external authority (" + safeName(auth)
+          + ") denied specialized scaling: " + decision.getReason(),
+          true, false, true);
+    }
 
     // Granted. Never let the arbiter push us above the physical budget: clamp the
     // granted tier down until it fits the local no-concurrency budgets.
@@ -295,7 +346,8 @@ public final class GpuGovernor
       return deny(sessionId, "authority grant " + decision.getTier().token()
           + " exceeds local budgets");
     return registerGrant(sessionId, granted, desired, gpuIndex, estBitrateKbps,
-        offline, snap, load, whyNot, "authority: " + safeName(auth));
+        offline, snap, load, whyNot, "authority: " + safeName(auth),
+        true, true, false);
   }
 
   /** Result of a ladder walk: the best admissible tier and why higher tiers failed. */
@@ -331,10 +383,12 @@ public final class GpuGovernor
   private Admission registerGrant(String sessionId, EnhancementTier tier, EnhancementTier desired,
                                   int gpuIndex, long estBitrateKbps, boolean offline,
                                   GpuSnapshot snap, RecordingGuard.CaptureLoad load,
-                                  List<String> whyNot, String extraNote)
+                                  List<String> whyNot, String extraNote,
+                                  boolean externalAuthorityPresent,
+                                  boolean externalGrant, boolean externalDeny)
   {
     Session s = new Session(sessionId, tier, gpuIndex,
-        effectiveBitrateKbps(tier, estBitrateKbps), offline);
+        effectiveBitrateKbps(tier, estBitrateKbps), offline, externalGrant);
     trackSession(s);
     grants.incrementAndGet();
     String reason = (tier == desired)
@@ -344,7 +398,8 @@ public final class GpuGovernor
     if (extraNote != null && extraNote.length() > 0) reason += " [" + extraNote + "]";
     if (Sage.DBG) System.out.println("GpuGovernor: " + sessionId + " " + reason
         + " [" + snap + ", " + load + "]");
-    return new Admission(sessionId, tier, gpuIndex, reason);
+    return new Admission(sessionId, tier, gpuIndex, reason,
+        externalAuthorityPresent, externalGrant, externalDeny);
   }
 
   /**
@@ -456,7 +511,10 @@ public final class GpuGovernor
       ExternalAdmissionAuthority auth = externalAuthority;
       // Forwarded as a keep-alive. Called very frequently (per ffmpeg progress
       // line), so the authority is contractually required to throttle internally.
-      if (auth != null) { try { auth.renew(sessionId); } catch (Throwable ignore) {} }
+      if (auth != null && s.externalLeaseGranted)
+      {
+        try { auth.renew(sessionId); } catch (Throwable ignore) {}
+      }
     }
   }
 

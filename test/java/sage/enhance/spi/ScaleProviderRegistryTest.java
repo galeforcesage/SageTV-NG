@@ -7,6 +7,7 @@ import org.testng.annotations.Test;
 import sage.Sage;
 import sage.TestUtils;
 import sage.enhance.EnhancementTier;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.testng.Assert.*;
 
@@ -171,6 +172,54 @@ public class ScaleProviderRegistryTest
     assertNotNull(sel.getLease(), "a specialized provider holds a permit");
     assertEquals(ScaleGovernor.getInstance().activeCount(), 1);
     sel.getLease().close();
+    assertEquals(ScaleGovernor.getInstance().activeCount(), 0);
+    r.close();
+  }
+
+  @Test
+  public void explicitExternalGrantAllowsSpecializedProvider()
+  {
+    ScaleProviderRegistration r = reg.register(new FakeSpecialized("nvidia-vsr"));
+    ScaleSelection sel = reg.select(live(), true);
+    assertEquals(sel.getProviderId(), "nvidia-vsr");
+    assertNotNull(sel.getLease());
+    sel.getLease().close();
+    r.close();
+  }
+
+  @Test
+  public void externalDenySkipsSpecializedProviderAndUsesLanczos()
+  {
+    final AtomicInteger probes = new AtomicInteger();
+    ScaleProvider vsr = new ScaleProvider() {
+      public String id() { return "nvidia-vsr"; }
+      public ScaleProviderCapabilities capabilities()
+      { return new ScaleProviderCapabilities(id(), true, true, 1); }
+      public ScaleProviderAvailability probe(ScaleRequest request)
+      { probes.incrementAndGet(); return ScaleProviderAvailability.available(); }
+      public ScaleExecutionPlan plan(ScaleRequest request)
+      { return new ScaleExecutionPlan(ExecutionForm.FFMPEG_FILTER, "vsr=1", "VSR"); }
+    };
+    ScaleProviderRegistration r = reg.register(vsr);
+
+    ScaleSelection sel = reg.select(live(), false);
+
+    assertEquals(sel.getProviderId(), CudaLanczosScaleProvider.ID);
+    assertEquals(probes.get(), 0, "denial must skip even the neural provider probe");
+    assertNull(sel.getLease());
+    r.close();
+  }
+
+  @Test
+  public void externalDenyWithNoLanczosDeliversSource()
+  {
+    Sage.put(PROP_CUDA_LANCZOS, "off");
+    ScaleProviderRegistration r = reg.register(new FakeSpecialized("nvidia-vsr"));
+
+    ScaleSelection sel = reg.select(live(), false);
+
+    assertEquals(sel.getProviderId(), BuiltinScaleProvider.ID);
+    assertFalse(sel.getExecutionPlan().isRenderable());
     assertEquals(ScaleGovernor.getInstance().activeCount(), 0);
     r.close();
   }

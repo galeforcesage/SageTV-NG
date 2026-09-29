@@ -68,6 +68,20 @@ public class FFMPEGTranscoder implements TranscodeEngine
     ensureReapHookInstalled();
   }
 
+  public boolean isEnhanceBrokerGrantedVsr() { return enhanceBrokerGrantedVsr; }
+  public boolean isEnhanceVsrWorkerActive() { return enhanceVsrWorkerActive; }
+  public boolean isEnhanceLanczosFallbackAvailable()
+  { return enhanceLanczosFallbackAvailable; }
+  public boolean isEnhanceLanczosFallbackActive() { return enhanceLanczosFallbackActive; }
+
+  /** Stable actual-path telemetry independent of grant and fallback availability. */
+  public String getEnhancementActualPath()
+  {
+    if (enhanceVsrWorkerActive) return "vsr";
+    if (enhanceLanczosFallbackActive) return "cuda-lanczos";
+    return "unenhanced";
+  }
+
   /** Stop tracking a child that has been (or is being) cleanly torn down. */
   static void unregisterLiveChild(Process p)
   {
@@ -2528,6 +2542,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
   {
     try
     {
+      enhanceBrokerGrantedVsr = false;
+      enhanceVsrWorkerActive = false;
+      enhanceLanczosFallbackAvailable = false;
+      enhanceLanczosFallbackActive = false;
+      enhanceLanczosFallbackStaged = false;
       if (enhanceRequest == null || !enhanceRequest.isActive()) return;
       if (!sage.enhance.EnhancementDryRun.isLive()) return;
       // Enhancement applies to the confirmed modern copy-family playback modes
@@ -2710,9 +2729,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
         return;
       }
 
+      enhanceBrokerGrantedVsr = adm.isExternalGrant();
       sage.enhance.EnhancementTier granted = adm.getTier();
       sage.enhance.EnhancementPlan plan = sage.enhance.GpuEnhancePipeline.buildPlan(
-          granted, interlaced, srcW, srcH, estKbps);
+          granted, interlaced, srcW, srcH, estKbps, adm.permitsSpecializedScale());
       if (plan == null || !plan.isActive())
       {
         gov.release(sessionId);
@@ -2723,6 +2743,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
             + granted.token() + " (" + (plan == null ? "null" : plan.getReason()) + ")");
         return;
       }
+      boolean selectedLanczos =
+          sage.enhance.spi.CudaLanczosScaleProvider.ID.equals(plan.getScaleProviderId());
+      enhanceLanczosFallbackAvailable = selectedLanczos;
 
       // External-process (upscale worker) plan: build the decode/encode stages
       // that bracket the worker from the copy-family base command BEFORE the
@@ -2740,7 +2763,26 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // it down explicitly below.
       Process planWarmProcess =
           (plan.getScaleExec() != null) ? plan.getScaleExec().getWarmProcess() : null;
-      if (plan.getScaleExec() != null && plan.getScaleExec().rendersExternalProcess()
+      sage.enhance.EnhancementPlan commandPlan = plan;
+      boolean externalScale = plan.getScaleExec() != null
+          && plan.getScaleExec().rendersExternalProcess();
+      if (externalScale)
+      {
+        sage.enhance.EnhancementPlan fallback =
+            sage.enhance.GpuEnhancePipeline.buildPlan(
+                granted, interlaced, srcW, srcH, estKbps, false);
+        if (fallback != null && fallback.isActive()
+            && sage.enhance.spi.CudaLanczosScaleProvider.ID.equals(
+                fallback.getScaleProviderId()))
+        {
+          commandPlan = fallback;
+          enhanceLanczosFallbackAvailable = true;
+          if (Sage.DBG) System.out.println("ENHANCE_LADDER staged=VSR->LANCZOS"
+              + " brokerGrantedVsr=" + enhanceBrokerGrantedVsr
+              + " lanczosFallback=true");
+        }
+      }
+      if (externalScale
           && (copyFamily || reencodeEnhanceable))
       {
         java.util.List<String> baseArgv =
@@ -2871,9 +2913,13 @@ public class FFMPEGTranscoder implements TranscodeEngine
         destroyQuietly(planWarmProcess);
       }
 
+      boolean commandIsLanczos =
+          sage.enhance.spi.CudaLanczosScaleProvider.ID.equals(
+              commandPlan.getScaleProviderId());
       boolean rewritten = copyFamily
-          ? sage.enhance.GpuEnhancePipeline.rewriteArgv(xcodeParamsVec, plan, srcFps)
-          : sage.enhance.GpuEnhancePipeline.rewriteReencodeArgv(xcodeParamsVec, plan, srcFps);
+          ? sage.enhance.GpuEnhancePipeline.rewriteArgv(xcodeParamsVec, commandPlan, srcFps)
+          : sage.enhance.GpuEnhancePipeline.rewriteReencodeArgv(xcodeParamsVec, commandPlan, srcFps);
+      enhanceLanczosFallbackStaged = rewritten && commandIsLanczos;
       if (!rewritten)
       {
         // For an EXTERNAL_PROCESS plan the upscale is delivered by the staged
@@ -2919,6 +2965,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
         policyCeilingKbps = (int) Math.min(Integer.MAX_VALUE, estKbps * 3L / 2L);
       if (Sage.DBG) System.out.println("GPU_ENHANCE LIVE applied " + plan
           + " session=" + sessionId + " mode=" + xcodeModeName
+          + " brokerGrantedVsr=" + enhanceBrokerGrantedVsr
+          + " vsrWorkerActive=false"
+          + " lanczosFallback=" + enhanceLanczosFallbackAvailable
+          + " lanczosFallbackActive=false"
           + " profile=" + (enhanceProfile == null ? "unknown" : enhanceProfile.name())
           + " motion=" + motion
           + " ringBitrateKbps=" + currVideoBitrateKbps);
@@ -2933,6 +2983,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
         enhanceSessionId = null;
       }
       releaseEnhanceScaleLease();
+      enhanceVsrWorkerActive = false;
+      enhanceLanczosFallbackActive = false;
       if (Sage.DBG) System.out.println("GPU_ENHANCE apply failed (ignored): " + t);
     }
   }
@@ -3073,6 +3125,34 @@ public class FFMPEGTranscoder implements TranscodeEngine
     {
       enhanceScaleLease = null;
       try { lease.close(); } catch (Throwable ignore) {}
+    }
+  }
+
+  /**
+   * Unwind a failed/reclaimed external worker while preserving a buildable
+   * deterministic fallback reservation. Package-private for focused lifecycle
+   * tests.
+   */
+  void abandonExternalEnhance(String reason)
+  {
+    teardownExternalEnhance();
+    releaseEnhanceScaleLease();
+    enhanceVsrWorkerActive = false;
+    if (enhanceLanczosFallbackStaged)
+    {
+      if (Sage.DBG) System.out.println("ENHANCE_LADDER rung=VSR->LANCZOS"
+          + " reason=" + reason + " brokerGrantedVsr="
+          + enhanceBrokerGrantedVsr + " lanczosFallback=true");
+      return;
+    }
+    if (enhanceSessionId != null)
+    {
+      try { sage.enhance.GpuGovernor.getInstance().release(enhanceSessionId); }
+      catch (Throwable ignore) {}
+      if (Sage.DBG) System.out.println("GPU_ENHANCE external pipeline abandoned; "
+          + "released governor permit for " + enhanceSessionId
+          + " (no deterministic fallback; falling back to plain transcode)");
+      enhanceSessionId = null;
     }
   }
 
@@ -5125,7 +5205,20 @@ public class FFMPEGTranscoder implements TranscodeEngine
     Process externalEncode = null;
     if (pendingExternalPipeline != null)
     {
-      try { externalEncode = launchExternalEnhancePipeline(pendingExternalPipeline, pendingExternalWorkerArgv, pendingExternalWarmProcess); }
+      try
+      {
+        if (enhanceSessionId != null
+            && sage.enhance.GpuGovernor.getInstance().isReclaimed(enhanceSessionId))
+        {
+          if (Sage.DBG) System.out.println("ENHANCE_LADDER rung=VSR->LANCZOS"
+              + " reason=broker-reclaimed-before-worker-start");
+        }
+        else
+        {
+          externalEncode = launchExternalEnhancePipeline(
+              pendingExternalPipeline, pendingExternalWorkerArgv, pendingExternalWarmProcess);
+        }
+      }
       catch (Throwable t)
       {
         if (Sage.DBG) System.out.println("GPU_ENHANCE external pipeline launch failed, "
@@ -5136,35 +5229,30 @@ public class FFMPEGTranscoder implements TranscodeEngine
       pendingExternalWarmProcess = null;
       if (externalEncode == null)
       {
-        teardownExternalEnhance();
-        // The upscale worker never came up, so this session is now a plain
-        // (un-enhanced) transcode. It must NOT keep holding the GPU enhance
-        // concurrency slot: otherwise a subsequent re-negotiation (e.g. the client
-        // moves to a higher-resolution display and re-OPENs) is wrongly denied with
-        // "concurrency ceiling 1 (active 1)" until this dead session finally ends.
-        // The fallback command needs neither the governor permit nor the scale
-        // lease, so return both now. Both releases are idempotent, so stopTranscode()
-        // unwinding later is harmless.
-        if (enhanceSessionId != null)
-        {
-          try { sage.enhance.GpuGovernor.getInstance().release(enhanceSessionId); }
-          catch (Throwable ignore) {}
-          if (Sage.DBG) System.out.println("GPU_ENHANCE external pipeline abandoned; "
-              + "released governor permit for " + enhanceSessionId
-              + " (falling back to plain transcode)");
-          enhanceSessionId = null;
-        }
-        releaseEnhanceScaleLease();
+        abandonExternalEnhance("worker-startup-failure");
       }
     }
     if (externalEncode != null)
     {
       xcodeProcess = externalEncode;
       externalEnhanceActive = true;
+      enhanceVsrWorkerActive = true;
+      enhanceLanczosFallbackActive = false;
+      if (Sage.DBG) System.out.println("ENHANCE_LADDER rung=VSR"
+          + " brokerGrantedVsr=" + enhanceBrokerGrantedVsr
+          + " vsrWorkerActive=true lanczosFallback="
+          + enhanceLanczosFallbackAvailable + " lanczosFallbackActive=false");
     }
     else
     {
       xcodeProcess = xcodePb.start();
+      enhanceVsrWorkerActive = false;
+      enhanceLanczosFallbackActive = enhanceLanczosFallbackStaged;
+      if (enhanceLanczosFallbackActive && Sage.DBG)
+        System.out.println("ENHANCE_LADDER rung=LANCZOS"
+            + " brokerGrantedVsr=" + enhanceBrokerGrantedVsr
+            + " vsrWorkerActive=false lanczosFallback=true"
+            + " lanczosFallbackActive=true");
     }
     // Runtime software-fallback bookkeeping: record when this child launched and
     // whether it selected an NVENC video encoder, so the stderr consumer can spot
@@ -5300,7 +5388,22 @@ public class FFMPEGTranscoder implements TranscodeEngine
               // Live ffmpeg progress line: the child is alive and producing, so
               // refresh the governor heartbeat that keeps this session out of the
               // idle reaper. No-op when this is not an enhanced session.
-              sage.enhance.GpuGovernor.getInstance().heartbeat(FFMPEGTranscoder.this.enhanceSessionId);
+              sage.enhance.GpuGovernor governor = sage.enhance.GpuGovernor.getInstance();
+              governor.heartbeat(FFMPEGTranscoder.this.enhanceSessionId);
+              if (FFMPEGTranscoder.this.externalEnhanceActive
+                  && governor.isReclaimed(FFMPEGTranscoder.this.enhanceSessionId))
+              {
+                String reclaimedId = FFMPEGTranscoder.this.enhanceSessionId;
+                System.out.println("ENHANCE_LADDER rung=VSR->LANCZOS"
+                    + " reason=broker-reclaimed; stopping VSR worker for safe relaunch"
+                    + " session=" + reclaimedId);
+                governor.release(reclaimedId);
+                FFMPEGTranscoder.this.enhanceSessionId = null;
+                FFMPEGTranscoder.this.releaseEnhanceScaleLease();
+                FFMPEGTranscoder.this.teardownExternalEnhance();
+                destroyQuietly(FFMPEGTranscoder.this.xcodeProcess);
+                break;
+              }
               // Parse to get the byte position for the specified time
               if (XCODE_DEBUG) System.out.println(sb.toString().trim());
               int frameIdx = sb.indexOf("frame=");
@@ -6109,6 +6212,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // Return any specialized scale permit this session held (null for the
     // built-in scaler path).
     releaseEnhanceScaleLease();
+    enhanceVsrWorkerActive = false;
+    enhanceLanczosFallbackActive = false;
+    enhanceLanczosFallbackStaged = false;
     try
     {
       if (xcodeStderrThread != null)
@@ -6480,6 +6586,16 @@ public class FFMPEGTranscoder implements TranscodeEngine
   protected sage.enhance.EnhancementTier enhanceRequest = sage.enhance.EnhancementTier.NONE;
   /** Governor session id held while an enhanced session is admitted; null when none. */
   protected String enhanceSessionId;
+  /** Explicit external grant; does not imply that a VSR worker became active. */
+  protected volatile boolean enhanceBrokerGrantedVsr;
+  /** True only while the external VSR worker pipeline is the active path. */
+  protected volatile boolean enhanceVsrWorkerActive;
+  /** True when a buildable deterministic CUDA-Lanczos plan was captured. */
+  protected volatile boolean enhanceLanczosFallbackAvailable;
+  /** True only when the running command actually uses the CUDA-Lanczos plan. */
+  protected volatile boolean enhanceLanczosFallbackActive;
+  /** True when the single-process argv was successfully rewritten to Lanczos. */
+  protected volatile boolean enhanceLanczosFallbackStaged;
   /** Specialized scale-provider permit held for this enhanced session; null for
    *  the built-in scaler path. Released exactly once alongside the governor
    *  session, so it is safe to release from multiple lifecycle unwinds. */

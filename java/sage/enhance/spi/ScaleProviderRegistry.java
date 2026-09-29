@@ -251,6 +251,16 @@ public final class ScaleProviderRegistry
    */
   public ScaleSelection select(ScaleRequest request)
   {
+    return select(request, true);
+  }
+
+  /**
+   * Select a scale backend, optionally excluding every specialized provider.
+   * This fail-closed admission bridge is used when an installed external
+   * authority did not explicitly grant neural scaling.
+   */
+  public ScaleSelection select(ScaleRequest request, boolean allowSpecialized)
+  {
     // Deinterlace-only / non-upscaling: the built-in passthrough (the core still
     // deinterlaces). Choosing it here is not a fallback.
     if (request == null || !request.isUpscaling())
@@ -262,6 +272,14 @@ public final class ScaleProviderRegistry
       ScaleGovernor.Lease lease = null;
       try
       {
+        boolean specialized = provider.capabilities() != null
+            && provider.capabilities().isSpecialized();
+        if (specialized && !allowSpecialized)
+        {
+          System.out.println("SCALE_PROVIDER select: provider '" + id
+              + "' skipped -- specialized scaling lacks an explicit external grant");
+          continue;
+        }
         ScaleProviderAvailability avail = provider.probe(request);
         if (avail == null || !avail.isAvailable())
         {
@@ -271,8 +289,6 @@ public final class ScaleProviderRegistry
           continue;
         }
 
-        boolean specialized = provider.capabilities() != null
-            && provider.capabilities().isSpecialized();
         if (specialized)
         {
           lease = ScaleGovernor.getInstance().acquire(id, request);
@@ -333,6 +349,16 @@ public final class ScaleProviderRegistry
   {
     try
     {
+      // Warmup starts specialized worker resources before normal admission. With
+      // an external authority installed there is no explicit grant yet, so doing
+      // that would be unmanaged neural work. Brokered sessions cold-start only
+      // after their grant; deterministic CUDA-Lanczos needs no warmup.
+      if (sage.enhance.GpuGovernor.getInstance().getExternalAuthority() != null)
+      {
+        if (Sage.DBG) System.out.println("SCALE_WARMUP skipped -- external admission"
+            + " authority installed and no per-session grant exists yet");
+        return;
+      }
       ScaleWarmupCache cache = ScaleWarmupCache.getInstance();
       if (!cache.isEnabled() || req == null || !req.isUpscaling()) return;
       // Only a specialized provider (expensive cold start: model load, worker
