@@ -56,6 +56,41 @@ The script: runs the `jdeps` preflight and aborts on any missing class; backs up
 stamps `DEPLOYED_COMMIT`; restarts; and fails loudly if Catbert init errors
 appear in the log.
 
+### State-managed Java 21 host layout
+
+On the state-managed production host, the authoritative host-side Java 21
+payload is:
+
+```text
+/opt/sagetv/jars/java21/Sage.jar
+/opt/sagetv/jars/java21/JARs/
+```
+
+The entrypoint materializes that payload inside the container at
+`/opt/sagetv/server/`, where the process runs with CWD `/opt/sagetv/server` and
+classpath `Sage.jar:JARs/*`. The host path `/opt/sagetv/server/Sage.jar` is a
+legacy artifact and is **not** the active source for this deployment.
+
+For this layout, stage and atomically replace the Java 21 payload under
+`/opt/sagetv/jars/java21/`, preserving the `Sage.jar` + `JARs/` backup/rollback
+pair, then restart the Sage container once so the entrypoint materializes it.
+Do not infer the active artifact from the same-looking host
+`/opt/sagetv/server/Sage.jar`.
+
+After restart, verify the running process and the materialized jar through its
+mount namespace:
+
+```sh
+pid="$(pgrep -f 'sage\.Sage')"
+tr '\0' ' ' < "/proc/$pid/cmdline"       # must show -cp Sage.jar:JARs/*
+readlink "/proc/$pid/cwd"                # /opt/sagetv/server
+sha256sum "/proc/$pid/root/opt/sagetv/server/Sage.jar"
+sha256sum /opt/sagetv/jars/java21/Sage.jar
+```
+
+The two SHA-256 values must match. This check avoids confusing the inactive
+host `/opt/sagetv/server/Sage.jar` with the container's active materialized jar.
+
 ## Restart mechanism (do NOT use `startsage`)
 
 The state-managed `entrypoint-state.sh` runs java as its child (PPID = the
