@@ -136,6 +136,17 @@ For the coordinated GPU broker, core, and VSR plugin release, use this order:
    The host and `/proc/$pid/root` hashes must be identical before proceeding.
 6. Only after verification, enable the broker's 3072 MiB warm-resident policy.
 
+Pinned staged artifacts for this rollout:
+
+| Component | Commit | SHA-256 |
+|---|---|---|
+| SageTV-NG core `Sage.jar` | `53fd4e20` | `e0bd5cc06796aadceb1c26028c1b6427b9b7cd7dbd9b182cccc9e3b7a3edcab8` |
+| VSR plugin JAR | `4263af7` (launcher mode fix `a3f7d28`) | `e5ce77c1dd56d7918ce79262f9931ef6f9f341e7e69c854cc44a896551fe49f4` |
+| Sanitized `run_worker.sh` | `a3f7d28` | `e881da9968eb6cee64af6cac5a71798133541d12bb5105b0928d5592874b474c` |
+
+Verify these hashes before replacing any active file. The launcher must retain
+its executable bit.
+
 For rollback, first disable and unload the warm-resident policy so no lease or
 resident worker depends on the new clients. Then restore the previous plugin
 and the backed-up `/opt/sagetv/jars/java21/{Sage.jar,JARs/}` pair, restart Sage
