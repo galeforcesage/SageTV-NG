@@ -200,6 +200,14 @@ public class MiniPlayerTest
   }
 
   @Test
+  public void testEnhancementTierDoesNotCreateDirectEnhanceDelivery()
+  {
+    assertEquals(MiniPlayer.buildEffDeliveryToken("pull", null,
+        sage.enhance.EnhancementTier.ENHANCE_2160P), "pull:direct",
+        "A raw direct pull has no transcoder and must not advertise enhancement");
+  }
+
+  @Test
   public void testEnhancementNeverResurrectsANullToken()
   {
     assertNull(MiniPlayer.buildEffDeliveryToken(null, null,

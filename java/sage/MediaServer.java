@@ -220,6 +220,10 @@ public class MediaServer implements Runnable
       req = true;
       mode = mode.substring(0, mode.length() - ":enhance".length()).trim();
     }
+    // Enhancement cannot remain direct; TV/AVPlay uses the MPEG-TS copy family.
+    if (req && "direct".equalsIgnoreCase(mode)
+        && sage.enhance.EnhancementTier.fromToken(tier).isActive())
+      mode = "mpeg2tsremux";
     return new XcodeEnhanceRequest(mode, req, tier);
   }
 

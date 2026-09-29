@@ -81,6 +81,70 @@ public class MediaServerXcodeEnhanceTest
   }
 
   @Test
+  public void directEnhanceRoutesToEnhanceableCopyFamily()
+  {
+    MediaServer.XcodeEnhanceRequest req = MediaServer.parseXcodeEnhanceRequest(
+        "direct:enhance;tier=2160p;bw=50000");
+
+    assertEquals(req.baseMode, "mpeg2tsremux",
+        "direct:enhance must create the TV/AVPlay copy-family transcoder");
+    assertTrue(req.enhanceRequested);
+    assertEquals(req.tierToken, "2160p");
+
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.xcodeModeName = req.baseMode;
+    assertTrue(t.isModernCopyFamilyXcodeMode(),
+        "routed mode must pass the GPU enhancement mode gate");
+  }
+
+  @Test
+  public void ordinaryAndMalformedDirectRemainUnchanged()
+  {
+    MediaServer.XcodeEnhanceRequest plain =
+        MediaServer.parseXcodeEnhanceRequest("direct");
+    assertEquals(plain.baseMode, "direct");
+    assertFalse(plain.enhanceRequested);
+
+    MediaServer.XcodeEnhanceRequest untargeted =
+        MediaServer.parseXcodeEnhanceRequest("direct:enhance");
+    assertEquals(untargeted.baseMode, "direct");
+    assertTrue(untargeted.enhanceRequested);
+    assertNull(untargeted.tierToken);
+
+    MediaServer.XcodeEnhanceRequest invalid =
+        MediaServer.parseXcodeEnhanceRequest("direct:enhance;tier=bogus;bw=50000");
+    assertEquals(invalid.baseMode, "direct");
+    assertTrue(invalid.enhanceRequested);
+    assertEquals(invalid.tierToken, "bogus");
+  }
+
+  @Test
+  public void directEnhanceDenialFallbackUsesRemuxNotLegacySdProfile()
+      throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    String key = MediaServer.XCODE_QUALITIES_PROPERTY_ROOT + "mpeg2tsremux";
+    Sage.put(key, "-f mpegts -c:v copy -c:a copy");
+    try
+    {
+      MediaServer.XcodeEnhanceRequest req = MediaServer.parseXcodeEnhanceRequest(
+          "direct:enhance;tier=2160p;bw=50000");
+      FFMPEGTranscoder t = new FFMPEGTranscoder();
+      t.setTranscodeFormat(req.baseMode, new sage.media.format.ContainerFormat());
+
+      assertTrue(t.xcodeParams.indexOf("-c:v copy") >= 0);
+      assertTrue(t.xcodeParams.indexOf("-f mpegts") >= 0);
+      assertFalse(t.xcodeParams.indexOf("352x240") >= 0,
+          "authority denial/fallback must retain the deterministic remux base,"
+          + " never Sage's unknown-mode SD profile");
+    }
+    finally
+    {
+      Sage.remove(key);
+    }
+  }
+
+  @Test
   public void enhancementCoexistsWithAudioParams()
   {
     // The real wire may carry audio hints alongside the enhancement marker.

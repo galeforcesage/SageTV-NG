@@ -161,6 +161,9 @@ public class MiniPlayer implements DVDMediaPlayer
     if (enhanceTier == null || !enhanceTier.isActive()) return base;
     String wire = enhanceTier.wireToken();
     if (wire == null) return base;
+    // A raw pull has no transcoder for enhancement; only advertise the tier
+    // after the caller has promoted it to pull-xcode or push.
+    if ("pull".equals(chosenSurfaceDelivery)) return base;
     return base + ":enhance;tier=" + wire;
   }
 
