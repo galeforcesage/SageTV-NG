@@ -106,11 +106,20 @@ For the coordinated GPU broker, core, and VSR plugin release, use this order:
    classpath, for example to
    `/opt/sagetv/state/mine/disabled-jars/gpu-broker-adapter.jar.pre-warm-resident`,
    preserving its metadata and hash.
-   The final worker has no broker client/imports, broker URL/token command-line
-   options, or disable key; broker ownership is structural in the plugin Java.
-   Confirm `vsr/worker_extra_args` contains no legacy broker flags. The plugin
-   reads `SAGETV_VSR_BROKER_*`; the worker does not.
-3. Stage core commit `53fd4e20` and the matching final VSR plugin together.
+   The final Python worker has no broker client/imports, broker URL/token
+   command-line options, or disable key; broker ownership is structural in the
+   plugin Java. However, the production wrapper
+   `/media/sagetv/nextcloud/SageTV9/vsr-runtime/run_worker.sh` previously
+   exported `GPU_ROUTER_ENABLED`, `GPU_ROUTER_URL`,
+   `GPU_ROUTER_APPLICATION_ID`, and `GPU_ROUTER_TOKEN` and read
+   `.gpu_router_token`. Install the sanitized replacement wrapper in this same
+   maintenance window; it must unset every `GPU_ROUTER_*` and
+   `SAGETV_VSR_BROKER_*` variable before executing the worker. Also confirm
+   `vsr/worker_extra_args` contains no legacy broker flags.
+3. Stage core commit `53fd4e20` and the matching final VSR plugin together. The
+   active plugin destination is
+   `/opt/sagetv/jars/java21/sagetv-ng-vsr-plugin.jar`; its configured
+   `worker_path` must remain the sanitized wrapper path above.
    Install the complete matching `Sage.jar` + `JARs/` overlay under the
    authoritative host path `/opt/sagetv/jars/java21/`.
 4. Restart Sage exactly once so the state-managed entrypoint materializes the
