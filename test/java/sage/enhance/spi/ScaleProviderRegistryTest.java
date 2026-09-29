@@ -7,6 +7,8 @@ import org.testng.annotations.Test;
 import sage.Sage;
 import sage.TestUtils;
 import sage.enhance.EnhancementTier;
+import sage.enhance.ExternalAdmissionAuthority;
+import sage.enhance.GpuGovernor;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.testng.Assert.*;
@@ -34,6 +36,8 @@ public class ScaleProviderRegistryTest
     reg = ScaleProviderRegistry.getInstance();
     reg.resetForTest();
     ScaleGovernor.getInstance().resetForTest();
+    GpuGovernor.getInstance().setExternalAuthority(null);
+    ScaleWarmupCache.getInstance().resetForTest();
   }
 
   @AfterMethod
@@ -41,6 +45,8 @@ public class ScaleProviderRegistryTest
   {
     reg.resetForTest();
     ScaleGovernor.getInstance().resetForTest();
+    GpuGovernor.getInstance().setExternalAuthority(null);
+    ScaleWarmupCache.getInstance().resetForTest();
     Sage.remove(PROP_PROVIDER);
     Sage.remove(PROP_MAX);
     Sage.remove(PROP_CUDA_LANCZOS);
@@ -52,10 +58,24 @@ public class ScaleProviderRegistryTest
         "scale_npp", ScaleRequest.Purpose.LIVE);
   }
 
+  private static ExternalAdmissionAuthority authority()
+  {
+    return new ExternalAdmissionAuthority()
+    {
+      public String name() { return "test"; }
+      public Decision admit(String id, EnhancementTier desired, int gpu, long kbps,
+                            boolean offline)
+      { return Decision.grant(desired); }
+      public void renew(String id) {}
+      public void release(String id) {}
+      public boolean isReclaimed(String id) { return false; }
+    };
+  }
+
   // ---- Fakes --------------------------------------------------------------
 
   /** A specialized provider that returns a renderable fragment. */
-  private static final class FakeSpecialized implements ScaleProvider
+  private static class FakeSpecialized implements ScaleProvider
   {
     private final String id;
     FakeSpecialized(String id) { this.id = id; }
@@ -222,6 +242,53 @@ public class ScaleProviderRegistryTest
     assertFalse(sel.getExecutionPlan().isRenderable());
     assertEquals(ScaleGovernor.getInstance().activeCount(), 0);
     r.close();
+  }
+
+  @Test
+  public void authorityBlocksWarmupUnlessProviderOwnsWarmAdmission()
+      throws Exception
+  {
+    final AtomicInteger warmups = new AtomicInteger();
+    ScaleProvider unmanaged = new FakeSpecialized("unmanaged")
+    {
+      public WarmContext warmup(ScaleRequest request, WarmupBudget budget)
+      {
+        warmups.incrementAndGet();
+        return null;
+      }
+    };
+    ScaleProviderRegistration registration = reg.register(unmanaged);
+    GpuGovernor.getInstance().setExternalAuthority(authority());
+
+    reg.warmupSelectedProvider(live());
+    Thread.sleep(50L);
+
+    assertEquals(warmups.get(), 0);
+    registration.close();
+  }
+
+  @Test
+  public void selfGovernedProviderMayWarmUnderAuthority()
+      throws Exception
+  {
+    final java.util.concurrent.CountDownLatch warmed =
+        new java.util.concurrent.CountDownLatch(1);
+    ScaleProvider managed = new FakeSpecialized("managed")
+    {
+      public boolean managesWarmupAdmission() { return true; }
+      public WarmContext warmup(ScaleRequest request, WarmupBudget budget)
+      {
+        warmed.countDown();
+        return null;
+      }
+    };
+    ScaleProviderRegistration registration = reg.register(managed);
+    GpuGovernor.getInstance().setExternalAuthority(authority());
+
+    reg.warmupSelectedProvider(live());
+
+    assertTrue(warmed.await(1, java.util.concurrent.TimeUnit.SECONDS));
+    registration.close();
   }
 
   @Test

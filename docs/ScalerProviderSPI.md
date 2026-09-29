@@ -160,9 +160,14 @@ ffmpeg (decode) --rgb24--> worker (yours) --rgb24--> ffmpeg (encode, NVENC)
   (same input flags, so any `-ss` seek stays aligned), applies NVENC HEVC, and
   writes the delivery container to stdout.
 
-**Lifecycle.** The worker prints `READY\n` to **stderr** once its model is warm;
-the core waits up to `playback/gpu_enhance/scale/external_worker_startup_timeout_seconds`
-(default 30) for it. If `READY` never arrives (or the worker exits first), the core
+**Lifecycle.** The worker prints `READY\n` to **stderr** once its model is warm.
+The core's provider-neutral warmup budget is 20 seconds end to end: up to
+8 seconds for external resource acquisition and up to 12 seconds for runtime/model
+readiness. Providers receive this split through `WarmupBudget`. A cold external
+worker must reach READY within the same 12-second readiness phase; the core caps
+`playback/gpu_enhance/scale/external_worker_ready_timeout_ms` at 12000 (the
+legacy `external_worker_startup_timeout_seconds` remains a capped fallback).
+If `READY` never arrives (or the worker exits first), the core
 abandons the external pipeline and falls back to the built-in passthrough command for
 this session — the client still gets a stream, but it **deinterlaces/re-encodes only
 and does NOT upscale** (source resolution). On clean shutdown the core closes the
@@ -174,6 +179,16 @@ back to the built-in).
 **No vendor code lives in the core.** The core only knows how to spawn the argv
 the plan hands it and pipe raw frames; the worker, its model, and any EULA'd
 runtime ship and install with your plugin.
+
+A provider may keep a stream-independent resident worker warm and return a
+short-lived, already-READY per-playback proxy in its `WarmContext` plan. The core
+never starts dummy decode/encode processes during warmup: NVDEC/NVENC remain
+stream-bound and are created only after real playback admission. If an
+`ExternalAdmissionAuthority` is installed, a specialized provider must override
+`managesWarmupAdmission()` to return true before core will call its proactive
+warmup hook. That opt-in asserts that the provider independently owns the
+authority/lease lifecycle for warm work; existing providers default to false so
+they cannot accidentally start unmanaged specialized work.
 
 ### 2.4 Capabilities & availability
 
@@ -275,9 +290,9 @@ runs out of process. The core is explicit about what it renders today:
 
 ## 5.1 Warmup (optional pre-warm to eliminate cold-start)
 
-> Status: SPI surface landed; core wiring is gated behind
-> `playback/gpu_enhance/scale/warmup_enabled` (default off) and is inert until a
-> provider overrides `warmup()`. Providers that never override it are unaffected.
+> Status: SPI surface and core wiring are active by default. The path remains
+> inert for providers that keep the default `warmup()` implementation, and can
+> be disabled with `playback/gpu_enhance/scale/warmup_enabled=false`.
 
 An `EXTERNAL_PROCESS` provider may need seconds to become ready (model load,
 shader compile, GPU context init). Paid at play-start that cost is a black
@@ -293,6 +308,14 @@ public interface ScaleProvider {
   /** Begin expensive init for an anticipated session; return a handle the core
    *  holds and passes back at build time, or null for no warmup. May block. */
   default WarmContext warmup(ScaleRequest request) { return null; }
+
+  /** Budget-aware form; the default preserves old provider behavior. */
+  default WarmContext warmup(ScaleRequest request, WarmupBudget budget) {
+    return warmup(request);
+  }
+
+  /** True only when this provider independently admits its warm resource. */
+  default boolean managesWarmupAdmission() { return false; }
 
   /** Build a plan using a still-valid pre-warmed context. If unusable, close it,
    *  fall back to plan(request), and let the core cold-start. */
@@ -317,15 +340,21 @@ Guarantees the core gives a provider:
 - **Single-owner.** A `WarmContext` is consumed at most once, then closed; it is
   never shared across concurrent sessions.
 - **Bounded.** If the offer is never taken, a reaper calls `close()` after
-  `ttlMillis()` — a warm worker cannot leak VRAM indefinitely.
+  `ttlMillis()` — a warm worker cannot leak VRAM indefinitely. Acquire plus
+  readiness is also hard-capped at 20 seconds (8 + 12 by default). At the
+  deadline core cancels and interrupts the warmup task; providers must honor
+  interruption, abort external work, and close partial acquisitions.
 - **Matched by geometry.** The core only hands a warm context back to
-  `plan(req, warm)` when the live request's provider id, source WxH, target WxH,
-  and tier match the request the context was warmed for. On any mismatch the core
+  `  plan(req, warm)` when the live request's provider id, source height, target
+  WxH, and tier match the request the context was warmed for. On any mismatch the core
   closes the stale context and cold-starts, so a provider's `plan(req, warm)` can
   assume the dimensions line up (but should still verify and cold-fall-back).
 
-Consuming a warm worker: return a plan that carries the already-running process
-so the core skips the spawn (the argv is retained for logging only):
+Consuming a resident worker: create a short-lived per-playback proxy and return
+a plan carrying that already-READY proxy process, so the core skips process
+spawn and the READY wait (the argv is retained for logging only). The resident
+worker remains provider-owned; core may terminate the proxy during normal
+stream teardown:
 
 ```java
 @Override public ScaleExecutionPlan plan(ScaleRequest req, WarmContext warm) {
@@ -334,7 +363,7 @@ so the core skips the spawn (the argv is retained for logging only):
   return ScaleExecutionPlan.externalWithWarmProcess(
       WorkerCommand.buildLiveStream(...),   // diagnostics only when warm
       req.getTargetWidth(), req.getTargetHeight(), "rgb24", "nvidia-vsr",
-      ctx.getWorker());                     // core wires this process, no spawn
+      ctx.openPlaybackProxy());             // core owns this proxy, not resident
 }
 ```
 
@@ -345,12 +374,12 @@ plugin team):
   advisory never blocks the offer on it; the offer is made from `probe()`/`plan()`
   as today, and the warm context is resolved (with a short bounded wait) at build
   time. Blocking the offer for a 9 s model load would defeat the point.
-- **No speculative governor permit.** `warmup()` does **not** hold a
-  `ScaleGovernor`/GPU admission permit. The warm worker is best-effort and must
-  never block a recording or a real transcode for the GPU (recording protection
-  is invariant 0). The normal permit is acquired at consume time inside
-  `select()`, exactly as on the cold path. If a provider wants to gate warmup on
-  GPU budget, it does so privately inside its own `warmup()`.
+- **No speculative core permit.** Core does not hold a `ScaleGovernor` permit
+  during warmup; the normal permit is acquired at consume time inside `select()`.
+  Under an installed `ExternalAdmissionAuthority`, core calls proactive warmup
+  only when `managesWarmupAdmission()` is true. Such a provider owns its
+  low-priority/reclaimable warm-resource lease and must reconcile reclaim before
+  returning a context.
 - **Keyed by request geometry, not media id.** The consume point
   (`ScaleProviderRegistry.select(ScaleRequest)`) carries only the request, so the
   stash key is `(providerId, srcW, srcH, targetW, targetH, tier)` — which also
@@ -459,9 +488,12 @@ Registration rules:
 | `playback/gpu_enhance/scale_provider` | *(empty)* | Optional soft-preference head: names a registered provider to try first. Empty = pure automatic chain. Never pins or restricts. |
 | `playback/gpu_enhance/scale_cuda_lanczos_provider` | `auto` | Master switch for the always-registered CUDA-Lanczos live upscaler. `auto`/truthy = enabled; a falsey value forces VSR-or-nothing. |
 | `playback/gpu_enhance/scale/max_specialized_sessions` | `1` | Concurrent specialized-provider ceiling. |
-| `playback/gpu_enhance/scale/external_worker_startup_timeout_seconds` | `30` | How long the core waits for an `EXTERNAL_PROCESS` worker's `READY` before falling back to the built-in passthrough (deinterlace-only, no upscale). |
+| `playback/gpu_enhance/scale/external_worker_ready_timeout_ms` | `12000` | Worker/model READY phase for a cold `EXTERNAL_PROCESS`; clamped to 1,000–12,000 ms. |
+| `playback/gpu_enhance/scale/external_worker_startup_timeout_seconds` | `12` | Legacy fallback used only when `external_worker_ready_timeout_ms` is unset; still capped at 12 seconds. |
 | `playback/gpu_enhance/scale/external_worker_stall_timeout_seconds` | `5` | Idle-frame watchdog: if no frames flow for this long, the core kills the worker and tears the session down. |
-| `playback/gpu_enhance/scale/warmup_enabled` | `false` | Master switch for the §5.1 warmup path. When off (default) the advisor never calls `warmup()` and `select()` never consults the warm stash — behavior is identical to no-warmup. Turn on only with a provider that overrides `warmup()`. |
+| `playback/gpu_enhance/scale/warmup_enabled` | `true` | Master switch for the §5.1 warmup path. Providers with the default no-op hook remain unaffected. |
+| `playback/gpu_enhance/scale/warmup_acquire_timeout_ms` | `8000` | External warm-resource acquisition phase budget. |
+| `playback/gpu_enhance/scale/warmup_ready_timeout_ms` | `12000` | Worker/model readiness phase budget; acquire + readiness is hard-capped at 20 seconds. |
 | `playback/gpu_enhance/scale/warmup_max_ttl_seconds` | `60` | Upper bound the core clamps a provider's `WarmContext.ttlMillis()` to, so a misbehaving provider cannot pin a warm worker (and its VRAM) indefinitely. |
 
 ---

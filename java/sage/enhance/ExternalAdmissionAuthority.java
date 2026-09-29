@@ -39,10 +39,12 @@ package sage.enhance;
  * {@link RuntimeException} thrown from {@link #admit}, or a {@link Decision}
  * marked {@link Decision#isDeferToLocal() defer-to-local}, is treated as "no
  * answer": the governor falls back to its ordinary local concurrency-ceiling
- * decision. Neither path is an external grant, so specialized/neural scaling
+ * decision. Neither path is an external grant, so externally managed work
  * remains forbidden while an authority is installed. An explicit
- * {@link Decision#deny(String) deny} authoritatively suppresses specialized
- * scaling, while still allowing the core's deterministic CUDA-Lanczos fallback.
+ * {@link Decision#deny(String) deny} denies the whole request. An authority
+ * that declines only its scoped external resource uses
+ * {@link Decision#declineExternalResource(String)}, leaving the caller free to
+ * choose a separately governed local fallback.
  *
  * <h2>Lifecycle mapping</h2>
  * <ul>
@@ -101,12 +103,14 @@ public interface ExternalAdmissionAuthority
   boolean isReclaimed(String sessionId);
 
   /**
-   * The outcome of {@link #admit}. Immutable. Three shapes:
+   * The outcome of {@link #admit}. Immutable. Four shapes:
    * <ul>
    *   <li>{@link #grant(EnhancementTier)} &mdash; run at this tier (clamped down
    *       locally if it somehow exceeds the physical budget).</li>
-   *   <li>{@link #deny(String)} &mdash; a real cross-tenant refusal; specialized
-   *       scaling is suppressed, but deterministic fallback remains eligible.</li>
+   *   <li>{@link #deny(String)} &mdash; deny the complete requested operation.</li>
+   *   <li>{@link #declineExternalResource(String)} &mdash; decline only the
+   *       externally governed resource; the caller may choose an independent
+   *       local fallback, but must not execute the declined resource.</li>
    *   <li>{@link #deferToLocal(String)} &mdash; "no answer"; the governor uses its
    *       ordinary local concurrency-ceiling decision (the fail-open path).</li>
    * </ul>
@@ -115,13 +119,16 @@ public interface ExternalAdmissionAuthority
   {
     private final EnhancementTier tier;   // granted tier; null unless GRANT
     private final boolean deny;
+    private final boolean declineExternalResource;
     private final boolean deferToLocal;
     private final String reason;
 
-    private Decision(EnhancementTier tier, boolean deny, boolean deferToLocal, String reason)
+    private Decision(EnhancementTier tier, boolean deny,
+                     boolean declineExternalResource, boolean deferToLocal, String reason)
     {
       this.tier = tier;
       this.deny = deny;
+      this.declineExternalResource = declineExternalResource;
       this.deferToLocal = deferToLocal;
       this.reason = reason == null ? "" : reason;
     }
@@ -131,27 +138,35 @@ public interface ExternalAdmissionAuthority
     {
       if (tier == null || !tier.isActive())
         return deny("authority granted no active tier");
-      return new Decision(tier, false, false, "granted " + tier.token());
+      return new Decision(tier, false, false, false, "granted " + tier.token());
     }
 
     /**
-     * Refuse specialized/neural enhancement for this session. The governor
-     * honours the refusal without treating it as a grant, while allowing its
-     * deterministic CUDA-Lanczos fallback when locally buildable.
+     * Deny the complete requested operation.
      */
     public static Decision deny(String reason)
     {
-      return new Decision(null, true, false, reason);
+      return new Decision(null, true, false, false, reason);
+    }
+
+    /**
+     * Decline only the resource governed by this authority. This is not a grant;
+     * the caller may independently select a locally governed fallback.
+     */
+    public static Decision declineExternalResource(String reason)
+    {
+      return new Decision(null, false, true, false, reason);
     }
 
     /** No answer &mdash; the governor falls back to its local ceiling (fail-open). */
     public static Decision deferToLocal(String reason)
     {
-      return new Decision(null, false, true, reason);
+      return new Decision(null, false, false, true, reason);
     }
 
     public boolean isGranted()      { return tier != null && tier.isActive(); }
     public boolean isDeny()         { return deny; }
+    public boolean isExternalResourceDeclined() { return declineExternalResource; }
     public boolean isDeferToLocal() { return deferToLocal; }
     /** Granted tier, or {@link EnhancementTier#NONE} when not a grant. */
     public EnhancementTier getTier() { return tier == null ? EnhancementTier.NONE : tier; }
@@ -161,7 +176,8 @@ public interface ExternalAdmissionAuthority
     public String toString()
     {
       String kind = isGranted() ? ("grant " + tier.token())
-          : (deferToLocal ? "defer-to-local" : "deny");
+          : (deferToLocal ? "defer-to-local"
+          : (declineExternalResource ? "decline-external-resource" : "deny"));
       return "Decision[" + kind + (reason.isEmpty() ? "" : ": " + reason) + "]";
     }
   }

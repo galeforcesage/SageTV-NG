@@ -55,6 +55,15 @@ import sage.Sage;
  */
 public final class GpuGovernor
 {
+  /**
+   * Process-owner fence invoked before stale-session reaping releases an
+   * external grant. Returning false leaves the session and grant intact.
+   */
+  public interface ExternalReleaseGuard
+  {
+    boolean prepareForExternalRelease();
+  }
+
   private static final String PROP_ENABLED        = "playback/gpu_enhance/enabled";
   private static final String PROP_SOFT_CAP       = "playback/gpu_enhance/soft_cap_pct";
   private static final String PROP_HARD_CAP       = "playback/gpu_enhance/hard_cap_pct";
@@ -119,7 +128,7 @@ public final class GpuGovernor
     public boolean isExternalAuthorityPresent() { return externalAuthorityPresent; }
     /** True only for an explicit external grant, not merely active enhancement. */
     public boolean isExternalGrant() { return externalGrant; }
-    /** True when the authority explicitly denied specialized/neural scaling. */
+    /** True when the authority declined only its externally governed resource. */
     public boolean isExternalDeny() { return externalDeny; }
     /**
      * Whether a specialized scale provider may be selected. With an installed
@@ -150,7 +159,8 @@ public final class GpuGovernor
     volatile long estBitrateKbps;
     volatile long lastHeartbeat;
     volatile boolean offline;
-    final boolean externalLeaseGranted;
+    volatile boolean externalLeaseGranted;
+    volatile ExternalReleaseGuard externalReleaseGuard;
 
     Session(String id, EnhancementTier tier, int gpuIndex, long estBitrateKbps, boolean offline)
     {
@@ -320,20 +330,22 @@ public final class GpuGovernor
     }
 
     if (decision.isDeny())
+      return deny(sessionId, "external authority (" + safeName(auth) + ") denied: "
+          + decision.getReason());
+
+    if (decision.isExternalResourceDeclined())
     {
-      // An authoritative refusal forbids the scarce specialized/neural path, but
-      // does not erase deterministic fallback. Re-apply the ordinary local
-      // concurrency ceiling because the authority granted no externally managed
-      // capacity; then constrain provider selection to CUDA-Lanczos. If either
-      // local admission or plan construction fails, playback remains unenhanced.
+      // The authority declined only its resource. Re-apply the ordinary local
+      // ceiling, then let the caller choose an independently governed local
+      // fallback. The declined external resource remains forbidden.
       Ladder capped = walkLadder(startTier, snap, load, estBitrateKbps, offline, true);
       if (!capped.tier.isActive())
         return deny(sessionId, "external authority (" + safeName(auth)
-            + ") denied specialized scaling (" + decision.getReason()
+            + ") declined its resource (" + decision.getReason()
             + "); local fallback ceiling denies (" + join(capped.whyNot) + ")");
       return registerGrant(sessionId, capped.tier, desired, gpuIndex, estBitrateKbps,
           offline, snap, load, capped.whyNot, "external authority (" + safeName(auth)
-          + ") denied specialized scaling: " + decision.getReason(),
+          + ") declined its resource: " + decision.getReason(),
           true, false, true);
     }
 
@@ -485,7 +497,16 @@ public final class GpuGovernor
     if (sessionId == null) return;
     Session s = sessions.remove(sessionId);
     ExternalAdmissionAuthority auth = externalAuthority;
-    if (auth != null)
+    boolean releaseExternal = s == null;
+    if (s != null)
+    {
+      synchronized (s)
+      {
+        releaseExternal = s.externalLeaseGranted;
+        s.externalLeaseGranted = false;
+      }
+    }
+    if (auth != null && releaseExternal)
     {
       // Always forward: the local session may already be gone (idempotent teardown),
       // but the arbiter still needs the release so it doesn't hold a phantom lease.
@@ -501,6 +522,27 @@ public final class GpuGovernor
     }
   }
 
+  /**
+   * Release only the external grant while retaining the local session
+   * reservation for an independently governed fallback. Idempotent.
+   */
+  public void releaseExternalGrant(String sessionId)
+  {
+    if (sessionId == null) return;
+    Session s = sessions.get(sessionId);
+    if (s == null || !s.externalLeaseGranted) return;
+    synchronized (s)
+    {
+      if (!s.externalLeaseGranted) return;
+      s.externalLeaseGranted = false;
+      ExternalAdmissionAuthority auth = externalAuthority;
+      if (auth != null)
+      {
+        try { auth.release(sessionId); } catch (Throwable ignore) {}
+      }
+    }
+  }
+
   /** Note that a session is still alive, for {@link #reapStale()}. */
   public void heartbeat(String sessionId)
   {
@@ -511,9 +553,15 @@ public final class GpuGovernor
       ExternalAdmissionAuthority auth = externalAuthority;
       // Forwarded as a keep-alive. Called very frequently (per ffmpeg progress
       // line), so the authority is contractually required to throttle internally.
-      if (auth != null && s.externalLeaseGranted)
+      if (auth != null)
       {
-        try { auth.renew(sessionId); } catch (Throwable ignore) {}
+        synchronized (s)
+        {
+          if (s.externalLeaseGranted)
+          {
+            try { auth.renew(sessionId); } catch (Throwable ignore) {}
+          }
+        }
       }
     }
   }
@@ -530,6 +578,24 @@ public final class GpuGovernor
     ExternalAdmissionAuthority auth = externalAuthority;
     if (auth == null) return false;
     try { return auth.isReclaimed(sessionId); } catch (Throwable ignore) { return false; }
+  }
+
+  /** True while this session still owns an external authority grant. */
+  public boolean hasExternalGrant(String sessionId)
+  {
+    Session s = (sessionId == null) ? null : sessions.get(sessionId);
+    return s != null && s.externalLeaseGranted;
+  }
+
+  /**
+   * Attach the process-owner fence used before stale reaping releases an
+   * external grant. The callback must synchronously stop externally accounted
+   * work and return true only when release is safe.
+   */
+  public void setExternalReleaseGuard(String sessionId, ExternalReleaseGuard guard)
+  {
+    Session s = (sessionId == null) ? null : sessions.get(sessionId);
+    if (s != null) s.externalReleaseGuard = guard;
   }
 
   /** Update a running session's measured output bitrate. */
@@ -614,10 +680,39 @@ public final class GpuGovernor
     {
       if ((now - s.lastHeartbeat) > stale)
       {
-        sessions.remove(s.id);
-        reaped++;
-        if (Sage.DBG) System.out.println("GpuGovernor: reaped stale session " + s.id
-            + " (no heartbeat for " + (now - s.lastHeartbeat) + "ms)");
+        ExternalAdmissionAuthority auth = externalAuthority;
+        if (s.externalLeaseGranted && auth != null)
+        {
+          ExternalReleaseGuard guard = s.externalReleaseGuard;
+          boolean safe = false;
+          try { safe = guard != null && guard.prepareForExternalRelease(); }
+          catch (Throwable ignore) {}
+          if (!safe)
+          {
+            if (Sage.DBG) System.out.println("GpuGovernor: stale session " + s.id
+                + " external release deferred -- process owner did not confirm teardown");
+            continue;
+          }
+        }
+        if (sessions.remove(s.id, s))
+        {
+          if (s.externalLeaseGranted)
+          {
+            boolean releaseNow;
+            synchronized (s)
+            {
+              releaseNow = s.externalLeaseGranted;
+              s.externalLeaseGranted = false;
+            }
+            if (releaseNow && auth != null)
+            {
+              try { auth.release(s.id); } catch (Throwable ignore) {}
+            }
+          }
+          reaped++;
+          if (Sage.DBG) System.out.println("GpuGovernor: reaped stale session " + s.id
+              + " (no heartbeat for " + (now - s.lastHeartbeat) + "ms)");
+        }
       }
     }
     if (reaped > 0) GpuMonitor.getInstance().invalidate();

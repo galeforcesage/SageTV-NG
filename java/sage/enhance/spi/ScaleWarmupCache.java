@@ -12,6 +12,8 @@ package sage.enhance.spi;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
@@ -25,7 +27,7 @@ import sage.Sage;
  * (seconds before play-start) and the resulting {@link WarmContext} is held here
  * until the pipeline is built, so the live session can wire an already-running
  * worker instead of paying a cold start on the play path. The whole mechanism is
- * gated by {@code playback/gpu_enhance/scale/warmup_enabled} (default off): when
+ * gated by {@code playback/gpu_enhance/scale/warmup_enabled} (default on): when
  * disabled, {@link #requestWarmup} and {@link #consume} are no-ops and playback
  * is byte-identical to the no-warmup path.
  *
@@ -54,6 +56,10 @@ public final class ScaleWarmupCache
       "playback/gpu_enhance/scale/warmup_max_ttl_seconds";
   private static final String PROP_CONSUME_WAIT_MS =
       "playback/gpu_enhance/scale/warmup_consume_wait_ms";
+  private static final String PROP_ACQUIRE_TIMEOUT_MS =
+      "playback/gpu_enhance/scale/warmup_acquire_timeout_ms";
+  private static final String PROP_READY_TIMEOUT_MS =
+      "playback/gpu_enhance/scale/warmup_ready_timeout_ms";
 
   private static final ScaleWarmupCache INSTANCE = new ScaleWarmupCache();
 
@@ -67,7 +73,16 @@ public final class ScaleWarmupCache
   private ScaleWarmupCache() {}
 
   /** Master switch. When false the whole mechanism is inert. */
-  public boolean isEnabled() { return Sage.getBoolean(PROP_ENABLED, false); }
+  public boolean isEnabled() { return Sage.getBoolean(PROP_ENABLED, true); }
+
+  WarmupBudget budget()
+  {
+    long acquire = Sage.getLong(PROP_ACQUIRE_TIMEOUT_MS,
+        WarmupBudget.DEFAULT_ACQUIRE_MILLIS);
+    long ready = Sage.getLong(PROP_READY_TIMEOUT_MS,
+        WarmupBudget.DEFAULT_READY_MILLIS);
+    return new WarmupBudget(acquire, ready);
+  }
 
   private long capMillis()
   {
@@ -103,26 +118,50 @@ public final class ScaleWarmupCache
 
     final ScaleProvider p = provider;
     final ScaleRequest r = req;
-    CompletableFuture<WarmContext> cf = CompletableFuture.supplyAsync(
-        new java.util.function.Supplier<WarmContext>()
+    final WarmupBudget budget = budget();
+    final CompletableFuture<WarmContext> cf = new CompletableFuture<WarmContext>();
+    final Future<?>[] task = new Future<?>[1];
+    task[0] = warmExec.submit(
+        new Runnable()
         {
-          public WarmContext get()
+          public void run()
           {
-            try { return p.warmup(r); }
+            WarmContext ctx = null;
+            try
+            {
+              ctx = p.warmup(r, budget);
+            }
             catch (Throwable t)
             {
               if (Sage.DBG) System.out.println("SCALE_WARMUP warmup threw for "
                   + key + ": " + t);
-              return null;
+            }
+            if (budget.remainingMillis() <= 0L)
+            {
+              closeQuietly(ctx);
+              cf.complete(null);
+            }
+            else if (!cf.complete(ctx))
+            {
+              closeQuietly(ctx);
             }
           }
-        }, warmExec);
+        });
+    ScheduledFuture<?> timeout = reaper.schedule(new Runnable()
+    {
+      public void run()
+      {
+        if (cf.complete(null))
+          task[0].cancel(true);
+      }
+    }, budget.getTotalMillis(), TimeUnit.MILLISECONDS);
 
-    Entry e = new Entry(key, cf);
+    Entry e = new Entry(key, cf, task[0], timeout);
     Entry prev = stash.putIfAbsent(key, e);
     if (prev != null)
     {
       // Lost a race; make sure our orphan is closed when it resolves.
+      e.cancelWork();
       closeWhenDone(cf);
       return;
     }
@@ -161,9 +200,11 @@ public final class ScaleWarmupCache
     {
       // Still warming or failed: cold-start now, and make sure a late-arriving
       // context is closed rather than leaked (we already own the removed entry).
+      e.cancelWork();
       closeWhenDone(e.future);
       return null;
     }
+    e.cancelTimeout();
     if (!isValidQuietly(ctx))
     {
       closeQuietly(ctx);
@@ -216,13 +257,14 @@ public final class ScaleWarmupCache
         if (age > cap)   // warmup hung well past any usable window
         {
           it.remove();
-          e.future.cancel(true);
+          e.cancelWork();
           closeWhenDone(e.future);
         }
         continue;
       }
       WarmContext c = e.future.getNow(null);
       if (c == null) { it.remove(); continue; }   // warmup returned null / failed
+      e.cancelTimeout();
       long ttl = Math.min(Math.max(0L, c.ttlMillis()), cap);
       if (age > ttl || !isValidQuietly(c))
       {
@@ -257,12 +299,29 @@ public final class ScaleWarmupCache
   {
     final String key;
     final CompletableFuture<WarmContext> future;
+    final Future<?> workerTask;
+    final ScheduledFuture<?> timeoutTask;
     final long createdAt = System.currentTimeMillis();
 
-    Entry(String key, CompletableFuture<WarmContext> future)
+    Entry(String key, CompletableFuture<WarmContext> future,
+          Future<?> workerTask, ScheduledFuture<?> timeoutTask)
     {
       this.key = key;
       this.future = future;
+      this.workerTask = workerTask;
+      this.timeoutTask = timeoutTask;
+    }
+
+    void cancelTimeout()
+    {
+      if (timeoutTask != null) timeoutTask.cancel(false);
+    }
+
+    void cancelWork()
+    {
+      cancelTimeout();
+      if (workerTask != null) workerTask.cancel(true);
+      future.complete(null);
     }
   }
 
@@ -275,7 +334,7 @@ public final class ScaleWarmupCache
     {
       Entry e = it.next();
       it.remove();
-      e.future.cancel(true);
+      e.cancelWork();
       closeWhenDone(e.future);
     }
   }

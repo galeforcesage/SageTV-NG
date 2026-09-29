@@ -383,9 +383,9 @@ public final class EnhancementAdvisor
 
     // We are about to offer this tier. Pre-warm the selected provider now, during
     // the advisory window, so an expensive external worker is ready by play-start
-    // instead of black-screening the cold start. No-op unless
-    // playback/gpu_enhance/scale/warmup_enabled is set and a provider overrides
-    // warmup(); never blocks the offer (runs on the warmup executor).
+    // instead of black-screening the cold start. No-op when warmup is disabled
+    // or the provider keeps the default hook; never blocks the offer (runs on
+    // the warmup executor).
     sage.enhance.spi.ScaleProviderRegistry.getInstance().warmupSelectedProvider(
         new sage.enhance.spi.ScaleRequest(tier, tier.getTargetWidth(), tier.getTargetHeight(),
             sourceWidth, sourceHeight, sourceInterlaced, null,

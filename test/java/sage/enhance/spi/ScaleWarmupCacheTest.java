@@ -24,13 +24,17 @@ import sage.TestUtils;
 import sage.enhance.EnhancementTier;
 
 /**
- * The pre-warm stash: gated off by default, round-trips a context on a hit,
+ * The pre-warm stash: enabled by default, round-trips a context on a hit,
  * enforces single-owner, and closes contexts it cannot hand out.
  */
 public class ScaleWarmupCacheTest
 {
   private static final String PROP_ENABLED = "playback/gpu_enhance/scale/warmup_enabled";
   private static final String PROP_WAIT = "playback/gpu_enhance/scale/warmup_consume_wait_ms";
+  private static final String PROP_ACQUIRE =
+      "playback/gpu_enhance/scale/warmup_acquire_timeout_ms";
+  private static final String PROP_READY =
+      "playback/gpu_enhance/scale/warmup_ready_timeout_ms";
 
   private ScaleWarmupCache cache;
 
@@ -50,6 +54,8 @@ public class ScaleWarmupCacheTest
     cache.resetForTest();
     Sage.remove(PROP_ENABLED);
     Sage.remove(PROP_WAIT);
+    Sage.remove(PROP_ACQUIRE);
+    Sage.remove(PROP_READY);
   }
 
   private static ScaleRequest req()
@@ -69,7 +75,7 @@ public class ScaleWarmupCacheTest
   }
 
   /** A provider whose warmup() hands back a supplied context and counts calls. */
-  private static final class WarmingProvider implements ScaleProvider
+  private static class WarmingProvider implements ScaleProvider
   {
     final RecordingWarm ctx;
     final AtomicInteger warmups = new AtomicInteger();
@@ -85,12 +91,76 @@ public class ScaleWarmupCacheTest
   @Test
   public void disabledIsInert()
   {
-    // enabled unset -> default false
+    Sage.put(PROP_ENABLED, "false");
     RecordingWarm w = new RecordingWarm(true);
     WarmingProvider p = new WarmingProvider(w);
     cache.requestWarmup(p.id(), p, req());
     assertNull(cache.consume(p.id(), req()), "consume is null when disabled");
     assertTrue(p.warmups.get() == 0, "warmup() is never called when disabled");
+  }
+
+  @Test
+  public void enabledByDefaultAndSuppliesBoundedBudget()
+  {
+    final WarmupBudget[] seen = new WarmupBudget[1];
+    RecordingWarm w = new RecordingWarm(true);
+    WarmingProvider p = new WarmingProvider(w)
+    {
+      public WarmContext warmup(ScaleRequest r, WarmupBudget budget)
+      {
+        seen[0] = budget;
+        return ctx;
+      }
+    };
+
+    cache.requestWarmup(p.id(), p, req());
+    assertSame(cache.consume(p.id(), req()), w);
+    assertTrue(seen[0] != null);
+    assertTrue(seen[0].getAcquireMillis() <= 8000L);
+    assertTrue(seen[0].getReadyMillis() <= 12000L);
+    assertTrue(seen[0].getTotalMillis() <= 20000L);
+  }
+
+  @Test
+  public void configuredBudgetIsHardCappedAtTwentySeconds()
+  {
+    Sage.put(PROP_ACQUIRE, "15000");
+    Sage.put(PROP_READY, "15000");
+    WarmupBudget budget = cache.budget();
+    assertTrue(budget.getTotalMillis() <= WarmupBudget.HARD_MAX_TOTAL_MILLIS);
+    assertTrue(budget.getReadyMillis() == 5000L);
+  }
+
+  @Test
+  public void lateWarmContextIsClosedAfterHardDeadline()
+      throws Exception
+  {
+    Sage.put(PROP_ACQUIRE, "0");
+    Sage.put(PROP_READY, "20");
+    Sage.put(PROP_WAIT, "100");
+    final RecordingWarm late = new RecordingWarm(true);
+    final AtomicInteger interrupted = new AtomicInteger();
+    WarmingProvider p = new WarmingProvider(late)
+    {
+      public WarmContext warmup(ScaleRequest r, WarmupBudget budget)
+      {
+        try { Thread.sleep(80L); }
+        catch (InterruptedException e)
+        {
+          interrupted.incrementAndGet();
+          Thread.currentThread().interrupt();
+        }
+        return ctx;
+      }
+    };
+
+    cache.requestWarmup(p.id(), p, req());
+    assertNull(cache.consume(p.id(), req()));
+    long deadline = System.currentTimeMillis() + 1000L;
+    while (!late.closed && System.currentTimeMillis() < deadline)
+      Thread.sleep(10L);
+    assertTrue(interrupted.get() == 1, "deadline interrupts the provider task");
+    assertTrue(late.closed, "a provider result arriving after 20s-equivalent deadline is closed");
   }
 
   @Test

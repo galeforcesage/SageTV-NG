@@ -16,23 +16,42 @@ import static org.testng.Assert.*;
 
 public class FFMPEGTranscoderTest
 {
+  @Test
+  public void externalWorkerReadyTimeoutUsesTwelveSecondPhaseAndHardClamp()
+      throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    String millis = "playback/gpu_enhance/scale/external_worker_ready_timeout_ms";
+    String legacy = "playback/gpu_enhance/scale/external_worker_startup_timeout_seconds";
+    Sage.remove(millis);
+    Sage.remove(legacy);
+    assertEquals(FFMPEGTranscoder.externalWorkerReadyTimeoutMillis(), 12000L);
+    Sage.put(millis, "30000");
+    assertEquals(FFMPEGTranscoder.externalWorkerReadyTimeoutMillis(), 12000L);
+    Sage.put(millis, "500");
+    assertEquals(FFMPEGTranscoder.externalWorkerReadyTimeoutMillis(), 1000L);
+    Sage.remove(millis);
+    Sage.remove(legacy);
+  }
 
   @Test
   public void enhancementTelemetrySeparatesGrantAvailabilityAndActivePath()
   {
     FFMPEGTranscoder t = new FFMPEGTranscoder();
-    t.enhanceBrokerGrantedVsr = true;
-    t.enhanceLanczosFallbackAvailable = true;
+    t.enhanceExternalResourceGranted = true;
+    t.enhanceLocalFallbackAvailable = true;
     assertTrue(t.isEnhanceBrokerGrantedVsr());
     assertTrue(t.isEnhanceLanczosFallbackAvailable());
     assertFalse(t.isEnhanceLanczosFallbackActive());
     assertEquals(t.getEnhancementActualPath(), "unenhanced");
 
-    t.enhanceVsrWorkerActive = true;
+    t.enhanceExternalWorkerActive = true;
     assertEquals(t.getEnhancementActualPath(), "vsr");
-    t.enhanceVsrWorkerActive = false;
-    t.enhanceLanczosFallbackActive = true;
+    assertEquals(t.getEnhancementExecutionForm(), "external-process");
+    t.enhanceExternalWorkerActive = false;
+    t.enhanceLocalFallbackActive = true;
     assertEquals(t.getEnhancementActualPath(), "cuda-lanczos");
+    assertEquals(t.getEnhancementExecutionForm(), "local-filter");
   }
 
   @Test
@@ -49,8 +68,8 @@ public class FFMPEGTranscoderTest
         sage.enhance.spi.ScaleRequest.Purpose.LIVE);
     FFMPEGTranscoder t = new FFMPEGTranscoder();
     t.enhanceScaleLease = scaleGov.acquire("nvidia-vsr", req);
-    t.enhanceLanczosFallbackAvailable = true;
-    t.enhanceLanczosFallbackStaged = true;
+    t.enhanceLocalFallbackAvailable = true;
+    t.enhanceLocalFallbackStaged = true;
     assertNotNull(t.enhanceScaleLease);
     assertEquals(scaleGov.activeCount(), 1);
 
@@ -67,9 +86,9 @@ public class FFMPEGTranscoderTest
   {
     FFMPEGTranscoder t = new FFMPEGTranscoder();
     t.enhanceSessionId = "reclaimed-session";
-    t.enhanceBrokerGrantedVsr = true;
-    t.enhanceLanczosFallbackAvailable = true;
-    t.enhanceLanczosFallbackStaged = true;
+    t.enhanceExternalResourceGranted = true;
+    t.enhanceLocalFallbackAvailable = true;
+    t.enhanceLocalFallbackStaged = true;
 
     t.abandonExternalEnhance("broker-reclaimed");
 

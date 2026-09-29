@@ -1,5 +1,7 @@
 package sage.enhance;
 
+import sage.Sage;
+
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNull;
@@ -106,6 +108,7 @@ public class GpuGovernorExternalAuthorityTest
     ExternalAdmissionAuthority.Decision deny =
         ExternalAdmissionAuthority.Decision.deny("higher-priority tenant");
     assertTrue(deny.isDeny());
+    assertFalse(deny.isExternalResourceDeclined());
     assertFalse(deny.isDeferToLocal());
     assertFalse(deny.isGranted());
 
@@ -114,6 +117,12 @@ public class GpuGovernorExternalAuthorityTest
     assertTrue(defer.isDeferToLocal());
     assertFalse(defer.isDeny());
     assertFalse(defer.isGranted());
+
+    ExternalAdmissionAuthority.Decision decline =
+        ExternalAdmissionAuthority.Decision.declineExternalResource("resource unavailable");
+    assertTrue(decline.isExternalResourceDeclined());
+    assertFalse(decline.isDeny());
+    assertFalse(decline.isGranted());
   }
 
   @Test
@@ -213,6 +222,80 @@ public class GpuGovernorExternalAuthorityTest
 
     assertEquals(auth.renews.get(), 0,
         "a deterministic fallback must not masquerade as a granted broker lease");
+  }
+
+  @Test
+  public void testReleaseExternalGrantKeepsLocalSessionAndStopsRenewal()
+  {
+    RecordingAuthority auth = new RecordingAuthority();
+    gov.setExternalAuthority(auth);
+    gov.trackSession(new GpuGovernor.Session(
+        "s-downgrade", EnhancementTier.ENHANCE_2160P, 0, 30000, false, true));
+
+    gov.releaseExternalGrant("s-downgrade");
+    gov.heartbeat("s-downgrade");
+
+    assertEquals(auth.released, java.util.Collections.singletonList("s-downgrade"));
+    assertEquals(auth.renews.get(), 0);
+    assertEquals(gov.tierOf("s-downgrade"), EnhancementTier.ENHANCE_2160P,
+        "local fallback reservation remains tracked");
+    assertFalse(gov.hasExternalGrant("s-downgrade"));
+  }
+
+  @Test
+  public void testStaleReaperReleasesExternalGrant()
+  {
+    RecordingAuthority auth = new RecordingAuthority();
+    gov.setExternalAuthority(auth);
+    GpuGovernor.Session stale =
+        new GpuGovernor.Session("s-stale-ext", EnhancementTier.ENHANCE_2160P,
+            0, 30000, false, true);
+    gov.trackSession(stale);
+    gov.setExternalReleaseGuard("s-stale-ext",
+        new GpuGovernor.ExternalReleaseGuard()
+        {
+          public boolean prepareForExternalRelease() { return true; }
+        });
+    stale.lastHeartbeat = 1L;
+    Sage.putLong("playback/gpu_enhance/session_stale_ms", 1L);
+    try
+    {
+      assertEquals(gov.reapStale(), 1);
+      assertEquals(auth.released,
+          java.util.Collections.singletonList("s-stale-ext"));
+    }
+    finally
+    {
+      Sage.remove("playback/gpu_enhance/session_stale_ms");
+    }
+  }
+
+  @Test
+  public void testStaleReaperDefersReleaseUntilProcessOwnerConfirms()
+  {
+    RecordingAuthority auth = new RecordingAuthority();
+    gov.setExternalAuthority(auth);
+    GpuGovernor.Session stale =
+        new GpuGovernor.Session("s-stale-busy", EnhancementTier.ENHANCE_2160P,
+            0, 30000, false, true);
+    gov.trackSession(stale);
+    gov.setExternalReleaseGuard("s-stale-busy",
+        new GpuGovernor.ExternalReleaseGuard()
+        {
+          public boolean prepareForExternalRelease() { return false; }
+        });
+    stale.lastHeartbeat = 1L;
+    Sage.putLong("playback/gpu_enhance/session_stale_ms", 1L);
+    try
+    {
+      assertEquals(gov.reapStale(), 0);
+      assertTrue(gov.hasExternalGrant("s-stale-busy"));
+      assertTrue(auth.released.isEmpty());
+    }
+    finally
+    {
+      Sage.remove("playback/gpu_enhance/session_stale_ms");
+    }
   }
 
   @Test

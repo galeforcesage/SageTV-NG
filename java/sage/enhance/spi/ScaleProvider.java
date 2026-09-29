@@ -76,6 +76,26 @@ public interface ScaleProvider
   }
 
   /**
+   * Budget-aware warmup hook. Existing providers remain source and binary
+   * compatible through the default delegation.
+   */
+  default WarmContext warmup(ScaleRequest request, WarmupBudget budget)
+  {
+    return warmup(request);
+  }
+
+  /**
+   * Whether this provider independently obtains any authority required by its
+   * warmup work. Required for proactive warmup while a process-wide external
+   * admission authority is installed; false preserves the no-unmanaged-work
+   * guarantee for existing providers.
+   */
+  default boolean managesWarmupAdmission()
+  {
+    return false;
+  }
+
+  /**
    * Build an execution plan using a pre-warmed context, produced by a prior
    * {@link #warmup(ScaleRequest)} call and still valid.
    *

@@ -349,16 +349,6 @@ public final class ScaleProviderRegistry
   {
     try
     {
-      // Warmup starts specialized worker resources before normal admission. With
-      // an external authority installed there is no explicit grant yet, so doing
-      // that would be unmanaged neural work. Brokered sessions cold-start only
-      // after their grant; deterministic CUDA-Lanczos needs no warmup.
-      if (sage.enhance.GpuGovernor.getInstance().getExternalAuthority() != null)
-      {
-        if (Sage.DBG) System.out.println("SCALE_WARMUP skipped -- external admission"
-            + " authority installed and no per-session grant exists yet");
-        return;
-      }
       ScaleWarmupCache cache = ScaleWarmupCache.getInstance();
       if (!cache.isEnabled() || req == null || !req.isUpscaling()) return;
       // Only a specialized provider (expensive cold start: model load, worker
@@ -370,6 +360,17 @@ public final class ScaleProviderRegistry
         ScaleProviderCapabilities caps = p.capabilities();
         if (caps != null && caps.isSpecialized())
         {
+          // A provider may proactively warm under an installed authority only
+          // when it explicitly owns that separate warm-resource admission.
+          // Existing providers default false, preventing unmanaged work.
+          if (sage.enhance.GpuGovernor.getInstance().getExternalAuthority() != null
+              && !p.managesWarmupAdmission())
+          {
+            if (Sage.DBG) System.out.println("SCALE_WARMUP skipped provider '" + p.id()
+                + "' -- external authority installed and provider does not"
+                + " manage warmup admission");
+            return;
+          }
           cache.requestWarmup(p.id(), p, req);
           return;
         }
