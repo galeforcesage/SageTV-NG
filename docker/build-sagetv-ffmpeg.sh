@@ -417,6 +417,83 @@ open(F, 'w', encoding='utf-8', errors='surrogateescape').write(src)
 PATCH8EOF
 if [ $? -ne 0 ]; then echo "ERROR: PATCH 8 (ac4dec.c) failed to apply" >&2; exit 1; fi
 
+# ---------------------------------------------------------------------
+# PATCH 9: AC-4 resampling mode (libavcodec/ac4dec.c)
+# ---------------------------------------------------------------------
+# AC-4 frame-rate-locked streams (ATSC 3.0) signal a resampling ratio so the
+# fixed-size MDCT frame maps to the correct number of 48kHz output samples. For
+# a 29.97fps-locked stream frame_rate_index=3 selects frame_len_base=1536 with
+# resampling_ratio 25025/24000, i.e. each 1536-sample frame actually represents
+# 1536*25025/24000 = 1601.6 samples of real time.
+#
+# The fork computes s->resampling_ratio (ac4_toc) but NEVER applies it -- the
+# apply step at the end of ac4_decode_frame is commented out -- so it emits the
+# raw 1536 samples labelled 48000Hz. Every frame is then 4.27% too short; over a
+# programme the decoded audio runs ~4% shorter than the video, and the
+# downstream aresample=async drift corrector pads the growing deficit with
+# ~102ms of silence every ~4.6s -- audible as regular sub-second audio breaks on
+# ATSC 3.0 (AC-4) playback. A hardware AC-4 decoder (e.g. nVidia Shield) applies
+# the resampling and plays clean, which is why only the server transcode path
+# exhibits the breaks.
+#
+# Fix: report the effective (lower) sample rate for resampling-mode frames so the
+# already-decoded samples carry their true duration. libavcodec may not depend on
+# libswresample (layering), so we do not resample in-decoder; instead the 48kHz
+# resample SageTV already performs before the audio encoder (-ar 48000 + the
+# aresample filter in FFMPEGTranscoder.buildAudioResampleFilter) restores the
+# nominal 48kHz grid exactly where a valid encoder rate is required. The E-AC-3
+# encoder asserts a standard sample rate, so this effective rate must never reach
+# an encoder un-resampled; every SageTV AC-4 re-encode path resamples to 48000.
+#
+# Verified on an ATSC 3.0 AC-4 5.1 capture (frame_rate_index 3): raw decode of a
+# 180s slice went 172.4s -> 179.7s (full real-time length), and the production
+# aformat=stereo,aresample=async=1000,-ar 48000 chain went from ~38 injected
+# ~102ms silence gaps to 0.
+echo "=== sagetv-ffmpeg: AC-4 resampling-mode fix ==="
+
+python3 << 'PATCH9EOF'
+import sys
+
+F = 'libavcodec/ac4dec.c'
+src = open(F, encoding='utf-8', errors='surrogateescape').read()
+
+def sub_once(old, new, label):
+    global src
+    if new in src:
+        print('  skip %s (already applied)' % label); return
+    n = src.count(old)
+    if n != 1:
+        print('  FAIL %s: found %d occurrences' % (label, n)); sys.exit(1)
+    src = src.replace(old, new, 1)
+    print('  ok   %s' % label)
+
+sub_once(r'''#include "libavutil/opt.h"''',
+r'''#include "libavutil/opt.h"
+#include "libavutil/mathematics.h"''', '9 include mathematics.h')
+
+sub_once(r'''    frame->nb_samples = s->frame_len_base;''',
+r'''    /* SageTV PATCH 9: apply AC-4 resampling mode. For frame-rate-locked streams
+       (e.g. ATSC 3.0 29.97fps: frame_rate_index 3 -> frame_len_base 1536,
+       resampling_ratio 25025/24000) each decoded frame of frame_len_base PCM
+       samples represents frame_len_base*resampling_ratio samples of real time.
+       The fork set s->resampling_ratio but never applied it, so output ran
+       1/ratio short (1536 vs 1601.6 @ 29.97fps = 4.27% too few samples/frame);
+       the downstream async resampler then padded the cumulative deficit with
+       periodic silence, heard as sub-second audio breaks. Keep the decoded
+       samples but report the effective (lower) sample rate so each frame carries
+       its true duration; the 48kHz resample SageTV already performs before the
+       encoder restores the nominal grid. */
+    if (s->resampling_ratio.num != s->resampling_ratio.den)
+        avctx->sample_rate = av_rescale_rnd(avctx->sample_rate,
+                                            s->resampling_ratio.den,
+                                            s->resampling_ratio.num,
+                                            AV_ROUND_NEAR_INF);
+    frame->nb_samples = s->frame_len_base;''', '9 apply resampling_ratio as effective rate')
+
+open(F, 'w', encoding='utf-8', errors='surrogateescape').write(src)
+PATCH9EOF
+if [ $? -ne 0 ]; then echo "ERROR: PATCH 9 (ac4dec.c) failed to apply" >&2; exit 1; fi
+
 echo "=== sagetv-ffmpeg: configuring ==="
 PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig" \
 ./configure \
