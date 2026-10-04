@@ -2652,25 +2652,51 @@ public class SDRipper extends EPGDataSource
           reader = new BufferedReader(new FileReader(programFile));
           Map<Integer, Map<String, String>> returnValue = deserializeStationDayMd5Map(reader);
 
-          // Check for stations without any airing data right now and if we have saved hashes for
-          // that station, remove them so the station will update.
+          // Validate each saved day hash against the airing data actually present in the database.
+          //
+          // The md5 cache lives in a separate file (sdmd5sched) from the program database (Wiz.bin).
+          // If the database is ever rolled back or loses airings - e.g. restored from an older
+          // snapshot, or a staging/rollback bug - while this cache survives, the cached hashes still
+          // match Schedules Direct and those days are skipped forever, leaving permanent holes in the
+          // guide (future days blank even though "today" is fine). The old guard only removed a
+          // station when it had no airing at the *current instant*, so any channel broadcasting right
+          // now kept its stale forward hashes and never self-healed.
+          //
+          // Instead, for every today-or-future day we hold a hash for, drop that hash whenever the
+          // database has no airing covering it. The next normal update then re-downloads exactly the
+          // missing days and the guide self-heals without any manual cache reset.
           int size = returnValue.size();
           long currTime = Sage.time();
-          for (Iterator<Integer> iterator = returnValue.keySet().iterator(); iterator.hasNext(); )
+          int clearedDays = 0;
+          for (Iterator<Map.Entry<Integer, Map<String, String>>> iterator = returnValue.entrySet().iterator(); iterator.hasNext(); )
           {
-            Integer stationID = iterator.next();
-            Airing airings[] = Wizard.getInstance().getAirings(stationID, currTime, currTime + 1, false);
-            if (airings == null || airings.length == 0)
+            Map.Entry<Integer, Map<String, String>> entry = iterator.next();
+            int stationID = entry.getKey();
+            Map<String, String> dayMd5s = entry.getValue();
+            for (Iterator<String> dayIt = dayMd5s.keySet().iterator(); dayIt.hasNext(); )
             {
-              if (Sage.DBG) System.out.println("SDEPG Removing hashes for station " + stationID);
-              iterator.remove();
+              String day = dayIt.next();
+              long dayStart = SDUtils.SDDateUTCToMillis(day);
+              long dayEnd = dayStart + Sage.MILLIS_PER_DAY;
+              // Past days are pruned on save; only validate the still-future portion of today and any
+              // fully future day.
+              if (dayEnd <= currTime)
+                continue;
+              long queryStart = Math.max(dayStart, currTime);
+              Airing airings[] = Wizard.getInstance().getAirings(stationID, queryStart, dayEnd, false);
+              if (airings == null || airings.length == 0 || wiz.isNoShow(airings[0]))
+              {
+                dayIt.remove();
+                clearedDays++;
+              }
             }
-            else if (wiz.isNoShow(airings[0]))
-            {
-              if (Sage.DBG) System.out.println("SDEPG Removing hashes for station " + stationID + " because " + airings[0] + " is no show.");
+            // Once a station has no remaining hashes, drop it entirely so it is fully re-scanned.
+            if (dayMd5s.isEmpty())
               iterator.remove();
-            }
           }
+          if (Sage.DBG && (clearedDays > 0 || returnValue.size() != size))
+            System.out.println("SDEPG Invalidated " + clearedDays + " stale day hash(es); "
+                + (size - returnValue.size()) + " station(s) fully cleared for re-scan.");
 
           // If we have made changes, save them so if we shutdown in the middle of any update, we
           // won't be left with only partial data.
