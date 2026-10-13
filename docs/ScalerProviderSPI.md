@@ -53,8 +53,10 @@ All in `sage.enhance.spi`:
 | `ScaleRequest` | immutable input | The job to scale. |
 | `ScaleProviderCapabilities` | immutable | Static self-description. |
 | `ScaleProviderAvailability` | immutable | `available()` / `unavailable(detail)`. |
+| `ScaleProviderAssessment` | immutable | Exact-profile measured capacity/admissibility. |
+| `ScaleProfileKey` / `FrameCadence` | immutable | Exact geometry, rational cadence, format, model/backend/device identity. |
 | `ScaleExecutionPlan` | immutable | How you want the scale stage realized. |
-| `ExecutionForm` | enum | `BUILTIN`, `FFMPEG_FILTER`, `EXTERNAL_PROCESS`, `SIDECAR`. |
+| `ExecutionForm` | enum | `BUILTIN`, `FFMPEG_FILTER`, `EXTERNAL_PROCESS`, `CUDA_IPC`, `SIDECAR`. |
 | `ScaleProviderRegistry` | singleton | `register()` / `select()`; runs the upscale preference chain. |
 | `ScaleProviderRegistration` | `AutoCloseable` | Handle; `close()` unregisters. |
 | `ScaleGovernor`, `ScaleGovernor.Lease` | admission budget | Core-managed. |
@@ -69,9 +71,17 @@ public interface ScaleProvider {
   String id();                                       // stable, unique
   ScaleProviderCapabilities capabilities();          // static self-description
   ScaleProviderAvailability probe(ScaleRequest r);   // cheap, side-effect free
+  default ScaleProviderAssessment assess(ScaleRequest r); // typed profile capacity
   ScaleExecutionPlan plan(ScaleRequest r);           // the scale stage for ONE request
 }
 ```
+
+`assess()` defaults to a compatibility adapter over `probe()`, so existing
+providers remain binary/source compatible and are treated as unmeasured.
+Measured providers return the exact `ScaleProfileKey`, sustainable and required
+FPS, headroom, benchmark timestamp/age, sample duration, and frame count.
+Malformed, mismatched, readiness-only, or below-required measured claims are
+rejected and selection continues to CUDA-Lanczos.
 
 Hard rules (enforced by the core; breaking them gets you skipped, never a crash):
 
@@ -96,6 +106,12 @@ Purpose getPurpose();           // LIVE or PROBE
 boolean isProbe();
 boolean isUpscaling();          // tier actually changes frame size
 ```
+
+The live and offer paths also carry exact rational source/target
+`FrameCadence`, required output FPS, source and transport pixel formats/bit
+depths, and optional model/backend/device/driver identities. `29.97` and
+`30.00`, or `59.94` and `60.00`, are distinct keys. Unknown identity does not
+match a measured neighboring profile.
 
 It carries only what a scaler needs — no bitrate, client identity, or admission
 state — so a provider cannot influence those decisions.
@@ -145,17 +161,16 @@ When an `EXTERNAL_PROCESS` plan is selected on the live path, the core renders a
 three-process pipeline and streams raw frames between the stages over OS pipes:
 
 ```
-ffmpeg (decode) --rgb24--> worker (yours) --rgb24--> ffmpeg (encode, NVENC)
+ffmpeg (decode) --negotiated raw frames--> worker --> ffmpeg (encode, NVENC)
 ```
 
-- **Decode stage** decodes the source, deinterlaces on the CPU, and writes
-  headerless `rawvideo` at the **source** resolution
-  (`source_w × source_h × 3` bytes per frame).
+- **Decode stage** decodes the source, performs CUDA bob deinterlace when
+  required, and writes headerless `rawvideo` at the source resolution.
 - **Worker** reads one input-frame-sized blob, upscales, and writes one
   output-frame-sized blob (`output_w × output_h × 3` bytes). No per-frame header,
   length prefix, or metadata — dimensions are fixed for the whole session from the
-  argv. Row-major, top-to-bottom, R-G-B per pixel (identical to ffmpeg
-  `-pix_fmt rgb24`).
+  argv. RGB24, NV12, and P010 sizes are explicit; 10-bit P010 is never silently
+  forced through NV12.
 - **Encode stage** reads the upscaled frames, re-reads the source for its audio
   (same input flags, so any `-ss` seek stays aligned), applies NVENC HEVC, and
   writes the delivery container to stdout.
@@ -168,8 +183,15 @@ this session — the client still gets a stream, but it **deinterlaces/re-encode
 and does NOT upscale** (source resolution). On clean shutdown the core closes the
 worker's stdin (EOF); the worker flushes and exits. If no frames flow for
 `playback/gpu_enhance/scale/external_worker_stall_timeout_seconds` (default 5) the core
-kills the worker and the session tears down (a mid-session worker cannot be hot-swapped
-back to the built-in).
+kills the worker and the session tears down.
+
+`ScaleExecutionPlan.externalIndexed(...)`, `IndexedFrameTransport`,
+`ScaleRuntimeSignal`, and the bounded `ScaleFrameRouter` define the checkpointed
+frame-index/PTS seam required for controlled degradation without replay. Indexed
+plans deliberately fail `isRenderable()` until the process wiring supplies both
+primary and fallback producers; this prevents versioned frame headers from ever
+being mistaken for legacy rawvideo. Runtime activation must be coordinated with
+a provider that emits the versioned transport and health protocol.
 
 **No vendor code lives in the core.** The core only knows how to spawn the argv
 the plan hands it and pipe raw frames; the worker, its model, and any EULA'd
@@ -257,6 +279,7 @@ runs out of process. The core is explicit about what it renders today:
 | `BUILTIN` | Passthrough — no scale fragment (deinterlace/re-encode only). A directly-constructed calibration/offline-parity plan may still carry a CUDA scale fragment here. | Yes. |
 | `FFMPEG_FILTER` | A provider-supplied `-vf` scale fragment the deployed ffmpeg can execute. | **Yes.** |
 | `EXTERNAL_PROCESS` | A native worker process the provider owns, spawned into a `decode → worker → encode` pipeline. | **Yes** (see §2.3.1). |
+| `CUDA_IPC` | Explicit CUDA surface allocation, plane/pitch, synchronization, context ownership, and release contract. | Declared; fails closed until the native renderer is wired. |
 | `SIDECAR` | A long-lived sidecar service. | Not yet rendered. |
 
 - If a backend can be expressed as a `-vf` fragment the deployed ffmpeg
@@ -318,9 +341,10 @@ Guarantees the core gives a provider:
   never shared across concurrent sessions.
 - **Bounded.** If the offer is never taken, a reaper calls `close()` after
   `ttlMillis()` — a warm worker cannot leak VRAM indefinitely.
-- **Matched by geometry.** The core only hands a warm context back to
-  `plan(req, warm)` when the live request's provider id, source WxH, target WxH,
-  and tier match the request the context was warmed for. On any mismatch the core
+- **Matched by exact profile.** The core only hands a warm context back to
+  `plan(req, warm)` when provider, source/target geometry and rational cadence,
+  interlace, pixel format/bit depth, model, backend, device, and driver match.
+  On any mismatch the core
   closes the stale context and cold-starts, so a provider's `plan(req, warm)` can
   assume the dimensions line up (but should still verify and cold-fall-back).
 
@@ -351,10 +375,9 @@ plugin team):
   is invariant 0). The normal permit is acquired at consume time inside
   `select()`, exactly as on the cold path. If a provider wants to gate warmup on
   GPU budget, it does so privately inside its own `warmup()`.
-- **Keyed by request geometry, not media id.** The consume point
+- **Keyed by exact request profile, not media id.** The consume point
   (`ScaleProviderRegistry.select(ScaleRequest)`) carries only the request, so the
-  stash key is `(providerId, srcW, srcH, targetW, targetH, tier)` — which also
-  gives the dimensions-match guarantee above for free.
+  stash key is `(providerId, tier, ScaleProfileKey)`.
 
 ---
 

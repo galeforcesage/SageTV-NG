@@ -78,13 +78,16 @@ public final class CudaLanczosScaleProvider implements ScaleProvider
     if (scaler == null)
       return new ScaleExecutionPlan(ExecutionForm.FFMPEG_FILTER, null, "cuda-lanczos (no scaler)");
 
-    // Byte-identical to the core's legacy in-process scale fragment.
+    // Byte-identical to the core's legacy in-process scale fragment, except the
+    // scale_cuda interp_algo (see HwEncoder.highQualityInterpAlgo: scale_cuda's
+    // Lanczos kernel paints a green edge, so it uses bicubic).
     StringBuilder s = new StringBuilder();
     s.append(scaler).append('=')
      .append(request.getTargetWidth()).append(':').append(request.getTargetHeight());
-    if (HwEncoder.scalerSupportsLanczos(scaler)) s.append(":interp_algo=lanczos");
+    String ia = HwEncoder.highQualityInterpAlgo(scaler);
+    if (ia != null) s.append(":interp_algo=").append(ia);
 
-    String label = "scale_npp".equals(scaler) ? "NPP/Lanczos" : "CUDA/Lanczos";
+    String label = "scale_npp".equals(scaler) ? "NPP/Lanczos" : "CUDA/" + (ia != null ? ia : "default");
     return new ScaleExecutionPlan(ExecutionForm.FFMPEG_FILTER, s.toString(), label);
   }
 

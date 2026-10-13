@@ -8,6 +8,74 @@
 
 ## Overview
 
+Paused push seeks use the receiving client's existing units: desktop and NG
+receivers get milliseconds relative to the stream's first PTS, while hardware
+extenders retain their raw 90 kHz PTS convention. The server converts the aligned
+I-frame timestamp at this boundary, including PTS rollover. Sending raw PTS to a
+millisecond receiver can falsely advance the timeline to the end and mark a
+partially viewed recording watched.
+
+Direct push playback resets its cached position on a full seek and checks
+reported positions against the new seek floor and the parser's sent-data
+boundary before using them for display or relative skips. Out-of-window reports
+are logged and retain the last accepted position. Pending relative skips remember
+the clamped recording boundary, not an unreachable negative or past-end request.
+The direct-push sent boundary is sampled from parsed PTS **after** each payload
+transfer, independently of bitrate/DTS statistics. MPEG-PS can omit DTS and end a
+payload on an audio packet; neither condition means that no media was sent.
+
+Pending-target coalescing and recording/live-edge clamps default on only for
+sessions accepted by the existing NG capability handshake, using
+`videoframe/ng_seek_target_coalesce`, `videoframe/ng_live_skip_edge_clamp`,
+and `miniplayer/ng_push_seek_dvr_clamp`. Explicit false values disable them.
+Unsupported NG playback-rate requests return 1.0 without seeking.
+`miniplayer/ng_push_inplace_seek` defaults off. Legacy sessions retain their
+existing unprefixed settings, defaults, and rate-to-skip behavior; local players
+and hardware clients without the NG handshake do not inherit the new defaults.
+
+These server changes do not implement a client-rendered clock or an epoch
+carrier in position replies. A server-local seek counter cannot identify the
+epoch of an untagged client report. Pull-transcode clients still own reopening
+their media connection at the requested target and discarding old demux state.
+
+Active, growing recordings served through the parameterized Protocol 2.1
+pull-xcode path are producer-paced by media time. FFmpeg normally reads at 1x,
+may establish a bounded startup reservoir, and may use a bounded catch-up rate
+after downstream backpressure clears. The requested `ss` offset remains the
+generation's playback origin; pacing never forces playback to the live edge.
+The existing transcode ring, MediaServer READ/SIZE protocol, and HTTP socket
+backpressure continue to regulate bytes independently.
+
+Completed recordings remain unpaced for fast startup and seeking. HLS/CMAF
+segment production, push/direct playback, and legacy unparameterized
+`XCODE_SETUP` sessions retain their existing behavior. The policy is controlled
+by `media_server/pull_xcode_active_readrate_enabled`,
+`media_server/pull_xcode_active_readrate`,
+`media_server/pull_xcode_active_initial_burst_seconds`, and
+`media_server/pull_xcode_active_catchup_rate`.
+
+For NG enhanced push, the inferred display clock is bounded by parsed PTS from
+successfully transferred payloads, not the DTS-only bitrate counter. Before any
+payload timestamp is available it stays at the seek target. This prevents a
+stalled pipeline from inventing playback progress; it does not prove which frame
+the client has rendered. Enhancement watchdogs are cancelled and joined before
+intentional seek/stop teardown, so a superseded worker cannot trigger crash
+cooldown or act on the next pipeline.
+NG reported-position clocks do not extrapolate a repeated client timestamp from
+wall time. A frozen renderer report stays frozen; legacy interpolation remains
+unchanged.
+
+Completed CMAF/HLS recordings expose their full playlist from media sequence zero,
+even when LL-HLS is enabled. Sliding windows, delta skips, blocking reloads and
+low-latency part/control tags apply only while the source segment is recording.
+Part duration remains consistent with the transcoder in both modes. A VOD resume
+target must not be excluded by a live-edge window.
+
+An NG recording load failure leaves the preview empty instead of automatically
+tuning live TV when the timed user-watch holdoff expires. The failure state is
+cleared by an explicit new watch request or successful load. Legacy preview
+auto-launch behavior is unchanged.
+
 This contract specifies how NG clients report **playback position** and participate in
 **trick-play** (fast-forward, rewind, jump, scrub) so that the SageTV-NG server can
 reposition **correctly** (right direction and distance, every time) and **quickly** (no

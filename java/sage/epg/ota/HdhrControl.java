@@ -357,6 +357,18 @@ public final class HdhrControl
     return parseLineupJson(body);
   }
 
+  /**
+   * Fetch the device's discover.json {@code ModelNumber} (e.g. {@code "HDFX-4K"}
+   * for the FLEX 4K, {@code "HDHR4-2US"} for the CONNECT). Used to distinguish
+   * mixed-capability ATSC 3.0 devices (where only some tuners can demod ATSC3)
+   * from single-standard devices. Returns null if the field is absent.
+   */
+  public static String fetchModelNumber(String deviceIp) throws IOException
+  {
+    String body = httpGetString("http://" + deviceIp + "/discover.json", 3000, 5000);
+    return extractTop(body, "ModelNumber");
+  }
+
   private static String httpGetString(String url, int connectMs, int readMs) throws IOException
   {
     URL u = new URL(url);

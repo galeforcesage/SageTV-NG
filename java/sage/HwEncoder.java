@@ -741,6 +741,41 @@ public final class HwEncoder
     return false;
   }
 
+  /** Operator override for the {@code scale_cuda} interpolation algorithm. "auto"
+   *  (default) selects {@code bicubic}; set to a concrete algo name
+   *  ({@code nearest|bilinear|bicubic|lanczos}) to pin it. */
+  private static final String PROP_SCALE_CUDA_INTERP = "playback/gpu_enhance/scale_cuda_interp";
+
+  /**
+   * The {@code interp_algo} value to pair with {@code scaler} for a high-quality
+   * GPU upscale, or {@code null} when the scaler exposes no {@code interp_algo}
+   * option (the caller then appends no suffix and bare {@code scale_cuda}'s
+   * default interpolation is used).
+   *
+   * <p>{@code scale_npp} uses {@code lanczos}: its resize kernel clamps sampling
+   * at the frame boundary, so Lanczos is artifact-free. This ffmpeg's
+   * {@code scale_cuda} Lanczos kernel does <b>not</b> clamp &mdash; near the
+   * top/left edge its wide multi-tap window reads out-of-bounds, zero-initialized
+   * memory (Y=0, Cb=Cr=0), which converts to a bright-green 2&ndash;3px border on
+   * the upscaled picture. Its {@code bicubic} path is edge-clamped and
+   * artifact-free while remaining a sharp, high-quality interpolation, so
+   * {@code scale_cuda} defaults to {@code bicubic}. Override with
+   * {@code playback/gpu_enhance/scale_cuda_interp} if a future ffmpeg fixes the
+   * Lanczos kernel.
+   */
+  public static String highQualityInterpAlgo(String scaler)
+  {
+    if ("scale_npp".equals(scaler)) return "lanczos";
+    if ("scale_cuda".equals(scaler))
+    {
+      if (!scaleCudaSupportsInterpAlgo()) return null;
+      String ov = Sage.get(PROP_SCALE_CUDA_INTERP, "auto").trim().toLowerCase(Locale.ROOT);
+      if (ov.length() > 0 && !ov.equals("auto")) return ov;
+      return "bicubic";
+    }
+    return null;
+  }
+
   /** True if the default ffmpeg's {@code scale_cuda} exposes {@code interp_algo}. */
   public static boolean scaleCudaSupportsInterpAlgo()
   {

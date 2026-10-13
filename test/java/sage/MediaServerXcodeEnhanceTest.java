@@ -125,6 +125,16 @@ public class MediaServerXcodeEnhanceTest
     assertNull(req.tierToken);
   }
 
+  @Test
+  public void parameterizedSetupIdentifiesExistingProtocol21Shape()
+  {
+    assertTrue(MediaServer.isParameterizedXcodeSetup("audioonly;ss=1500"));
+    assertTrue(MediaServer.isParameterizedXcodeSetup(
+        "mpeg2tsremux:enhance;tier=2160p"));
+    assertFalse(MediaServer.isParameterizedXcodeSetup("audioonly"));
+    assertFalse(MediaServer.isParameterizedXcodeSetup(null));
+  }
+
   /**
    * The browserhd fMP4 encode command MUST disable B-frames (-bf 0). Browser
    * MSE rejects the negative composition-time offsets that B-frame reordering

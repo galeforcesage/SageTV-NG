@@ -50,11 +50,66 @@ public class GpuEnhanceExternalPipelineTest
         "scale_cuda", 1920, 1080, 14000L, 0L, "built", exec, null);
   }
 
+  private static EnhancementPlan externalP010Plan()
+  {
+    ScaleExecutionPlan exec = new ScaleExecutionPlan(
+        ExecutionForm.EXTERNAL_PROCESS,
+        Arrays.asList("vsr_worker", "--mode", "stream", "--pix-fmt", "p010le"),
+        3840, 2160, "p010le", "VSR 10-bit");
+    return new EnhancementPlan(EnhancementTier.ENHANCE_2160P, true, "yadif_cuda",
+        "scale_cuda", 3840, 2160, 28000L, 0L, "built", exec, null);
+  }
+
   private static int idxPair(List<String> argv, String flag, String value)
   {
     for (int i = 0; i + 1 < argv.size(); i++)
       if (flag.equals(argv.get(i)) && value.equals(argv.get(i + 1))) return i;
     return -1;
+  }
+
+  @Test
+  public void rawFrameSizesAreExactAndBounded()
+  {
+    assertEquals(GpuEnhancePipeline.rawFrameBytes(1920, 1080, "rgb24"), 6220800);
+    assertEquals(GpuEnhancePipeline.rawFrameBytes(3840, 2160, "rgb24"), 24883200);
+    assertEquals(GpuEnhancePipeline.rawFrameBytes(3840, 2160, "nv12"), 12441600);
+    assertEquals(GpuEnhancePipeline.rawFrameBytes(3840, 2160, "p010le"), 24883200);
+    assertEquals(GpuEnhancePipeline.rawFrameBytes(1919, 1080, "nv12"), 0,
+        "4:2:0 formats require even geometry");
+    assertEquals(GpuEnhancePipeline.rawFrameBytes(Integer.MAX_VALUE, Integer.MAX_VALUE, "rgb24"), 0,
+        "unbounded allocations are rejected");
+    assertEquals(GpuEnhancePipeline.rawFrameBytes(1920, 1080, "unknown"), 0,
+        "unknown formats are rejected");
+  }
+
+  @Test
+  public void externalPipelineCarriesExactFrameSizes()
+  {
+    GpuEnhancePipeline.ExternalPipeline p = GpuEnhancePipeline.buildExternalPipeline(
+        baseCopyArgv(), externalPlan2160(), 30, null, 0, 29.97, null, 0.0, null,
+        0.0, 1920, 1080);
+    assertNotNull(p);
+    assertEquals(p.getDecodeFrameBytes(), 6220800);
+    assertEquals(p.getWorkerFrameBytes(), 24883200);
+    assertEquals(p.getFrameRate(), 29.97, 0.001);
+  }
+
+  @Test
+  public void interlacedP010PreservesTenBitDownloadFormat()
+  {
+    GpuEnhancePipeline.ExternalPipeline p = GpuEnhancePipeline.buildExternalPipeline(
+        baseCopyArgv(), externalP010Plan(), 30, "hevc", 0, 30000.0 / 1001.0,
+        null, 0.0, null, 0.0, 1920, 1080);
+    assertNotNull(p);
+    assertTrue(String.join(" ", p.getDecodeArgv()).contains(
+        "yadif_cuda=1:-1:0,hwdownload,format=p010le"),
+        "10-bit external transport must not force the deinterlaced frame through NV12: "
+            + p.getDecodeArgv());
+    assertTrue(idxPair(p.getDecodeArgv(), "-pix_fmt", "p010le") >= 0);
+    assertTrue(idxPair(p.getEncodeArgv(), "-pix_fmt", "p010le") >= 0);
+    assertTrue(idxPair(p.getEncodeArgv(), "-profile:v", "main10") >= 0);
+    assertTrue(idxPair(p.getEncodeArgv(), "-filter_threads", "4") < 0,
+        "P010 transport does not require RGB-to-YUV conversion threads");
   }
 
   @Test
@@ -424,6 +479,8 @@ public class GpuEnhanceExternalPipelineTest
         "encode output forced to 8-bit 4:2:0: " + e);
     assertTrue(idxPair(e, "-profile:v", "main") >= 0,
         "HEVC Main profile stamped for the RGB pipe: " + e);
+    assertTrue(idxPair(e, "-filter_threads", "4") >= 0,
+        "RGB-to-YUV conversion must not bottleneck on one filter thread: " + e);
     // The yuv420p pix_fmt belongs to the OUTPUT (after the pipe input), not the
     // rawvideo stdin, which stays rgb24 to match the worker.
     assertTrue(idxPair(e, "-pix_fmt", "rgb24") < idxPair(e, "-i", "pipe:0"),
@@ -439,6 +496,8 @@ public class GpuEnhanceExternalPipelineTest
     List<String> e = p.getEncodeArgv();
     assertTrue(idxPair(e, "-pix_fmt", "yuv420p") >= 0,
         "browser encode output forced to 8-bit 4:2:0: " + e);
+    assertTrue(idxPair(e, "-filter_threads", "4") >= 0,
+        "browser RGB-to-YUV conversion must use the measured thread count: " + e);
   }
 
   // ---- Frame-rate cap / decimation (pipe-bandwidth + fps-consistency) -------
@@ -538,12 +597,6 @@ public class GpuEnhanceExternalPipelineTest
   }
 
   // ---- Audio side-channel + accurate seek (resume lip-sync) -----------------
-  // On a resumed play the video (cuvid fast-seek) and the re-opened audio (demux
-  // seek) land at different times, and the rawvideo worker pipe strips the video
-  // PTS, so audio and video drift by a seek-dependent 0.5-1.2s. The fix copies the
-  // audio out of the SAME decode process to a FIFO, and both outputs use an
-  // accurate seek (coarse input pre-roll + accurate output seek) so they share one
-  // origin. No-op at ss=0; correct at every seek.
 
   @Test
   public void accurateSeekSplitRewritesInputAndReturnsOutputSeek()
@@ -585,13 +638,15 @@ public class GpuEnhanceExternalPipelineTest
     assertNotNull(p, "pipeline built");
     assertEquals(p.getAudioSidecarPath(), "/tmp/aud.ts", "sidecar path carried on the pipeline");
     List<String> d = p.getDecodeArgv();
-    // baseCopyArgv() seeks to 10.5 -> coarse input 8.5; video lands accurately at
-    // 10.5 via -copyts + a select filter (cuvid fast-seeks past the input discard).
+    // Both processes subtract the same origin; coarse seeking only limits I/O.
     assertTrue(idxPair(d, "-ss", "8.5") >= 0, "coarse input seek on the decode: " + d);
     assertEquals(count(d, "-ss"), 1, "video decode carries only the coarse input seek: " + d);
-    assertTrue(d.contains("-copyts"), "-copyts preserves source PTS for the select landing: " + d);
+    assertTrue(d.contains("-copyts"), "decode preserves source PTS: " + d);
+    assertTrue(idxPair(d, "-itsoffset", "-0.000000") >= 0, "decode uses the explicit container origin: " + d);
+    assertTrue(d.contains("-noaccurate_seek"), "decode grid, not demux discard, owns accurate landing");
     String vf = d.get(d.indexOf("-vf") + 1);
-    assertTrue(vf.contains("select=gte(t\\,10.5)"), "accurate select lands video at T=10.5: " + vf);
+    assertTrue(vf.contains("setpts=PTS-10.5/TB,fps=60000/1001:start_time=0"),
+        "decode materializes the shared seek timeline before dropping PTS: " + vf);
     assertTrue(idxPair(d, "-map", "0:v:0") >= 0, "explicit video map on the decode: " + d);
     assertEquals(d.get(d.indexOf("pipe:1") - 1), "rgb24", "video output pixel format on the pipe");
     assertEquals(d.get(d.size() - 1), "pipe:1", "decode's only output is the raw video pipe: " + d);
@@ -605,6 +660,11 @@ public class GpuEnhanceExternalPipelineTest
     assertTrue(a.contains("-y"), "audio process overwrites the pre-created FIFO node: " + a);
     assertTrue(idxPair(a, "-ss", "8.5") >= 0, "audio process uses the same coarse input seek: " + a);
     assertEquals(count(a, "-ss"), 2, "audio process: same one input + one output seek: " + a);
+    assertTrue(idxPair(a, "-ss", "10.5") > a.indexOf("-i"), "audio output subtracts T, not preroll: " + a);
+    assertTrue(a.contains("-copyts") && idxPair(a, "-itsoffset", "-0.000000") >= 0,
+        "audio shares decode origin: " + a);
+    assertTrue(idxPair(a, "-avoid_negative_ts", "disabled") >= 0, "do not re-zero audio independently: " + a);
+    assertTrue(idxPair(a, "-mpegts_copyts", "1") >= 0, "FIFO preserves relative packet timestamps: " + a);
     assertTrue(idxPair(a, "-map", "0:a?") >= 0, "audio mapped from the source: " + a);
     assertTrue(idxPair(a, "-c:a", "copy") >= 0, "audio copied to the sidecar: " + a);
     assertTrue(idxPair(a, "-f", "mpegts") >= 0, "sidecar muxed as mpegts: " + a);
@@ -689,6 +749,7 @@ public class GpuEnhanceExternalPipelineTest
     assertTrue(!e.contains("-ss"), "encode carries no seek (audio already positioned): " + e);
     assertTrue(idxPair(e, "-map", "0:v:0") >= 0, "video from the worker pipe: " + e);
     assertTrue(idxPair(e, "-map", "1:a?") >= 0, "audio from the FIFO input: " + e);
+    assertTrue(e.contains("-copyts"), "encode preserves FIFO audio offsets: " + e);
   }
 
   @Test
@@ -712,6 +773,8 @@ public class GpuEnhanceExternalPipelineTest
     List<String> e = p.getEncodeArgv();
     assertTrue(idxPair(e, "-i", "/tmp/aud2.ts") >= 0, "encode reads the FIFO: " + e);
     assertTrue(idxPair(e, "-map", "1:a?") >= 0, "audio from the FIFO input: " + e);
+    assertTrue(d.contains("-itsoffset"), "browser decode uses the shared source origin");
+    assertTrue(e.contains("-copyts"), "browser encode preserves FIFO audio offsets");
   }
 
   @Test
@@ -726,5 +789,103 @@ public class GpuEnhanceExternalPipelineTest
     assertNull(p.getAudioArgv(), "no audio process on the legacy shape");
     assertTrue(p.getDecodeArgv().contains("-an"), "legacy decode drops audio");
     assertTrue(idxPair(p.getEncodeArgv(), "-i", "/rec/file.ts") >= 0, "legacy encode re-opens source");
+  }
+
+  @Test
+  public void sidecarSharedTimelineIgnoresObsoleteAudioAdvance() throws Throwable
+  {
+    sage.TestUtils.initializeSageTVForTesting();
+    String key = "playback/gpu_enhance/scale/av_sync_audio_advance_ms";
+    try
+    {
+      sage.Sage.put(key, "1100");
+      List<String> noSeekBase = new ArrayList<String>(Arrays.asList(
+          "/usr/bin/ffmpeg", "-i", "/rec/file.ts", "-map", "0:v", "-map", "0:a",
+          "-c:v", "copy", "-c:a", "copy", "-f", "mpegts", "-"));
+      GpuEnhancePipeline.ExternalPipeline head = GpuEnhancePipeline.buildExternalPipeline(
+          noSeekBase, externalPlan(), 30, sage.media.format.MediaFormat.MPEG2_VIDEO,
+          0, 30000.0 / 1001.0, "/tmp/aud.ts", 2.0);
+      List<String> ah = head.getAudioArgv();
+      assertEquals(count(ah, "-ss"), 0, "head audio must not be trimmed by a constant: " + ah);
+      String headVf = head.getDecodeArgv().get(head.getDecodeArgv().indexOf("-vf") + 1);
+      assertTrue(headVf.contains("setpts=PTS-0/TB,fps=60000/1001:start_time=0"),
+          "head video preserves late starts on the common frame grid: " + headVf);
+
+      GpuEnhancePipeline.ExternalPipeline seek = GpuEnhancePipeline.buildExternalPipeline(
+          baseCopyArgv(), externalPlan(), 30, sage.media.format.MediaFormat.MPEG2_VIDEO,
+          0, 30000.0 / 1001.0, "/tmp/aud.ts", 2.0);
+      List<String> as = seek.getAudioArgv();
+      assertTrue(idxPair(as, "-ss", "8.5") >= 0, "coarse input seek preserved: " + as);
+      assertTrue(idxPair(as, "-ss", "10.5") >= 0, "audio subtracts the exact shared target: " + as);
+      assertEquals(count(as, "-ss"), 2, "one coarse input + one source-relative output seek: " + as);
+      assertTrue(idxPair(seek.getDecodeArgv(), "-ss", "8.5") >= 0, "video coarse seek intact");
+      String vf = seek.getDecodeArgv().get(seek.getDecodeArgv().indexOf("-vf") + 1);
+      assertTrue(vf.contains("setpts=PTS-10.5/TB"), "video subtracts the same target: " + vf);
+      assertFalse(seek.getEncodeArgv().contains("-itsoffset"), "no independent audio compensation");
+    }
+    finally
+    {
+      sage.Sage.put(key, "0");
+    }
+  }
+
+  @Test
+  public void sidecarSharedTimelineRetainsTargetWithoutPreroll()
+  {
+    GpuEnhancePipeline.ExternalPipeline p = GpuEnhancePipeline.buildExternalPipeline(
+        baseCopyArgv(), externalPlan(), 30, sage.media.format.MediaFormat.MPEG2_VIDEO,
+        0, 30000.0 / 1001.0, "/tmp/aud.ts", 0.0);
+    assertTrue(p.getAudioArgv().lastIndexOf("-ss") > p.getAudioArgv().indexOf("-i"),
+        "audio origin retained even without preroll");
+    assertEquals(p.getAudioArgv().get(p.getAudioArgv().lastIndexOf("-ss") + 1), "10.5");
+    String vf = p.getDecodeArgv().get(p.getDecodeArgv().indexOf("-vf") + 1);
+    assertTrue(vf.contains("setpts=PTS-10.5/TB"), "video origin retained without preroll: " + vf);
+    assertEquals(count(p.getDecodeArgv(), "-ss"), 1, "only the coarse seek on decode");
+  }
+
+  @Test
+  public void sidecarFrameGridUsesExactBobRateAndCap()
+  {
+    for (int cap : new int[] { 0, 30 })
+    {
+      GpuEnhancePipeline.ExternalPipeline p = GpuEnhancePipeline.buildExternalPipeline(
+          baseCopyArgv(), externalPlan(), 30, sage.media.format.MediaFormat.MPEG2_VIDEO,
+          cap, 30000.0 / 1001.0, "/tmp/aud.ts", 2.0);
+      String rate = cap == 0 ? "60000/1001" : "30";
+      String vf = p.getDecodeArgv().get(p.getDecodeArgv().indexOf("-vf") + 1);
+      assertTrue(vf.endsWith("setpts=PTS-10.5/TB,fps=" + rate + ":start_time=0"),
+          "one final CFR grid preserves timing and applies cap: " + vf);
+      assertTrue(idxPair(p.getEncodeArgv(), "-framerate", rate) >= 0,
+          "encode reconstructs the exact decode grid");
+    }
+  }
+
+  @Test
+  public void sidecarReadersShareExplicitContainerOrigin()
+  {
+    for (double origin : new double[] { 0.4307, 20001.4, -0.125 })
+    {
+      String offset = String.format(java.util.Locale.ROOT, "%.6f", -origin);
+      GpuEnhancePipeline.ExternalPipeline[] pipelines = {
+          GpuEnhancePipeline.buildExternalPipeline(
+              baseCopyArgv(), externalPlan(), 30, sage.media.format.MediaFormat.MPEG2_VIDEO,
+              0, 30000.0 / 1001.0, "/tmp/aud.ts", 2.0, null, origin),
+          GpuEnhancePipeline.buildExternalReencodePipeline(
+              baseBrowserhdArgv(), externalPlan2160(), 30, sage.media.format.MediaFormat.MPEG2_VIDEO,
+              0, 30000.0 / 1001.0, "/tmp/aud.ts", 2.0, null, origin)
+      };
+      for (GpuEnhancePipeline.ExternalPipeline p : pipelines)
+      {
+        assertTrue(idxPair(p.getDecodeArgv(), "-itsoffset", offset) >= 0);
+        assertTrue(idxPair(p.getAudioArgv(), "-itsoffset", offset) >= 0);
+        assertFalse(p.getDecodeArgv().contains("-start_at_zero"),
+            "do not let unused-stream selection change the origin");
+        assertFalse(p.getAudioArgv().contains("-start_at_zero"));
+        assertTrue(p.getAudioArgv().contains("-noaccurate_seek"),
+            "output seek, not input timestamp discard, owns audio landing");
+        assertFalse(p.getEncodeArgv().contains("-itsoffset"),
+            "no compensating shift after the shared source timeline");
+      }
+    }
   }
 }

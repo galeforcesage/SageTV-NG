@@ -88,4 +88,33 @@ public class ScaleExecutionPlanExternalTest
     assertFalse(p.rendersExternalProcess(), "not an external plan");
     assertNull(p.getExternalArgv(), "no argv on a filter plan");
   }
+
+  @Test
+  public void cudaIpcDescriptorIsExplicitAndNotRawPipe()
+  {
+    CudaIpcExecutionDescriptor descriptor = new CudaIpcExecutionDescriptor(
+        "GPU-uuid", "p010le", 3840, 2160, new long[] {7680, 7680},
+        new long[] {0, 16588800}, "session", "cuda-event",
+        "ffmpeg-primary-context", "ack-release");
+    ScaleExecutionPlan p = ScaleExecutionPlan.cudaIpc(ARGV, descriptor, "VSR CUDA IPC");
+    assertEquals(p.getForm(), ExecutionForm.CUDA_IPC);
+    assertEquals(p.getCudaIpcDescriptor(), descriptor);
+    assertTrue(descriptor.isComplete());
+    assertFalse(p.rendersExternalProcess(), "CUDA IPC is not a stdio raw-frame process");
+    assertFalse(p.isRenderable(), "core must fail closed until CUDA IPC rendering is wired");
+  }
+
+  @Test
+  public void indexedTransportFailsClosedUntilRouterIsWired()
+  {
+    IndexedFrameTransport transport = new IndexedFrameTransport(
+        IndexedFrameTransport.VERSION_1, 90000L, 6220800, 24883200);
+    ScaleExecutionPlan p = ScaleExecutionPlan.externalIndexed(
+        ARGV, 3840, 2160, "rgb24", transport, "VSR indexed");
+    assertTrue(transport.isSupported());
+    assertEquals(p.getIndexedFrameTransport(), transport);
+    assertFalse(p.rendersExternalProcess(),
+        "indexed headers must never be misread by the legacy rawvideo pump");
+    assertFalse(p.isRenderable());
+  }
 }

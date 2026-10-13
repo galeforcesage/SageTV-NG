@@ -2207,7 +2207,7 @@ public class Seeker implements Hunter
     {
       try
       {
-        encState.capDev.loadDeviceTracked();
+        encState.capDev.loadDevice();
       }
       catch (EncodingException e)
       {
@@ -2644,7 +2644,7 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
                     Sage.getBoolean("mmc/fully_reload_digital_tuners_on_halt_detection", false))
                 {
                   encState.capDev.freeDevice();
-                  encState.capDev.loadDeviceTracked();
+                  encState.capDev.loadDevice();
                 }
                 loadedOK = true;
                 encState.capDev.startEncoding(null, encState.currRecordFile.getRecordingFile().toString(), "");
@@ -2672,94 +2672,6 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
               encState.resetRequested = false;
               encState.lastSizeCheckTime = 0;
               encState.lastCheckedSize = 0;
-
-              // Phase 2 tuner resilience: mid-recording migration. If the device
-              // could not be reloaded (dead/unreachable tuner, not a transient
-              // encoding stall) and it has failed to load repeatedly, stop
-              // hammering it. Provided another functioning tuner can carry this
-              // station, cleanly finalize the partial recording here (endRecord
-              // ends the segment and unpins the airing from this dead encoder)
-              // and kick the scheduler, which reassigns the still-active airing
-              // to a healthy tuner via its existing failover path. The partial
-              // file is preserved; the continuation becomes a new segment/file
-              // on the new tuner. Disabled when the threshold is <= 0.
-              long migrateAfter = Sage.getLong("mmc/failed_loads_before_recording_migration", 2L);
-              if (!loadedOK && migrateAfter > 0 && encState.currRecord != null
-                  && encState.capDev.isInLoadCooldown()
-                  && encState.capDev.getConsecutiveLoadFailures() >= migrateAfter)
-              {
-                int migStation = encState.currRecord.getStationID();
-                boolean healthyAlternate = false;
-                for (EncoderState alt : encoderStateMap.values())
-                {
-                  if (alt != encState && alt.capDev.isFunctioning() && alt.capDev.canEncode()
-                      && !alt.capDev.isInLoadCooldown() && alt.stationSet.contains(migStation))
-                  {
-                    healthyAlternate = true;
-                    break;
-                  }
-                }
-                if (healthyAlternate)
-                {
-                  Airing migAir = encState.currRecord;
-                  if (Sage.DBG) System.out.println("SEEKER migrating in-progress recording off dead tuner "
-                      + encState.capDev.getName() + " (consecutive load failures="
-                      + encState.capDev.getConsecutiveLoadFailures() + ") airing=" + migAir);
-                  endRecord(encState, Sage.time(), false);
-                  // Reassign the still-desired airing to a healthy tuner on the next pass.
-                  sched.kick(true);
-                }
-                else if (Sage.DBG)
-                  System.out.println("SEEKER wants to migrate recording off dead tuner "
-                      + encState.capDev.getName() + " but no healthy station-capable tuner is available; will keep retrying");
-              }
-
-              // Phase 2 tuner resilience: no-signal (zero-data) migration. The
-              // device reloaded/restarted cleanly (loadedOK) but has produced
-              // ZERO bytes across repeated halt resets -- a marginal/undecodable
-              // lock (seq=0), stale RF map, or a form this tuner can't receive.
-              // This never trips the load cooldown above, so without this the
-              // halt-detector would relaunch the same dead tuner forever ("No
-              // Signal" loop). Arm a per-station no-signal cooldown so the
-              // scheduler routes around THIS tuner for THIS station only, then
-              // migrate the airing to a healthy station-capable alternate (which
-              // may receive the station fine). If no alternate exists we leave
-              // the cooldown armed but keep retrying here. Disabled when <= 0.
-              long zeroDataMigrateAfter = Sage.getLong("mmc/zero_data_halts_before_recording_migration", 2L);
-              if (loadedOK && recLength == 0 && zeroDataMigrateAfter > 0
-                  && encState.currRecord != null
-                  && encState.resetCount >= zeroDataMigrateAfter)
-              {
-                int migStation = encState.currRecord.getStationID();
-                // Quarantine this tuner for this station so selection avoids it.
-                encState.capDev.noteNoSignalFailure(migStation);
-                boolean healthyAlternate = false;
-                for (EncoderState alt : encoderStateMap.values())
-                {
-                  if (alt != encState && alt.capDev.isFunctioning() && alt.capDev.canEncode()
-                      && !alt.capDev.isInLoadCooldown()
-                      && !alt.capDev.isInNoSignalCooldownForStation(migStation)
-                      && alt.stationSet.contains(migStation))
-                  {
-                    healthyAlternate = true;
-                    break;
-                  }
-                }
-                if (healthyAlternate)
-                {
-                  Airing migAir = encState.currRecord;
-                  if (Sage.DBG) System.out.println("SEEKER migrating no-signal recording off tuner "
-                      + encState.capDev.getName() + " (zero data after " + encState.resetCount
-                      + " halt resets) station=" + migStation + " airing=" + migAir);
-                  endRecord(encState, Sage.time(), false);
-                  // Reassign the still-desired airing to a healthy tuner on the next pass.
-                  sched.kick(true);
-                }
-                else if (Sage.DBG)
-                  System.out.println("SEEKER wants to migrate no-signal recording off tuner "
-                      + encState.capDev.getName() + " (station=" + migStation
-                      + ") but no healthy station-capable alternate is available; will keep retrying");
-              }
             }
           }
           else if (encState.lastCheckedSize != recLength)
@@ -2767,10 +2679,6 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
             encState.resetCount = 0;
             encState.lastSizeCheckTime = Sage.time();
             encState.lastCheckedSize = recLength;
-            // Data is flowing again -- clear any no-signal quarantine we armed
-            // for the station currently recording on this tuner.
-            if (encState.currRecord != null)
-              encState.capDev.noteSignalOK(encState.currRecord.getStationID());
           }
         }
         else
@@ -4780,23 +4688,6 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
         && "true".equalsIgnoreCase(requestor.getCapability(recordIt ? "RecordRequestLiveMultiConflict"
             : "WatchRequestLiveMultiConflict"));
     Map<Airing, EncoderState> conflictMap = multiConflictCapable ? new LinkedHashMap<Airing, EncoderState>(encoderStateMap.size()) : null;
-    // Tuner resilience: if at least one tuner that can serve this station is
-    // NOT in a load-failure cooldown, prefer those and skip the cooled-down
-    // ones during selection. If EVERY station-capable tuner is cooled down we
-    // leave them all eligible (a last-resort attempt is better than refusing).
-    boolean haveHealthyForStation = false;
-    if (iKnowIWantThisEncoder == null)
-    {
-      for (EncoderState es : tryUs)
-      {
-        if (es.stationSet.contains(theAir.stationID) && !es.capDev.isInLoadCooldown()
-            && !es.capDev.isInNoSignalCooldownForStation(theAir.stationID))
-        {
-          haveHealthyForStation = true;
-          break;
-        }
-      }
-    }
     while (true)
     {
       Iterator<EncoderState> walker = tryUs.iterator();
@@ -4813,14 +4704,6 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
         EncoderState es = walker.next();
         if (!es.stationSet.contains(theAir.stationID))
         {
-          walker.remove();
-          continue;
-        }
-        if (haveHealthyForStation && (es.capDev.isInLoadCooldown()
-            || es.capDev.isInNoSignalCooldownForStation(theAir.stationID)))
-        {
-          if (Sage.DBG) System.out.println("findBestEncoderForNow: skipping " + es.capDev.getName()
-              + " (in load-failure or no-signal cooldown; a healthy tuner can serve this station)");
           walker.remove();
           continue;
         }
@@ -5372,7 +5255,6 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
     // 1 - highest merit not recording a must see, equal merit than use lower WP of currRec or non-used source
     EncoderState es = null;
     MediaFile rv = null;
-    int liveFailoverAttempts = 0;
     // Orphaned-capture guard: remember the encoder we attach this client to (and
     // set forceWatch on) below, so that if we ultimately fail to hand back a
     // playable file we can release it on the way out instead of leaving a
@@ -5529,30 +5411,6 @@ if (encState.currRecord.getDuration() + (Sage.time() - encState.lastResetTime) >
           work();
           if (rv == null)
             rv = wiz.getFileForAiring(watchAir);
-          // Tuner resilience: work() just tried to load the chosen capture
-          // device. If that load failed (device now quarantined in cooldown and
-          // still not loaded), don't hand back a dead live file that surfaces as
-          // "No signal" on the client. Release this client's hold on the dead
-          // tuner and retry selection so findBestEncoderForNow routes to a
-          // healthy tuner that can serve this station. Bounded so that when no
-          // healthy alternative exists we fall through to best-effort behavior.
-          if (es != null && es.capDev.isInLoadCooldown() && !es.capDev.isLoaded()
-              && liveFailoverAttempts < encoderStateMap.size() + 1)
-          {
-            liveFailoverAttempts++;
-            if (Sage.DBG) System.out.println("requestWatch: encoder " + es.capDev.getName()
-                + " failed to load; releasing and re-selecting a healthy tuner (attempt "
-                + liveFailoverAttempts + ")");
-            if (es.controllingClients.remove(uiClient) && es.controllingClients.isEmpty())
-            {
-              es.forceWatch = null;
-              es.forceProcessed = false;
-              es.absoluteClientControl = null;
-            }
-            if (es == engagedES) { engagedES = null; engagedClientAdded = false; }
-            rv = null;
-            continue;
-          }
         }
         else
         {

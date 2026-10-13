@@ -129,21 +129,9 @@ public class Scheduler implements SchedulerInterface
         {
           if (!cdi.getCaptureDevice().isLoaded())
           {
-            // Tuner resilience: a device that just failed to load is quarantined
-            // for a cooldown window. Skip it cheaply here instead of hammering
-            // loadDevice() (a dead network tuner blocks on a socket timeout)
-            // every scheduler pass; it is re-probed automatically once the
-            // cooldown lapses, so a returning tuner self-heals.
-            if (cdi.getCaptureDevice().isInLoadCooldown())
-            {
-              if (Sage.DBG) System.out.println("Schedule skipping encoder " + cdi.getCaptureDevice().getName() +
-                  " (in load-failure cooldown, " + cdi.getCaptureDevice().getConsecutiveLoadFailures() + " consecutive failures)");
-              walker.remove();
-              continue;
-            }
             try
             {
-              cdi.getCaptureDevice().loadDeviceTracked();
+              cdi.getCaptureDevice().loadDevice();
               allDevs.add(cdi.getCaptureDevice());
             }
             catch (EncodingException e)
@@ -185,18 +173,6 @@ public class Scheduler implements SchedulerInterface
           {
             if (ds.canViewStation(allStats[j]))
             {
-              // Tuner resilience: a station this tuner is currently in a
-              // no-signal (zero-data) cooldown for is treated as un-viewable on
-              // this device for the duration, so the scheduler routes the
-              // recording to a healthy station-capable tuner instead of
-              // reassigning it straight back to the tuner that gets no signal.
-              // Per-station, so the tuner still serves every other channel.
-              if (capdev.isInNoSignalCooldownForStation(allStats[j]))
-              {
-                if (Sage.DBG) System.out.println("Schedule excluding station " + allStats[j]
-                    + " from encoder " + capdev.getName() + " (in no-signal cooldown)");
-                continue;
-              }
               int currQualValue = currInputType;
               Integer statInt = allStats[j];
               es.stationSet.add(statInt);

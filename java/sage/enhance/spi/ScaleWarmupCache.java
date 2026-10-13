@@ -74,18 +74,10 @@ public final class ScaleWarmupCache
     return Math.max(1000L, Sage.getLong(PROP_MAX_TTL_SECONDS, 60L) * 1000L);
   }
 
-  /**
-   * Stash key. Deliberately keyed on the OUTPUT geometry + tier + source height
-   * (both the advisory offer and the live plan know these), not source width, so
-   * a small source-width discrepancy does not miss the warm worker; the provider
-   * re-verifies exact dimensions in {@link ScaleProvider#plan(ScaleRequest,
-   * WarmContext)} and cold-falls-back on any true mismatch.
-   */
+  /** Stash key. Warm contexts are reusable only for an exact profile identity. */
   static String keyFor(String providerId, ScaleRequest req)
   {
-    return providerId + "|" + req.getTier().token() + "|"
-        + req.getTargetWidth() + "x" + req.getTargetHeight()
-        + "|src=" + req.getSourceHeight();
+    return providerId + "|" + req.getTier().token() + "|" + req.getProfileKey();
   }
 
   /**

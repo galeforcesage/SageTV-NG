@@ -49,6 +49,8 @@ public final class ScaleProviderRegistry
    * outright; the client's intent plus the automatic chain drive that.
    */
   private static final String PROP_PROVIDER = "playback/gpu_enhance/scale_provider";
+  private static final String PROP_ASSESSMENT_MAX_AGE_SECONDS =
+      "playback/gpu_enhance/scale/assessment_max_age_seconds";
 
   private static final ScaleProviderRegistry INSTANCE = new ScaleProviderRegistry();
 
@@ -205,14 +207,16 @@ public final class ScaleProviderRegistry
       String id = p.id();
       try
       {
-        ScaleProviderAvailability avail = p.probe(probe);
-        if (avail == null || !avail.isAvailable())
+        ScaleProviderAssessment assessment = p.assess(probe);
+        if (!assessmentUsable(assessment, probe))
         {
-          System.out.println("SCALE_PROVIDER offer-gate: provider '" + id + "' probe unavailable: "
-              + (avail == null ? "null" : avail.getDetail()) + " -> trying next in chain");
+          System.out.println("SCALE_PROVIDER offer-gate: provider '" + id
+              + "' assessment unavailable: " + assessment + " -> trying next in chain");
           continue;
         }
-        ScaleExecutionPlan exec = p.plan(probe);
+        ScaleRequest assessedProbe = assessment.isMeasured()
+            ? probe.withProfileIdentity(assessment.getProfile()) : probe;
+        ScaleExecutionPlan exec = p.plan(assessedProbe);
         if (exec == null || !exec.isRenderable())
         {
           System.out.println("SCALE_PROVIDER offer-gate: provider '" + id + "' plan "
@@ -220,7 +224,7 @@ public final class ScaleProviderRegistry
           continue;
         }
         System.out.println("SCALE_PROVIDER offer-gate: provider '" + id
-            + "' will render -> offering upscale");
+            + "' will render assessment=" + assessment + " -> offering upscale");
         return true;
       }
       catch (Throwable t)
@@ -251,6 +255,28 @@ public final class ScaleProviderRegistry
    */
   public ScaleSelection select(ScaleRequest request)
   {
+    return select(request, false);
+  }
+
+  /**
+   * Like {@link #select(ScaleRequest)} but restricted to the <b>deterministic</b>
+   * rung of the chain: specialized AI upscalers (e.g. VSR) are skipped entirely,
+   * so selection resolves to CUDA-Lanczos (or, failing that, the built-in
+   * passthrough). This is the seam the transcoder uses to build the
+   * <i>one-rung-down</i> fallback for a session whose specialized upscaler was
+   * chosen but could not be delivered in time (cold model load past budget), so
+   * the single-process fallback command upscales with Lanczos rather than
+   * dropping straight to source. Takes no specialized {@link ScaleGovernor}
+   * permit (the deterministic provider needs none), so it never competes with the
+   * specialized budget the primary selection already holds.
+   */
+  public ScaleSelection selectDeterministic(ScaleRequest request)
+  {
+    return select(request, true);
+  }
+
+  private ScaleSelection select(ScaleRequest request, boolean deterministicOnly)
+  {
     // Deinterlace-only / non-upscaling: the built-in passthrough (the core still
     // deinterlaces). Choosing it here is not a fallback.
     if (request == null || !request.isUpscaling())
@@ -262,17 +288,20 @@ public final class ScaleProviderRegistry
       ScaleGovernor.Lease lease = null;
       try
       {
-        ScaleProviderAvailability avail = provider.probe(request);
-        if (avail == null || !avail.isAvailable())
+        boolean specialized = provider.capabilities() != null
+            && provider.capabilities().isSpecialized();
+        if (deterministicOnly && specialized)
+          continue;  // one-rung-down fallback build: skip AI upscalers outright.
+
+        ScaleProviderAssessment assessment = provider.assess(request);
+        if (!assessmentUsable(assessment, request))
         {
           System.out.println("SCALE_PROVIDER select: provider '" + id
-              + "' probe unavailable: " + (avail == null ? "null" : avail.getDetail())
+              + "' assessment unavailable: " + assessment
               + " -> trying next in chain");
           continue;
         }
 
-        boolean specialized = provider.capabilities() != null
-            && provider.capabilities().isSpecialized();
         if (specialized)
         {
           lease = ScaleGovernor.getInstance().acquire(id, request);
@@ -284,8 +313,10 @@ public final class ScaleProviderRegistry
           }
         }
 
+        ScaleRequest assessedRequest = assessment.isMeasured()
+            ? request.withProfileIdentity(assessment.getProfile()) : request;
         ScaleExecutionPlan exec;
-        WarmContext warm = ScaleWarmupCache.getInstance().consume(id, request);
+        WarmContext warm = ScaleWarmupCache.getInstance().consume(id, assessedRequest);
         if (warm != null)
         {
           // A pre-warmed worker is ready: let the provider fold it into its plan
@@ -293,11 +324,11 @@ public final class ScaleProviderRegistry
           // which case it closes the context and returns a fresh cold plan).
           if (Sage.DBG) System.out.println("SCALE_PROVIDER select: provider '" + id
               + "' consuming pre-warmed context");
-          exec = provider.plan(request, warm);
+          exec = provider.plan(assessedRequest, warm);
         }
         else
         {
-          exec = provider.plan(request);
+          exec = provider.plan(assessedRequest);
         }
         if (exec == null || !exec.isRenderable())
         {
@@ -307,6 +338,8 @@ public final class ScaleProviderRegistry
           continue;
         }
 
+        System.out.println("SCALE_PROVIDER select: provider '" + id
+            + "' selected assessment=" + assessment);
         return new ScaleSelection(id, exec, lease, false);
       }
       catch (Throwable t)
@@ -344,7 +377,16 @@ public final class ScaleProviderRegistry
         ScaleProviderCapabilities caps = p.capabilities();
         if (caps != null && caps.isSpecialized())
         {
-          cache.requestWarmup(p.id(), p, req);
+          ScaleProviderAssessment assessment = p.assess(req);
+          if (!assessmentUsable(assessment, req))
+          {
+            if (Sage.DBG) System.out.println("SCALE_WARMUP skip provider '" + p.id()
+                + "' assessment=" + assessment);
+            continue;
+          }
+          ScaleRequest assessedRequest = assessment.isMeasured()
+              ? req.withProfileIdentity(assessment.getProfile()) : req;
+          cache.requestWarmup(p.id(), p, assessedRequest);
           return;
         }
       }
@@ -376,6 +418,17 @@ public final class ScaleProviderRegistry
   private static void closeQuietly(ScaleGovernor.Lease lease)
   {
     if (lease != null) { try { lease.close(); } catch (Throwable ignore) {} }
+  }
+
+  private static boolean assessmentUsable(ScaleProviderAssessment assessment,
+      ScaleRequest request)
+  {
+    if (assessment == null || !assessment.isUsableFor(request)) return false;
+    if (!assessment.isMeasured()) return true;
+    long maxAgeSeconds = Math.max(1L,
+        Sage.getLong(PROP_ASSESSMENT_MAX_AGE_SECONDS, 3600L));
+    return assessment.getBenchmarkAge().compareTo(
+        java.time.Duration.ofSeconds(maxAgeSeconds)) <= 0;
   }
 
   /** Concise, plugin-diagnostic description of why a provider plan was rejected

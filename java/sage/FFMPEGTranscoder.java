@@ -1647,9 +1647,22 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (!sage.media.format.MediaFormat.MPEG2_TS.equals(sourceFormat.getFormatName())) return out;
     if (!sage.media.format.MediaFormat.HEVC.equals(sourceFormat.getPrimaryVideoFormat())) return out;
     // Leave the browserhd/pull-xcode path (it sets its own -hwaccel) and the
-    // PWA/HLS + H.264-push paths untouched — scope to the native placeshifter.
+    // PWA/HLS path (it owns its T3 full-GPU NVDEC pipeline) untouched.
+    //
+    // The native placeshifter has two live-ATSC3 variants and BOTH want NVDEC:
+    //   - the pull transcode (pushH264 == false), and
+    //   - the H.264 push re-encode (pushH264 == true), which decodes HEVC then
+    //     re-encodes to h264_nvenc/libx264. Earlier this excluded pushH264 and
+    //     fell back to the SOFTWARE HEVC decoder, which cannot sustain realtime
+    //     on 1080p60 HEVC Main10 and floods missing-ref (RPS/POC) "undecodable
+    //     NALU" errors -> the client freezes. The push path always re-encodes
+    //     (never -vcodec copy), so hevc_cuvid is genuinely consumed (not the
+    //     idle-session overhead FIX 1 strips on the copy path); frames land in
+    //     system memory (no -hwaccel_output_format), so the push block's
+    //     existing "-vf format=yuv420p" still does the 10-bit -> 8-bit
+    //     downconvert for the 8-bit NVENC/libx264 encoders.
     if (hwaccelDecode != null && hwaccelDecode.length() > 0) return out;
-    if (httplsMode || pushH264) return out;
+    if (httplsMode) return out;
 
     String mode = Sage.get("multimedia/hwaccel/atsc3_hevc_decode", "auto");
     if (mode == null) mode = "auto";
@@ -1687,6 +1700,16 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (ac4SourceAudioCodec == null || ac4SourceAudioCodec.length() == 0) return;
     if (sourceFormat == null) return;
     if (!sage.media.format.MediaFormat.AC4.equals(sourceFormat.getPrimaryAudioFormat())) return;
+    // Legacy Windows Placeshifter "dynamic" mode (MPEG4-ASP video in MPEG2-PS)
+    // drives a bespoke PS-ONLY push receiver whose historical audio codec is MP2.
+    // On that push path it does not reliably configure an AC-3 decoder, so the
+    // AC-4 ladder's AC-3 pick plays as broken/garbled audio. Force MP2 for this
+    // mode only — the codec the receiver was built for. clampAudioChannelsToEncoder
+    // (called immediately after this) auto-downmixes a >2ch source to the stereo
+    // MP2 can emit, so a 5.1 AC-4 source cannot abort the encode. Every other mode
+    // (dynamicts/dynamich264/enhance/audioonly) keeps the ladder pick unchanged.
+    String targetCodec = "dynamic".equalsIgnoreCase(xcodeModeName)
+        ? "mp2" : ac4SourceAudioCodec;
     boolean replaced = false;
     int abIndex = -1;
     for (int i = 0; i < xcodeParamsVec.size() - 1; i++)
@@ -1696,7 +1719,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
       String tok = (String) o;
       if (tok.equals("-acodec") || tok.equals("-c:a") || tok.equals("-codec:a"))
       {
-        xcodeParamsVec.set(i + 1, ac4SourceAudioCodec);
+        xcodeParamsVec.set(i + 1, targetCodec);
         replaced = true;
       }
       else if (tok.equals("-ab") || tok.equals("-b:a"))
@@ -1708,10 +1731,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
     {
       // Profile had no explicit audio codec — append one so AC-4 source actually
       // decodes. Insert before the "-" stdout sentinel, not after it.
-      addBeforeOutputSentinel(xcodeParamsVec, "-c:a", ac4SourceAudioCodec);
+      addBeforeOutputSentinel(xcodeParamsVec, "-c:a", targetCodec);
     }
     // E-AC-3 default bitrate bump for 5.1 — ac3 stays at whatever the profile chose.
-    if ("eac3".equalsIgnoreCase(ac4SourceAudioCodec))
+    if ("eac3".equalsIgnoreCase(targetCodec))
     {
       String eac3Bps = Sage.get("miniplayer/eac3_bitrate", "640k");
       if (abIndex >= 0)
@@ -1723,7 +1746,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
         addBeforeOutputSentinel(xcodeParamsVec, "-b:a", eac3Bps);
     }
     if (Sage.DBG) System.out.println("FFMPEGTranscoder: AC-4 source — audio codec overridden to "
-        + ac4SourceAudioCodec + (abIndex >= 0 ? " (bitrate slot=" + abIndex + ")" : ""));
+        + targetCodec + (abIndex >= 0 ? " (bitrate slot=" + abIndex + ")" : "")
+        + ("dynamic".equalsIgnoreCase(xcodeModeName) ? " [legacy placeshifter MP2 forced]" : ""));
   }
 
   /**
@@ -2049,6 +2073,32 @@ public class FFMPEGTranscoder implements TranscodeEngine
   }
 
   /**
+   * Recognize the subset of NVENC failure lines that are TRANSIENT, PER-SESSION
+   * resource exhaustion rather than a machine-wide capability loss. The NVENC
+   * engine is healthy and capable here — this one encode simply could not obtain
+   * VRAM or an encode slot at the moment (classically "Failed locking bitstream
+   * buffer: out of memory" or a CUDA out-of-memory), which on this deployment is
+   * almost always an orphaned sibling session still holding the resource. Such a
+   * line still matches {@link #isNvencInitFailureLine} (it contains "nvenc" +
+   * "failed"), so callers use this predicate to AVOID arming the machine-wide
+   * NVENC cooldown ({@link sage.HwEncoder#noteNvencFailure()}) for a capacity
+   * blip — otherwise every other in-flight/subsequent session is wrongly denied
+   * GPU enhance for the whole cooldown window. The offending session still
+   * degrades to a no-upscale remux via the caller's per-session rung logic.
+   */
+  private static boolean isNvencCapacityFailureLine(CharSequence line)
+  {
+    if (line == null) return false;
+    String l = line.toString().toLowerCase(java.util.Locale.ROOT);
+    if (l.indexOf("locking bitstream buffer") >= 0) return true;
+    if (l.indexOf("out of memory") >= 0) return true;
+    if (l.indexOf("cuda_error_out_of_memory") >= 0) return true;
+    if (l.indexOf("cuda error: out of memory") >= 0) return true;
+    if (l.indexOf("outofmemory") >= 0) return true;
+    return false;
+  }
+
+  /**
    * True when this transcode COPIES the video track into an MP4-family
    * (fragmented) output — i.e. the {@code browserhd_copyv} / {@code browserhd_remux}
    * pull-xcode modes. On these paths the output track's width/height and the
@@ -2165,6 +2215,52 @@ public class FFMPEGTranscoder implements TranscodeEngine
    */
   // ---- External-process (upscale worker) enhancement launch ---------------
 
+  boolean isEnhanceOutputBackpressured()
+  {
+    synchronized (xcodeSyncLock)
+    {
+      return bufferOutput && !xcodeDone && xcodeBuffer != null
+          && numFilledXcodeBuffers >= xcodeBuffer.length;
+    }
+  }
+
+  private void maybeLogEnhancedDelivery(long mediaMillis)
+  {
+      sage.ng.EnhancedDeliveryMetrics metrics = enhanceDeliveryMetrics;
+      if (metrics == null || mediaMillis <= 0L || enhanceSessionId == null
+          || enhanceRequiredFrameRate <= 0.0
+          || !Sage.getBoolean("playback/gpu_enhance/delivery_telemetry", true))
+        return;
+      long now = System.currentTimeMillis();
+      sage.ng.EnhancedDeliveryMetrics.RateSample rate =
+          metrics.sample(now, mediaMillis, isEnhanceOutputBackpressured());
+      if (rate == null) return;
+
+      int filled;
+      int capacity;
+      synchronized (xcodeSyncLock)
+      {
+        filled = numFilledXcodeBuffers;
+        capacity = xcodeBuffer == null ? 0 : xcodeBuffer.length;
+      }
+      long[] dr = enhanceDecodeReadStamp;
+      long[] dw = enhanceDecodeWriteStamp;
+      long[] wr = enhanceWorkerReadStamp;
+      long[] ww = enhanceWorkerWriteStamp;
+      System.out.println(String.format(java.util.Locale.US,
+          "ENHANCE_DELIVERY session=%s requiredFps=%.3f mediaRate=%.4fx"
+          + " windowMs=%d mediaMs=%d ring=%d/%d backpressured=false"
+          + " edgeAgeMs=decodeRead:%d,decodeWrite:%d,workerRead:%d,workerWrite:%d",
+          enhanceSessionId, enhanceRequiredFrameRate, rate.mediaRate, rate.wallMillis,
+          rate.mediaMillis, filled, capacity, stampAge(now, dr), stampAge(now, dw),
+          stampAge(now, wr), stampAge(now, ww)));
+  }
+
+  private static long stampAge(long now, long[] stamp)
+  {
+    return stamp == null || stamp[0] <= 0L ? -1L : Math.max(0L, now - stamp[0]);
+  }
+
   /**
    * Launch the three-process enhancement pipeline
    * ({@code ffmpeg decode → worker → ffmpeg encode}) staged by
@@ -2203,10 +2299,26 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // A pre-warmed worker (from ScaleWarmupCache) is already spawned and already
     // signaled READY (the provider consumed that during warmup), so the core
     // neither spawns it nor waits on a READY latch it would never see.
+    // prestartedSupplied records that the plan carried a live worker/proxy AT ALL:
+    // once it did, the accompanying argv is diagnostic-only and must never be
+    // executed (see the worker-spawn branch below).
+    final boolean prestartedSupplied = (warmWorker != null);
     final boolean warm = (warmWorker != null && warmWorker.isAlive());
 
     long startupMs = Math.max(1000L,
         Sage.getLong("playback/gpu_enhance/scale/external_worker_startup_timeout_seconds", 30L) * 1000L);
+    // Option B budget: a cold specialized (VSR) worker is held on "Loading..." only
+    // as long as the decide->first-frame budget allows. The longer model-load grace
+    // is unlocked ONLY when a machine-wide arbiter affirmatively reserved GPU for
+    // this session (enhanceBrokerGrantedVsr); otherwise the ordinary decision budget
+    // binds and a slow load degrades one rung to CUDA-Lanczos. Never widen past the
+    // operator's legacy startup ceiling, so that knob still narrows the wait. A
+    // pre-warmed worker skips this wait entirely (handled below).
+    {
+      long budgetMs = Math.max(250L, Sage.getLong("playback/gpu_enhance/decision_budget_ms", 3000L));
+      long graceMs  = Math.max(budgetMs, Sage.getLong("playback/gpu_enhance/vsr_model_load_grace_ms", 8000L));
+      startupMs = Math.min(startupMs, enhanceBrokerGrantedVsr ? graceMs : budgetMs);
+    }
     final long stallMs = Math.max(1000L,
         Sage.getLong("playback/gpu_enhance/scale/external_worker_stall_timeout_seconds", 10L) * 1000L);
 
@@ -2226,10 +2338,28 @@ public class FFMPEGTranscoder implements TranscodeEngine
       {
         worker = warmWorker;
         if (Sage.DBG) System.out.println("GPU_ENHANCE using pre-warmed worker "
-            + "(skipping spawn + READY wait); argv(diag): " + workerArgv);
+            + "(skipping spawn + READY wait); argv(diag, NOT executed): " + workerArgv);
+      }
+      else if (prestartedSupplied)
+      {
+        // A prestarted worker/proxy was supplied by the plan but is no longer
+        // alive at launch. Its argv is DIAGNOSTIC ONLY: spawning from it here would
+        // create a worker outside the plugin's lease/pin/ownership bookkeeping,
+        // detached from the grant that reserved the GPU. Refuse, and fail the
+        // launch so the caller releases the grant/lease and falls back to a plain
+        // remux / re-plan. Never execute argv(diag) once any prestarted process
+        // was supplied.
+        System.out.println("GPU_ENHANCE prestarted worker supplied but not alive at"
+            + " launch; refusing to spawn from argv(diag) -- failing launch so the"
+            + " caller releases the grant and falls back/re-plans."
+            + " argv(diag, NOT executed): " + workerArgv);
+        destroyQuietly(decode);
+        return null;
       }
       else
       {
+        // No prestarted process was ever supplied: core legitimately owns the
+        // worker lifecycle and spawns it from the plan's argv.
         if (Sage.DBG) System.out.println("GPU_ENHANCE external worker argv: " + workerArgv);
         worker = wPb.start();
       }
@@ -2271,8 +2401,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
           if (Sage.DBG) System.out.println("GPU_ENHANCE pre-warmed pipeline not all alive"
               + " (workerAlive=" + worker.isAlive() + " decodeAlive=" + decode.isAlive()
               + " encodeAlive=" + encode.isAlive() + "); abandoning external pipeline");
-          destroyQuietly(encode); destroyQuietly(worker); destroyQuietly(decode); destroyQuietly(audio);
-          unregisterLiveChild(decode); unregisterLiveChild(worker); unregisterLiveChild(encode); unregisterLiveChild(audio);
+          abandonExternalEnhanceChildren(encode, worker, decode, audio);
           return null;
         }
       }
@@ -2308,7 +2437,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
         // fall back to the plain command -- the multi-second black screen the user
         // sees. Polling in short slices lets us abandon within ~200ms of a crash.
         boolean got = false;
-        long readyDeadline = System.currentTimeMillis() + startupMs;
+        long readyStart = System.currentTimeMillis();
+        long readyDeadline = readyStart + startupMs;
         while (true)
         {
           if (ready.await(200, java.util.concurrent.TimeUnit.MILLISECONDS)) { got = true; break; }
@@ -2317,23 +2447,59 @@ public class FFMPEGTranscoder implements TranscodeEngine
         }
         if (!got || !worker.isAlive() || !decode.isAlive() || !encode.isAlive())
         {
-          if (Sage.DBG) System.out.println("GPU_ENHANCE external worker not READY within "
-              + startupMs + "ms (got=" + got + " workerAlive=" + worker.isAlive()
+          long elapsedMs = System.currentTimeMillis() - readyStart;
+          System.out.println("GPU_ENHANCE external worker not READY within "
+              + startupMs + "ms (elapsedMs=" + elapsedMs
+              + " budget=" + (enhanceBrokerGrantedVsr ? "vsr_model_load_grace" : "decision_budget")
+              + " got=" + got + " workerAlive=" + worker.isAlive()
               + " decodeAlive=" + decode.isAlive() + " encodeAlive=" + encode.isAlive()
-              + "); abandoning external pipeline");
-          destroyQuietly(encode); destroyQuietly(worker); destroyQuietly(decode); destroyQuietly(audio);
-          unregisterLiveChild(decode); unregisterLiveChild(worker); unregisterLiveChild(encode); unregisterLiveChild(audio);
+              + "); abandoning external pipeline (single-process fallback follows)");
+          abandonExternalEnhanceChildren(encode, worker, decode, audio);
           return null;
         }
       }
 
       // Frame pumps: decode.stdout -> worker.stdin ; worker.stdout -> encode.stdin.
-      final long[] lastProgress = { System.currentTimeMillis() };
+      // Each pump is stamped on BOTH its read side and its write side, so the
+      // stall watchdog can attribute a freeze to the correct EDGE rather than
+      // always blaming the worker. A single post-cycle stamp cannot tell "worker
+      // produced nothing" from "the pump is blocked WRITING to a back-pressured
+      // nvenc": both freeze the one stamp. Splitting read vs write disambiguates:
+      //   dwRead  -- decode produced a chunk (read from decode.stdout)
+      //   dwWrite -- worker accepted a chunk (written to worker.stdin)
+      //   weRead  -- worker produced a chunk (read from worker.stdout); 0 sentinel
+      //              = "no first frame yet" (separates startup grace from steady).
+      //   weWrite -- encode accepted a chunk (enhanced output delivered); 0 = none.
+      final long now0 = System.currentTimeMillis();
+      final long[] dwRead  = { now0 };
+      final long[] dwWrite = { now0 };
+      final long[] weRead  = { 0L };
+      final long[] weWrite = { 0L };
+      enhanceDecodeReadStamp = dwRead;
+      enhanceDecodeWriteStamp = dwWrite;
+      enhanceWorkerReadStamp = weRead;
+      enhanceWorkerWriteStamp = weWrite;
+      enhanceRequiredFrameRate = ep.getFrameRate();
       startFramePump("enhance-decode->worker", decode.getInputStream(),
-          worker.getOutputStream(), lastProgress);
+          worker.getOutputStream(), ep.getDecodeFrameBytes(), dwRead, dwWrite);
       startFramePump("enhance-worker->encode", worker.getInputStream(),
-          encode.getOutputStream(), null);
+          encode.getOutputStream(), ep.getWorkerFrameBytes(), weRead, weWrite);
       startStderrDrain("enhance-decode-stderr", decode.getErrorStream());
+
+      final long pipelineStart = System.currentTimeMillis();
+      // First-frame grace: the worker is already READY, but its FIRST upscaled
+      // frame can be far slower than steady state (cold inference). Hold the tight
+      // steady-state stall clock until that first frame flows. Never shorter than
+      // the steady-state stall. This delays only the give-up decision for a worker
+      // that never produces -- it adds no latency to the success path.
+      final long startupGraceMs = Math.max(stallMs,
+          Sage.getLong("playback/gpu_enhance/scale/external_worker_startup_grace_seconds", 20L) * 1000L);
+      // Anti-wedge ceiling for the "neither pump advancing" case (upstream/
+      // downstream, not the worker): ride out a transient hiccup, but if nothing
+      // moves for this much longer window, tear the session down WITHOUT a cooldown
+      // so a genuinely wedged encode can't pin the pipeline forever.
+      final long hardStallMs = Math.max(stallMs,
+          Sage.getLong("playback/gpu_enhance/scale/external_worker_hard_stall_seconds", 30L) * 1000L);
 
       // Stall watchdog: if frames stop flowing decode->worker for stallMs while
       // the decode is still producing, OR the worker dies outright, tear the
@@ -2347,38 +2513,157 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // leave the sidecar (and encode) running forever: the "exit but the server
       // keeps transcoding" leak.
       final Process wd = worker, dd = decode, ed = encode;
+      final long[] fDwRead = dwRead, fDwWrite = dwWrite, fWeRead = weRead, fWeWrite = weWrite;
       Thread watch = new Thread("enhance-stall-watchdog")
       {
         public void run()
         {
+          long rideSince = 0L; // when a non-worker (upstream/downstream) stall began
+          long backpressureGraceUntil = 0L;
           while (ed.isAlive())
           {
             try { Thread.sleep(1000L); } catch (InterruptedException ie) { return; }
             if (!dd.isAlive()) return; // decode finished: clean EOF path, not a stall
+
+            long now = System.currentTimeMillis();
             boolean workerGone = !wd.isAlive();
-            boolean stalled = System.currentTimeMillis() - lastProgress[0] > stallMs;
-            if (workerGone || stalled)
+            if (!workerGone && isEnhanceOutputBackpressured())
             {
-              if (Sage.DBG) System.out.println("GPU_ENHANCE external worker "
-                  + (workerGone ? "died" : "stalled > " + stallMs + "ms")
-                  + "; tearing down worker + audio sidecar so the encode can EOF"
-                  + " (plain remux on re-open)");
-              if (stalled) markEnhanceStallCooldown(FFMPEGTranscoder.this.currFile);
-              destroyQuietly(wd);
-              Process a = FFMPEGTranscoder.this.enhanceAudioProcess;
-              if (a != null) destroyQuietly(a);
+              // A full output ring stops stdout consumption and backs up every
+              // pipe, including a healthy worker. Pause is not a worker failure.
+              rideSince = 0L;
+              backpressureGraceUntil = now + stallMs;
+              continue;
+            }
+            if (!workerGone && now < backpressureGraceUntil)
+              continue;
+
+            // Per-edge liveness within the steady-state stall window. Read vs write
+            // stamps pinpoint which direction is actually blocked:
+            boolean decodeProducing = (now - fDwRead[0]  <= stallMs); // decode emits
+            boolean workerConsuming = (now - fDwWrite[0] <= stallMs); // worker reads in
+            boolean workerProducing = fWeRead[0]  != 0L && (now - fWeRead[0]  <= stallMs);
+            boolean outFlowing      = fWeWrite[0] != 0L && (now - fWeWrite[0] <= stallMs);
+
+            // Phase 1 -- startup. The worker is READY but has not produced its first
+            // frame yet (weRead still at its 0 sentinel). Apply the SEPARATE,
+            // generous first-frame grace, then attribute the failure by edge.
+            if (fWeRead[0] == 0L && !workerGone)
+            {
+              if (now - pipelineStart > startupGraceMs)
+              {
+                boolean fedWorker = fDwWrite[0] > pipelineStart; // worker accepted input
+                boolean gotInput  = fDwRead[0]  > pipelineStart; // decode produced input
+                if (fedWorker || gotInput)
+                {
+                  // Input reached (or was offered to) the worker, yet it emitted no
+                  // first frame -> the worker is the proven culprit.
+                  if (Sage.DBG) System.out.println("GPU_ENHANCE external worker produced"
+                      + " no frame within startup grace " + startupGraceMs + "ms (input"
+                      + (fedWorker ? " consumed" : " offered but not consumed")
+                      + "); tearing down (worker is the culprit -> cooldown)");
+                  markEnhanceStallCooldown(FFMPEGTranscoder.this.currFile);
+                }
+                else
+                {
+                  // Decode never produced input -> upstream starvation, not the
+                  // worker. No cooldown, so the next open retries enhancement.
+                  if (Sage.DBG) System.out.println("GPU_ENHANCE no first frame within"
+                      + " startup grace " + startupGraceMs + "ms but decode produced no"
+                      + " input (upstream starvation, not the worker); tearing down"
+                      + " without cooldown");
+                }
+                tearDownEnhanceWorkerStages(wd);
+                return;
+              }
+              continue; // still within startup grace; do not apply steady-state stall
+            }
+
+            // Phase 2 -- steady state (worker has produced at least one frame, or died).
+            if (workerGone)
+            {
+              // Worker exited on its own. If the encode is still alive it crashed
+              // mid-stream (its fault -> cooldown); if the encode already died the
+              // worker just took a SIGPIPE from a dead downstream -- not its fault.
+              boolean culprit = ed.isAlive();
+              if (Sage.DBG) System.out.println("GPU_ENHANCE external worker died;"
+                  + " tearing down worker + audio sidecar so the encode can EOF"
+                  + (culprit ? " (worker crashed -> cooldown)" : " (downstream gone -> no cooldown)"));
+              if (culprit) markEnhanceStallCooldown(FFMPEGTranscoder.this.currFile);
+              tearDownEnhanceWorkerStages(wd);
+              return;
+            }
+
+            // Output to the client is the liveness signal that matters. While it
+            // keeps flowing -- even below realtime -- the session is healthy.
+            if (outFlowing) { rideSince = 0L; continue; }
+
+            // Output to the client has stalled. Attribute to the correct edge.
+            if (workerProducing)
+            {
+              // Frames ARE leaving the worker but not reaching the client: the
+              // worker->encode pump is blocked WRITING to the encode, i.e. nvenc is
+              // back-pressuring downstream. NOT the worker's fault -> no cooldown.
+              // Ride out transient hiccups; tear down only at the hard ceiling.
+              if (rideSince == 0L) rideSince = now;
+              if (now - rideSince > hardStallMs)
+              {
+                if (Sage.DBG) System.out.println("GPU_ENHANCE pipeline wedged (worker"
+                    + " still producing but encode/nvenc back-pressured for > "
+                    + hardStallMs + "ms; downstream, not the worker); tearing down"
+                    + " without cooldown so the client re-plans");
+                tearDownEnhanceWorkerStages(wd);
+                return;
+              }
+              continue;
+            }
+
+            // Worker is NOT producing output (weRead stalled).
+            if (workerConsuming)
+            {
+              // Consuming input but emitting nothing -> genuinely stuck worker.
+              if (Sage.DBG) System.out.println("GPU_ENHANCE external worker stuck"
+                  + " (consuming input, no output for > " + stallMs + "ms); tearing"
+                  + " down worker + audio sidecar (worker is the culprit -> cooldown)");
+              markEnhanceStallCooldown(FFMPEGTranscoder.this.currFile);
+              tearDownEnhanceWorkerStages(wd);
+              return;
+            }
+
+            if (decodeProducing)
+            {
+              // Decode is producing but the worker is not accepting it (decode->worker
+              // pump blocked writing to worker.stdin) -> the worker is stuck on input.
+              if (Sage.DBG) System.out.println("GPU_ENHANCE external worker stuck (not"
+                  + " accepting decode output for > " + stallMs + "ms); tearing down"
+                  + " worker + audio sidecar (worker is the culprit -> cooldown)");
+              markEnhanceStallCooldown(FFMPEGTranscoder.this.currFile);
+              tearDownEnhanceWorkerStages(wd);
+              return;
+            }
+
+            // Neither decode nor worker advancing: upstream (decode) starvation
+            // rippling down. NOT the worker; ride out transient hiccups and tear
+            // down (without cooldown) only at the hard ceiling.
+            if (rideSince == 0L) rideSince = now;
+            if (now - rideSince > hardStallMs)
+            {
+              if (Sage.DBG) System.out.println("GPU_ENHANCE pipeline wedged (upstream"
+                  + " decode starvation, neither decode nor worker advancing for > "
+                  + hardStallMs + "ms; not the worker); tearing down without cooldown");
+              tearDownEnhanceWorkerStages(wd);
               return;
             }
           }
         }
       };
       watch.setDaemon(true);
-      watch.start();
-
       this.enhanceDecodeProcess = decode;
       this.enhanceWorkerProcess = worker;
       this.enhanceAudioProcess = audio;
       this.externalSourceCtrl = ep.hasSourceControl();
+      enhanceWatchdogThread = watch;
+      watch.start();
       if (Sage.DBG) System.out.println("GPU_ENHANCE external pipeline live (decode+worker+encode)");
       return encode;
     }
@@ -2397,32 +2682,41 @@ public class FFMPEGTranscoder implements TranscodeEngine
     }
   }
 
-  /** Copy bytes from {@code in} to {@code out} on a daemon thread, closing both on
-   *  EOF/error so the downstream stage sees the pipe close (flush + exit). When
-   *  {@code progress} is non-null, its element 0 is stamped with the time of each
-   *  successful write for the stall watchdog. */
+  /** Tear down the upscale stages after the watchdog decides the session must end:
+   *  destroy the worker (so the encode's video input EOFs) and the audio sidecar
+   *  (which {@code -follow}s the growing file and would otherwise never EOF, pinning
+   *  the encode and leaking a transcode after the client has left). The decode and
+   *  encode are left to EOF on their own. */
+  private void tearDownEnhanceWorkerStages(Process worker)
+  {
+    destroyQuietly(worker);
+    Process a = this.enhanceAudioProcess;
+    if (a != null) destroyQuietly(a);
+  }
+
+  /** Copy raw frames from {@code in} to {@code out} on a daemon thread. */
   private void startFramePump(final String name, final java.io.InputStream in,
-      final java.io.OutputStream out, final long[] progress)
+      final java.io.OutputStream out, final int frameBytes,
+      final long[] readStamp, final long[] writeStamp)
   {
     Thread t = new Thread(name)
     {
       public void run()
       {
-        byte[] buf = new byte[64 * 1024];
         try
         {
-          int n;
-          while ((n = in.read(buf)) >= 0)
-          {
-            if (n > 0)
-            {
-              out.write(buf, 0, n);
-              out.flush();
-              if (progress != null) progress[0] = System.currentTimeMillis();
-            }
-          }
+          pumpFrameStream(in, out, frameBytes, readStamp, writeStamp);
         }
-        catch (java.io.IOException ignore) {}
+        catch (java.io.EOFException eof)
+        {
+          System.out.println("GPU_ENHANCE " + name + " rejected truncated raw frame: "
+              + eof.getMessage());
+        }
+        catch (java.io.IOException ioe)
+        {
+          if (XCODE_DEBUG) System.out.println("GPU_ENHANCE " + name
+              + " stopped during pipe teardown: " + ioe);
+        }
         finally
         {
           try { out.close(); } catch (java.io.IOException ignore) {}
@@ -2432,6 +2726,65 @@ public class FFMPEGTranscoder implements TranscodeEngine
     };
     t.setDaemon(true);
     t.start();
+  }
+
+  static long pumpFrameStream(java.io.InputStream in, java.io.OutputStream out,
+      int frameBytes, long[] readStamp, long[] writeStamp) throws java.io.IOException
+  {
+    int configuredChunk = (int) Math.max(64L * 1024L,
+        Sage.getLong("playback/gpu_enhance/scale/pump_buffer_bytes", 1024L * 1024L));
+    int transferBytes = frameBytes > 0 ? Math.min(frameBytes, configuredChunk) : configuredChunk;
+    byte[] buffer = new byte[transferBytes];
+    long transfers = 0L;
+    int frameRemaining = frameBytes;
+    while (true)
+    {
+      int wanted = frameBytes > 0 ? Math.min(buffer.length, frameRemaining) : buffer.length;
+      int offset = 0;
+      while (offset < wanted)
+      {
+        int n = in.read(buffer, offset, wanted - offset);
+        if (n < 0)
+        {
+          if (offset == 0)
+          {
+            if (frameBytes > 0 && frameRemaining != frameBytes)
+              throw new java.io.EOFException((frameBytes - frameRemaining)
+                  + " of " + frameBytes + " bytes");
+            return transfers;
+          }
+          if (frameBytes > 0)
+            throw new java.io.EOFException((frameBytes - frameRemaining + offset)
+                + " of " + frameBytes + " bytes");
+          out.write(buffer, 0, offset);
+          out.flush();
+          if (writeStamp != null) writeStamp[0] = System.currentTimeMillis();
+          return transfers + 1L;
+        }
+        if (n == 0) continue;
+        offset += n;
+        if (readStamp != null) readStamp[0] = System.currentTimeMillis();
+        if (frameBytes <= 0) break;
+      }
+      out.write(buffer, 0, offset);
+      if (frameBytes > 0)
+      {
+        frameRemaining -= offset;
+        if (frameRemaining == 0)
+        {
+          out.flush();
+          if (writeStamp != null) writeStamp[0] = System.currentTimeMillis();
+          transfers++;
+          frameRemaining = frameBytes;
+        }
+      }
+      else
+      {
+        out.flush();
+        if (writeStamp != null) writeStamp[0] = System.currentTimeMillis();
+        transfers++;
+      }
+    }
   }
 
   /** Drain a child stderr to the log on a daemon thread so it can never block. */
@@ -2456,13 +2809,39 @@ public class FFMPEGTranscoder implements TranscodeEngine
     t.start();
   }
 
-  /** Tear down the external-process enhancement sub-stages (decode + worker), if
-   *  any. The encode process is the tracked xcodeProcess and is handled by the
-   *  normal stopTranscode() path. Idempotent. */
+  private volatile Thread enhanceWatchdogThread;
+
+  private void stopEnhanceWatchdog()
+  {
+    Thread watch = enhanceWatchdogThread;
+    cancelEnhanceWatchdog(watch);
+    if (enhanceWatchdogThread == watch)
+      enhanceWatchdogThread = null;
+  }
+
+  static void cancelEnhanceWatchdog(Thread watch)
+  {
+    if (watch == null || watch == Thread.currentThread()) return;
+    watch.interrupt();
+    boolean interrupted = false;
+    while (watch.isAlive())
+    {
+      try { watch.join(); }
+      catch (InterruptedException e) { interrupted = true; }
+    }
+    if (interrupted) Thread.currentThread().interrupt();
+  }
+
+  /** Tear down the external-process enhancement sub-stages after the watchdog
+   *  has exited, so intentional process shutdown cannot trigger crash cooldown. */
   private void teardownExternalEnhance()
   {
+    stopEnhanceWatchdog();
     externalEnhanceActive = false;
     externalSourceCtrl = false;
+    enhanceRequiredFrameRate = 0.0;
+    enhanceDecodeReadStamp = enhanceDecodeWriteStamp =
+        enhanceWorkerReadStamp = enhanceWorkerWriteStamp = null;
     Process w = enhanceWorkerProcess, d = enhanceDecodeProcess, a = enhanceAudioProcess;
     enhanceWorkerProcess = null;
     enhanceDecodeProcess = null;
@@ -2481,6 +2860,56 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (p == null) return;
     try { p.descendants().forEach(ProcessHandle::destroyForcibly); } catch (Throwable ignore) {}
     try { p.destroyForcibly(); } catch (Throwable ignore) {}
+  }
+
+  /**
+   * Bounded wait for an already-killed process to actually exit, using a shared
+   * deadline so a batch of children cannot sum their individual caps. Returns as
+   * soon as the process is gone (normally &lt;200ms after SIGKILL).
+   */
+  private static void awaitExit(Process p, long deadlineMs)
+  {
+    if (p == null) return;
+    long remaining = deadlineMs - System.currentTimeMillis();
+    if (remaining <= 0) return;
+    try { p.waitFor(remaining, java.util.concurrent.TimeUnit.MILLISECONDS); }
+    catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+    catch (Throwable ignore) {}
+  }
+
+  /**
+   * Abandon a half-started external enhance pipeline and BLOCK (bounded) until
+   * the GPU consumers -- the NVENC encode, the NVDEC decode and the CUDA worker
+   * -- have actually exited, so the NVIDIA driver reclaims their VRAM and NVENC
+   * bitstream buffers before the caller launches the single-process fallback
+   * hevc_nvenc.
+   *
+   * <p>Without this barrier the fallback encoder starts microseconds after the
+   * external encode is merely SIGKILLed (destroyQuietly never waited), so the two
+   * 3840x2160 NVENC sessions overlap and the fallback loses the race for
+   * bitstream-buffer memory: "Failed locking bitstream buffer: out of memory
+   * (10)" -> "Cannot allocate memory" -> Conversion failed. That transient OOM
+   * trips the nvenc_encode_failure degrade-relaunch, which tears the stream down
+   * exactly while a client (Tizen avplay) is still preparing it, surfacing as
+   * PLAYER_ERROR_CONNECTION_FAILED. Waiting for the real process exit removes the
+   * overlap, so the fallback Lanczos encode initialises cleanly and the client
+   * prepares against one stable 2160p stream -- no teardown mid-prepare.
+   *
+   * <p>SIGKILL is issued to all four first (parallel teardown); the shared
+   * deadline then caps the total block. On the normal (worker-ready) path this is
+   * never reached, so steady-state playback is untouched.
+   */
+  private void abandonExternalEnhanceChildren(Process encode, Process worker,
+      Process decode, Process audio)
+  {
+    destroyQuietly(encode); destroyQuietly(worker); destroyQuietly(decode); destroyQuietly(audio);
+    long deadline = System.currentTimeMillis()
+        + Math.max(0L, Sage.getLong("playback/gpu_enhance/external_teardown_wait_ms", 1500L));
+    awaitExit(encode, deadline);
+    awaitExit(decode, deadline);
+    awaitExit(worker, deadline);
+    unregisterLiveChild(decode); unregisterLiveChild(worker);
+    unregisterLiveChild(encode); unregisterLiveChild(audio);
   }
 
   /**
@@ -2528,6 +2957,17 @@ public class FFMPEGTranscoder implements TranscodeEngine
   {
     try
     {
+      // Server-driven degrade-relaunch just fired for this session after a runtime
+      // NVENC encoder failure: deliver a plain (NVENC-free) remux this launch
+      // instead of re-injecting the scale+hevc_nvenc that just died at frame 0.
+      // One-shot -- consume the flag so a later legitimate open retries enhancement.
+      if (suppressEnhanceThisLaunch)
+      {
+        suppressEnhanceThisLaunch = false;
+        System.out.println("ENHANCE_LADDER rung=GPU->SOURCE reason=nvenc_encode_failure"
+            + " (degrade-relaunch: enhancement suppressed this launch, serving plain remux)");
+        return;
+      }
       if (enhanceRequest == null || !enhanceRequest.isActive()) return;
       if (!sage.enhance.EnhancementDryRun.isLive()) return;
       // Enhancement applies to the confirmed modern copy-family playback modes
@@ -2601,6 +3041,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
       int srcW = 0, srcH = 0, srcFps = 0;
       double srcFpsExact = 0.0;
+      String srcPixelFormat = "";
+      int srcBitDepth = 0;
       boolean interlaced = false;
       long srcKbps = 0L;
       if (sourceFormat != null)
@@ -2612,6 +3054,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
           srcH = vf.getHeight();
           srcFps = Math.round(vf.getFps());
           srcFpsExact = vf.getFps();
+          srcPixelFormat = vf.getColorspace();
+          srcBitDepth = sage.enhance.GpuEnhancePipeline.inferBitDepth(srcPixelFormat);
           interlaced = vf.isInterlaced();
         }
         long br = sourceFormat.getBitrate();
@@ -2631,7 +3075,21 @@ public class FFMPEGTranscoder implements TranscodeEngine
       // daemon probe, hard timeout, property-gated -- a slow/growing file can
       // never stall the transcode; on timeout/error srcH stays 0 and we admit
       // honestly against what we know.
-      if ((srcW <= 0 || srcH <= 0) && currFile != null
+      //
+      // Mid-watch format adaptivity: a US ATSC subchannel reconfigures its
+      // encoder at a program boundary (720p59.94 sports <-> 1080i29.97 drama),
+      // so the geometry captured in sourceFormat at tune goes STALE the moment
+      // the show changes -- and the wrong interlaced flag is load-bearing
+      // (GpuEnhancePipeline adds the GPU deinterlacer only when interlaced, so a
+      // stale progressive flag over new 1080i combs). For an active/in-progress
+      // source we therefore re-probe the CURRENT file on every (re)build (each
+      // relaunch/reseek), overwriting the baked tune-time geometry with what is
+      // on disk now, so the tier/plan track the real format. Bounded + gated;
+      // a completed (VOD) source keeps its trusted tune-time geometry and is
+      // byte-identical (this only re-probes when activeFile, or when srcH<=0).
+      boolean reprobeActiveGeom = activeFile
+          && Sage.getBoolean("playback/gpu_enhance/live_source_reprobe_active", true);
+      if ((srcW <= 0 || srcH <= 0 || reprobeActiveGeom) && currFile != null
           && Sage.getBoolean("playback/gpu_enhance/live_source_probe", true))
       {
         sage.media.format.VideoFormat pvf = probeSourceVideoFormatBounded(currFile,
@@ -2643,13 +3101,62 @@ public class FFMPEGTranscoder implements TranscodeEngine
           interlaced = pvf.isInterlaced();
           int pfps = Math.round(pvf.getFps());
           if (pfps > 0) { srcFps = pfps; srcFpsExact = pvf.getFps(); }
+          srcPixelFormat = pvf.getColorspace();
+          srcBitDepth = sage.enhance.GpuEnhancePipeline.inferBitDepth(srcPixelFormat);
           if (Sage.DBG) System.out.println("GPU_ENHANCE apply: live-source probe recovered geometry "
               + srcW + "x" + srcH + (interlaced ? "i" : "p") + "@" + srcFps + " from " + currFile);
         }
         else if (Sage.DBG)
         {
           System.out.println("GPU_ENHANCE apply: live-source probe did not recover geometry"
-              + " (source still 0x0) for " + currFile + "; admission uses srcH=" + srcH);
+              + " (no fresh read) for " + currFile + "; admission uses srcH=" + srcH);
+        }
+      }
+
+      // Recording-segment rollover recovery. A newborn segment file (the
+      // recording just rolled to ...-N.mpg) has no readable video GOP yet, so
+      // BOTH sourceFormat and the bounded probe above come up srcH=0 -- and the
+      // advisor then fail-closes to UNKNOWN_SOURCE (null plan -> plain remux) for
+      // the WHOLE segment, even though we upscaled the PRIOR segment of this very
+      // recording a moment ago. Remember the last honest geometry keyed by
+      // recording id and reuse it when the probe comes up empty on an active
+      // file. Keyed by MediaFile id (NOT the segment path) so a channel/recording
+      // switch can never reapply a stale interlaced flag: a different recording
+      // has a different key and falls through to today's honest decline. The
+      // memory is overwritten whenever a real probe succeeds, so it self-heals
+      // the instant the fresh segment grows a GOP. Property-gated, reversible.
+      if (currFile != null
+          && Sage.getBoolean("playback/gpu_enhance/live_source_geom_memory", true))
+      {
+        int geomKey = 0;
+        try
+        {
+          MediaFile gmf = Wizard.getInstance().getFileForFilePath(currFile);
+          if (gmf != null) geomKey = gmf.id;
+        }
+        catch (Throwable t) { /* best-effort; key 0 disables memory for this file */ }
+
+        if (srcW > 0 && srcH > 0 && geomKey != 0)
+        {
+          enhanceGeomMemKey = geomKey;
+          enhanceGeomMemW = srcW;
+          enhanceGeomMemH = srcH;
+          enhanceGeomMemFps = srcFps;
+          enhanceGeomMemFpsExact = srcFpsExact;
+          enhanceGeomMemInterlaced = interlaced;
+        }
+        else if (srcH <= 0 && activeFile && geomKey != 0
+            && geomKey == enhanceGeomMemKey && enhanceGeomMemH > 0)
+        {
+          srcW = enhanceGeomMemW;
+          srcH = enhanceGeomMemH;
+          srcFps = enhanceGeomMemFps;
+          srcFpsExact = enhanceGeomMemFpsExact;
+          interlaced = enhanceGeomMemInterlaced;
+          if (Sage.DBG) System.out.println("GPU_ENHANCE apply: reusing last-known geometry "
+              + srcW + "x" + srcH + (interlaced ? "i" : "p") + "@" + srcFps
+              + " for recording " + geomKey + " (newborn segment "
+              + currFile.getName() + " not probeable yet)");
         }
       }
 
@@ -2712,7 +3219,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
       sage.enhance.EnhancementTier granted = adm.getTier();
       sage.enhance.EnhancementPlan plan = sage.enhance.GpuEnhancePipeline.buildPlan(
-          granted, interlaced, srcW, srcH, estKbps);
+          granted, interlaced, srcW, srcH, estKbps, false, srcFpsExact,
+          srcPixelFormat, srcBitDepth);
       if (plan == null || !plan.isActive())
       {
         gov.release(sessionId);
@@ -2734,6 +3242,16 @@ public class FFMPEGTranscoder implements TranscodeEngine
       pendingExternalPipeline = null;
       pendingExternalWorkerArgv = null;
       pendingExternalWarmProcess = null;
+      enhanceBrokerGrantedVsr = false;
+      enhanceFallbackIsLanczos = false;
+      // Fresh genuine enhance apply (the suppress guard above already returned for a
+      // degrade-relaunch): re-enable one server-driven degrade for this new attempt.
+      nvencDegradeRelaunched = false;
+      // One-rung-down (CUDA-Lanczos) fallback plan for a staged specialized/VSR
+      // pipeline: built alongside the external staging below, rewritten into the
+      // single-process command so a worker that misses its load budget still
+      // upscales at the granted tier instead of dropping straight to source.
+      sage.enhance.EnhancementPlan lanczosFallbackPlan = null;
       // A pre-warmed worker the plan may carry. If we end up NOT staging the
       // external pipeline (wrong argv shape, or an ep build failure), this warm
       // worker was consumed from the cache and would otherwise leak, so we tear
@@ -2848,19 +3366,46 @@ public class FFMPEGTranscoder implements TranscodeEngine
           outOpts.add("-af"); outOpts.add(sidecarAf);
           sidecarAudio = new sage.enhance.GpuEnhancePipeline.SidecarAudio(inOpts, outOpts);
         }
-        sage.enhance.GpuEnhancePipeline.ExternalPipeline ep = copyFamily
-            ? sage.enhance.GpuEnhancePipeline.buildExternalPipeline(baseArgv, plan, srcFps, srcVideoFmt, fpsCap, srcFpsExact, audioSidecar, seekPrerollSec, sidecarAudio)
-            : sage.enhance.GpuEnhancePipeline.buildExternalReencodePipeline(baseArgv, plan, srcFps, srcVideoFmt, fpsCap, srcFpsExact, audioSidecar, seekPrerollSec, sidecarAudio);
+        double sourceOriginSeconds = audioSidecar == null ? 0.0 : probeEnhanceSourceOrigin();
+        sage.enhance.GpuEnhancePipeline.ExternalPipeline ep = !Double.isFinite(sourceOriginSeconds)
+            ? null : copyFamily
+            ? sage.enhance.GpuEnhancePipeline.buildExternalPipeline(baseArgv, plan, srcFps, srcVideoFmt,
+                fpsCap, srcFpsExact, audioSidecar, seekPrerollSec, sidecarAudio,
+                sourceOriginSeconds, srcW, srcH)
+            : sage.enhance.GpuEnhancePipeline.buildExternalReencodePipeline(baseArgv, plan, srcFps,
+                srcVideoFmt, fpsCap, srcFpsExact, audioSidecar, seekPrerollSec, sidecarAudio,
+                sourceOriginSeconds, srcW, srcH);
         if (ep != null)
         {
           pendingExternalPipeline = ep;
           pendingExternalWorkerArgv = plan.getScaleExec().getExternalArgv();
           pendingExternalWarmProcess = plan.getScaleExec().getWarmProcess();
+          // Grace window unlocks ONLY on an explicit external-arbiter grant.
+          enhanceBrokerGrantedVsr = (adm != null && adm.isExternalGrant());
+          // Build the deterministic CUDA-Lanczos fallback plan now (best-effort):
+          // a box with no CUDA scaler yields none and keeps the plain (source)
+          // fallback. It takes no specialized ScaleGovernor permit, so it never
+          // competes with the VSR lease the primary plan already holds.
+          try
+          {
+            sage.enhance.EnhancementPlan lf = sage.enhance.GpuEnhancePipeline.buildPlan(
+                granted, interlaced, srcW, srcH, estKbps, true, srcFpsExact,
+                srcPixelFormat, srcBitDepth);
+            if (lf != null && lf.isActive() && lf.isScaling()) lanczosFallbackPlan = lf;
+          }
+          catch (Throwable t)
+          {
+            if (Sage.DBG) System.out.println("GPU_ENHANCE Lanczos fallback plan build "
+                + "failed (ignored): " + t);
+          }
           if (Sage.DBG) System.out.println("GPU_ENHANCE external-process pipeline staged: "
               + plan.getScaleExec().getImplementationLabel()
               + " path=" + (copyFamily ? "copy-family" : "re-encode")
               + " worker=" + pendingExternalWorkerArgv
-              + (pendingExternalWarmProcess != null ? " (pre-warmed)" : ""));
+              + " sourceOriginSeconds=" + sourceOriginSeconds
+              + (pendingExternalWarmProcess != null ? " (pre-warmed)" : "")
+              + " brokerGrantedVsr=" + enhanceBrokerGrantedVsr
+              + " lanczosFallback=" + (lanczosFallbackPlan != null));
         }
       }
       // Consumed a warm worker but did not stage it into a pipeline: don't leak it.
@@ -2871,9 +3416,17 @@ public class FFMPEGTranscoder implements TranscodeEngine
         destroyQuietly(planWarmProcess);
       }
 
+      // Single-process fallback command. When a specialized/VSR pipeline was
+      // staged AND a deterministic Lanczos plan built, rewrite the fallback with
+      // the Lanczos plan so a worker that never comes up still upscales (one rung
+      // down) rather than dropping to source. Otherwise rewrite with the primary
+      // plan exactly as before.
+      sage.enhance.EnhancementPlan rewritePlan =
+          (lanczosFallbackPlan != null) ? lanczosFallbackPlan : plan;
       boolean rewritten = copyFamily
-          ? sage.enhance.GpuEnhancePipeline.rewriteArgv(xcodeParamsVec, plan, srcFps)
-          : sage.enhance.GpuEnhancePipeline.rewriteReencodeArgv(xcodeParamsVec, plan, srcFps);
+          ? sage.enhance.GpuEnhancePipeline.rewriteArgv(xcodeParamsVec, rewritePlan, srcFps)
+          : sage.enhance.GpuEnhancePipeline.rewriteReencodeArgv(xcodeParamsVec, rewritePlan, srcFps);
+      enhanceFallbackIsLanczos = (lanczosFallbackPlan != null && rewritten);
       if (!rewritten)
       {
         // For an EXTERNAL_PROCESS plan the upscale is delivered by the staged
@@ -3266,6 +3819,53 @@ public class FFMPEGTranscoder implements TranscodeEngine
     return resample;
   }
 
+  /**
+   * Server-driven runtime degrade after a GPU-ENHANCE session's {@code hevc_nvenc}
+   * child failed to initialize/encode. Both the specialized (VSR) and the
+   * CUDA-Lanczos rungs encode through NVENC, so this failure class rules out every
+   * GPU rung for this session; the only rung left is a plain no-upscale remux.
+   *
+   * <p>Runs on its OWN daemon thread and must never be invoked from the stderr
+   * consumer, because {@link #stopTranscode()} joins that thread. It is written to
+   * be safe against the client's own pull-driven relaunch racing it: it never
+   * blindly stops a child, so it cannot kill a healthy relaunch a still-connected
+   * client already performed. It only steps in when the failed child is gone and
+   * nothing has relaunched, delivering the plain remux the client would otherwise
+   * have to navigate away and re-request to get. {@link #suppressEnhanceThisLaunch}
+   * (armed by the caller, re-armed here) guarantees the relaunch cannot re-inject
+   * the encoder that just died.
+   */
+  private void degradeRelaunchAfterNvencFailure()
+  {
+    try
+    {
+      // Give a still-connected client's own pull-driven relaunch first refusal: it
+      // rebuilds the (now-suppressed => plain) stream itself and our startTranscode()
+      // below then no-ops on the live child. Only if no reader relaunched do we act.
+      long delay = Math.max(0L,
+          Sage.getLong("playback/gpu_enhance/nvenc_degrade_relaunch_delay_ms", 750L));
+      if (delay > 0)
+      {
+        try { Thread.sleep(delay); }
+        catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
+      }
+      if (forciblyStopped) return;   // session torn down (client left / stop): nothing to do
+      Process cur = xcodeProcess;
+      if (cur != null && cur.isAlive()) return;  // a relaunch already produced a (plain) child
+      // Re-arm defensively: a racing relaunch may have consumed the flag before
+      // exiting. This launch MUST be a plain remux, not another NVENC attempt.
+      suppressEnhanceThisLaunch = true;
+      System.out.println("ENHANCE_LADDER degrade-relaunch: failed NVENC child gone,"
+          + " launching plain no-upscale remux (server-driven)");
+      startTranscode();   // lock-serialized; reaps a dead child, no-ops on a live one
+    }
+    catch (Throwable t)
+    {
+      System.out.println("ENHANCE_LADDER degrade-relaunch failed (a client pull will still"
+          + " recover a plain stream via the armed suppress): " + t);
+    }
+  }
+
   public void startTranscode() throws java.io.IOException
   {
     // Serialize (re)launch so a concurrent "ensure running" caller can never spawn
@@ -3385,6 +3985,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
 				xcodeParamsVec.add(Long.toString(transcodeStartSeekTime/1000));
 			}*/
     }
+    maybeLogEnhancedDelivery(lastXcodeStreamTime);
     if (httplsMode)
       segmentTargetCounter = (int)(transcodeStartSeekTime / segmentDur);
 
@@ -3537,6 +4138,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
       else
         xcodeParamsVec.add("-activefile");
     }
+
+    sage.ng.ActivePullPacingPolicy pacingPolicy = appendActivePullPacingArguments(xcodeParamsVec);
+    if (pacingPolicy.isEnabled() && Sage.DBG)
+      System.out.println("FFMPEGTranscoder: active pull pacing " + pacingPolicy);
 
     // -stdinctrl is a SageTV custom flag re-implemented in the unified
     // FFmpeg build (see docs/FFMPEG_UNIFICATION_PLAN.md). Always pass it;
@@ -4209,14 +4814,16 @@ public class FFMPEGTranscoder implements TranscodeEngine
       xcodeParamsVec.add("-vcodec");
       xcodeParamsVec.add(videoCodec);
       // Force 8-bit 4:2:0 output frames regardless of source bit depth. ATSC3
-      // HEVC Main10 sources decode to yuv420p10le via the software HEVC decoder
-      // on this path (nativeHevcHwDecodeArgs() intentionally excludes pushH264 --
-      // see its javadoc), and both h264_nvenc's 8-bit "high" profile and libx264
-      // without high-bit-depth support reject/mishandle 10-bit input directly
-      // (observed as h264_nvenc "CreateInputBuffer failed: invalid param"). This
-      // mirrors the existing audioonly h264_nvenc precedent (see audioonly video
-      // codec handling above) and is a cheap no-op when the source is already
-      // 8-bit yuv420p.
+      // HEVC Main10 sources decode to a 10-bit plane (yuv420p10le in software,
+      // or p010le when nativeHevcHwDecodeArgs() routes decode through NVDEC
+      // hevc_cuvid for this push path), and both h264_nvenc's 8-bit "high"
+      // profile and libx264 without high-bit-depth support reject/mishandle
+      // 10-bit input directly (observed as h264_nvenc "CreateInputBuffer
+      // failed: invalid param"). This CPU format filter does the 10->8-bit
+      // downconvert; the NVDEC decoder lands frames in system memory (no
+      // -hwaccel_output_format) precisely so this filter still applies. Mirrors
+      // the existing audioonly h264_nvenc precedent and is a cheap no-op when
+      // the source is already 8-bit yuv420p.
       xcodeParamsVec.add("-vf");
       xcodeParamsVec.add("format=yuv420p");
 
@@ -5110,6 +5717,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // a video-copy output and re-base timestamps so the client media clock can't
     // rewind mid-stream (freeze). Last argv edit, so it sees the final codecs.
     maybeFixNativeCopyPushCommand(xcodeParamsVec);
+    updateVideoBitrateAdjustable(xcodeParamsVec);
     String[] xcodeParamArray = (String[]) xcodeParamsVec.toArray(Pooler.EMPTY_STRING_ARRAY);
     // Always log the FFmpeg command line for diagnosability (disable with xcode_cmdline_debug=FALSE)
     if (Sage.DBG && !"FALSE".equals(Sage.get("xcode_cmdline_debug", "TRUE"))) System.out.println("Executing xcoding process with args: " + java.util.Arrays.asList(xcodeParamArray));
@@ -5137,24 +5745,41 @@ public class FFMPEGTranscoder implements TranscodeEngine
       if (externalEncode == null)
       {
         teardownExternalEnhance();
-        // The upscale worker never came up, so this session is now a plain
-        // (un-enhanced) transcode. It must NOT keep holding the GPU enhance
-        // concurrency slot: otherwise a subsequent re-negotiation (e.g. the client
-        // moves to a higher-resolution display and re-OPENs) is wrongly denied with
-        // "concurrency ceiling 1 (active 1)" until this dead session finally ends.
-        // The fallback command needs neither the governor permit nor the scale
-        // lease, so return both now. Both releases are idempotent, so stopTranscode()
-        // unwinding later is harmless.
-        if (enhanceSessionId != null)
-        {
-          try { sage.enhance.GpuGovernor.getInstance().release(enhanceSessionId); }
-          catch (Throwable ignore) {}
-          if (Sage.DBG) System.out.println("GPU_ENHANCE external pipeline abandoned; "
-              + "released governor permit for " + enhanceSessionId
-              + " (falling back to plain transcode)");
-          enhanceSessionId = null;
-        }
+        // Always return the specialized (VSR) scale lease: the single-process
+        // fallback never uses a specialized worker. Idempotent.
         releaseEnhanceScaleLease();
+        if (enhanceFallbackIsLanczos)
+        {
+          // One rung down: the fallback single-process command upscales with
+          // CUDA-Lanczos at the SAME granted tier, so it is still an enhanced
+          // NVENC session and MUST keep the governor permit -- releasing it would
+          // let a rival session oversubscribe the GPU. Only the specialized lease
+          // was returned above.
+          System.out.println("ENHANCE_LADDER rung=VSR->LANCZOS reason=worker_not_ready"
+              + " brokerGrantedVsr=" + enhanceBrokerGrantedVsr
+              + " session=" + enhanceSessionId
+              + " (single-process CUDA-Lanczos fallback, permit retained)");
+        }
+        else
+        {
+          // Plain (source-resolution) fallback: this session is now un-enhanced.
+          // It must NOT keep holding the GPU enhance concurrency slot: otherwise a
+          // subsequent re-negotiation (e.g. the client moves to a higher-resolution
+          // display and re-OPENs) is wrongly denied with "concurrency ceiling 1
+          // (active 1)" until this dead session finally ends. The fallback command
+          // needs neither the governor permit nor the scale lease, so return both.
+          // Releases are idempotent, so stopTranscode() unwinding later is harmless.
+          if (enhanceSessionId != null)
+          {
+            try { sage.enhance.GpuGovernor.getInstance().release(enhanceSessionId); }
+            catch (Throwable ignore) {}
+            System.out.println("ENHANCE_LADDER rung=VSR->SOURCE reason=worker_not_ready"
+                + " brokerGrantedVsr=" + enhanceBrokerGrantedVsr
+                + " session=" + enhanceSessionId
+                + " (no CUDA scaler for Lanczos; plain remux, permit released)");
+            enhanceSessionId = null;
+          }
+        }
       }
     }
     if (externalEncode != null)
@@ -5214,6 +5839,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // We open up the error stream and consume that for status info. The transcoded data is consumed by reading
     // from stdout.
     xcodeDone = false;
+    enhanceDeliveryMetrics = new sage.ng.EnhancedDeliveryMetrics(
+        Sage.getLong("playback/gpu_enhance/delivery_telemetry_interval_ms", 5000L));
     if (xcodeBuffer == null)
     {
       // Don't use properties for these because it leads to major inconsistencies between systems that are quite difficult to diagnose
@@ -5288,10 +5915,61 @@ public class FFMPEGTranscoder implements TranscodeEngine
                   && isNvencInitFailureLine(sb))
               {
                 xcodeSawNvencInitFailure = true;
-                sage.HwEncoder.noteNvencFailure();
-                System.out.println("XCODE_NVENC_FALLBACK: NVENC encoder init failed ('"
-                    + sb.toString().trim() + "'); relaunches use software libx264 for the "
-                    + "cooldown window so the client still gets a stream");
+                // Distinguish a CAPABILITY failure (driver / no-capable-devices /
+                // OpenEncodeSession -22 — the whole machine genuinely cannot NVENC)
+                // from a transient per-session CAPACITY failure (bitstream-buffer OOM
+                // / CUDA OOM — the engine is healthy, this one encode just could not
+                // get VRAM or a slot right now, typically because an orphaned sibling
+                // session was still holding it; the push-loop teardown fix reduces but
+                // cannot fully eliminate that race). Only a capability failure should
+                // arm the machine-wide NVENC cooldown; arming it for a capacity blip
+                // wrongly denies GPU enhance to every OTHER session for the whole
+                // cooldown window (the Fox-News-after-AnimalControl NO_GPU_SUPPORT
+                // symptom). Either way THIS session's GPU encode is dead and degrades
+                // to a no-upscale remux via the rung logic below.
+                boolean nvencCapacityOnly = isNvencCapacityFailureLine(sb);
+                if (!nvencCapacityOnly)
+                {
+                  sage.HwEncoder.noteNvencFailure();
+                  System.out.println("XCODE_NVENC_FALLBACK: NVENC encoder init failed ('"
+                      + sb.toString().trim() + "'); relaunches use software libx264 for the "
+                      + "cooldown window so the client still gets a stream");
+                }
+                else
+                {
+                  System.out.println("XCODE_NVENC_CAPACITY: transient NVENC capacity failure ('"
+                      + sb.toString().trim() + "'); degrading THIS session to a no-upscale remux "
+                      + "only — machine NVENC left healthy so other sessions still enhance");
+                }
+                // Rung-aware runtime degrade. For a GPU-ENHANCE session BOTH the VSR
+                // and CUDA-Lanczos rungs encode via hevc_nvenc, so an NVENC-encode
+                // failure (e.g. bitstream-buffer OOM under concurrency, the
+                // 2026-09-27 Shield crash) kills whichever GPU rung this session was
+                // on. Skip both GPU rungs and deliver a plain no-upscale remux: arm
+                // a one-shot suppress so this session's NEXT launch re-enhances into
+                // nothing (deterministic, independent of the cooldown clock), and
+                // proactively kick a server-driven relaunch so the client is not left
+                // on the dead stream waiting to pull again.
+                if (FFMPEGTranscoder.this.enhanceSessionId != null
+                    && !FFMPEGTranscoder.this.nvencDegradeRelaunched
+                    && (Sage.time() - FFMPEGTranscoder.this.xcodeLaunchTime)
+                        <= Sage.getLong("playback/gpu_enhance/nvenc_early_fail_ms", 5000L))
+                {
+                  FFMPEGTranscoder.this.nvencDegradeRelaunched = true;
+                  FFMPEGTranscoder.this.suppressEnhanceThisLaunch = true;
+                  System.out.println("ENHANCE_LADDER rung=GPU->SOURCE reason=nvenc_encode_failure"
+                      + " session=" + FFMPEGTranscoder.this.enhanceSessionId
+                      + " (arming no-upscale remux relaunch)");
+                  if (Sage.getBoolean("playback/gpu_enhance/nvenc_degrade_relaunch", true))
+                  {
+                    Thread dr = new Thread("enhance-nvenc-degrade-relaunch")
+                    {
+                      public void run() { FFMPEGTranscoder.this.degradeRelaunchAfterNvencFailure(); }
+                    };
+                    dr.setDaemon(true);
+                    dr.start();
+                  }
+                }
               }
               sb.setLength(0);
             }
@@ -5453,6 +6131,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (bufferOutput)
     {
       openSpillIfEnabled();
+      final sage.ng.EnhancedDeliveryMetrics writerMetrics = enhanceDeliveryMetrics;
       xcodeStdoutThread = new Thread("XcodeDataConsumer")
       {
         public void run()
@@ -5475,9 +6154,22 @@ public class FFMPEGTranscoder implements TranscodeEngine
                 // writer laps the reader unbounded (numFilled was seen climbing to
                 // ~100 in a 64-slot ring -> torn fMP4 -> CHUNK_DEMUXER_ERROR). >=
                 // re-blocks and self-corrects.
-                if (numFilledXcodeBuffers >= xcodeBuffer.length && !xcodeDone)
+                boolean ringFull = numFilledXcodeBuffers >= xcodeBuffer.length && !xcodeDone;
+                sage.ng.EnhancedDeliveryMetrics.BackpressureEvent bpEvent =
+                    writerMetrics.updateBackpressure(System.currentTimeMillis(), ringFull);
+                if (XCODE_DEBUG && bpEvent != sage.ng.EnhancedDeliveryMetrics.BackpressureEvent.NONE)
                 {
-                  if (XCODE_DEBUG) System.out.println("Waiting for transcode buffer to become available...");
+                  if (bpEvent == sage.ng.EnhancedDeliveryMetrics.BackpressureEvent.RECOVERED)
+                    System.out.println("Transcode buffer available after backpressure durationMs="
+                        + writerMetrics.getBackpressureDuration(System.currentTimeMillis()));
+                  else
+                    System.out.println("Waiting for transcode buffer to become available"
+                        + " event=" + bpEvent + " filled=" + numFilledXcodeBuffers
+                        + "/" + xcodeBuffer.length + " durationMs="
+                        + writerMetrics.getBackpressureDuration(System.currentTimeMillis()));
+                }
+                if (ringFull)
+                {
                   try
                   {
                     xcodeSyncLock.wait(100);
@@ -6067,6 +6759,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
   public void stopTranscode()
   {
+    stopEnhanceWatchdog();
     forciblyStopped = true;
     xcodeDone = true;
     if (XCODE_DEBUG) System.out.println("Destroying old transcode process...");
@@ -6456,6 +7149,29 @@ public class FFMPEGTranscoder implements TranscodeEngine
     bufferOutput = x;
   }
 
+  public void setProtocol21PullSession(boolean protocol21PullSession)
+  {
+    this.protocol21PullSession = protocol21PullSession;
+  }
+
+  sage.ng.ActivePullPacingPolicy resolveActivePullPacingPolicy()
+  {
+    return sage.ng.ActivePullPacingPolicy.resolve(
+        Sage.getBoolean("media_server/pull_xcode_active_readrate_enabled", true),
+        activeFile, bufferOutput, protocol21PullSession, httplsMode,
+        Sage.get("media_server/pull_xcode_active_readrate", "1.0"),
+        Sage.get("media_server/pull_xcode_active_initial_burst_seconds", "6"),
+        Sage.get("media_server/pull_xcode_active_catchup_rate", "1.5"));
+  }
+
+  sage.ng.ActivePullPacingPolicy appendActivePullPacingArguments(
+      java.util.List<String> arguments)
+  {
+    sage.ng.ActivePullPacingPolicy policy = resolveActivePullPacingPolicy();
+    policy.appendInputArguments(arguments);
+    return policy;
+  }
+
   /**
    * GPU-accelerated DECODE hint emitted as {@code -hwaccel <api>} before
    * {@code -i} (e.g. "cuda" for NVDEC). Offloads HEVC/H.264 decode to the GPU,
@@ -6600,6 +7316,16 @@ public class FFMPEGTranscoder implements TranscodeEngine
   public int getCurrentVideoBitrateKbps()
   {
     return currVideoBitrateKbps;
+  }
+
+  public boolean isVideoBitrateAdjustable()
+  {
+    return videoBitrateAdjustable;
+  }
+
+  void updateVideoBitrateAdjustable(java.util.ArrayList arguments)
+  {
+    videoBitrateAdjustable = !isVideoCopySelected(arguments);
   }
 
   /**
@@ -7466,6 +8192,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
   // cannot autodetect a muxer from.
   protected String rawCmdlineContainer = null;
   protected boolean activeFile;
+  protected boolean protocol21PullSession;
+  protected volatile boolean videoBitrateAdjustable;
   // Raw xcodeMode name passed to setTranscodeFormat(String, ContainerFormat) --
   // e.g. "mpeg2tsremux", "browserhd_remux", "dynamicts". Captured so the
   // on-demand (non-activeFile) probesize/analyzeduration tuning below can be
@@ -7506,6 +8234,13 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
   protected long lastXcodeStreamTime;
   protected long lastXcodeStreamPosition;
+  private volatile sage.ng.EnhancedDeliveryMetrics enhanceDeliveryMetrics =
+      new sage.ng.EnhancedDeliveryMetrics(5000L);
+  private volatile double enhanceRequiredFrameRate;
+  private volatile long[] enhanceDecodeReadStamp;
+  private volatile long[] enhanceDecodeWriteStamp;
+  private volatile long[] enhanceWorkerReadStamp;
+  private volatile long[] enhanceWorkerWriteStamp;
 
   protected Thread xcodeStderrThread;
   protected Thread xcodeStdoutThread;
@@ -7531,6 +8266,40 @@ public class FFMPEGTranscoder implements TranscodeEngine
   private volatile boolean xcodeUsedNvenc;
   /** Set by the stderr consumer when it observes an NVENC encoder-init failure. */
   private volatile boolean xcodeSawNvencInitFailure;
+  /**
+   * True when this enhance session's GPU admission came from an explicit external
+   * arbiter grant. It is the SOLE condition under which a cold specialized
+   * upscaler (VSR) worker is allowed the longer {@code vsr_model_load_grace_ms}
+   * window instead of the ordinary {@code decision_budget_ms} at launch. Reset per
+   * enhance attempt; broker-agnostic (the core only knows "some authority granted").
+   */
+  private volatile boolean enhanceBrokerGrantedVsr;
+  // Last source geometry successfully resolved for the CURRENT recording, reused
+  // when a newborn segment at a recording-segment rollover cannot be probed yet.
+  // Keyed by MediaFile id so a channel/recording switch (e.g. 720p sports ->
+  // 1080i drama) never reapplies a stale interlaced flag -- a different recording
+  // has a different key and falls through to the honest srcH=0 decline. Single
+  // writer (the transcode apply thread of this instance), so no sync needed.
+  private int enhanceGeomMemKey = 0;
+  private int enhanceGeomMemW = 0;
+  private int enhanceGeomMemH = 0;
+  private int enhanceGeomMemFps = 0;
+  private double enhanceGeomMemFpsExact = 0.0;
+  private boolean enhanceGeomMemInterlaced = false;
+  /**
+   * True when the single-process fallback command carries a CUDA-Lanczos upscale
+   * (the one-rung-down fallback for a staged specialized/VSR pipeline). When the
+   * external worker never comes up, the fallback still upscales at the granted
+   * tier, so it MUST keep the governor permit rather than releasing it as a plain
+   * remux would. Reset per enhance attempt.
+   */
+  private volatile boolean enhanceFallbackIsLanczos;
+  /** One-shot guard: a server-driven degrade-relaunch has already fired for this
+   *  session, so a burst of NVENC stderr lines cannot spawn a relaunch storm. */
+  private volatile boolean nvencDegradeRelaunched;
+  /** Set just before a degrade-relaunch so the next {@link #maybeApplyGpuEnhancement}
+   *  skips enhancement entirely and delivers a plain (NVENC-free) remux. */
+  private volatile boolean suppressEnhanceThisLaunch;
 
   protected boolean bufferOutput;
 
@@ -7850,6 +8619,65 @@ public class FFMPEGTranscoder implements TranscodeEngine
     catch (InterruptedException ie) { Thread.currentThread().interrupt(); return null; }
     sage.media.format.ContainerFormat cf = out[0];
     return (cf != null) ? cf.getVideoFormat() : null;
+  }
+
+  private java.io.File enhanceOriginFile;
+  private double enhanceSourceOrigin = Double.NaN;
+
+  private double probeEnhanceSourceOrigin()
+  {
+    if (currFile != null && currFile.equals(enhanceOriginFile)
+        && Double.isFinite(enhanceSourceOrigin))
+      return enhanceSourceOrigin;
+    Process probe = null;
+    try
+    {
+      if (currFile == null)
+        throw new java.io.IOException("source file is unavailable");
+      String ffprobe = sage.HwEncoder.deriveFfprobePath(getTranscoderPath());
+      if (!new java.io.File(ffprobe).isFile())
+      {
+        ffprobe = Sage.getToolPath("ffprobe");
+        if (ffprobe == null || !new java.io.File(ffprobe).isFile()) ffprobe = "ffprobe";
+      }
+      probe = new ProcessBuilder(ffprobe, "-v", "error", "-show_entries", "format=start_time",
+          "-of", "default=nokey=1:noprint_wrappers=1", currFile.getAbsolutePath())
+          .redirectError(ProcessBuilder.Redirect.INHERIT).start();
+      int timeoutMs = Math.max(1, Sage.getInt(
+          "playback/gpu_enhance/scale/source_origin_probe_ms", 1200));
+      if (!probe.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS))
+        throw new java.io.IOException("container-origin probe timed out after " + timeoutMs + "ms");
+      String value;
+      try (java.io.BufferedReader reader = new java.io.BufferedReader(
+          new java.io.InputStreamReader(probe.getInputStream(), java.nio.charset.StandardCharsets.UTF_8)))
+      {
+        value = reader.readLine();
+      }
+      if (probe.exitValue() != 0 || value == null)
+        throw new java.io.IOException("container-origin probe failed: " + value);
+      double origin = Double.parseDouble(value.trim());
+      if (!Double.isFinite(origin))
+        throw new java.io.IOException("container origin is not finite: " + value);
+      enhanceOriginFile = currFile;
+      enhanceSourceOrigin = origin;
+      return origin;
+    }
+    catch (java.io.IOException | NumberFormatException e)
+    {
+      System.out.println("GPU_ENHANCE external pipeline not staged: cannot establish shared"
+          + " source timestamp origin for " + currFile + ": " + e);
+      return Double.NaN;
+    }
+    catch (InterruptedException e)
+    {
+      Thread.currentThread().interrupt();
+      System.out.println("GPU_ENHANCE source-origin probe interrupted; external pipeline not staged");
+      return Double.NaN;
+    }
+    finally
+    {
+      if (probe != null && probe.isAlive()) probe.destroyForcibly();
+    }
   }
 
   protected int[] computeRightSizedTarget(sage.media.format.VideoFormat srcVideo,

@@ -116,6 +116,21 @@ public class GpuGovernorExternalAuthorityTest
     assertFalse(defer.isGranted());
   }
 
+  @Test
+  public void testDeclineExternalResourceFailsOpenToLocalButIsLabelled()
+  {
+    ExternalAdmissionAuthority.Decision decline =
+        ExternalAdmissionAuthority.Decision.declineExternalResource("no broker grant");
+    // Fail-open: the governor treats it exactly like defer-to-local.
+    assertTrue(decline.isDeferToLocal(), "external decline falls open to the local scaler");
+    assertFalse(decline.isDeny(), "an external decline is not a cross-tenant deny");
+    assertFalse(decline.isGranted(), "an external decline grants no tier");
+    // ...but it is distinctly labelled so telemetry can tell it from a 'no answer'.
+    assertTrue(decline.isExternalResourceDeclined(), "distinctly labelled as an external decline");
+    assertFalse(ExternalAdmissionAuthority.Decision.deferToLocal("x").isExternalResourceDeclined(),
+        "a plain defer-to-local is not an external decline");
+  }
+
   // ---- Governor forwarding ------------------------------------------------
 
   @Test
@@ -206,5 +221,34 @@ public class GpuGovernorExternalAuthorityTest
     assertFalse(gov.isReclaimed("s-throw")); // swallowed -> false
     gov.release("s-throw");             // must not throw
     assertTrue(gov.isIdle());
+  }
+
+  // ---- Admission external-grant flag --------------------------------------
+
+  @Test
+  public void testAdmissionExternalGrantFlagThreadsThrough()
+  {
+    // The 5-arg ctor with externalGrant=true is the ONLY way the flag is set; it
+    // marks a grant that came from an affirmative arbiter decision (the sole
+    // condition unlocking the specialized model-load grace window).
+    GpuGovernor.Admission ext = new GpuGovernor.Admission(
+        "s-ext", EnhancementTier.ENHANCE_2160P, 0, "external authority granted", true);
+    assertTrue(ext.isExternalGrant());
+    assertTrue(ext.isGranted());
+    assertEquals(ext.getTier(), EnhancementTier.ENHANCE_2160P);
+  }
+
+  @Test
+  public void testAdmissionDefaultsToLocalGrant()
+  {
+    // The legacy 4-arg ctor and an explicit false both denote a local-ceiling or
+    // fail-open grant, which must NEVER unlock the arbiter-only grace window.
+    GpuGovernor.Admission legacy = new GpuGovernor.Admission(
+        "s-loc", EnhancementTier.ENHANCE_2160P, 0, "local ceiling");
+    assertFalse(legacy.isExternalGrant());
+
+    GpuGovernor.Admission explicitFalse = new GpuGovernor.Admission(
+        "s-loc2", EnhancementTier.ENHANCE_1440P, 0, "defer-to-local", false);
+    assertFalse(explicitFalse.isExternalGrant());
   }
 }

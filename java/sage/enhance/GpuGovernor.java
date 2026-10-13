@@ -87,19 +87,38 @@ public final class GpuGovernor
     private final String reason;
     private final int gpuIndex;
     private final String sessionId;
+    private final boolean externalGrant;
 
     Admission(String sessionId, EnhancementTier granted, int gpuIndex, String reason)
+    {
+      this(sessionId, granted, gpuIndex, reason, false);
+    }
+
+    Admission(String sessionId, EnhancementTier granted, int gpuIndex, String reason,
+              boolean externalGrant)
     {
       this.sessionId = sessionId;
       this.granted = granted;
       this.gpuIndex = gpuIndex;
       this.reason = reason;
+      this.externalGrant = externalGrant;
     }
 
     /** True when some enhancement was granted. */
     public boolean isGranted() { return granted != null && granted.isActive(); }
     public EnhancementTier getTier() { return granted == null ? EnhancementTier.NONE : granted; }
     public int getGpuIndex() { return gpuIndex; }
+    /**
+     * True when this grant came from an explicit {@link ExternalAdmissionAuthority}
+     * decision (a machine-wide arbiter affirmatively reserved GPU for this
+     * session), as opposed to a local-ceiling grant or a fail-open
+     * defer-to-local. Broker-agnostic: the core learns only that <i>some</i>
+     * external authority granted, never anything about the arbiter itself. The
+     * transcoder uses it as the sole condition under which a cold specialized
+     * upscaler (e.g. VSR) is allowed the longer model-load grace window instead of
+     * the ordinary decision budget.
+     */
+    public boolean isExternalGrant() { return externalGrant; }
     /** Always populated, including on success — this is the telemetry record. */
     public String getReason() { return reason; }
     public String getSessionId() { return sessionId; }
@@ -295,7 +314,7 @@ public final class GpuGovernor
       return deny(sessionId, "authority grant " + decision.getTier().token()
           + " exceeds local budgets");
     return registerGrant(sessionId, granted, desired, gpuIndex, estBitrateKbps,
-        offline, snap, load, whyNot, "authority: " + safeName(auth));
+        offline, snap, load, whyNot, "authority: " + safeName(auth), true);
   }
 
   /** Result of a ladder walk: the best admissible tier and why higher tiers failed. */
@@ -333,6 +352,15 @@ public final class GpuGovernor
                                   GpuSnapshot snap, RecordingGuard.CaptureLoad load,
                                   List<String> whyNot, String extraNote)
   {
+    return registerGrant(sessionId, tier, desired, gpuIndex, estBitrateKbps, offline,
+        snap, load, whyNot, extraNote, false);
+  }
+
+  private Admission registerGrant(String sessionId, EnhancementTier tier, EnhancementTier desired,
+                                  int gpuIndex, long estBitrateKbps, boolean offline,
+                                  GpuSnapshot snap, RecordingGuard.CaptureLoad load,
+                                  List<String> whyNot, String extraNote, boolean externalGrant)
+  {
     Session s = new Session(sessionId, tier, gpuIndex,
         effectiveBitrateKbps(tier, estBitrateKbps), offline);
     trackSession(s);
@@ -344,7 +372,7 @@ public final class GpuGovernor
     if (extraNote != null && extraNote.length() > 0) reason += " [" + extraNote + "]";
     if (Sage.DBG) System.out.println("GpuGovernor: " + sessionId + " " + reason
         + " [" + snap + ", " + load + "]");
-    return new Admission(sessionId, tier, gpuIndex, reason);
+    return new Admission(sessionId, tier, gpuIndex, reason, externalGrant);
   }
 
   /**

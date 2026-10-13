@@ -159,6 +159,30 @@ public class MiniPlayer implements DVDMediaPlayer
     else
       base = chosenSurfaceDelivery; // push, hls unchanged
     if (enhanceTier == null || !enhanceTier.isActive()) return base;
+    // Enhancement-carrier invariant. A bare "pull:direct" is a SIZE/READ
+    // passthrough (the bridge maps it to /msproxy?mode=direct) with NO server
+    // transcoder, so it physically cannot carry an enhancement re-encode.
+    // Appending ":enhance;tier=" here would emit an unroutable
+    // "direct:enhance" that Sage does not recognise as an enhancement-capable
+    // xcode mode -- the msproxy bridge then collapses it to the legacy DVD
+    // default profile (352x240 MPEG-4 @ 300 kbps), which is exactly the
+    // observed live-TV regression. The GPU-enhance pull upgrade in load()
+    // promotes such a tune to pull-xcode:<copy-family remux> BEFORE this token
+    // is built, so in the normal path base is never bare "pull:direct" when a
+    // tier is active. This is the single chokepoint that makes that promotion
+    // load-bearing: if it ever fails to fire (e.g. a surface with no
+    // pull-xcode transport, or a future gate divergence), enhancement simply
+    // cannot be delivered on a passthrough -- drop the suffix and keep a clean
+    // DIRECT_PLAY at source resolution rather than corrupt it into the DVD
+    // default. Never silent: warn so a missed promotion stays diagnosable.
+    if ("pull:direct".equals(base))
+    {
+      if (sage.Sage.DBG) System.out.println("MiniPlayer: enhancement tier "
+          + enhanceTier.token() + " NOT applied to bare pull:direct (a passthrough"
+          + " has no transcoder to carry the upscale); delivering DIRECT_PLAY at"
+          + " source resolution instead of an unroutable direct:enhance");
+      return base;
+    }
     String wire = enhanceTier.wireToken();
     if (wire == null) return base;
     return base + ":enhance;tier=" + wire;
@@ -329,6 +353,32 @@ public class MiniPlayer implements DVDMediaPlayer
   static boolean isCopyFamilyRemuxMode(String mode)
   {
     return "mpeg2tsremux".equals(mode) || "mpeg2psremux".equals(mode);
+  }
+
+  /**
+   * Append the source audio's {@code ch=}/{@code sr=}/{@code bps=} detail to a
+   * synthesized push {@code [bf=aud;f=...]} descriptor when the delivered audio
+   * is a stream copy of the source (i.e. the wire codec equals the source
+   * codec). NG push clients (ExoPlayer / IJK) initialise the audio renderer
+   * straight from these descriptor fields; when a bare {@code [bf=aud;f=AC3;]}
+   * arrives with no sample rate or channel count the client passes 0/0 to the
+   * decoder, which fails to open ("Invalid sample rate or channel count") and
+   * plays the stream SILENT. The {@code mpeg2psremux} and {@code usingRemuxer}
+   * descriptors already carry these fields; the {@code mpeg2tsremux} enhance
+   * path (classified TRANSCODE because the video is re-encoded to HEVC, so the
+   * hint is synthesized here rather than copied from a target format) did not,
+   * which is exactly why GPU-enhanced TS playback was silent while the PS remux
+   * of the same source had sound. Only emitted on a copy so a true audio
+   * transcode (which may downmix/resample) never advertises stale geometry.
+   */
+  static void appendCopiedAudioDetail(StringBuilder fb,
+      sage.media.format.AudioFormat srcAf, String wireACodec)
+  {
+    if (srcAf == null || wireACodec == null || !wireACodec.equals(srcAf.getFormatName()))
+      return;
+    if (srcAf.getChannels() > 0)      fb.append(";ch=").append(srcAf.getChannels());
+    if (srcAf.getSamplingRate() > 0)  fb.append(";sr=").append(srcAf.getSamplingRate());
+    if (srcAf.getBitsPerSample() > 0) fb.append(";bps=").append(srcAf.getBitsPerSample());
   }
 
   /**
@@ -1003,6 +1053,9 @@ public class MiniPlayer implements DVDMediaPlayer
     lastEstimatedStreamBitrate = lastAverageEstimatedStreamBitrate = 0;
     clientReportedPlayState = 0;
     clientReportedMediaTime = 0;
+    directPushSeekFloor = 0;
+    directPushSentThrough = -1;
+    lastRejectedDirectPushPosition = Long.MIN_VALUE;
     lastParserTimestamp = 0;
     lastParserTimestampBytePos = 0;
 
@@ -1082,12 +1135,28 @@ public class MiniPlayer implements DVDMediaPlayer
     if (detailedPushBufferStats && pushMode && rpSrc == null)
     {
       long currMediaTime = clientReportedMediaTime + timestampOffset;
-      if (lastMediaTimeBase == currMediaTime && currState == PLAY_STATE)
+      if (!serverSideTranscoding && !byteBasedSeeking && mpegSrc != null)
+      {
+        if (!directPushPositionInWindow(currMediaTime, directPushSeekFloor, directPushSentThrough))
+        {
+          if (Sage.DBG && currMediaTime != lastRejectedDirectPushPosition)
+            System.out.println("NG-POSDIAG rejecting direct-push position=" + currMediaTime
+                + " seekFloor=" + directPushSeekFloor + " sentThrough=" + directPushSentThrough
+                + " retainedPosition=" + lastMediaTime + " epoch=" + seekEpoch);
+          lastRejectedDirectPushPosition = currMediaTime;
+          return lastMediaTime;
+        }
+      }
+      if (lastMediaTimeBase == currMediaTime && currState == PLAY_STATE && !isNgTrickplaySession())
       {
         lastMediaTime = (Sage.eventTime() - lastMediaTimeCacheTime) + lastMediaTime;
       }
       else
         lastMediaTime = lastMediaTimeBase = currMediaTime;
+      if (!serverSideTranscoding && !byteBasedSeeking && mpegSrc != null)
+        lastMediaTime = Math.min(lastMediaTime, directPushSentThrough + 2000L);
+      else if (serverSideTranscoding && isNgTrickplaySession())
+        lastMediaTime = boundPushDisplayEstimate(lastMediaTime, timestampOffset, directPushSentThrough);
       lastMediaTimeCacheTime = Sage.eventTime();
       return lastMediaTime;
     }
@@ -1143,6 +1212,8 @@ public class MiniPlayer implements DVDMediaPlayer
         if (adv > 0)
           base += adv;
       }
+      if (isNgTrickplaySession())
+        return boundPushDisplayEstimate(base, timestampOffset, directPushSentThrough);
       if (lastParserTimestamp > timestampOffset && base > lastParserTimestamp)
         base = lastParserTimestamp;
       if (base < timestampOffset)
@@ -1150,6 +1221,11 @@ public class MiniPlayer implements DVDMediaPlayer
       return base;
     }
     return getMediaTimeMillis();
+  }
+
+  static long boundPushDisplayEstimate(long estimate, long seekFloor, long sentThrough)
+  {
+    return Math.max(seekFloor, Math.min(estimate, Math.max(seekFloor, sentThrough)));
   }
 
   // Increment 1b -- seek-epoch trust guard. Returns true when the client's reported
@@ -2442,8 +2518,16 @@ public class MiniPlayer implements DVDMediaPlayer
           else if (sage.enhance.EnhancementAdvisor.isEnabled())
           {
             int srcFps = 0;
+            double srcFpsExact = 0.0;
+            String srcPixelFormat = "";
+            int srcBitDepth = 0;
             if (cf != null && cf.getVideoFormat() != null)
+            {
               srcFps = Math.round(cf.getVideoFormat().getFps());
+              srcFpsExact = cf.getVideoFormat().getFps();
+              srcPixelFormat = cf.getVideoFormat().getColorspace();
+              srcBitDepth = sage.enhance.GpuEnhancePipeline.inferBitDepth(srcPixelFormat);
+            }
             // NG live 4K upscaling: an in-progress live recording is frequently
             // not format-scanned yet at tune time, so currMF.getFileFormat()
             // yields 0x0 video -- the advisor then short-circuits to
@@ -2471,7 +2555,13 @@ public class MiniPlayer implements DVDMediaPlayer
                 enhSrcH = pvf.getHeight();
                 enhSrcInterlaced = pvf.isInterlaced();
                 int pfps = Math.round(pvf.getFps());
-                if (pfps > 0) enhSrcFps = pfps;
+                if (pfps > 0)
+                {
+                  enhSrcFps = pfps;
+                  srcFpsExact = pvf.getFps();
+                }
+                srcPixelFormat = pvf.getColorspace();
+                srcBitDepth = sage.enhance.GpuEnhancePipeline.inferBitDepth(srcPixelFormat);
                 if (Sage.DBG) System.out.println("GPU_ENHANCE live-source probe recovered geometry "
                     + enhSrcW + "x" + enhSrcH + (enhSrcInterlaced ? "i" : "p") + "@" + enhSrcFps
                     + " from " + file);
@@ -2548,7 +2638,51 @@ public class MiniPlayer implements DVDMediaPlayer
                 // enhanceBwKbps (LAN-unmetered / fresh active probe / passive
                 // fallback) rather than the passive estimate that sized the
                 // legacy stream. 0 imposes no cap.
-                sourceBitrateKbps, enhanceBwKbps);
+                sourceBitrateKbps, enhanceBwKbps, srcFpsExact, srcPixelFormat, srcBitDepth);
+            // NG live 4K upscaling -- provisional tier when the source geometry
+            // is still unknown at tune. A newborn live segment (recording
+            // started moments ago, no video GOP on disk yet) makes even the
+            // bounded probe above parse audio-only, so enhSrcH stays 0 and the
+            // advisor fail-closes to UNKNOWN_SOURCE -- enhancement then latches
+            // OFF for the whole session even though the file grows a real
+            // 720p/1080i GOP a second later. FFMPEGTranscoder.maybeApplyGpuEnhancement
+            // ALREADY re-probes the growing file and re-derives the honest
+            // tier/plan from fresh geometry (and re-clamps to the client sink
+            // via tierForLiveSink) on every (re)build -- but it only runs when
+            // the negotiated tier is active. So for a LIVE source whose geometry
+            // we simply could not read yet, hand it the sink's own upscale
+            // ceiling as a PROVISIONAL active tier: the transcoder resolves the
+            // real tier from actual geometry when it launches (a beat later,
+            // when the GOP exists) and self-heals on the next relaunch if still
+            // too early; if geometry never appears, buildPlan returns null and
+            // the stream degrades to today's plain remux. A completed (VOD)
+            // source is never forced -- unknown geometry there is a genuine
+            // "don't know", not a newborn-timing race. Guarded + reversible; a
+            // known-geometry tune is byte-identical (cannot fire when enhSrcH>0).
+            if ((enhanceTier == null || !enhanceTier.isActive())
+                && enhSrcH <= 0
+                && currMF != null && currMF.isRecording()
+                && mcsr != null && mcsr.getSinkWidth() > 0 && mcsr.getSinkHeight() > 0
+                && sage.HwEncoder.gpuEnhanceSupported()
+                && sage.enhance.spi.ScaleProviderRegistry.getInstance().selectedProviderCanUpscale()
+                && Sage.getBoolean("playback/gpu_enhance/live_provisional_tier", true))
+            {
+              sage.enhance.EnhancementTier provisional =
+                  sage.enhance.EnhancementTier.clampToSink(
+                      sage.enhance.EnhancementTier.ENHANCE_2160P,
+                      mcsr.getSinkWidth(), mcsr.getSinkHeight());
+              int adminMax = Sage.getInt("playback/gpu_enhance/max_height", 2160);
+              if (adminMax > 0)
+                provisional = sage.enhance.EnhancementTier.clampToHeight(provisional, adminMax);
+              if (provisional != null && provisional.isActive())
+              {
+                if (Sage.DBG) System.out.println("GPU_ENHANCE live provisional tier "
+                    + provisional.token() + " (source geometry unknown at tune; sink "
+                    + mcsr.getSinkWidth() + "x" + mcsr.getSinkHeight() + ") -- transcoder"
+                    + " will resolve the honest tier from apply-time geometry");
+                enhanceTier = provisional;
+              }
+            }
           }
         }
         catch (Throwable t)
@@ -2609,9 +2743,17 @@ public class MiniPlayer implements DVDMediaPlayer
           // so MediaServer builds a video-copy transcoder the enhancement pass then
           // rewrites into the NVENC HEVC upscale. Audio is copied untouched.
           //
-          // Safety mirrors the push upgrade: never a recording / active-file source
-          // (!timeshifted; Invariant 0 is also re-checked in maybeApplyGpuEnhancement),
-          // NG video sessions only, and only when the WINNING surface actually
+          // Live / active-file sources ARE eligible here — parity with the
+          // REMUX+enhance path, which already upscales live TV (e.g. an MPEG2-PS
+          // live tune that REMUXes to MP4 gets the NVENC HEVC upscale). Excluding
+          // timeshifted here stranded the one combination REMUX does not cover:
+          // a LIVE stream seen as MPEG2-TS that the surface "covers" as a bare
+          // DIRECT_PLAY pull — no transcoder, enhance dropped, and (since a
+          // browser cannot actually decode MPEG2) the msproxy bridge collapsed to
+          // the legacy DVD default profile. Invariant 0 is still re-checked in
+          // maybeApplyGpuEnhancement, so a source that would disturb a recording
+          // is declined downstream. Otherwise: NG video sessions only, and only
+          // when the WINNING surface actually
           // advertises BOTH HEVC decode (the enhanced copy path emits HEVC) AND
           // pull-xcode delivery. That delivery guard is load-bearing: a client
           // whose surface offers only raw [push, pull] (e.g. the android_media3 /
@@ -2626,7 +2768,7 @@ public class MiniPlayer implements DVDMediaPlayer
           if ("pull".equals(chosenSurfaceDelivery)
               && (chosenSurfaceXcodeMode == null || chosenSurfaceXcodeMode.length() == 0)
               && chosenSurface != null
-              && !timeshifted && ngSession
+              && ngSession
               && majorTypeHint == MediaFile.MEDIATYPE_VIDEO
               && enhanceTier != null && enhanceTier.isActive()
               && Sage.getBoolean("miniplayer/enhance_pull_upgrade", true)
@@ -2667,7 +2809,7 @@ public class MiniPlayer implements DVDMediaPlayer
           else if ("pull".equals(chosenSurfaceDelivery)
               && (chosenSurfaceXcodeMode == null || chosenSurfaceXcodeMode.length() == 0)
               && chosenSurface != null
-              && !timeshifted && ngSession
+              && ngSession
               && majorTypeHint == MediaFile.MEDIATYPE_VIDEO
               && enhanceTier != null && enhanceTier.isActive()
               && Sage.getBoolean("miniplayer/enhance_push_mkv_upgrade", true)
@@ -3525,17 +3667,34 @@ public class MiniPlayer implements DVDMediaPlayer
               // whose profile nonetheless allows (and the decision selected)
               // H.264; using it here re-emitted MPEG4 ("dynamic") and contradicted
               // the decision → client rejected the codec → black screen.
-              if (isH264TargetVideo(profileDecision.targetVideoCodec))
+              if (isH264TargetVideo(profileDecision.targetVideoCodec)
+                  && mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_TS))
               {
-                // H.264 target → emit H.264 in MPEG2-TS (dynamich264, the mode
-                // the openURL descriptor synth already advertises as
-                // f=MPEG2-TS;bf=vid;f=H.264;bf=aud;f=AAC). Fall back to dynamicts
-                // only if the client can't take a plain TS push container.
-                prefTranscodeMode =
-                    (mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_TS)
-                     || mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS))
-                    ? "dynamich264" : "dynamicts";
+                // H.264 target AND the client's PUSH receiver can demux MPEG2-TS
+                // → emit H.264 in MPEG2-TS (dynamich264, advertised by the openURL
+                // synth as f=MPEG2-TS;bf=vid;f=H.264;...).
+                prefTranscodeMode = "dynamich264";
                 pathTaken = "decision-h264";
+              }
+              else if (isH264TargetVideo(profileDecision.targetVideoCodec))
+              {
+                // H.264 target but the client CANNOT demux an MPEG2-TS PUSH. The
+                // classic desktop Placeshifter has a bespoke PS-ONLY native push
+                // receiver (distinct from its general PULL/MPlayer demuxer that the
+                // desktop_default profile's H.264-only video list actually describes)
+                // -- it was never built for TS framing, so pushing it H.264-in-TS
+                // stalls the server pusher outright: zero output frames, no audio or
+                // video (root-caused in legacyH264PushProfileApplies(); this is the
+                // live ATSC3/HEVC placeshifter failure being fixed). There is no
+                // H.264-in-PS push mode, so down-convert the video to the MPEG4-ASP
+                // MPEG2-PS "dynamic" ladder that bespoke push path has decoded for
+                // years (the HEVC/other source is transcoded to MPEG4 here; audio is
+                // the AC-4 ladder pick, which the push receiver + profile both allow).
+                // Only if the client takes neither a PS nor a TS push do we fall back
+                // to dynamicts.
+                prefTranscodeMode = mcsr.isSupportedPushContainerFormat(sage.media.format.MediaFormat.MPEG2_PS)
+                    ? "dynamic" : "dynamicts";
+                pathTaken = "decision-h264-no-ts-push->mpeg4ps";
               }
               else
               {
@@ -3583,10 +3742,19 @@ public class MiniPlayer implements DVDMediaPlayer
       // is the push analogue of the pull-xcode "mpeg2tsremux:enhance" path the Tizen
       // PWA already uses. Audio is copied untouched (enhancement never re-encodes it).
       //
-      // Safety: never a recording / active-file source (!timeshifted; Invariant 0 is
-      // also re-checked in maybeApplyGpuEnhancement), only NG video sessions, only a
-      // pending raw direct-play push (!transcoded), and only when the client actually
-      // advertises BOTH HEVC decode AND MPEG2-TS push so it can receive HEVC-in-TS.
+      // Live / active-file sources ARE eligible — parity with the pull-xcode
+      // DIRECT_PLAY->enhance promotion above (~line 2718) and with the REMUX+enhance
+      // path, both of which already upscale live TV. Excluding timeshifted here
+      // stranded the exact combination this block exists to cover: a LIVE tuner
+      // stream the client fully DIRECT_PLAYs as a raw push (e.g. the NVIDIA Shield
+      // direct-playing a 720p MPEG2 broadcast) — timeshifted is true for every live
+      // push, so the guard silently voided the offered upscale on precisely the
+      // source that needs it. Invariant 0 is still re-checked in
+      // maybeApplyGpuEnhancement, so a source that would disturb a recording is
+      // declined downstream (falling back to a plain copy-family remux the client can
+      // still play). Otherwise: only NG video sessions, only a pending raw direct-play
+      // push (!transcoded), and only when the client actually advertises BOTH HEVC
+      // decode AND MPEG2-TS push so it can receive HEVC-in-TS.
       // Flag-guarded for instant rollback. When the tier is NONE (the default and the
       // dry-run state) this never fires and delivery is byte-identical to today.
       // Android-class route (decided at the post-rank surface block above): the
@@ -3595,7 +3763,7 @@ public class MiniPlayer implements DVDMediaPlayer
       // MATROSKA push. currentTunePushEnhanceMode carries the concrete copy mode;
       // when set, pushMode was already forced true (via ngEarlyDelivery="push" ->
       // NG Gate #6) and the surface transport override cleared clientDoesPull.
-      if (pushMode && !transcoded && !timeshifted && ngSession
+      if (pushMode && !transcoded && ngSession
           && majorTypeHint == MediaFile.MEDIATYPE_VIDEO
           && currentTuneEnhanceTier != null && currentTuneEnhanceTier.isActive()
           && currentTunePushEnhanceMode != null)
@@ -3608,7 +3776,7 @@ public class MiniPlayer implements DVDMediaPlayer
             + "promoted to " + prefTranscodeMode + " copy-family transcode for tier="
             + currentTuneEnhanceTier.token() + " (client advertises HEVC decode + MATROSKA push)");
       }
-      else if (pushMode && !transcoded && !timeshifted && ngSession && mcsr != null
+      else if (pushMode && !transcoded && ngSession && mcsr != null
           && majorTypeHint == MediaFile.MEDIATYPE_VIDEO
           && currentTuneEnhanceTier != null && currentTuneEnhanceTier.isActive()
           && Sage.getBoolean("miniplayer/enhance_push_upgrade", true)
@@ -4022,20 +4190,59 @@ public class MiniPlayer implements DVDMediaPlayer
             // synth further below for custom/named modes.
             cf = null; // don't set the format since it'll be a base MPEG2 format
             // But if we're doing placeshifting then we need the format string
+            // AC-4 sources: every real-encode push mode below actually DELIVERS
+            // the AC-4 fallback-ladder codec (eac3 -> ac3 -> aac -> mp2; see
+            // setAc4SourceAudioCodec), NOT the AAC the hardcoded templates assume,
+            // because this ffmpeg cannot copy/mux AC-4. Resolve the real delivered
+            // audio token ONCE so the mode branches advertise it. If the client is
+            // told AAC but fed AC3 it configures the wrong decoder and stalls the
+            // entire pipeline — no video OR audio reaches the user (the exact live
+            // ATSC3/HEVC placeshifter failure this fixes). null => non-AC-4 source,
+            // leave each template's default audio untouched.
+            String _ac4Aud = null;
+            {
+              sage.media.format.ContainerFormat _cf4 = (currMF != null) ? currMF.getFileFormat() : null;
+              sage.media.format.AudioFormat _af4 = (_cf4 != null) ? _cf4.getAudioFormat() : null;
+              boolean _srcAc4 = _af4 != null && sage.media.format.MediaFormat.AC4.equals(_af4.getFormatName());
+              String _pick4 = (_srcAc4 && mpegSrc != null) ? mpegSrc.getAc4SourceAudioCodec() : null;
+              if (_pick4 != null && _pick4.length() > 0)
+              {
+                if ("eac3".equalsIgnoreCase(_pick4)) _ac4Aud = sage.media.format.MediaFormat.EAC3;
+                else if ("ac3".equalsIgnoreCase(_pick4)) _ac4Aud = sage.media.format.MediaFormat.AC3;
+                else if (_pick4.toLowerCase().startsWith("aac")) _ac4Aud = sage.media.format.MediaFormat.AAC;
+                else if ("mp2".equalsIgnoreCase(_pick4)) _ac4Aud = sage.media.format.MediaFormat.MP2;
+                if (Sage.DBG && _ac4Aud != null)
+                  System.out.println("MiniPlayer: AC-4 source — push wire audio resolved to delivered codec "
+                      + _ac4Aud + " (ladder pick=" + _pick4 + ")");
+              }
+            }
             if ("dynamic".equals(prefTranscodeMode))
             {
-              formatString = "f=MPEG2-PS;[bf=vid;f=MPEG4;][bf=aud;f=MP2]";
+              // MPEG4-ASP video + audio in MPEG2-PS: the classic placeshifter's
+              // bespoke PS-only push receiver. Its historical (and only reliable)
+              // audio codec on this push path is MP2. FFMPEGTranscoder forces the
+              // encode to MP2 for this mode (see maybeOverrideAc4AudioCodec), so an
+              // AC-4 source no longer delivers AC3 here; advertise MP2 to match.
+              // Telling the client AC3 while delivering MP2 (or vice-versa) makes it
+              // configure the wrong decoder and plays broken/garbled audio.
+              formatString = "f=MPEG2-PS;[bf=vid;f=MPEG4;][bf=aud;f="
+                  + sage.media.format.MediaFormat.MP2 + "]";
             }
             else if ("dynamicts".equals(prefTranscodeMode))
             {
-              formatString = "f=MPEG2-TS;[bf=vid;f=MPEG4;][bf=aud;f=AAC]";
+              formatString = "f=MPEG2-TS;[bf=vid;f=MPEG4;][bf=aud;f="
+                  + (_ac4Aud != null ? _ac4Aud : sage.media.format.MediaFormat.AAC) + "]";
             }
             else if ("dynamich264".equals(prefTranscodeMode))
             {
-              // Modern H.264/MPEG2-TS push (FFMPEGTranscoder pushH264 shape),
-              // AAC audio -- describe the OUTPUT so NG clients set up an H.264
-              // TS extractor instead of sniffing (or hanging on an empty hint).
-              formatString = "f=MPEG2-TS;[bf=vid;f=H.264;][bf=aud;f=AAC]";
+              // Modern H.264/MPEG2-TS push (FFMPEGTranscoder pushH264 shape).
+              // Audio is AAC for most sources, but an AC-4 source is transcoded
+              // to the AC-4 fallback-ladder pick (_ac4Aud, resolved above) --
+              // describe the OUTPUT so the client sets up the right extractor and
+              // audio decoder instead of sniffing (or configuring an AAC decoder
+              // for an AC3 stream, which stalls playback entirely).
+              formatString = "f=MPEG2-TS;[bf=vid;f=H.264;][bf=aud;f="
+                  + (_ac4Aud != null ? _ac4Aud : sage.media.format.MediaFormat.AAC) + "]";
             }
             else if ("music".equals(prefTranscodeMode) || "music128".equals(prefTranscodeMode))
             {
@@ -4088,7 +4295,9 @@ public class MiniPlayer implements DVDMediaPlayer
                 if (srcVf.getFps() > 0)    fb.append(";fps=").append(srcVf.getFps());
               }
               fb.append(";]");
-              fb.append("[bf=aud;f=").append(acName).append(";]");
+              fb.append("[bf=aud;f=").append(acName);
+              appendCopiedAudioDetail(fb, srcAf, acName);
+              fb.append(";]");
               formatString = fb.toString();
               if (Sage.DBG) System.out.println("MiniPlayer: audio-only push format hint -> " + formatString);
             }
@@ -4219,10 +4428,45 @@ public class MiniPlayer implements DVDMediaPlayer
                 else if ("mp3".equals(ac) || "libmp3lame".equals(ac))
                   wireACodec = sage.media.format.MediaFormat.MP3;
               }
+              // ROOT-CAUSE FIX (AC-4 live/ATSC3 on legacy push clients): when the
+              // source audio is AC-4, FFMPEGTranscoder ALWAYS overrides the audio
+              // codec to the AC-4 fallback-ladder pick (eac3 -> ac3 -> aac -> mp2;
+              // see setAc4SourceAudioCodec) because this ffmpeg cannot copy/mux
+              // AC-4. The transcode mode's audiocodec= default (e.g. dynamich264 ->
+              // aac) is therefore NOT what is actually delivered. Without this
+              // correction the openURL descriptor advertises the mode default (AAC)
+              // while the stream carries the ladder codec (AC3): the client sets up
+              // an AAC decoder, is fed AC3, and stalls the whole pipeline — no video
+              // OR audio reaches the user. Force the wire hint to the real delivered
+              // codec. (The COPY branch above already handles the native-AC-4-copy
+              // case; this covers every non-COPY transcode mode.)
+              {
+                String _ac4Pick = (mpegSrc != null) ? mpegSrc.getAc4SourceAudioCodec() : null;
+                sage.media.format.ContainerFormat _srcCfA = (currMF != null) ? currMF.getFileFormat() : null;
+                sage.media.format.AudioFormat _srcAfA = (_srcCfA != null) ? _srcCfA.getAudioFormat() : null;
+                boolean _srcIsAc4 = _srcAfA != null
+                    && sage.media.format.MediaFormat.AC4.equals(_srcAfA.getFormatName());
+                if (_srcIsAc4 && _ac4Pick != null && _ac4Pick.length() > 0)
+                {
+                  String _was = wireACodec;
+                  if ("eac3".equalsIgnoreCase(_ac4Pick)) wireACodec = sage.media.format.MediaFormat.EAC3;
+                  else if ("ac3".equalsIgnoreCase(_ac4Pick)) wireACodec = sage.media.format.MediaFormat.AC3;
+                  else if (_ac4Pick.toLowerCase().startsWith("aac")) wireACodec = sage.media.format.MediaFormat.AAC;
+                  else if ("mp2".equalsIgnoreCase(_ac4Pick)) wireACodec = sage.media.format.MediaFormat.MP2;
+                  if (Sage.DBG && !_was.equals(wireACodec))
+                    System.out.println("MiniPlayer: AC-4 source — wire hint audio forced to delivered codec "
+                        + wireACodec + " (ladder pick=" + _ac4Pick + ", mode default was " + _was + ")");
+                }
+              }
               StringBuilder fb = new StringBuilder();
               fb.append("f=").append(wireContainer).append(";");
               fb.append("[bf=vid;f=").append(wireVCodec).append(";]");
-              fb.append("[bf=aud;f=").append(wireACodec).append(";]");
+              fb.append("[bf=aud;f=").append(wireACodec);
+              {
+                sage.media.format.ContainerFormat _adCf = (currMF != null) ? currMF.getFileFormat() : null;
+                appendCopiedAudioDetail(fb, (_adCf != null) ? _adCf.getAudioFormat() : null, wireACodec);
+              }
+              fb.append(";]");
               formatString = fb.toString();
               if (Sage.DBG) System.out.println("MiniPlayer: property-string transcode mode — synthesized push hint -> "
                   + formatString + " from mode=" + prefTranscodeMode);
@@ -4283,7 +4527,12 @@ public class MiniPlayer implements DVDMediaPlayer
               fb.append("f=").append(wireContainer).append(";");
               if (!videoOnlyDropped)
                 fb.append("[bf=vid;f=").append(wireVCodec).append(";]");
-              fb.append("[bf=aud;f=").append(wireACodec).append(";]");
+              fb.append("[bf=aud;f=").append(wireACodec);
+              {
+                sage.media.format.ContainerFormat _adCf = (currMF != null) ? currMF.getFileFormat() : null;
+                appendCopiedAudioDetail(fb, (_adCf != null) ? _adCf.getAudioFormat() : null, wireACodec);
+              }
+              fb.append(";]");
               formatString = fb.toString();
               if (Sage.DBG) System.out.println("MiniPlayer: fallback push format hint for prefTranscodeMode='"
                   + prefTranscodeMode + "' (parsed from xcode_qualities) -> " + formatString);
@@ -5048,7 +5297,16 @@ public class MiniPlayer implements DVDMediaPlayer
                   clientReportedMediaTime = 0;
                 }
                 else
+                {
                   lastMediaTime = seekTimeMillis;
+                  if (detailedPushBufferStats && !byteBasedSeeking && rpSrc == null)
+                  {
+                    directPushSeekFloor = seekTimeMillis;
+                    lastMediaTimeBase = seekTimeMillis;
+                    clientReportedMediaTime = (int) seekTimeMillis;
+                    lastRejectedDirectPushPosition = Long.MIN_VALUE;
+                  }
+                }
                 lastMediaTimeCacheTime = Sage.eventTime();
                 // We must continue around the loop because we seeked and now may not have anything left in the buffer
                 continue;
@@ -5410,6 +5668,30 @@ public class MiniPlayer implements DVDMediaPlayer
           catch (Exception e){}
           pushDumpStream = null;
         }
+        // NG server-side-transcode leak guard. The push loop above exits one of two
+        // ways: a clean stop()/free() moves currState out of PLAY/PAUSE (the while
+        // condition ends the loop), or a pushBuffer0 failure -- the client's media
+        // connection dropping ungracefully (app killed, network loss, force-quit) --
+        // hits a `break` while currState is STILL PLAY/PAUSE. In that second case
+        // nothing else has torn the transcode down yet, so a server-side GPU enhance
+        // transcode would sit holding its NVENC session and VRAM until the idle reaper
+        // eventually collects it. Overlapping the next heavy 2160p enhance with that
+        // orphan is exactly what produces "Failed locking bitstream buffer: out of
+        // memory" and the machine-wide NVENC cooldown that then denies later plays.
+        // Drive the same teardown the control channel would (connectionError ->
+        // reconnect daemon -> VideoFrame.prepareForReload -> player.free() ->
+        // mpegSrc.close() -> stopTranscode), so the GPU reservation is returned
+        // promptly. This mirrors the sendStart-failure handling earlier in this
+        // thread, is idempotent with free()/a concurrent control-channel drop
+        // (connectionError() de-dupes via startedReconnectDaemon), and is scoped to
+        // the server-side-transcode path so the legacy plain-placeshifter push and
+        // its reconnect behaviour are unchanged.
+        if (serverSideTranscoding && (currState == PAUSE_STATE || currState == PLAY_STATE))
+        {
+          if (Sage.DBG) System.out.println("Push loop exited with the media connection lost but no clean stop; " +
+              "triggering teardown to release the server-side transcode (GPU) promptly");
+          connectionError();
+        }
       }
 
       private int getFlags()
@@ -5600,7 +5882,7 @@ public class MiniPlayer implements DVDMediaPlayer
   {
     if (currState == PLAY_STATE || currState == PAUSE_STATE || currState == LOADED_STATE)
     {
-      // Increment 1c -- DVR / live-edge clamp (default OFF: miniplayer/push_seek_dvr_clamp).
+      // DVR clamp defaults on for NG sessions; legacy settings remain unchanged.
       // Clamp the seek target to [0, availableDuration]. For an in-progress recording,
       // getDuration(currSegment) returns the currently-available end (the live edge), so a
       // forward skip saturates at live instead of overshooting into not-yet-recorded
@@ -5629,7 +5911,7 @@ public class MiniPlayer implements DVDMediaPlayer
             // math (SeekWindow) -- one authority for the min/max/floor discipline across
             // every seek path. Media-relative ms here; floor 0, no tail margin (preserves
             // the exact prior [0, availEnd] behavior).
-            if (Sage.getBoolean("miniplayer/push_seek_dvr_clamp", false))
+            if (trickplayPolicyEnabled("miniplayer", "push_seek_dvr_clamp", isNgTrickplaySession(), true))
             {
               long clamped = SeekWindow.clampToWindow(seekTimeMillis, 0L, availEnd, 0L);
               if (clamped != seekTimeMillis)
@@ -5737,9 +6019,11 @@ public class MiniPlayer implements DVDMediaPlayer
                 long adv = Sage.eventTime() - timestampOffsetWallTime;
                 if (adv > 0) pushDisplayBase += adv;
               }
-              if (lastParserTimestamp > timestampOffset && pushDisplayBase > lastParserTimestamp)
+              if (!isNgTrickplaySession() && lastParserTimestamp > timestampOffset && pushDisplayBase > lastParserTimestamp)
                 pushDisplayBase = lastParserTimestamp;
               if (pushDisplayBase < timestampOffset) pushDisplayBase = timestampOffset;
+              if (serverSideTranscoding && isNgTrickplaySession())
+                pushDisplayBase = boundPushDisplayEstimate(pushDisplayBase, timestampOffset, directPushSentThrough);
               // A forward skip whose target is still inside the data already transcoded and
               // pushed to the client (display .. lastParserTimestamp) can be satisfied by an
               // in-place client-side seek (seekPull0 -> MEDIACMD_SEEK) with NO ffmpeg restart,
@@ -5755,7 +6039,7 @@ public class MiniPlayer implements DVDMediaPlayer
               // a property so it can be re-enabled for experimentation once a robust display-
               // position signal is available. Default path is a full reprime (consistent).
               boolean pushInPlaceSeek = serverSideTranscoding && detailedPushBufferStats &&
-                  Sage.getBoolean("miniplayer/push_inplace_seek", false) &&
+                  trickplayPolicyEnabled("miniplayer", "push_inplace_seek", isNgTrickplaySession(), false) &&
                   seekTimeMillis > pushDisplayBase && seekTimeMillis < lastParserTimestamp;
               // NG push-mode seek diagnostics: capture the full reposition decision so a
               // backward-skip-goes-forward / flush-to-0 repro can be triaged from the log
@@ -5854,7 +6138,16 @@ public class MiniPlayer implements DVDMediaPlayer
                       " (asserted restart point; verify vs transcoder actual restart time)");
                 }
                 else
+                {
                   lastMediaTime = seekTimeMillis;
+                  if (detailedPushBufferStats && !byteBasedSeeking && rpSrc == null)
+                  {
+                    directPushSeekFloor = seekTimeMillis;
+                    lastMediaTimeBase = seekTimeMillis;
+                    clientReportedMediaTime = (int) seekTimeMillis;
+                    lastRejectedDirectPushPosition = Long.MIN_VALUE;
+                  }
+                }
                 lastMediaTimeCacheTime = Sage.eventTime();
               }
             }
@@ -5962,27 +6255,43 @@ public class MiniPlayer implements DVDMediaPlayer
     }
     else
     {
-      MediaFile currMF = VideoFrame.getMediaFileForPlayer(MiniPlayer.this);
-      // Do a skip instead so we actually do something with this command instead of not responding to it
-      VideoFrame vf = VideoFrame.getVideoFrameForPlayer(MiniPlayer.this);
-      long maxTime = (vf != null && currMF != null) ? currMF.getDuration(vf.getCurrSegment()) : Long.MAX_VALUE;
-      try
+      if (!isNgTrickplaySession())
       {
-        if (newRate > 1.0f)
+        MediaFile currMF = VideoFrame.getMediaFileForPlayer(MiniPlayer.this);
+        VideoFrame vf = VideoFrame.getVideoFrameForPlayer(MiniPlayer.this);
+        long maxTime = (vf != null && currMF != null) ? currMF.getDuration(vf.getCurrSegment()) : Long.MAX_VALUE;
+        try
         {
-          seek(Math.min(maxTime, Math.max(0, getMediaTimeMillis() + (uiMgr == null ? 15000L : uiMgr.getLong("videoframe/ff_time", 10000L)))));
+          if (newRate > 1.0f)
+            seek(Math.min(maxTime, Math.max(0, getMediaTimeMillis() +
+                (uiMgr == null ? 15000L : uiMgr.getLong("videoframe/ff_time", 10000L)))));
+          else if (newRate < 1.0f)
+            seek(Math.min(maxTime, Math.max(0, getMediaTimeMillis() +
+                (uiMgr == null ? -15000L : uiMgr.getLong("videoframe/rew_time", -10000L)))));
         }
-        else if (newRate < 1.0f)
+        catch (PlaybackException e)
         {
-          seek(Math.min(maxTime, Math.max(0, getMediaTimeMillis() + (uiMgr == null ? -15000L : uiMgr.getLong("videoframe/rew_time", -10000L)))));
+          System.out.println("ERROR doing seek instead of rate change of: " + e);
         }
+        return 1.0f;
       }
-      catch (PlaybackException e)
-      {
-        System.out.println("ERROR doing seek instead of rate change of: " + e);
-      }
+      if (newRate != 1.0f && Sage.DBG)
+        System.out.println("MiniPlayer: playback rate " + newRate +
+            " unsupported on this delivery path; retaining 1.0 without seeking");
       return 1.0f;
     }
+  }
+
+  protected boolean isNgTrickplaySession()
+  {
+    return mcsr != null && mcsr.isNgCapableSession();
+  }
+
+  static boolean trickplayPolicyEnabled(String namespace, String policy, boolean ngSession,
+      boolean ngDefault)
+  {
+    return Sage.getBoolean(namespace + "/" + (ngSession ? "ng_" : "") + policy,
+        ngSession && ngDefault);
   }
 
   public synchronized void setVideoRectangles(java.awt.Rectangle videoSrcRect,
@@ -6609,6 +6918,26 @@ public class MiniPlayer implements DVDMediaPlayer
     }
   }
 
+  static long pausedPushSeekTime(long iframePts, long firstPts, boolean hardwareExtender)
+  {
+    // Hardware extenders retain raw PTS; desktop/NG receivers use stream-relative ms.
+    if (hardwareExtender) return iframePts + 5000;
+    long relativePts = iframePts - firstPts;
+    if (firstPts - iframePts > 100000)
+      relativePts += FastMpeg2Reader.MAX_PTS;
+    return Math.max(0L, (relativePts + 5000) / 90L);
+  }
+
+  static boolean directPushPositionInWindow(long position, long seekFloor, long sentThrough)
+  {
+    return position >= Math.max(0L, seekFloor - 2000L)
+        && sentThrough >= seekFloor && position <= sentThrough + 2000L;
+  }
+
+  private long directPushSeekFloor;
+  private volatile long directPushSentThrough = -1;
+  private long lastRejectedDirectPushPosition = Long.MIN_VALUE;
+
   protected void seekPull0(long seekTimeMillis)
   {
     if (Sage.DBG) System.out.println("seekPull0(" + seekTimeMillis + ")");
@@ -7135,7 +7464,7 @@ public class MiniPlayer implements DVDMediaPlayer
         }
         // I don't see any good reason to do this interpolation on embedded since if we sent a request to the miniclient above
         // then we should have a pretty accurate time counter right now
-        if (lastMediaTimeBase == currMediaTime && currState == PLAY_STATE)
+        if (lastMediaTimeBase == currMediaTime && currState == PLAY_STATE && !isNgTrickplaySession())
         {
           lastMediaTime = (Sage.eventTime() - lastMediaTimeCacheTime) + lastMediaTime;
         }
@@ -7308,6 +7637,7 @@ public class MiniPlayer implements DVDMediaPlayer
   {
     if (Sage.DBG) System.out.println("flushPush0()");
     lastParserTimestamp = 0;
+    directPushSentThrough = -1;
     lastParserTimestampBytePos = 0;
     seekEpoch++;
     if (numPushedBuffers > 0 || mediaExtender)
@@ -7407,8 +7737,9 @@ public class MiniPlayer implements DVDMediaPlayer
           if (targetPTS > 0)
           {
             if (Sage.DBG) System.out.println("Sending seek pull command to enable seek while paused targetPTS=" + targetPTS);
-            seekPull0(targetPTS + 5000);
+            seekPull0(pausedPushSeekTime(targetPTS, mpegSrc.getFirstPTS(), hdMediaExtender));
           }
+
         }
       }
       sockBuf.clear();
@@ -7477,6 +7808,13 @@ public class MiniPlayer implements DVDMediaPlayer
         while (sockBuf.hasRemaining())
           clientSocket.write(sockBuf);
       }
+      if (buf != null && size > 0 && (!serverSideTranscoding || isNgTrickplaySession()) && !transcoded
+          && !byteBasedSeeking && mpegSrc != null && (flags & PUSHBUFFER_SUBPIC_FLAG) == 0)
+      {
+        // Read after transfer: NIO transfer parses the packet while sending it.
+        // PS packets may carry PTS without DTS, and the last packet may be audio.
+        directPushSentThrough = Math.max(directPushSentThrough, mpegSrc.getLastParsedTimeMillis());
+      }
       long t2 = Sage.eventTime();
       pushedBytes += size;
       if (bwDebug && Sage.DBG && numPushedBuffers % 50 == 0 && t2 > lastTime && size > 0)
@@ -7508,9 +7846,11 @@ public class MiniPlayer implements DVDMediaPlayer
                 long adv = nowPd - timestampOffsetWallTime;
                 if (adv > 0) inferredBase += adv;
               }
-              if (lastParserTimestamp > timestampOffset && inferredBase > lastParserTimestamp)
+              if (!isNgTrickplaySession() && lastParserTimestamp > timestampOffset && inferredBase > lastParserTimestamp)
                 inferredBase = lastParserTimestamp;
               if (inferredBase < timestampOffset) inferredBase = timestampOffset;
+              if (isNgTrickplaySession())
+                inferredBase = boundPushDisplayEstimate(inferredBase, timestampOffset, directPushSentThrough);
               long crmtSrc = clientReportedMediaTime + timestampOffset;
               System.out.println("NG-POSDIAG epoch=" + seekEpoch +
                   " enc=" + currHintEncoding +
@@ -7521,7 +7861,14 @@ public class MiniPlayer implements DVDMediaPlayer
                   " lastParserTs=" + lastParserTimestamp +
                   " parserLead=" + (lastParserTimestamp - inferredBase) +
                   " trusted=" + isClientPositionTrustedForEpoch() +
-                  " playState=" + clientReportedPlayState + " state=" + currState);
+                  " playState=" + clientReportedPlayState + " state=" + currState +
+                  " freeSpace=" + freeSpace + "/" + maxAvailBufferSize +
+                  " pendingReplies=" + (clientInStream == null ? 0 :
+                      clientInStream.getLazyReplyCount()) +
+                  " pushBps=" + lastEstimatedPushBitrate +
+                  " avgPushBps=" + lastAverageEstimatedPushBitrate +
+                  " replyAgeMs=" + (lastDetailedBufferUpdate == 0 ? -1 :
+                      Math.max(0, nowPd - lastDetailedBufferUpdate)));
             }
           }
         }
@@ -7974,7 +8321,9 @@ public class MiniPlayer implements DVDMediaPlayer
             {
               clientReportedMediaTime = readIntX();
               clientReportedPlayState = readByteX();
+              lastDetailedBufferUpdate = Sage.eventTime();
             }
+
             // Calculate the bandwidth for what we're actually sending across the channel
             if ((detailedPushBufferStats || dynamicRateAdjust) && hasNewPushStats())
             {
@@ -8338,6 +8687,14 @@ public class MiniPlayer implements DVDMediaPlayer
     if (i < 0) return null;
     int start = i + needle.length();
     int end = formatString.indexOf(';', start);
+    // A codec token may be terminated by the block's trailing ';' (e.g.
+    // "[bf=vid;f=H.264;]") OR, when the template omits that ';', directly by the
+    // closing ']' (e.g. "[bf=aud;f=AC3]"). Honour whichever comes first so the
+    // extracted codec is "AC3", not "AC3]" -- the stray bracket made
+    // isAudioCodecAllowed() reject a profile-allowed codec and spuriously trip the
+    // INVARIANT VIOLATION warning.
+    int bracket = formatString.indexOf(']', start);
+    if (bracket >= 0 && (end < 0 || bracket < end)) end = bracket;
     if (end < 0) end = formatString.length();
     String codec = formatString.substring(start, end).trim();
     return (codec.length() > 0) ? codec : null;

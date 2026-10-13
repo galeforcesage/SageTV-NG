@@ -72,6 +72,7 @@ public final class GpuEnhancePipeline
 
   private static final String DEFAULT_PRESET = "p4";
   private static final String DEFAULT_TUNE   = "hq";
+  private static final String RGB_FILTER_THREADS = "4";
 
   private GpuEnhancePipeline() { }
 
@@ -92,6 +93,30 @@ public final class GpuEnhancePipeline
 
   public static EnhancementPlan buildPlan(EnhancementTier tier, boolean sourceInterlaced,
                                           int sourceWidth, int sourceHeight, long bitrateKbps)
+  {
+    return buildPlan(tier, sourceInterlaced, sourceWidth, sourceHeight, bitrateKbps, false);
+  }
+
+  /**
+   * Build an enhancement plan, optionally restricted to the <b>deterministic</b>
+   * scale rung. With {@code deterministicOnly=true} the scale-provider selection
+   * skips specialized AI upscalers (e.g. VSR) and resolves to CUDA-Lanczos (or
+   * the built-in passthrough) — the one-rung-down fallback the transcoder rewrites
+   * into its single-process command so a session whose specialized worker misses
+   * its load budget still upscales with Lanczos instead of dropping to source.
+   */
+  public static EnhancementPlan buildPlan(EnhancementTier tier, boolean sourceInterlaced,
+                                          int sourceWidth, int sourceHeight, long bitrateKbps,
+                                          boolean deterministicOnly)
+  {
+    return buildPlan(tier, sourceInterlaced, sourceWidth, sourceHeight, bitrateKbps,
+        deterministicOnly, 0.0, "", 0);
+  }
+
+  public static EnhancementPlan buildPlan(EnhancementTier tier, boolean sourceInterlaced,
+                                          int sourceWidth, int sourceHeight, long bitrateKbps,
+                                          boolean deterministicOnly, double sourceFps,
+                                          String sourcePixelFormat, int sourceBitDepth)
   {
     if (tier == null || !tier.isActive())
       return EnhancementPlan.NONE;
@@ -139,11 +164,13 @@ public final class GpuEnhancePipeline
     sage.enhance.spi.ScaleExecutionPlan scaleExec = null;
     sage.enhance.spi.ScaleGovernor.Lease scaleLease = null;
     {
-      sage.enhance.spi.ScaleRequest req = new sage.enhance.spi.ScaleRequest(
-          tier, tier.getTargetWidth(), tier.getTargetHeight(), sourceWidth, sourceHeight,
-          sourceInterlaced, scaler, sage.enhance.spi.ScaleRequest.Purpose.LIVE);
+      sage.enhance.spi.ScaleRequest req = exactScaleRequest(tier, sourceWidth, sourceHeight,
+          sourceInterlaced, sourceFps, sourcePixelFormat, sourceBitDepth, scaler,
+          sage.enhance.spi.ScaleRequest.Purpose.LIVE);
       sage.enhance.spi.ScaleSelection sel =
-          sage.enhance.spi.ScaleProviderRegistry.getInstance().select(req);
+          deterministicOnly
+              ? sage.enhance.spi.ScaleProviderRegistry.getInstance().selectDeterministic(req)
+              : sage.enhance.spi.ScaleProviderRegistry.getInstance().select(req);
       if (sel != null)
       {
         scaleExec = sel.getExecutionPlan();
@@ -174,6 +201,52 @@ public final class GpuEnhancePipeline
     return new EnhancementPlan(tier, deint != null, deint, scaler,
         tier.getTargetWidth(), tier.getTargetHeight(), rate, cap, "built",
         scaleExec, scaleLease);
+  }
+
+  public static sage.enhance.spi.ScaleRequest exactScaleRequest(EnhancementTier tier,
+      int sourceWidth, int sourceHeight, boolean sourceInterlaced, double sourceFps,
+      String sourcePixelFormat, int sourceBitDepth, String scaler,
+      sage.enhance.spi.ScaleRequest.Purpose purpose)
+  {
+    sage.enhance.spi.FrameCadence sourceCadence =
+        sage.enhance.spi.FrameCadence.fromFps(sourceFps);
+    sage.enhance.spi.FrameCadence targetCadence =
+        sourceInterlaced ? sourceCadence.multiply(2L) : sourceCadence;
+    int fpsCap = Sage.getInt("playback/gpu_enhance/scale/max_output_fps", 0);
+    if (fpsCap > 0 && targetCadence.asDouble() > fpsCap)
+      targetCadence = new sage.enhance.spi.FrameCadence(fpsCap, 1L);
+    String sourceFmt = normalizePixelFormat(sourcePixelFormat);
+    int bitDepth = sourceBitDepth > 0 ? sourceBitDepth : inferBitDepth(sourceFmt);
+    String transport = Sage.get("playback/gpu_enhance/scale/transport_pixel_format",
+        bitDepth > 8 ? "p010le" : "rgb24").trim();
+    int transportDepth = inferBitDepth(transport);
+    return new sage.enhance.spi.ScaleRequest(tier, tier.getTargetWidth(),
+        tier.getTargetHeight(), sourceWidth, sourceHeight, sourceInterlaced, scaler, purpose,
+        sourceCadence, targetCadence, sourceFmt, bitDepth, transport, transportDepth,
+        Sage.get("playback/gpu_enhance/scale/backend_identity", ""),
+        Sage.get("playback/gpu_enhance/scale/model_identity", ""),
+        Sage.get("playback/gpu_enhance/scale/device_identity", ""),
+        Sage.get("playback/gpu_enhance/scale/driver_identity", ""));
+  }
+
+  public static int inferBitDepth(String pixelFormat)
+  {
+    String value = normalizePixelFormat(pixelFormat);
+    if (value.isEmpty()) return 0;
+    if (value.indexOf("p010") >= 0 || value.indexOf("10le") >= 0
+        || value.indexOf("10be") >= 0) return 10;
+    if (value.indexOf("12le") >= 0 || value.indexOf("12be") >= 0) return 12;
+    if (value.indexOf("16le") >= 0 || value.indexOf("16be") >= 0) return 16;
+    return 8;
+  }
+
+  private static String normalizePixelFormat(String pixelFormat)
+  {
+    if (pixelFormat == null) return "";
+    String value = pixelFormat.trim().toLowerCase(java.util.Locale.ROOT);
+    int details = value.indexOf('(');
+    if (details > 0) value = value.substring(0, details).trim();
+    return value;
   }
 
   /**
@@ -229,7 +302,8 @@ public final class GpuEnhancePipeline
         StringBuilder s = new StringBuilder();
         s.append(plan.getScaler()).append('=')
          .append(plan.getTargetWidth()).append(':').append(plan.getTargetHeight());
-        if (HwEncoder.scalerSupportsLanczos(plan.getScaler())) s.append(":interp_algo=lanczos");
+        String ia = HwEncoder.highQualityInterpAlgo(plan.getScaler());
+        if (ia != null) s.append(":interp_algo=").append(ia);
         frag = s.toString();
       }
       if (frag != null && frag.length() > 0)
@@ -571,15 +645,23 @@ public final class GpuEnhancePipeline
     private final String audioSidecarPath;
     private final java.util.List<String> audioArgv;
     private final boolean sourceControl;
+    private final int decodeFrameBytes;
+    private final int workerFrameBytes;
+    private final double frameRate;
     ExternalPipeline(java.util.List<String> d, java.util.List<String> e)
-    { this(d, e, null, null, false); }
+    { this(d, e, null, null, false, 0, 0, 0.0); }
     ExternalPipeline(java.util.List<String> d, java.util.List<String> e, String audioSidecar,
         java.util.List<String> audioArgv)
-    { this(d, e, audioSidecar, audioArgv, false); }
+    { this(d, e, audioSidecar, audioArgv, false, 0, 0, 0.0); }
     ExternalPipeline(java.util.List<String> d, java.util.List<String> e, String audioSidecar,
         java.util.List<String> audioArgv, boolean sourceControl)
+    { this(d, e, audioSidecar, audioArgv, sourceControl, 0, 0, 0.0); }
+    ExternalPipeline(java.util.List<String> d, java.util.List<String> e, String audioSidecar,
+        java.util.List<String> audioArgv, boolean sourceControl, int decodeFrameBytes,
+        int workerFrameBytes, double frameRate)
     { this.decodeArgv = d; this.encodeArgv = e; this.audioSidecarPath = audioSidecar; this.audioArgv = audioArgv;
-      this.sourceControl = sourceControl; }
+      this.sourceControl = sourceControl; this.decodeFrameBytes = decodeFrameBytes;
+      this.workerFrameBytes = workerFrameBytes; this.frameRate = frameRate; }
     /**
      * True when the source-reading stages ({@link #getDecodeArgv() decode} and,
      * when present, {@link #getAudioArgv() audio}) carry the SageTV {@code
@@ -621,6 +703,37 @@ public final class GpuEnhancePipeline
      * encode after creating the FIFO.
      */
     public java.util.List<String> getAudioArgv() { return audioArgv; }
+    /** Exact bytes in each raw frame emitted by the decode stage, or 0 when unknown. */
+    public int getDecodeFrameBytes() { return decodeFrameBytes; }
+    /** Exact bytes in each upscaled raw frame emitted by the worker, or 0 when unknown. */
+    public int getWorkerFrameBytes() { return workerFrameBytes; }
+    /** Exact raw-frame cadence expected by the encode input, or 0 when unknown. */
+    public double getFrameRate() { return frameRate; }
+  }
+
+  static int rawFrameBytes(int width, int height, String pixelFormat)
+  {
+    if (width <= 0 || height <= 0 || pixelFormat == null) return 0;
+    String pf = pixelFormat.trim().toLowerCase(java.util.Locale.ROOT);
+    long pixels = (long) width * (long) height;
+    if (pixels <= 0L || pixels > 256L * 1024L * 1024L) return 0;
+    long bytes;
+    if ("rgb24".equals(pf) || "bgr24".equals(pf) || "gbrp".equals(pf)
+        || "yuv444p".equals(pf) || "p010le".equals(pf) || "p010be".equals(pf))
+      bytes = pixels * 3L;
+    else if ("rgba".equals(pf) || "bgra".equals(pf)
+        || "argb".equals(pf) || "abgr".equals(pf))
+      bytes = pixels * 4L;
+    else if ("gray".equals(pf) || "gray8".equals(pf))
+      bytes = pixels;
+    else if ("nv12".equals(pf) || "yuv420p".equals(pf))
+    {
+      if ((width & 1) != 0 || (height & 1) != 0) return 0;
+      bytes = pixels * 3L / 2L;
+    }
+    else
+      return 0;
+    return bytes > 256L * 1024L * 1024L ? 0 : (int) bytes;
   }
 
   /**
@@ -719,7 +832,25 @@ public final class GpuEnhancePipeline
     String pf = pipePixFmt.toLowerCase(java.util.Locale.ROOT);
     boolean rgbFamily = pf.startsWith("rgb") || pf.startsWith("bgr") || pf.startsWith("gbr");
     if (rgbFamily) { out.add("-pix_fmt"); out.add("yuv420p"); }
+    else if ("p010le".equals(pf) || "p010".equals(pf))
+    { out.add("-pix_fmt"); out.add("p010le"); }
     return out;
+  }
+
+  private static boolean needsRgbOutputConversion(String pipePixFmt)
+  {
+    if (pipePixFmt == null) return false;
+    String pf = pipePixFmt.toLowerCase(java.util.Locale.ROOT);
+    return pf.startsWith("rgb") || pf.startsWith("bgr") || pf.startsWith("gbr");
+  }
+
+  private static String pipeOutputProfile(String pipePixFmt)
+  {
+    if (pipePixFmt == null) return null;
+    String pf = pipePixFmt.toLowerCase(java.util.Locale.ROOT);
+    if ("p010le".equals(pf) || "p010".equals(pf)) return "main10";
+    if (pf.startsWith("rgb") || pf.startsWith("bgr") || pf.startsWith("gbr")) return "main";
+    return null;
   }
 
   /**
@@ -769,9 +900,7 @@ public final class GpuEnhancePipeline
     final java.util.List<String> decodeInput;
     /** {@code ["-ss", "<preroll>"]} to prepend to each output, or empty. */
     final java.util.List<String> outputSeek;
-    /** Absolute source seconds of the seek target T, or 0 when there is no
-     *  meaningful seek (head). Used to drive the video's accurate {@code select}
-     *  landing when {@link #outputSeek} is non-empty. */
+    /** Source-relative seconds of the shared seek origin, including no-preroll seeks. */
     final double targetSeconds;
     SeekSplit(java.util.List<String> di, java.util.List<String> os)
     { this(di, os, 0.0); }
@@ -783,13 +912,13 @@ public final class GpuEnhancePipeline
    * Split the base {@code inputSection} into a coarse input seek plus an accurate
    * output seek of at most {@code prerollSec} seconds. When the section carries
    * no {@code -ss}, or the seek is at/again the head, or {@code prerollSec <= 0},
-   * the input is returned unchanged with an empty output seek (a no-op).
+   * the input is returned unchanged with an empty output seek. The source-relative
+   * target is retained even when preroll is disabled.
    */
   static SeekSplit accurateSeekSplit(java.util.List<String> inputSection, double prerollSec)
   {
     java.util.List<String> di = new java.util.ArrayList<String>(inputSection);
     java.util.List<String> os = new java.util.ArrayList<String>();
-    if (prerollSec <= 0.0) return new SeekSplit(di, os);
     int ssIdx = -1;
     double t = 0.0;
     for (int i = 0; i + 1 < di.size(); i++)
@@ -802,6 +931,7 @@ public final class GpuEnhancePipeline
       }
     }
     if (ssIdx < 0 || t <= 0.0) return new SeekSplit(di, os); // no meaningful seek
+    if (prerollSec <= 0.0) return new SeekSplit(di, os, t);
     double coarse = Math.max(0.0, t - prerollSec);
     double outSeek = t - coarse;
     if (outSeek <= 0.0) return new SeekSplit(di, os);
@@ -836,8 +966,8 @@ public final class GpuEnhancePipeline
    *     other stages, preserved ahead of the ffmpeg binary
    * @param ffmpegBin the ffmpeg executable
    * @param split the accurate-seek split already computed for the video decode;
-   *     its coarse input and per-output {@code -ss} are reused verbatim so audio
-   *     and video land at the identical source time
+   *     its coarse input seek is reused; output {@code -ss} subtracts its absolute
+   *     source-relative target from the preserved audio timestamps
    * @param audioMap the audio stream selector (e.g. {@code 0:a?})
    * @param audioSidecarPath the FIFO path to write mpegts audio to
    * @param sidecarAudio when {@code null} (or carrying no output options) the
@@ -854,12 +984,13 @@ public final class GpuEnhancePipeline
    */
   static java.util.List<String> buildAudioSidecarArgv(java.util.List<String> launchPrefix,
       String ffmpegBin, SeekSplit split, String audioMap, String audioSidecarPath, boolean sourceCtrl,
-      SidecarAudio sidecarAudio)
+      SidecarAudio sidecarAudio, double sourceOriginSeconds)
   {
     java.util.List<String> a = new java.util.ArrayList<String>();
     a.addAll(launchPrefix);
     a.add(ffmpegBin);
     a.add("-y");                              // overwrite the pre-created FIFO node
+    addSourceTimelineInput(a, sourceOriginSeconds);
     // Source control channel: like the decode stage, this process follows the live
     // file, so it must accept 'inactivefile' to stop -follow at a program boundary
     // (otherwise the encode's audio FIFO input never EOFs and the pipeline can't
@@ -870,7 +1001,12 @@ public final class GpuEnhancePipeline
     if (sidecarAudio != null && sidecarAudio.inputOpts != null)
       a.addAll(sidecarAudio.inputOpts);
     a.addAll(stripInputHwaccel(split.decodeInput));  // coarse input seek + source
-    a.addAll(split.outputSeek);               // accurate output seek to exactly T
+    // With the explicit shared timestamp offset, output -ss is relative to the source origin,
+    // not to the coarse input seek. It subtracts T without erasing packet gaps.
+    if (split.targetSeconds > 0.0)
+    {
+      a.add("-ss"); a.add(formatSeconds(split.targetSeconds));
+    }
     a.add("-map"); a.add(audioMap);
     boolean transcode = sidecarAudio != null && sidecarAudio.outputOpts != null
         && !sidecarAudio.outputOpts.isEmpty();
@@ -880,6 +1016,10 @@ public final class GpuEnhancePipeline
     {
       a.add("-c:a"); a.add("copy");           // default: preserve the source codec
     }
+    a.add("-muxdelay"); a.add("0");
+    a.add("-muxpreload"); a.add("0");
+    a.add("-avoid_negative_ts"); a.add("disabled");
+    a.add("-mpegts_copyts"); a.add("1");
     a.add("-f"); a.add("mpegts");
     a.add(audioSidecarPath);
     return a;
@@ -932,7 +1072,7 @@ public final class GpuEnhancePipeline
    * @param decimateToken the {@code fps=} decimation target, or null for none
    */
   private static java.util.List<String> externalDecodeFilters(
-      EnhancementPlan plan, String csFix, String decimateToken)
+      EnhancementPlan plan, String csFix, String decimateToken, String pipePixelFormat)
   {
     java.util.List<String> vf = new java.util.ArrayList<String>();
     if (plan.isDeinterlace())
@@ -941,7 +1081,7 @@ public final class GpuEnhancePipeline
       if (deint == null) deint = "yadif_cuda";
       vf.add(deint + "=1:-1:0");   // bob (send_field): field-rate output
       vf.add("hwdownload");
-      vf.add("format=nv12");
+      vf.add("format=" + ("p010le".equalsIgnoreCase(pipePixelFormat) ? "p010le" : "nv12"));
       if (csFix != null) vf.add(csFix);
     }
     else if (csFix != null)
@@ -953,30 +1093,28 @@ public final class GpuEnhancePipeline
   }
 
   /**
-   * Insert an accurate-landing {@code select} filter into an already-built decode
-   * filter chain so the first delivered video frame is the one at exactly source
-   * time {@code targetSeconds}.
-   *
-   * <p>Rationale: the {@code *_cuvid} decoders with CUDA-resident output
-   * ({@code -hwaccel_output_format cuda}) honour a coarse <em>input</em>
-   * {@code -ss} as a fast keyframe seek but skip the input-side accurate discard,
-   * so a following output {@code -ss preroll} lands the first frame at
-   * {@code keyframe + preroll} &mdash; up to a GOP early, varying with seek
-   * position. The packet-accurate audio side-channel lands at exactly T, so the
-   * mismatch shows as variable lip-sync drift that changes on every skip. Driving
-   * the landing with {@code select='gte(t,T)'} instead performs the discard on the
-   * decoded frames (under {@code -copyts}, whose preserved source PTS makes
-   * {@code t} absolute), landing video at exactly T to match the audio.
-   *
-   * <p>The filter is inserted <em>before</em> any {@code fps=} decimation so it
-   * sees the original decoded presentation timestamps.
+   * Rebase normalized source PTS to the shared seek origin and materialize a
+   * constant-rate frame grid before the timestamp-less worker pipe. The encoder
+   * reconstructs that same grid; source gaps and late video starts must not
+   * disappear when raw frames lose their timestamps.
    */
-  private static void appendAccurateSelect(java.util.List<String> vf, double targetSeconds)
+  private static void appendSharedTimeline(java.util.List<String> vf, double targetSeconds,
+      String frameRate)
   {
-    String sel = "select=gte(t\\," + formatSeconds(targetSeconds) + ")";
-    for (int i = 0; i < vf.size(); i++)
-      if (vf.get(i).startsWith("fps=")) { vf.add(i, sel); return; }
-    vf.add(sel);
+    // The worker pipe drops PTS. Materialize their spacing into a CFR frame grid
+    // before that boundary, preserving gaps instead of compressing the timeline.
+    vf.add("setpts=PTS-" + formatSeconds(targetSeconds) + "/TB");
+    vf.add("fps=" + frameRate + ":start_time=0");
+  }
+
+  private static void addSourceTimelineInput(java.util.List<String> argv, double sourceOriginSeconds)
+  {
+    argv.add("-copyts");
+    // start_at_zero can choose a different origin after unused streams are
+    // discarded. Apply the SAME container origin to both independent demuxers.
+    argv.add("-itsoffset");
+    argv.add(String.format(java.util.Locale.ROOT, "%.6f", -sourceOriginSeconds));
+    argv.add("-noaccurate_seek");
   }
 
   /**
@@ -1113,6 +1251,30 @@ public final class GpuEnhancePipeline
       int fpsCap, double exactFps, String audioSidecarPath, double seekPrerollSec,
       SidecarAudio sidecarAudio)
   {
+    return buildExternalPipeline(baseCopyArgv, plan, fps, srcVideoFormat, fpsCap, exactFps,
+        audioSidecarPath, seekPrerollSec, sidecarAudio, 0.0);
+  }
+
+  /**
+   * Build a worker pipeline using the measured container start time as the
+   * common timestamp origin for video decode and the independent audio sidecar.
+   */
+  public static ExternalPipeline buildExternalPipeline(
+      java.util.List<String> baseCopyArgv, EnhancementPlan plan, int fps, String srcVideoFormat,
+      int fpsCap, double exactFps, String audioSidecarPath, double seekPrerollSec,
+      SidecarAudio sidecarAudio, double sourceOriginSeconds)
+  {
+    return buildExternalPipeline(baseCopyArgv, plan, fps, srcVideoFormat, fpsCap, exactFps,
+        audioSidecarPath, seekPrerollSec, sidecarAudio, sourceOriginSeconds, 0, 0);
+  }
+
+  public static ExternalPipeline buildExternalPipeline(
+      java.util.List<String> baseCopyArgv, EnhancementPlan plan, int fps, String srcVideoFormat,
+      int fpsCap, double exactFps, String audioSidecarPath, double seekPrerollSec,
+      SidecarAudio sidecarAudio, double sourceOriginSeconds, int sourceWidth, int sourceHeight)
+  {
+    if (!Double.isFinite(sourceOriginSeconds))
+      throw new IllegalArgumentException("source timestamp origin must be finite");
     if (baseCopyArgv == null || baseCopyArgv.size() < 3 || plan == null || !plan.isActive())
       return null;
     sage.enhance.spi.ScaleExecutionPlan exec = plan.getScaleExec();
@@ -1155,6 +1317,9 @@ public final class GpuEnhancePipeline
     if (pixFmt == null || pixFmt.isEmpty()) pixFmt = "rgb24";
     int outW = exec.getOutputWidth();
     int outH = exec.getOutputHeight();
+    int decodeFrameBytes = rawFrameBytes(sourceWidth, sourceHeight, pixFmt);
+    int workerFrameBytes = rawFrameBytes(outW, outH, pixFmt);
+    if (workerFrameBytes == 0) return null;
     if (fps <= 0) fps = 30;
     // Effective pipeline rate. Bob deinterlace (mode 1) emits one frame per field,
     // so an interlaced source doubles to its field rate BEFORE any cap; the cap
@@ -1187,15 +1352,11 @@ public final class GpuEnhancePipeline
     // copies the source audio to the FIFO after the identical accurate seek, and
     // the encode reads that FIFO. The decode itself stays video-only either way
     // -- routing audio as a second decode output deadlocks against the back-
-    // pressured raw video pipe (see ExternalPipeline#getAudioSidecarPath). The
-    // accurate seek lands the first video frame at exactly T via a select filter
-    // (see appendAccurateSelect) so it matches the audio process; no-op at the head.
+    // pressured raw video pipe (see ExternalPipeline#getAudioSidecarPath).
+    // Both processes normalize the container origin and subtract the same T.
     boolean sidecar = (audioSidecarPath != null && !audioSidecarPath.isEmpty());
     SeekSplit seek = sidecar ? accurateSeekSplit(inputSection, seekPrerollSec) : null;
-    boolean accurateSelect = seek != null && !seek.outputSeek.isEmpty();
-    // -copyts preserves source PTS so the select filter's t is absolute; must
-    // precede the input so it applies to the decode.
-    if (accurateSelect) decode.add("-copyts");
+    if (sidecar) addSourceTimelineInput(decode, sourceOriginSeconds);
     decode.add("-hwaccel"); decode.add("cuda");
     if (externalDecodeNeedsCudaFrames(plan)) { decode.add("-hwaccel_output_format"); decode.add("cuda"); }
     if (cuvid != null) { decode.add("-c:v"); decode.add(cuvid); }
@@ -1212,8 +1373,8 @@ public final class GpuEnhancePipeline
     // any, runs last so only frames that will be encoded reach the pipe.
     String csFix = cuvidColorspaceFixup(cuvid, pixFmt);
     java.util.List<String> vf =
-        externalDecodeFilters(plan, csFix, decimate ? frTok : null);
-    if (accurateSelect) appendAccurateSelect(vf, seek.targetSeconds);
+        externalDecodeFilters(plan, csFix, !sidecar && decimate ? frTok : null, pixFmt);
+    if (sidecar) appendSharedTimeline(vf, seek.targetSeconds, frTok);
     if (sidecar)
     {
       decode.add("-map"); decode.add("0:v:0");    // video only; audio is the sidecar process
@@ -1230,12 +1391,18 @@ public final class GpuEnhancePipeline
     // Standalone audio process: accurate-seek copy of the source audio -> FIFO.
     java.util.List<String> audioArgv = sidecar
         ? buildAudioSidecarArgv(launchPrefix, ffmpegBin, seek, "0:a?", audioSidecarPath, sourceCtrl,
-            sidecarAudio) : null;
+            sidecarAudio, sourceOriginSeconds) : null;
 
     // ---- Encode stage: raw frames on stdin (+ source audio) -> container on stdout ----
     java.util.List<String> encode = new java.util.ArrayList<String>();
     encode.addAll(launchPrefix);
     encode.add(ffmpegBin);
+    if (needsRgbOutputConversion(pixFmt))
+    {
+      encode.add("-filter_threads");
+      encode.add(RGB_FILTER_THREADS);
+    }
+    if (sidecar) encode.add("-copyts");
     // Input 0: the upscaled raw frames from the worker.
     encode.add("-f"); encode.add("rawvideo");
     encode.add("-pix_fmt"); encode.add(pixFmt);
@@ -1246,7 +1413,11 @@ public final class GpuEnhancePipeline
     // seeked out of the decode) when present, else the original source re-opened
     // with the same input flags (legacy shape; the "same -ss" is NOT actually
     // aligned on a resume -- see ExternalPipeline#getAudioSidecarPath).
-    if (sidecar) { encode.add("-f"); encode.add("mpegts"); encode.add("-i"); encode.add(audioSidecarPath); }
+    if (sidecar)
+    {
+      encode.add("-f"); encode.add("mpegts");
+      encode.add("-i"); encode.add(audioSidecarPath);
+    }
     else encode.addAll(inputSection);
     encode.add("-map"); encode.add("0:v:0");
     encode.add("-map"); encode.add("1:a?");
@@ -1256,13 +1427,15 @@ public final class GpuEnhancePipeline
     // decoders instantiate but cannot render. See pipeOutputPixelFormatArgs.
     java.util.List<String> pixArgs = pipeOutputPixelFormatArgs(pixFmt);
     encode.addAll(pixArgs);
-    if (!pixArgs.isEmpty()) { encode.add("-profile:v"); encode.add("main"); }
+    String outputProfile = pipeOutputProfile(pixFmt);
+    if (outputProfile != null) { encode.add("-profile:v"); encode.add(outputProfile); }
     encode.add("-c:a"); encode.add("copy");
     encode.add("-f"); encode.add(container);
     encode.add(outputTarget);
 
     if (buildEncoderArgs(plan, effFpsInt).isEmpty()) return null; // no NVENC encoder available
-    return new ExternalPipeline(decode, encode, sidecar ? audioSidecarPath : null, audioArgv, sourceCtrl);
+    return new ExternalPipeline(decode, encode, sidecar ? audioSidecarPath : null, audioArgv,
+        sourceCtrl, decodeFrameBytes, workerFrameBytes, effRate);
   }
 
   /**
@@ -1366,6 +1539,30 @@ public final class GpuEnhancePipeline
       int fpsCap, double exactFps, String audioSidecarPath, double seekPrerollSec,
       SidecarAudio sidecarAudio)
   {
+    return buildExternalReencodePipeline(baseReencodeArgv, plan, fps, srcVideoFormat, fpsCap,
+        exactFps, audioSidecarPath, seekPrerollSec, sidecarAudio, 0.0);
+  }
+
+  /**
+   * Re-encode counterpart using the same measured container origin for both
+   * source readers, without changing the selected output codecs.
+   */
+  public static ExternalPipeline buildExternalReencodePipeline(
+      java.util.List<String> baseReencodeArgv, EnhancementPlan plan, int fps, String srcVideoFormat,
+      int fpsCap, double exactFps, String audioSidecarPath, double seekPrerollSec,
+      SidecarAudio sidecarAudio, double sourceOriginSeconds)
+  {
+    return buildExternalReencodePipeline(baseReencodeArgv, plan, fps, srcVideoFormat, fpsCap,
+        exactFps, audioSidecarPath, seekPrerollSec, sidecarAudio, sourceOriginSeconds, 0, 0);
+  }
+
+  public static ExternalPipeline buildExternalReencodePipeline(
+      java.util.List<String> baseReencodeArgv, EnhancementPlan plan, int fps, String srcVideoFormat,
+      int fpsCap, double exactFps, String audioSidecarPath, double seekPrerollSec,
+      SidecarAudio sidecarAudio, double sourceOriginSeconds, int sourceWidth, int sourceHeight)
+  {
+    if (!Double.isFinite(sourceOriginSeconds))
+      throw new IllegalArgumentException("source timestamp origin must be finite");
     if (baseReencodeArgv == null || baseReencodeArgv.size() < 3
         || plan == null || !plan.isActive())
       return null;
@@ -1399,9 +1596,18 @@ public final class GpuEnhancePipeline
 
     String pixFmt = exec.getPipePixelFormat();
     if (pixFmt == null || pixFmt.isEmpty()) pixFmt = "rgb24";
+    // The browser external path intentionally preserves the base H.264 encoder.
+    // H.264 NVENC cannot carry this P010/Main10 contract, so reject instead of
+    // silently truncating to 8-bit.
+    if (("p010le".equalsIgnoreCase(pixFmt) || "p010".equalsIgnoreCase(pixFmt))
+        && enc.toLowerCase(java.util.Locale.ROOT).indexOf("h264") >= 0)
+      return null;
     int outW = exec.getOutputWidth();
     int outH = exec.getOutputHeight();
     if (outW <= 0 || outH <= 0) return null;
+    int decodeFrameBytes = rawFrameBytes(sourceWidth, sourceHeight, pixFmt);
+    int workerFrameBytes = rawFrameBytes(outW, outH, pixFmt);
+    if (workerFrameBytes == 0) return null;
     if (fps <= 0) fps = 30;
     // Bob deinterlace doubles an interlaced source to its field rate before any
     // cap; decode and encode share the one exact rate (see the copy-family builder).
@@ -1423,13 +1629,11 @@ public final class GpuEnhancePipeline
     // Audio side-channel (see the copy-family builder): when present, a SEPARATE
     // ffmpeg process copies the source audio to the FIFO after the identical
     // accurate seek and the encode reads it; the decode stays video-only either
-    // way (a second decode output deadlocks against the raw video pipe). The
-    // accurate seek lands the first video frame at exactly T via a select filter
-    // (see appendAccurateSelect) to match the audio.
+    // way (a second decode output deadlocks against the raw video pipe).
+    // Both processes normalize the container origin and subtract the same T.
     boolean sidecar = (audioSidecarPath != null && !audioSidecarPath.isEmpty());
     SeekSplit seek = sidecar ? accurateSeekSplit(inputSection, seekPrerollSec) : null;
-    boolean accurateSelect = seek != null && !seek.outputSeek.isEmpty();
-    if (accurateSelect) decode.add("-copyts");   // keep source PTS so select's t is absolute
+    if (sidecar) addSourceTimelineInput(decode, sourceOriginSeconds);
     decode.add("-hwaccel"); decode.add("cuda");
     if (externalDecodeNeedsCudaFrames(plan)) { decode.add("-hwaccel_output_format"); decode.add("cuda"); }
     if (cuvid != null) { decode.add("-c:v"); decode.add(cuvid); }
@@ -1439,8 +1643,8 @@ public final class GpuEnhancePipeline
     // externalDecodeFilters / cuvidColorspaceFixup.
     String csFix = cuvidColorspaceFixup(cuvid, pixFmt);
     java.util.List<String> vf =
-        externalDecodeFilters(plan, csFix, decimate ? frTok : null);
-    if (accurateSelect) appendAccurateSelect(vf, seek.targetSeconds);
+        externalDecodeFilters(plan, csFix, !sidecar && decimate ? frTok : null, pixFmt);
+    if (sidecar) appendSharedTimeline(vf, seek.targetSeconds, frTok);
     if (sidecar)
     {
       decode.add("-map"); decode.add("0:v:0");
@@ -1458,7 +1662,7 @@ public final class GpuEnhancePipeline
     // Reencode/browser path keeps the legacy shape (no source control channel).
     java.util.List<String> audioArgv = sidecar
         ? buildAudioSidecarArgv(launchPrefix, ffmpegBin, seek, "0:a?", audioSidecarPath, false,
-            sidecarAudio) : null;
+            sidecarAudio, sourceOriginSeconds) : null;
 
     // ---- Walk the base OUTPUT section: gather source audio maps (retargeted to
     // input 1) and everything worth keeping, dropping -vf / -map / inherited rate
@@ -1492,6 +1696,12 @@ public final class GpuEnhancePipeline
     java.util.List<String> encode = new java.util.ArrayList<String>();
     encode.addAll(launchPrefix);
     encode.add(ffmpegBin);
+    if (needsRgbOutputConversion(pixFmt))
+    {
+      encode.add("-filter_threads");
+      encode.add(RGB_FILTER_THREADS);
+    }
+    if (sidecar) encode.add("-copyts");
     // Input 0: the upscaled raw frames from the worker.
     encode.add("-f"); encode.add("rawvideo");
     encode.add("-pix_fmt"); encode.add(pixFmt);
@@ -1530,9 +1740,16 @@ public final class GpuEnhancePipeline
     // a 4:4:4 stream the browser MSE / HW decoders can't render. The base output
     // section's -profile:v (high) is retained and is 4:2:0-compatible.
     encode.addAll(pipeOutputPixelFormatArgs(pixFmt));
+    String outputProfile = pipeOutputProfile(pixFmt);
+    if (outputProfile != null)
+    {
+      encode.add("-profile:v");
+      encode.add(outputProfile);
+    }
     encode.add(outputTarget);
 
-    return new ExternalPipeline(decode, encode, sidecar ? audioSidecarPath : null, audioArgv);
+    return new ExternalPipeline(decode, encode, sidecar ? audioSidecarPath : null, audioArgv,
+        false, decodeFrameBytes, workerFrameBytes, effRate);
   }
 
   /**

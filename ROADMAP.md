@@ -819,6 +819,60 @@ Otherwise leave `DIRECT_PLAY` intact.
 device scale target is resolved so `sourceHeight < scaleTarget` can be compared
 at decision time.
 
+### Replace `unknown_sink=refuse/infer` with a positive physical-size signal
+
+**Remove the `playback/gpu_enhance/unknown_sink` flag entirely.** It only
+exists because one ambiguous signal — an absent `DISPLAY_SINK_RESOLUTION` — is
+overloaded to mean two different things, and neither flag setting is correct for
+both:
+
+- *"My window is too small to benefit"* — the PWA's deliberate convention of
+  omitting the sink when its viewport is under the ~1280px enhance threshold.
+- *"I genuinely couldn't read my display"* — a transient EDID/HDMI dropout on an
+  otherwise 4K-capable client (observed live 2026-10-03: a Shield stopped
+  reporting its sink at 17:55 and every playback dropped to the deint floor until
+  the client-side bug was fixed).
+
+`refuse` (current default, set in `d15a0131` 2026-09-19) reads both as "no" and
+strands a real 4K client on a momentary fault. `infer` (the pre-Sep-19 default)
+reads both as "yes, go to ceiling" and wastes bandwidth pushing 2160p at a small
+PWA window. The ambiguity is the defect; a boolean policy over a bad signal can't
+fix it.
+
+**Target design — decide from what the client affirmatively declares, not from
+silence:**
+
+- **New client capability `DISPLAY_PHYSICAL_DIAGONAL`** (millimetres; `0`/absent
+  = truly unknown), reported *alongside* the existing pixel sink resolution. Keep
+  the two distinct: pixels = what we upscale *toward* (the grid); physical
+  diagonal = whether a human can *see* the gain. Sources:
+  - Phone/tablet (native Android): exact, from `DisplayMetrics`
+    `sqrt((w/xdpi)² + (h/ydpi)²)`.
+  - Shield / Android TV: HDMI EDID physical-size block when present; else fall
+    back to "sink pixels ≥ 3840 ⇒ large TV".
+  - PWA/browser: physical inches isn't reliably knowable, so the PWA declares its
+    viewport CSS-px size *positively* as its suppression signal (not by omission).
+- **Server gate becomes a physical-size floor**, new property
+  `playback/gpu_enhance/min_panel_diagonal_in` (default **12**): a client that
+  *declares* a diagonal below the floor → deint/none; at/above → proceed to the
+  normal ceiling/decode/bandwidth clamp. Encodes "under 12″ can't be upscaled"
+  directly, driven by an affirmative declaration.
+- **Decouple "unknown" from "small"** in `EnhancementAdvisor.decide` so a truly
+  absent sink is a rare, conservative case rather than a silent veto — at which
+  point `unknown_sink` has no remaining job and is deleted along with
+  `inferOnUnknownSink()`.
+
+**Lanes.** Wire fields are owned by the client teams (propose, don't invent — see
+the OpenSageTV-compat constraint): add `DISPLAY_PHYSICAL_DIAGONAL`, and make the
+PWA send its size positively. Core owns the `min_panel_diagonal_in` gate, reading
+the new field, and removing the `unknown_sink` branch + flag.
+
+**Files likely touched.** `java/sage/enhance/EnhancementAdvisor.java` (drop
+`PROP_UNKNOWN_SINK` / `inferOnUnknownSink`, add the diagonal floor gate),
+`java/sage/MiniClientSageRenderer.java` (query + parse the new property in the NG
+capability burst, next to `DISPLAY_SINK_RESOLUTION`), and the client-side docs
+for the new capability.
+
 ---
 
 ## Longer-term modernization track  *(backlog, not scheduled)*

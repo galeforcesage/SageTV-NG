@@ -115,13 +115,21 @@ public interface ExternalAdmissionAuthority
     private final EnhancementTier tier;   // granted tier; null unless GRANT
     private final boolean deny;
     private final boolean deferToLocal;
+    private final boolean externalDeclined;
     private final String reason;
 
     private Decision(EnhancementTier tier, boolean deny, boolean deferToLocal, String reason)
     {
+      this(tier, deny, deferToLocal, false, reason);
+    }
+
+    private Decision(EnhancementTier tier, boolean deny, boolean deferToLocal,
+                     boolean externalDeclined, String reason)
+    {
       this.tier = tier;
       this.deny = deny;
       this.deferToLocal = deferToLocal;
+      this.externalDeclined = externalDeclined;
       this.reason = reason == null ? "" : reason;
     }
 
@@ -145,9 +153,25 @@ public interface ExternalAdmissionAuthority
       return new Decision(null, false, true, reason);
     }
 
+    /**
+     * The external authority explicitly declined its own resource (no broker
+     * grant, worker unavailable), so enhancement should fall back to the local
+     * deterministic scaler. Fail-open: the governor honours this exactly like
+     * {@link #deferToLocal(String)} (it reports {@link #isDeferToLocal()}), but it
+     * is distinctly labelled &mdash; see {@link #isExternalResourceDeclined()}
+     * &mdash; so telemetry can tell an explicit external decline apart from a
+     * "no answer".
+     */
+    public static Decision declineExternalResource(String reason)
+    {
+      return new Decision(null, false, true, true, reason);
+    }
+
     public boolean isGranted()      { return tier != null && tier.isActive(); }
     public boolean isDeny()         { return deny; }
     public boolean isDeferToLocal() { return deferToLocal; }
+    /** True if this is an explicit external-resource decline (still fail-open). */
+    public boolean isExternalResourceDeclined() { return externalDeclined; }
     /** Granted tier, or {@link EnhancementTier#NONE} when not a grant. */
     public EnhancementTier getTier() { return tier == null ? EnhancementTier.NONE : tier; }
     public String getReason()       { return reason; }
@@ -156,6 +180,7 @@ public interface ExternalAdmissionAuthority
     public String toString()
     {
       String kind = isGranted() ? ("grant " + tier.token())
+          : externalDeclined ? "decline-external"
           : (deferToLocal ? "defer-to-local" : "deny");
       return "Decision[" + kind + (reason.isEmpty() ? "" : ": " + reason) + "]";
     }

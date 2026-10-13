@@ -35,6 +35,16 @@ public final class ScaleRequest
   private final boolean sourceInterlaced;
   private final String builtinScalerHint;
   private final Purpose purpose;
+  private final FrameCadence sourceCadence;
+  private final FrameCadence targetCadence;
+  private final String sourcePixelFormat;
+  private final int sourceBitDepth;
+  private final String transportPixelFormat;
+  private final int transportBitDepth;
+  private final String backendIdentity;
+  private final String modelIdentity;
+  private final String deviceIdentity;
+  private final String driverIdentity;
 
   /**
    * Legacy constructor without a source width. Retained for callers (probe
@@ -48,12 +58,27 @@ public final class ScaleRequest
                       String builtinScalerHint, Purpose purpose)
   {
     this(tier, targetWidth, targetHeight, 0, sourceHeight, sourceInterlaced,
-        builtinScalerHint, purpose);
+        builtinScalerHint, purpose, FrameCadence.UNKNOWN, FrameCadence.UNKNOWN,
+        "", 0, "", 0, "", "", "", "");
   }
 
   public ScaleRequest(EnhancementTier tier, int targetWidth, int targetHeight,
                       int sourceWidth, int sourceHeight, boolean sourceInterlaced,
                       String builtinScalerHint, Purpose purpose)
+  {
+    this(tier, targetWidth, targetHeight, sourceWidth, sourceHeight, sourceInterlaced,
+        builtinScalerHint, purpose, FrameCadence.UNKNOWN, FrameCadence.UNKNOWN,
+        "", 0, "", 0, "", "", "", "");
+  }
+
+  public ScaleRequest(EnhancementTier tier, int targetWidth, int targetHeight,
+                      int sourceWidth, int sourceHeight, boolean sourceInterlaced,
+                      String builtinScalerHint, Purpose purpose,
+                      FrameCadence sourceCadence, FrameCadence targetCadence,
+                      String sourcePixelFormat, int sourceBitDepth,
+                      String transportPixelFormat, int transportBitDepth,
+                      String backendIdentity, String modelIdentity,
+                      String deviceIdentity, String driverIdentity)
   {
     this.tier = (tier == null) ? EnhancementTier.NONE : tier;
     this.targetWidth = targetWidth;
@@ -63,6 +88,16 @@ public final class ScaleRequest
     this.sourceInterlaced = sourceInterlaced;
     this.builtinScalerHint = builtinScalerHint;
     this.purpose = (purpose == null) ? Purpose.LIVE : purpose;
+    this.sourceCadence = sourceCadence == null ? FrameCadence.UNKNOWN : sourceCadence;
+    this.targetCadence = targetCadence == null ? FrameCadence.UNKNOWN : targetCadence;
+    this.sourcePixelFormat = clean(sourcePixelFormat);
+    this.sourceBitDepth = sourceBitDepth;
+    this.transportPixelFormat = clean(transportPixelFormat);
+    this.transportBitDepth = transportBitDepth;
+    this.backendIdentity = clean(backendIdentity);
+    this.modelIdentity = clean(modelIdentity);
+    this.deviceIdentity = clean(deviceIdentity);
+    this.driverIdentity = clean(driverIdentity);
   }
 
   public EnhancementTier getTier() { return tier; }
@@ -76,6 +111,30 @@ public final class ScaleRequest
   public int getSourceWidth() { return sourceWidth; }
   public int getSourceHeight() { return sourceHeight; }
   public boolean isSourceInterlaced() { return sourceInterlaced; }
+  public FrameCadence getSourceCadence() { return sourceCadence; }
+  public FrameCadence getTargetCadence() { return targetCadence; }
+  public double getSourceFps() { return sourceCadence.asDouble(); }
+  public double getTargetFps() { return targetCadence.asDouble(); }
+  public double getRequiredOutputFps() { return getTargetFps(); }
+  public String getSourcePixelFormat() { return sourcePixelFormat; }
+  public int getSourceBitDepth() { return sourceBitDepth; }
+  public String getTransportPixelFormat() { return transportPixelFormat; }
+  public int getTransportBitDepth() { return transportBitDepth; }
+  public String getBackendIdentity() { return backendIdentity; }
+  public String getModelIdentity() { return modelIdentity; }
+  public String getDeviceIdentity() { return deviceIdentity; }
+  public String getDriverIdentity() { return driverIdentity; }
+  public ScaleProfileKey getProfileKey() { return ScaleProfileKey.fromRequest(this); }
+
+  public ScaleRequest withProfileIdentity(ScaleProfileKey profile)
+  {
+    if (profile == null || !profile.matchesRequest(this)) return this;
+    return new ScaleRequest(tier, targetWidth, targetHeight, sourceWidth, sourceHeight,
+        sourceInterlaced, builtinScalerHint, purpose, sourceCadence, targetCadence,
+        sourcePixelFormat, sourceBitDepth, transportPixelFormat, transportBitDepth,
+        profile.getBackendIdentity(), profile.getModelIdentity(), profile.getDeviceIdentity(),
+        profile.getDriverIdentity());
+  }
 
   /** The concrete CUDA scaler filter name this ffmpeg build offers
    *  ({@code scale_npp} or {@code scale_cuda}), or null if none. Providers may
@@ -94,6 +153,14 @@ public final class ScaleRequest
     return "ScaleRequest[" + tier.token() + " " + targetWidth + "x" + targetHeight
         + " src=" + (sourceWidth > 0 ? sourceWidth + "x" : "") + sourceHeight
         + (sourceInterlaced ? "i" : "p")
+        + "@" + sourceCadence + "->@" + targetCadence
+        + " fmt=" + sourcePixelFormat + "/" + sourceBitDepth
+        + " transport=" + transportPixelFormat + "/" + transportBitDepth
         + " hint=" + builtinScalerHint + " " + purpose + "]";
+  }
+
+  private static String clean(String value)
+  {
+    return value == null ? "" : value.trim();
   }
 }

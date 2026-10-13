@@ -28,6 +28,9 @@ public enum ExecutionForm
   /** A separate native worker process the provider owns, spawned by the core and
    *  fed fixed-size raw frames over stdio (decode → worker → encode). */
   EXTERNAL_PROCESS,
+  /** Cross-process CUDA surfaces with explicit allocation and synchronization
+   *  ownership. Declared separately from raw stdio pixel transport. */
+  CUDA_IPC,
   /** A long-lived sidecar service the provider talks to. Not yet rendered. */
   SIDECAR
 }

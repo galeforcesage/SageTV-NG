@@ -86,12 +86,26 @@ public class CudaLanczosScaleProviderTest
   }
 
   @Test
-  public void cudaPlanAddsLanczosWhenInterpForcedOn()
+  public void cudaPlanUsesBicubicWhenInterpForcedOn()
   {
     Sage.put(PROP_INTERP, "true");   // force scale_cuda interp_algo support in-test
     ScaleExecutionPlan plan = provider.plan(upscale("scale_cuda"));
-    assertEquals(plan.getFfmpegFilter(), "scale_cuda=3840:2160:interp_algo=lanczos");
-    assertEquals(plan.getImplementationLabel(), "CUDA/Lanczos");
+    // scale_cuda's Lanczos kernel paints a green edge, so it resolves to bicubic.
+    assertEquals(plan.getFfmpegFilter(), "scale_cuda=3840:2160:interp_algo=bicubic");
+    assertEquals(plan.getImplementationLabel(), "CUDA/bicubic");
+  }
+
+  @Test
+  public void cudaInterpAlgoIsOperatorOverridable()
+  {
+    Sage.put(PROP_INTERP, "true");
+    Sage.put("playback/gpu_enhance/scale_cuda_interp", "lanczos");
+    try
+    {
+      ScaleExecutionPlan plan = provider.plan(upscale("scale_cuda"));
+      assertEquals(plan.getFfmpegFilter(), "scale_cuda=3840:2160:interp_algo=lanczos");
+    }
+    finally { Sage.remove("playback/gpu_enhance/scale_cuda_interp"); }
   }
 
   @Test

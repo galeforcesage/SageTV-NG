@@ -128526,6 +128526,8 @@
     </ns0:Branch>
     <ns0:Branch Name="null" Sym="BASE-57916">
      <ns0:Action ID="9316" Name="&quot;REM Watch, jumping directly to OSD for playback&quot;" Sym="BASE-49266">
+      <ns0:Action Name="WatchAtLiveEdge = false" Sym="NGLIVE-60" />
+      <ns0:Action Name="WatchAtBeginning = false" Sym="NGBEGIN-1" />
       <ns0:Action Name="ContinueWatchAttempt = true" Sym="BASE-49267">
        <ns0:Conditional Name="IsDVD(Airing)" Sym="BASE-49268">
         <ns0:Branch Name="true" Sym="OPUS4A-183881">
@@ -128610,7 +128612,7 @@
                   </ns0:Panel>
                  </ns0:Item>
                  <ns0:Item Name="Start from the Beginning" Sym="BASE-49288">
-                  <ns0:Action Name="ClearWatched(Airing)" Sym="BASE-49289">
+                  <ns0:Action Name="WatchAtBeginning = true" Sym="BASE-49289">
                    <ns0:Action Name="CloseOptionsMenu()" Sym="BASE-49290" />
                   </ns0:Action>
                  </ns0:Item>
@@ -128653,7 +128655,51 @@
             <ns0:Action Name="&quot;REM Only ask about restart/resuming playback if airing is not currently airing or still recording.&quot;" Sym="OPUS4A-184882">
              <ns0:Conditional Name="((GetAiringStartTime(Airing) &lt; Time()) &amp;&amp; (GetAiringEndTime(Airing) &gt; Time())) || IsFileCurrentlyRecording(Airing)" Sym="OPUS4A-184884">
               <ns0:Branch Name="true" Sym="OPUS4A-184885">
-               <ns0:Action Name="&quot;REM Currently airing and/or recording, so don't bother asking to restart or resume.&quot;" Sym="OPUS4A-184887" />
+               <ns0:Conditional Name="IsFileCurrentlyRecording(Airing)" Sym="NGLIVE-50">
+                <ns0:Branch Name="true" Sym="NGLIVE-51">
+                 <ns0:OptionsMenu Name="Join in-progress recording" Sym="NGLIVE-20">
+                  <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+                  <ns0:Action Name="&quot;This program is still being recorded.\nWhere would you like to start watching?\n &quot;" Sym="NGLIVE-21">
+                   <ns0:Text Name="" Sym="NGLIVE-22" />
+                  </ns0:Action>
+                  <ns0:Item Name="Watch Live" Sym="NGLIVE-23">
+                   <ns0:Attribute Name="DefaultFocus" Sym="NGLIVE-24">
+                    <ns0:Value>true</ns0:Value>
+                   </ns0:Attribute>
+                   <ns0:Action Name="WatchAtLiveEdge = true" Sym="NGLIVE-25">
+                    <ns0:Action Name="CloseOptionsMenu()" Sym="NGLIVE-26" />
+                   </ns0:Action>
+                  </ns0:Item>
+                  <ns0:Conditional Name="GetWatchedDuration(Airing) &gt; 0" Sym="NGLIVE-27">
+                   <ns0:Branch Name="true" Sym="NGLIVE-28">
+                    <ns0:Item Name="Resume Where I Left Off" Sym="NGLIVE-29">
+                     <ns0:Action Name="CloseOptionsMenu()" Sym="NGLIVE-30" />
+                    </ns0:Item>
+                   </ns0:Branch>
+                  </ns0:Conditional>
+                  <ns0:Item Name="Start from the Beginning" Sym="NGLIVE-31">
+                   <ns0:Action Name="WatchAtBeginning = true" Sym="NGLIVE-32">
+                    <ns0:Action Name="CloseOptionsMenu()" Sym="NGLIVE-33" />
+                   </ns0:Action>
+                  </ns0:Item>
+                  <ns0:Item Name="Cancel" Sym="NGLIVE-34">
+                   <ns0:Action Name="ContinueWatchAttempt = false" Sym="NGLIVE-35">
+                    <ns0:Action Name="CloseOptionsMenu()" Sym="NGLIVE-36" />
+                   </ns0:Action>
+                  </ns0:Item>
+                  <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+                  <ns0:Listener Name="" Sym="NGLIVE-37">
+                   <ns0:ListenerEvent>Options</ns0:ListenerEvent>
+                   <ns0:Action Name="ContinueWatchAttempt = false" Sym="NGLIVE-38">
+                    <ns0:Action Name="CloseOptionsMenu()" Sym="NGLIVE-39" />
+                   </ns0:Action>
+                  </ns0:Listener>
+                 </ns0:OptionsMenu>
+                </ns0:Branch>
+                <ns0:Branch Name="else" Sym="NGLIVE-52">
+                 <ns0:Action Name="&quot;REM Currently airing but not recording a local file, so don't bother asking to restart or resume.&quot;" Sym="OPUS4A-184887" />
+                </ns0:Branch>
+               </ns0:Conditional>
               </ns0:Branch>
               <ns0:Branch Name="else" Sym="OPUS4A-184886">
                <ns0:Action Ref="46278" Name="&quot;REM Ask whether to re..." />
@@ -128696,19 +128742,63 @@
             <ns0:Action Ref="5949" Name="&quot;REM If Stopping a dow..." />
            </ns0:Action>
           </ns0:Action>
-          <ns0:Action Name="Watch(Airing)" Sym="BASE-44389">
-           <ns0:Conditional Name="ResultCode = this" Sym="BASE-44390">
-            <ns0:Branch Name="true" Sym="BASE-44391">
-             <ns0:Action Name="AddGlobalContext(&quot;StartPlaybackMenu&quot;, GetCurrentMenuWidget() )" Sym="BASE-44392" />
-             <ns0:Menu Ref="16" Name="MediaPlayer OSD" />
-            </ns0:Branch>
-            <ns0:Branch Name="else" Sym="BASE-44393">
-             <ns0:Action Name="CloseOptionsMenu()" Sym="BASE-44394">
-              <ns0:Action Ref="33669" Name="&quot;REM Show Watch error ..." />
+          <ns0:Conditional Name="WatchAtLiveEdge" Sym="NGLIVE-11">
+           <ns0:Branch Name="true" Sym="NGLIVE-12">
+            <ns0:Action Name="WatchAtLiveEdge = false" Sym="NGLIVE-13">
+             <ns0:Action Name="WatchLiveEdge(Airing)" Sym="NGLIVE-14">
+              <ns0:Conditional Name="ResultCode = this" Sym="NGLIVE-16">
+               <ns0:Branch Name="true" Sym="NGLIVE-17">
+                <ns0:Action Name="AddGlobalContext(&quot;StartPlaybackMenu&quot;, GetCurrentMenuWidget() )" Sym="NGLIVE-18" />
+                <ns0:Menu Ref="16" Name="MediaPlayer OSD" />
+               </ns0:Branch>
+               <ns0:Branch Name="else" Sym="NGLIVE-19">
+                <ns0:Action Name="CloseOptionsMenu()" Sym="NGLIVE-40">
+                 <ns0:Action Ref="33669" Name="&quot;REM Show Watch error ..." />
+                </ns0:Action>
+               </ns0:Branch>
+              </ns0:Conditional>
              </ns0:Action>
-            </ns0:Branch>
-           </ns0:Conditional>
-          </ns0:Action>
+            </ns0:Action>
+           </ns0:Branch>
+           <ns0:Branch Name="else" Sym="NGLIVE-15">
+            <ns0:Conditional Name="WatchAtBeginning" Sym="NGBEGIN-2">
+             <ns0:Branch Name="true" Sym="NGBEGIN-3">
+              <ns0:Action Name="WatchAtBeginning = false" Sym="NGBEGIN-4">
+               <ns0:Action Name="ClearWatched(Airing)" Sym="NGBEGIN-5">
+                <ns0:Action Name="WatchFromBeginning(Airing)" Sym="NGBEGIN-6">
+                 <ns0:Conditional Name="ResultCode = this" Sym="NGBEGIN-7">
+                  <ns0:Branch Name="true" Sym="NGBEGIN-8">
+                   <ns0:Action Name="AddGlobalContext(&quot;StartPlaybackMenu&quot;, GetCurrentMenuWidget() )" Sym="NGBEGIN-9" />
+                   <ns0:Menu Ref="16" Name="MediaPlayer OSD" />
+                  </ns0:Branch>
+                  <ns0:Branch Name="else" Sym="NGBEGIN-10">
+                   <ns0:Action Name="CloseOptionsMenu()" Sym="NGBEGIN-11">
+                    <ns0:Action Ref="33669" Name="&quot;REM Show Watch error ..." />
+                   </ns0:Action>
+                  </ns0:Branch>
+                 </ns0:Conditional>
+                </ns0:Action>
+               </ns0:Action>
+              </ns0:Action>
+             </ns0:Branch>
+             <ns0:Branch Name="else" Sym="NGBEGIN-12">
+              <ns0:Action Name="Watch(Airing)" Sym="BASE-44389">
+               <ns0:Conditional Name="ResultCode = this" Sym="BASE-44390">
+                <ns0:Branch Name="true" Sym="BASE-44391">
+                 <ns0:Action Name="AddGlobalContext(&quot;StartPlaybackMenu&quot;, GetCurrentMenuWidget() )" Sym="BASE-44392" />
+                 <ns0:Menu Ref="16" Name="MediaPlayer OSD" />
+                </ns0:Branch>
+                <ns0:Branch Name="else" Sym="BASE-44393">
+                 <ns0:Action Name="CloseOptionsMenu()" Sym="BASE-44394">
+                  <ns0:Action Ref="33669" Name="&quot;REM Show Watch error ..." />
+                 </ns0:Action>
+                </ns0:Branch>
+               </ns0:Conditional>
+              </ns0:Action>
+             </ns0:Branch>
+            </ns0:Conditional>
+           </ns0:Branch>
+          </ns0:Conditional>
          </ns0:Action>
         </ns0:Branch>
        </ns0:Conditional>

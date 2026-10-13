@@ -112,18 +112,20 @@ public class GpuEnhancePipelineTest
     assertEquals(chain, "scale_npp=3840:2160:interp_algo=lanczos");
   }
 
-  /** {@code scale_cuda} gets Lanczos too on builds that expose {@code interp_algo}
-   *  (gated by the capability probe / override), so switching off the deprecated
-   *  NPP filter costs no quality. */
+  /** {@code scale_cuda} gets a high-quality interp on builds that expose
+   *  {@code interp_algo}, so switching off the deprecated NPP filter costs no
+   *  quality. It resolves to {@code bicubic}, not {@code lanczos}: this build's
+   *  scale_cuda Lanczos kernel reads out-of-bounds at the top/left edge and
+   *  paints a green border, while bicubic is edge-clamped. */
   @Test
-  public void testScaleCudaUsesLanczosWhenSupported()
+  public void testScaleCudaUsesBicubicWhenSupported()
   {
     Sage.putBoolean("playback/gpu_enhance/scale_cuda_lanczos", true);
     try
     {
       String chain = GpuEnhancePipeline.buildFilterChain(
           plan(EnhancementTier.ENHANCE_2160P, false, "scale_cuda"));
-      assertEquals(chain, "scale_cuda=3840:2160:interp_algo=lanczos");
+      assertEquals(chain, "scale_cuda=3840:2160:interp_algo=bicubic");
     }
     finally { Sage.remove("playback/gpu_enhance/scale_cuda_lanczos"); }
   }

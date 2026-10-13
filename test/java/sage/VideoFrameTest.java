@@ -2,6 +2,8 @@ package sage;
 
 import org.testng.annotations.Test;
 
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 
 /**
@@ -14,6 +16,60 @@ import static org.testng.Assert.assertEquals;
  */
 public class VideoFrameTest
 {
+  @Test
+  public void testExplicitStartFromBeginningIgnoresSavedResume()
+  {
+    MediaFile mediaFile = mock(MediaFile.class);
+    Airing airing = mock(Airing.class);
+    when(mediaFile.getContentAiring()).thenReturn(airing);
+    when(airing.getStartTime()).thenReturn(1200000L);
+
+    assertEquals(VideoFrame.selectInitialWatchTarget(mediaFile, false, true), 1200000L,
+        "Explicit restart must use the airing start even if teardown writes a resume concurrently");
+    assertEquals(VideoFrame.selectInitialWatchTarget(mediaFile, true, false), 1200000L,
+        "Playlist start-from-beginning keeps the same target selection");
+  }
+
+  @Test
+  public void testNgLoadFailureDoesNotAutoTuneLiveTv()
+  {
+    assertEquals(VideoFrame.suppressDefaultWatchAfterFailure(true, true), true,
+        "A failed recording load must not trigger a tuner after a timed holdoff expires");
+    assertEquals(VideoFrame.suppressDefaultWatchAfterFailure(true, false), false,
+        "An explicit new watch or successful load clears the failure state");
+    assertEquals(VideoFrame.suppressDefaultWatchAfterFailure(false, true), false,
+        "Legacy default preview behavior remains unchanged");
+    assertEquals(VideoFrame.suppressDefaultWatchAfterFailure(false, false), false);
+  }
+
+  @Test
+  public void testRepeatedSkipsUsePendingTargetWhileSettling()
+  {
+    long position = 600000L;
+    long pending = position;
+    for (long delta : new long[] {30000L, 30000L, -30000L, 150000L, -150000L})
+    {
+      pending += delta;
+      assertEquals(VideoFrame.shouldUsePendingSkipTarget(position, pending,
+          500L, 8000L, 2500L, 0L, 1920000L), true);
+    }
+    assertEquals(pending, 630000L);
+    assertEquals(VideoFrame.shouldUsePendingSkipTarget(pending, pending,
+        500L, 8000L, 2500L, 0L, 1920000L), false);
+    assertEquals(VideoFrame.shouldUsePendingSkipTarget(position, pending,
+        8001L, 8000L, 2500L, 0L, 1920000L), false);
+    assertEquals(VideoFrame.shouldUsePendingSkipTarget(position, 2000000L,
+        500L, 8000L, 2500L, 0L, 1920000L), false);
+  }
+
+  @Test
+  public void testPendingSkipRemembersClampedLanding()
+  {
+    assertEquals(VideoFrame.clampPendingSkipTarget(-12637L, 0L, 1920625L), 0L);
+    assertEquals(VideoFrame.clampPendingSkipTarget(2000000L, 0L, 1920625L), 1920625L);
+    assertEquals(VideoFrame.clampPendingSkipTarget(24762L, 0L, 1920625L), 24762L);
+    assertEquals(VideoFrame.clampPendingSkipTarget(99000L, 100000L, 200000L), 100000L);
+  }
   @Test
   public void testLiveCaptionDelayCompensationOnlyAppliesToLiveCapPlayerWhenEnabled() throws Throwable
   {

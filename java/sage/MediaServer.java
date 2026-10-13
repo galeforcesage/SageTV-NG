@@ -213,6 +213,7 @@ public class MediaServer implements Runnable
         String k = p.substring(0, eq).trim().toLowerCase();
         if (k.equals("tier")) tier = p.substring(eq + 1).trim();
       }
+
     }
     boolean req = false;
     if (mode.endsWith(":enhance"))
@@ -221,6 +222,11 @@ public class MediaServer implements Runnable
       mode = mode.substring(0, mode.length() - ":enhance".length()).trim();
     }
     return new XcodeEnhanceRequest(mode, req, tier);
+  }
+
+  static boolean isParameterizedXcodeSetup(String xcodeArg)
+  {
+    return xcodeArg != null && xcodeArg.indexOf(';') >= 0;
   }
 
   public MediaServer()
@@ -1468,6 +1474,7 @@ public class MediaServer implements Runnable
           else if (tempString.indexOf("XCODE_SETUP ") == 0)
           {
             String xcodeArg = tempString.substring(tempString.indexOf(" ") + 1);
+            boolean parameterizedProtocol21 = isParameterizedXcodeSetup(xcodeArg);
             // Protocol 2.1 (option B): "<mode>;k=v;k=v". The base mode is
             // normalized; the ";k=v" suffix carries per-request surface hints
             // (acodec, ac, ss) so the server honors the decision engine's best
@@ -1535,6 +1542,7 @@ public class MediaServer implements Runnable
             // the whole pipeline deadlocks. Enabling output buffering starts the
             // XcodeDataConsumer thread that drains stdout and reports availability.
             fftc.setEnableOutputBuffering(true);
+            fftc.setProtocol21PullSession(parameterizedProtocol21);
             // GPU-accelerated decode: offload HEVC/H.264 decode off the CPU
             // (the dominant start/seek latency for high-res HEVC pull-xcode).
             // Default "auto" resolves to CUDA/NVDEC only when the chosen H.264
@@ -1647,7 +1655,14 @@ public class MediaServer implements Runnable
               try
               {
                 int measuredKbps = Integer.parseInt(tempString.substring(13).trim());
-                if (Sage.getBoolean("media_server/xcode_adjust_server_policy", true))
+                if (!fftc.isVideoBitrateAdjustable())
+                {
+                  if (Sage.DBG) System.out.println("MediaServer XCODE_ADJUST measured=" + measuredKbps
+                      + "kbps ignored (video stream is not dynamically adjustable)");
+                  commBufWrite.clear();
+                  commBufWrite.put("NO_INIT\r\n".getBytes()).flip();
+                }
+                else if (Sage.getBoolean("media_server/xcode_adjust_server_policy", true))
                 {
                   // Server owns policy: the bridge reports RAW delivered goodput;
                   // reserve margin + dead-band + fast-down/slow-up + ceiling all

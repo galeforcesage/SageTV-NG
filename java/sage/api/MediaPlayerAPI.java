@@ -371,6 +371,109 @@ public class MediaPlayerAPI {
         }, "AsyncWatch");
         return taskID;
       }});
+    rft.put(new PredefinedJEPFunction("MediaPlayer", "WatchLiveEdge", 1, new String[] { "Content" })
+    {
+      /**
+       * Instructs SageTV to playback the specified media content, starting at the live edge if the content is
+       * currently being recorded (an in-progress recording). This behaves exactly like {@link #Watch(Object)}
+       * except that for an Airing that is still recording, playback begins at the live broadcast position rather
+       * than resuming at the last watched position or the start of the buffer. For completed content this is
+       * equivalent to Watch.
+       * @param Content the Airing, MediaFile or file path to begin playback of at the live edge
+       * @return true if the request was successful, a localized error message otherwise
+       *
+       * @declaration public Object WatchLiveEdge(Object Content);
+       */
+      public Object runSafely(final Catbert.FastStack stack) throws Exception{
+        Object stacker = stack.pop();
+        final Object o = (stacker instanceof sage.vfs.MediaNode) ? ((sage.vfs.MediaNode)stacker).getDataObject() : stacker;
+        final UIManager uiMgr = stack.getUIMgrSafe();
+        final Object taskID = Catbert.getNewTaskID();
+        Pooler.execute(new Runnable()
+        {
+          public void run()
+          {
+            int watchCode = 0;
+            if (o instanceof Airing)
+            {
+              Airing a = (Airing) o;
+              watchCode = uiMgr.getVideoFrame().watch(a, true);
+            }
+            else if (o instanceof MediaFile) {
+              MediaFile mf = (MediaFile)o;
+              watchCode = uiMgr.getVideoFrame().watch(mf, true);
+            }
+            else if (o != null)
+            {
+              // Filename
+              String fname = o.toString();
+              try
+              {
+                uiMgr.getVideoFrame().setAboutToCallWatch();
+                MediaFile mf = Wizard.getInstance().getPlayableMediaFile(fname);
+                if (mf != null)
+                    watchCode = uiMgr.getVideoFrame().watch(mf);
+                else
+                  watchCode = VideoFrame.WATCH_FAILED_FILES_NOT_ON_DISK;
+              }
+              finally
+              {
+                uiMgr.getVideoFrame().clearAboutToCallWatch();
+              }
+            }
+            else
+              watchCode = VideoFrame.WATCH_FAILED_NULL_AIRING;
+            Object rv = Catbert.getWatchFailureObject(watchCode);
+            Catbert.asyncTaskComplete(taskID, rv);
+          }
+        }, "AsyncWatchLiveEdge");
+        return taskID;
+      }});
+    rft.put(new PredefinedJEPFunction("MediaPlayer", "WatchFromBeginning", 1, new String[] { "Content" })
+    {
+      /**
+       * Instructs SageTV to play the specified content from its beginning,
+       * ignoring any saved resume position for this watch request.
+       * @param Content the Airing, MediaFile or file path to begin playback of
+       * @return true if the request was successful, a localized error message otherwise
+       *
+       * @declaration public Object WatchFromBeginning(Object Content);
+       */
+      public Object runSafely(final Catbert.FastStack stack) throws Exception{
+        Object stacker = stack.pop();
+        final Object o = (stacker instanceof sage.vfs.MediaNode) ? ((sage.vfs.MediaNode)stacker).getDataObject() : stacker;
+        final UIManager uiMgr = stack.getUIMgrSafe();
+        final Object taskID = Catbert.getNewTaskID();
+        Pooler.execute(new Runnable()
+        {
+          public void run()
+          {
+            int watchCode;
+            if (o instanceof Airing)
+              watchCode = uiMgr.getVideoFrame().watchFromBeginning((Airing) o);
+            else if (o instanceof MediaFile)
+              watchCode = uiMgr.getVideoFrame().watchFromBeginning((MediaFile) o);
+            else if (o != null)
+            {
+              try
+              {
+                uiMgr.getVideoFrame().setAboutToCallWatch();
+                MediaFile mf = Wizard.getInstance().getPlayableMediaFile(o.toString());
+                watchCode = mf == null ? VideoFrame.WATCH_FAILED_FILES_NOT_ON_DISK
+                    : uiMgr.getVideoFrame().watchFromBeginning(mf);
+              }
+              finally
+              {
+                uiMgr.getVideoFrame().clearAboutToCallWatch();
+              }
+            }
+            else
+              watchCode = VideoFrame.WATCH_FAILED_NULL_AIRING;
+            Catbert.asyncTaskComplete(taskID, Catbert.getWatchFailureObject(watchCode));
+          }
+        }, "AsyncWatchFromBeginning");
+        return taskID;
+      }});
     rft.put(new PredefinedJEPFunction("MediaPlayer", "WatchLive", -1, new String[] { "CaptureDeviceInput", "PauseBufferSize", "PhysicalChannel" })
     {
       /**

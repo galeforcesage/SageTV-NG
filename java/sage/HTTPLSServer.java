@@ -350,6 +350,7 @@ public class HTTPLSServer implements Runnable
           }
           else if (isFmp4Playlist)
           {
+            boolean lowLatencyPlaylist = lowLatencyPlaylistEnabled(llhlsEnabled, mf.isRecording(segmentNum));
             // fMP4 variant playlist (HLS v7 + CMAF). Mirrors the TS variant
             // playlist (@288) but with EXT-X-MAP + .m4s parts.
             //
@@ -360,7 +361,7 @@ public class HTTPLSServer implements Runnable
             // Bounded by httpls/llhls_block_timeout_ms so a stalled/ended source
             // never hangs the connection. No-op unless llhlsEnabled AND the client
             // actually sent _HLS_msn, so VOD and legacy fetches are unaffected.
-            if (llhlsEnabled && httpQuery != null)
+            if (lowLatencyPlaylist && httpQuery != null)
             {
               String msnStr = getQueryParam(httpQuery, "_HLS_msn");
               if (msnStr != null && msnStr.length() > 0)
@@ -395,17 +396,8 @@ public class HTTPLSServer implements Runnable
             // disables windowing (full list). Gated by llhlsEnabled, so the
             // default-off path lists the full playlist with MEDIA-SEQUENCE:0,
             // byte-identical to pre-LL-HLS output.
-            int windowStart = 0;
-            if (llhlsEnabled)
-            {
-              int windowSec = Sage.getInt("httpls/llhls_window_sec", 120);
-              if (windowSec > 0)
-              {
-                int windowParts = (int)Math.ceil((double)windowSec / fmp4PartDur);
-                if (numParts > windowParts)
-                  windowStart = numParts - windowParts;
-              }
-            }
+            int windowStart = fmp4WindowStart(lowLatencyPlaylist, numParts, fmp4PartDur,
+                Sage.getInt("httpls/llhls_window_sec", 120));
 
             // LL-HLS delta playlist (EXT-X-SKIP): when a low-latency client asks
             // for a delta (?_HLS_skip=YES|v2) replace the parts older than the skip
@@ -416,7 +408,7 @@ public class HTTPLSServer implements Runnable
             // only when the client asked for it AND there is something to skip.
             int skipUntilSec = Math.max(6 * fmp4PartDur, Sage.getInt("httpls/llhls_skip_boundary_sec", 12));
             boolean wantSkip = false;
-            if (llhlsEnabled && httpQuery != null)
+            if (lowLatencyPlaylist && httpQuery != null)
               wantSkip = getQueryParam(httpQuery, "_HLS_skip").length() > 0;
             int firstListedPart = windowStart;
             if (wantSkip)
@@ -430,16 +422,15 @@ public class HTTPLSServer implements Runnable
 
             sb.append("#EXTM3U\r\n");
             // EXT-X-SKIP and the low-latency tags require HLS compatibility v9.
-            sb.append("#EXT-X-VERSION:" + (llhlsEnabled ? 9 : 7) + "\r\n");
+            sb.append("#EXT-X-VERSION:" + (lowLatencyPlaylist ? 9 : 7) + "\r\n");
             sb.append("#EXT-X-MEDIA-SEQUENCE:" + windowStart + "\r\n");
-            if (llhlsEnabled)
+            if (lowLatencyPlaylist)
             {
               // Low-latency control tags. CAN-BLOCK-RELOAD lets a client long-poll
               // the live edge (honored by the blocking-reload wait above).
               // CAN-SKIP-UNTIL advertises the delta-playlist boundary implemented
-              // via #EXT-X-SKIP below. On a completed VOD the #EXT-X-ENDLIST below
-              // makes hls.js treat it as VOD and ignore blocking, but the tags
-              // still parse cleanly. PART-HOLD-BACK must be >= 3x PART-TARGET.
+              // via #EXT-X-SKIP below. Completed VOD uses the full playlist,
+              // without live-only control tags. PART-HOLD-BACK must be >= 3x PART-TARGET.
               sb.append("#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=" + (3 * fmp4PartDur) + ".0,CAN-SKIP-UNTIL=" + skipUntilSec + ".0\r\n");
               sb.append("#EXT-X-PART-INF:PART-TARGET=" + fmp4PartDur + ".0\r\n");
             }
@@ -448,7 +439,7 @@ public class HTTPLSServer implements Runnable
             if (skippedSegments > 0)
               sb.append("#EXT-X-SKIP:SKIPPED-SEGMENTS=" + skippedSegments + "\r\n");
             if (Sage.DBG) System.out.println("CMAF Request for fMP4 playlist at " + bwkbps + "kbps for mf=" + mfId + " seg=" + segmentNum + " clientMac=" + clientMac + " totalParts=" + numParts + " windowStart=" + windowStart + " firstListed=" + firstListedPart + (wantSkip ? " (delta skip=" + skippedSegments + ")" : ""));
-            appendFmp4Parts(sb, base, mf.getDuration(segmentNum), firstListedPart);
+            appendFmp4Parts(sb, base, mf.getDuration(segmentNum), firstListedPart, fmp4PartDur, lowLatencyPlaylist);
 
             // EPG-boundary seam (Path B, capability-gated). Legacy clients never
             // send x-cmaf-seam, so `ended` stays true here and they get exactly
@@ -489,7 +480,8 @@ public class HTTPLSServer implements Runnable
                     + succ.getID() + "_0_" + bwkbps;
                 sb.append("#EXT-X-DISCONTINUITY\r\n");
                 sb.append("#EXT-X-MAP:URI=\"" + succBase + "_init.mp4\"\r\n");
-                appendFmp4Parts(sb, succBase, succ.getDuration(0));
+                appendFmp4Parts(sb, succBase, succ.getDuration(0), 0, fmp4PartDur,
+                    lowLatencyPlaylistEnabled(llhlsEnabled, succ.isRecording(0)));
                 if (Sage.DBG) System.out.println("CMAF seam: bridging mf=" + chainFile.getID()
                     + " -> successor mf=" + succ.getID() + " (link " + (links + 1) + ")");
                 chainFile = succ;
@@ -3758,15 +3750,21 @@ public class HTTPLSServer implements Runnable
     public int goodputSamples;
   }
 
-  // Append the #EXTINF + .m4s part lines for one CMAF file to the playlist under
-  // the given base URL, one part per partDur (last part may be shorter). Shared by
-  // the requested file and every EPG-boundary seam successor chained after it.
-  private void appendFmp4Parts(StringBuffer sb, String base, long durationMs)
+  static boolean lowLatencyPlaylistEnabled(boolean enabled, boolean recording)
   {
-    appendFmp4Parts(sb, base, durationMs, 0);
+    return enabled && recording;
   }
 
-  private void appendFmp4Parts(StringBuffer sb, String base, long durationMs, int startIndex)
+  static int fmp4WindowStart(boolean lowLatencyPlaylist, int numParts, int partDuration, int windowSec)
+  {
+    if (!lowLatencyPlaylist || windowSec <= 0) return 0;
+    int windowParts = (int)Math.ceil((double)windowSec / partDuration);
+    return Math.max(0, numParts - windowParts);
+  }
+
+  // Shared by the requested file and every EPG-boundary seam successor.
+  static void appendFmp4Parts(StringBuffer sb, String base, long durationMs, int startIndex,
+      int fmp4PartDur, boolean lowLatencyPlaylist)
   {
     long totalSecs = durationMs / 1000;
     int total = (int)Math.ceil((double)totalSecs / fmp4PartDur);
@@ -3784,11 +3782,11 @@ public class HTTPLSServer implements Runnable
       remTime -= fmp4PartDur;
       // LL-HLS: advertise a .m4s near the edge as a single-part segment. The PART
       // URI is the segment URI itself (segment==part), so no separate part files
-      // or concat endpoint are needed. Emitted only when llhlsEnabled; otherwise
+      // or concat endpoint are needed. Emitted only for low-latency live playlists; otherwise
       // this loop is byte-identical to the pre-LL-HLS output.
       if (i >= startIndex)
       {
-        if (llhlsEnabled && i >= total - edgeParts)
+        if (lowLatencyPlaylist && i >= total - edgeParts)
           sb.append("#EXT-X-PART:DURATION=" + currDur + ".0,URI=\"" + base + "_" + i + ".m4s\"\r\n");
         sb.append("#EXTINF:" + currDur + ".0,\r\n");
         sb.append(base + "_" + i + ".m4s\r\n");

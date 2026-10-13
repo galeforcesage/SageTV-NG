@@ -7,6 +7,11 @@ import sage.media.format.ContainerFormat;
 import sage.media.format.VideoFormat;
 
 import java.io.File;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
+import java.io.FilterInputStream;
+import java.io.IOException;
 
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -16,6 +21,104 @@ import static org.testng.Assert.*;
 
 public class FFMPEGTranscoderTest
 {
+  @Test
+  public void framePumpPreservesFragmentedFrameBoundaries() throws Exception
+  {
+    byte[] input = new byte[37];
+    for (int i = 0; i < input.length; i++) input[i] = (byte) (i * 7);
+    ByteArrayInputStream raw = new ByteArrayInputStream(input);
+    FilterInputStream fragmented = new FilterInputStream(raw)
+    {
+      public int read(byte[] b, int off, int len) throws IOException
+      {
+        return super.read(b, off, Math.min(3, len));
+      }
+    };
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    long[] readStamp = { 0L };
+    long[] writeStamp = { 0L };
+
+    assertEquals(FFMPEGTranscoder.pumpFrameStream(
+        fragmented, output, 37, readStamp, writeStamp), 1L);
+    assertEquals(output.toByteArray(), input);
+    assertTrue(readStamp[0] > 0L);
+    assertTrue(writeStamp[0] >= readStamp[0]);
+  }
+
+  @Test(expectedExceptions = EOFException.class)
+  public void framePumpRejectsTruncatedRawFrame() throws Exception
+  {
+    FFMPEGTranscoder.pumpFrameStream(
+        new ByteArrayInputStream(new byte[36]), new ByteArrayOutputStream(), 37, null, null);
+  }
+
+  @Test(expectedExceptions = EOFException.class)
+  public void framePumpRejectsTruncationAtChunkBoundary() throws Exception
+  {
+    int frameBytes = 2 * 1024 * 1024;
+    FFMPEGTranscoder.pumpFrameStream(
+        new ByteArrayInputStream(new byte[1024 * 1024]), new ByteArrayOutputStream(),
+        frameBytes, null, null);
+  }
+
+  @Test
+  public void framePumpChunkFallbackPreservesBytes() throws Exception
+  {
+    byte[] input = new byte[131073];
+    for (int i = 0; i < input.length; i++) input[i] = (byte) i;
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    assertTrue(FFMPEGTranscoder.pumpFrameStream(
+        new ByteArrayInputStream(input), output, 0, null, null) > 0L);
+    assertEquals(output.toByteArray(), input);
+  }
+
+  @Test(timeOut = 5000)
+  public void testStopTranscodeCancelsWatchdogBeforeProcessTeardown() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    final java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+    final java.util.concurrent.atomic.AtomicBoolean exited = new java.util.concurrent.atomic.AtomicBoolean();
+    Thread watch = new Thread(() ->
+    {
+      entered.countDown();
+      try { Thread.sleep(60000L); }
+      catch (InterruptedException expected) {}
+      finally { exited.set(true); }
+    });
+    watch.setDaemon(true);
+    watch.start();
+    assertTrue(entered.await(1, java.util.concurrent.TimeUnit.SECONDS));
+    FFMPEGTranscoder transcoder = new FFMPEGTranscoder();
+    java.lang.reflect.Field field = FFMPEGTranscoder.class.getDeclaredField("enhanceWatchdogThread");
+    field.setAccessible(true);
+    field.set(transcoder, watch);
+    transcoder.stopTranscode();
+    assertTrue(exited.get());
+    assertFalse(watch.isAlive(), "Old watchdog must not observe the intentional shutdown or the next generation");
+    assertNull(field.get(transcoder));
+    transcoder.stopTranscode();
+  }
+
+  @Test
+  public void enhancementWatchdogRecognizesOutputBackpressure() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    assertFalse(t.isEnhanceOutputBackpressured(), "no ring before startup");
+    t.bufferOutput = true;
+    t.xcodeBuffer = new byte[2][8];
+    t.numFilledXcodeBuffers = 1;
+    assertFalse(t.isEnhanceOutputBackpressured(), "space available");
+    t.numFilledXcodeBuffers = 2;
+    assertTrue(t.isEnhanceOutputBackpressured(), "full ring backpressures healthy pipeline");
+    t.numFilledXcodeBuffers = 3;
+    assertTrue(t.isEnhanceOutputBackpressured(), "over-capacity ring also blocks writer");
+    t.numFilledXcodeBuffers = 0;
+    assertFalse(t.isEnhanceOutputBackpressured(), "consumption releases backpressure");
+    t.numFilledXcodeBuffers = 2;
+    t.xcodeDone = true;
+    assertFalse(t.isEnhanceOutputBackpressured(), "completed transcode is not waiting on consumer");
+  }
 
   @Test
   public void testParseFrameSize() throws Throwable
@@ -1500,6 +1603,85 @@ public class FFMPEGTranscoderTest
     assertEquals(FFMPEGTranscoder.computeGoodputAdjustedVideoKbps(
         5500, 4000, 300, 40000, 0.80, 0.15, 0.05), 4400,
         "Slow-up must not overshoot the candidate when it is below the up-step ceiling");
+  }
+
+  @Test
+  public void activeProtocol21PullAppendsPacingBeforeInput() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.activeFile = true;
+    t.bufferOutput = true;
+    t.protocol21PullSession = true;
+    t.httplsMode = false;
+    java.util.ArrayList<String> args = new java.util.ArrayList<String>();
+    args.add("-ss");
+    args.add("30.000");
+    t.appendActivePullPacingArguments(args);
+    args.add("-i");
+    args.add("recording.ts");
+
+    int readrate = args.indexOf("-readrate");
+    assertTrue(readrate > args.indexOf("-ss"), "Pacing must preserve an explicit seek origin");
+    assertTrue(readrate < args.indexOf("-i"), "FFmpeg read-rate flags are input options");
+    assertEquals(args.get(readrate + 1), "1");
+    assertEquals(args.get(args.indexOf("-readrate_initial_burst") + 1), "6");
+    assertEquals(args.get(args.indexOf("-readrate_catchup") + 1), "1.5");
+
+    java.util.ArrayList<String> restarted = new java.util.ArrayList<String>();
+    t.appendActivePullPacingArguments(restarted);
+    assertEquals(restarted, java.util.Arrays.asList("-readrate", "1",
+        "-readrate_initial_burst", "6", "-readrate_catchup", "1.5"),
+        "Each seek/restart generation resolves and reapplies the same stateless policy");
+  }
+
+  @Test
+  public void completedSegmentedAndLegacySessionsDoNotAppendPacing() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.bufferOutput = true;
+    t.protocol21PullSession = true;
+    java.util.ArrayList<String> args = new java.util.ArrayList<String>();
+    t.appendActivePullPacingArguments(args);
+    assertTrue(args.isEmpty(), "Completed recordings remain unpaced");
+
+    t.activeFile = true;
+    t.httplsMode = true;
+    t.appendActivePullPacingArguments(args);
+    assertTrue(args.isEmpty(), "HLS/CMAF segment production remains unpaced");
+
+    t.httplsMode = false;
+    t.protocol21PullSession = false;
+    t.appendActivePullPacingArguments(args);
+    assertTrue(args.isEmpty(), "Legacy unparameterized pull setup remains unpaced");
+
+    t.protocol21PullSession = true;
+    Sage.put("media_server/pull_xcode_active_readrate_enabled", "false");
+    try
+    {
+      t.appendActivePullPacingArguments(args);
+      assertTrue(args.isEmpty(), "The explicit server property disables pacing");
+    }
+    finally
+    {
+      Sage.remove("media_server/pull_xcode_active_readrate_enabled");
+    }
+  }
+
+  @Test
+  public void videoCopySessionsRejectBitrateAdjustment()
+  {
+    FFMPEGTranscoder copy = new FFMPEGTranscoder();
+    copy.updateVideoBitrateAdjustable(new java.util.ArrayList(
+        java.util.Arrays.asList("-f", "mpegts", "-vcodec", "copy", "-acodec", "ac3")));
+    assertFalse(copy.isVideoBitrateAdjustable(),
+        "audioonly/copy video has no encoder bitrate to adjust");
+
+    FFMPEGTranscoder encode = new FFMPEGTranscoder();
+    encode.updateVideoBitrateAdjustable(new java.util.ArrayList(
+        java.util.Arrays.asList("-f", "mpegts", "-c:v", "h264_nvenc", "-b:v", "5000k")));
+    assertTrue(encode.isVideoBitrateAdjustable());
   }
 
   // =======================================================================

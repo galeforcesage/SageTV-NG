@@ -538,26 +538,42 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   {
     // Keep it all airing based even though we undo this afterwards
     if (watchFile == null) return WATCH_FAILED_NULL_AIRING;
-    return watch(watchFile.getContentAiring(), false, null, watchFile, false);
+    return watch(watchFile.getContentAiring(), false, false, null, watchFile, false);
+  }
+  public int watch(MediaFile watchFile, boolean forceLive)
+  {
+    // Keep it all airing based even though we undo this afterwards
+    if (watchFile == null) return WATCH_FAILED_NULL_AIRING;
+    return watch(watchFile.getContentAiring(), forceLive, false, null, watchFile, false);
+  }
+  public int watchFromBeginning(MediaFile watchFile)
+  {
+    if (watchFile == null) return WATCH_FAILED_NULL_AIRING;
+    return watch(watchFile.getContentAiring(), false, true, null, watchFile, false);
   }
   public int watch(Airing watchAir)
   {
-    return watch(watchAir, false, null, null, false);
+    return watch(watchAir, false, false, null, null, false);
   }
   public int watch(Airing watchAir, boolean forceLive)
   {
-    return watch(watchAir, forceLive, null, null, false);
+    return watch(watchAir, forceLive, false, null, null, false);
+  }
+  public int watchFromBeginning(Airing watchAir)
+  {
+    return watch(watchAir, false, true, null, null, false);
   }
   public int lockTuner(MediaFile liveFile)
   {
     if (liveFile == null) return WATCH_FAILED_NULL_AIRING;
-    return watch(liveFile.getContentAiring(), true, null, liveFile, true);
+    return watch(liveFile.getContentAiring(), true, false, null, liveFile, true);
   }
   private int watch(Airing watchAir, boolean forceLive, Playlist sourcePlaylist, MediaFile watchThisFile)
   {
-    return watch(watchAir, forceLive, sourcePlaylist, watchThisFile, false);
+    return watch(watchAir, forceLive, false, sourcePlaylist, watchThisFile, false);
   }
-  private int watch(Airing watchAir, boolean forceLive, Playlist sourcePlaylist, MediaFile watchThisFile, boolean lockTunerOnly)
+  private int watch(Airing watchAir, boolean forceLive, boolean forceBeginning,
+      Playlist sourcePlaylist, MediaFile watchThisFile, boolean lockTunerOnly)
   {
     if (Sage.DBG) System.out.println("VideoFrame.watch(" + watchAir + ")");
     if (watchAir == null) return WATCH_FAILED_NULL_AIRING;
@@ -569,6 +585,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         watchThisFile = Wizard.getInstance().getFileForAiring(watchAir);
       if (Sage.DBG) System.out.println("watchThisFile=" + watchThisFile);
       iWantToBeLive = false;
+      iWantToStartAtBeginning = false;
 
       if (watchThisFile != null && watchThisFile.isAnyLiveStream())
         forceLive = true;
@@ -601,6 +618,11 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
           {
             submitJob(new VFJob(TIME_SET, Long.MAX_VALUE));
             // If we're live we need to be playing too!
+            submitJob(new VFJob(PLAY));
+          }
+          else if (forceBeginning)
+          {
+            submitJob(new VFJob(TIME_SET, watchThisFile.getContentAiring().getStartTime()));
             submitJob(new VFJob(PLAY));
           }
           else if (restartOnRedundantWatch)
@@ -673,8 +695,10 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
             if (watchAir.stationID != 0)
               Sage.getRawProperties().updateMRUList("recent_channels", Integer.toString(watchAir.stationID), 10);
             lastUserWatchAttemptTime = Sage.eventTime();
+            playbackLoadFailed = false;
             submitJob(new VFJob(WATCH_MF, watchThisFile, sourcePlaylist));
             iWantToBeLive = forceLive;
+            iWantToStartAtBeginning = forceBeginning;
           }
           return seekerError[0];
         }
@@ -732,6 +756,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         }
         liveControl = true;
         iWantToBeLive = forceLive;
+        iWantToStartAtBeginning = forceBeginning;
         if (watchThisFile.isAnyLiveStream())
           controlledInput = mmc.getCaptureDeviceInputNamed(watchThisFile.encodedBy);
         uiMgr.putInt(prefs + LAST_STATION_ID, lastStationID = watchAir.stationID);
@@ -741,6 +766,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         if (!lockTunerOnly)
         {
           lastUserWatchAttemptTime = Sage.eventTime();
+          playbackLoadFailed = false;
           submitJob(new VFJob(WATCH_MF, watchThisFile, sourcePlaylist));
         }
         return WATCH_OK;
@@ -1767,6 +1793,69 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
           }
         }
 
+        // NG seek settle/debounce (default OFF: videoframe/seek_settle_global_ms=0).
+        // On the push server-side-transcode (enhance) path every committed TIME_ADJUST/
+        // TIME_SET is a full transcoder reprime -- a ~0.5s teardown+respawn of the enhance
+        // pipeline. A burst of SPACED FF/REW presses (each arriving just AFTER the prior
+        // reprime finished, so the pile-up coalescer above never folds them) therefore fires
+        // one reprime per press: visible tearing, and the repeated mid-session respawns can
+        // destabilize into a full pipeline re-OFFER whose backlog the client then gallops
+        // through (the observed "jumped ahead ~15 min" report). Settle collapses the whole
+        // burst into ONE reprime at the final/accumulated target: once a seek job is current,
+        // wait a short QUIET window for the next press and fold it in with the same coalescer
+        // semantics (TIME_SET takes the latest target, TIME_ADJUST accumulates the delta).
+        // The window resets on each folded press and is hard-capped so a held key can never
+        // defer the reprime indefinitely; a queued non-seek job ends settling immediately so
+        // other work is never delayed. settleMs<=0 skips the block entirely, so the default
+        // path is byte-identical to legacy.
+        if (currJob.id == TIME_ADJUST || currJob.id == TIME_SET)
+        {
+          long settleMs = uiMgr.getLong(prefs + "seek_settle_ms",
+              Sage.getLong("videoframe/seek_settle_global_ms", 0L));
+          if (settleMs > 0)
+          {
+            long settleCapMs = uiMgr.getLong(prefs + "seek_settle_max_ms",
+                Sage.getLong("videoframe/seek_settle_global_max_ms", 1500L));
+            long settleStart = Sage.eventTime();
+            int foldedPresses = 0;
+            settleLoop:
+            while (true)
+            {
+              // Fold any consecutive same-kind seek jobs already queued behind currJob.
+              while (watchQueue.size() > 1)
+              {
+                VFJob nextSeek = (VFJob) watchQueue.get(1);
+                if (nextSeek.id != currJob.id)
+                  break settleLoop; // non-seek work is waiting -> commit this reprime now
+                if (currJob.id == TIME_SET)
+                  currJob.time = nextSeek.time;
+                else
+                  currJob.time += nextSeek.time;
+                foldedPresses++;
+                synchronized (queueLock)
+                {
+                  watchQueue.remove(1);
+                  queueLock.notifyAll();
+                }
+              }
+              if (Sage.eventTime() - settleStart >= settleCapMs)
+                break; // hard cap reached -> commit
+              synchronized (queueLock)
+              {
+                if (watchQueue.size() > 1)
+                  continue; // a press arrived while we were folding -> loop to fold it
+                try { queueLock.wait(settleMs); } catch (InterruptedException ie) {}
+                if (watchQueue.size() <= 1)
+                  break; // quiet for the full window -> settled, commit the single reprime
+              }
+            }
+            if (Sage.DBG && foldedPresses > 0)
+              System.out.println("NG-SEEKDIAG seek-settle folded " + foldedPresses +
+                  " press(es) -> single reprime job=" + currJob +
+                  " waitedMs=" + (Sage.eventTime() - settleStart));
+          }
+        }
+
         final VFJob finalJob = currJob;
         if (Sage.WINDOWS_OS && rethreadVF /*&& !(uiMgr.getRootPanel().getRenderEngine() instanceof JOGLSageRenderer)*/ &&
             !(player instanceof LinuxMPlayerPlugin))
@@ -1871,6 +1960,14 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       rv += 3000; // this delay was in the MiniMPlayerPlugin and is lost in local mode since we don't have the above setting
     }
     return rv;
+  }
+
+  static long selectInitialWatchTarget(MediaFile watchMe,
+      boolean playlistFromBeginning, boolean explicitlyFromBeginning)
+  {
+    Airing airing = watchMe.getContentAiring();
+    return (playlistFromBeginning || explicitlyFromBeginning)
+        ? airing.getStartTime() : BigBrother.getLatestWatch(airing);
   }
 
   private void processJob(VFJob daJob)
@@ -2014,7 +2111,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
             lastVideoOpTime = Sage.eventTime();
             long ffBase = getSkipBaseMillis();
             long ffRaw = ffBase + daJob.time;
-            long ffTarget = Sage.getBoolean("videoframe/live_skip_edge_clamp", false)
+            long ffTarget = trickplayPolicyEnabled("live_skip_edge_clamp")
                 ? clampLiveSkipTarget(ffRaw) : ffRaw;
             // NG-TRICKDIAG: log-only trick-play base/target self-check. Covers ALL paths
             // (push + pull-xcode) so a live in-progress FF/REW can be validated against the
@@ -2077,7 +2174,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
             }
           }
           long rewRaw = rewTarget;
-          if (Sage.getBoolean("videoframe/live_skip_edge_clamp", false))
+          if (trickplayPolicyEnabled("live_skip_edge_clamp"))
             rewTarget = clampLiveSkipTarget(rewTarget);
           if (Sage.DBG) System.out.println("NG-TRICKDIAG REW delta=" + daJob.time +
               " base=" + rewBase + " mediaTime=" + getMediaTimeMillis() + " rawTarget=" + rewRaw +
@@ -2546,8 +2643,9 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       // watched time + 1 sec & forward.
       // Set the time after the file is loaded
       MediaFile watchMe = daJob.file;
-      long targetTime = (!playlistChain.isEmpty() && uiMgr.getBoolean("videoframe/start_playlist_items_from_beginning", true)) ?
-          watchMe.getContentAiring().getStartTime() : BigBrother.getLatestWatch(watchMe.getContentAiring());
+      long targetTime = selectInitialWatchTarget(watchMe,
+          !playlistChain.isEmpty() && uiMgr.getBoolean("videoframe/start_playlist_items_from_beginning", true),
+          iWantToStartAtBeginning);
           targetTime = Math.max(targetTime, watchMe.getRecordTime() +
               (watchMe.isTV() ? uiMgr.getLong(prefs + TIME_TO_START_INTO_TV_FILE_PLAYBACK, 0) : 0));
           if (watchMe.isMusic()) // always start music from the beginning of the song or when we're going through a playlist
@@ -2729,10 +2827,13 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
               lastVideoOpTime = Sage.eventTime();
               if (!timeSelRes)
               {
+                playbackLoadFailed = true;
                 System.out.println("VideoFrame had an error loading the file. It must abort the file load.");
                 mightWait = 0;
                 closeMediaFile(true, false, true);
               }
+              else
+                playbackLoadFailed = false;
             }
           }
           else
@@ -3905,11 +4006,11 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       return offsetTime + theFile.getStart(segment);
   }
 
-  // NG seek-target coalescing state (default OFF: videoframe/seek_target_coalesce).
+  // NG seek-target coalescing state; legacy defaults and overrides are unchanged.
   // When enabled, a just-issued relative/absolute skip target is remembered so that a
   // rapid follow-up skip that arrives before playback settles to that target accumulates
   // from the INTENDED position instead of the still-climbing reported position. See
-  // getSkipBaseMillis() for the full rationale. All zero/false by default so that with the
+  // getSkipBaseMillis() for the full rationale. With the
   // flag off these fields are never written and behavior is identical to legacy.
   private long pendingSkipTargetMillis = 0;   // file-epoch ms of the last issued skip target
   private long pendingSkipTargetSetTime = 0;  // Sage.eventTime() when it was issued
@@ -3929,7 +4030,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   private long getSkipBaseMillis()
   {
     long reported = getSeekBaseMediaTimeMillis();
-    if (!Sage.getBoolean("videoframe/seek_target_coalesce", false))
+    if (!trickplayPolicyEnabled("seek_target_coalesce"))
       return reported;
     try
     {
@@ -3947,22 +4048,10 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       long tol = uiMgr.getLong(prefs + "seek_target_coalesce_tol_ms", 2500);
       // Expire once the transcode settle window has elapsed -- after that the reported
       // position is trustworthy again.
-      if (now - pendingSkipTargetSetTime > window)
-      {
-        pendingSkipTargetValid = false;
-        return reported;
-      }
-      // Reject a target that isn't inside this file's seekable window (e.g. left over from a
-      // previous file/segment); prevents a stale huge epoch from hijacking the base.
       long floor = theFile.getStart(segment);
       long edge = theFile.getEnd(segment);
-      if (edge > floor && (pendingSkipTargetMillis < floor - tol || pendingSkipTargetMillis > edge + tol))
-      {
-        pendingSkipTargetValid = false;
-        return reported;
-      }
-      // Playback has caught up to (within tol of) the intended target: trust reported again.
-      if (Math.abs(reported - pendingSkipTargetMillis) <= tol)
+      if (!shouldUsePendingSkipTarget(reported, pendingSkipTargetMillis,
+          now - pendingSkipTargetSetTime, window, tol, floor, edge))
       {
         pendingSkipTargetValid = false;
         return reported;
@@ -3985,11 +4074,34 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   // field writes) unless videoframe/seek_target_coalesce is ON, keeping the default path legacy.
   private void notePendingSkipTarget(long fileEpochTarget)
   {
-    if (!Sage.getBoolean("videoframe/seek_target_coalesce", false))
+    if (!trickplayPolicyEnabled("seek_target_coalesce"))
       return;
-    pendingSkipTargetMillis = fileEpochTarget;
+    if (currFile == null || currFile.isLiveStream()) return;
+    pendingSkipTargetMillis = clampPendingSkipTarget(fileEpochTarget,
+        currFile.getStart(segment), currFile.getEnd(segment));
     pendingSkipTargetSetTime = Sage.eventTime();
     pendingSkipTargetValid = true;
+  }
+
+  static long clampPendingSkipTarget(long target, long start, long end)
+  {
+    return Math.max(start, Math.min(target, Math.max(start, end)));
+  }
+
+  private boolean trickplayPolicyEnabled(String policy)
+  {
+    boolean ngSession = uiMgr != null && uiMgr.getRootPanel() != null &&
+        uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer &&
+        ((MiniClientSageRenderer) uiMgr.getRootPanel().getRenderEngine()).isNgCapableSession();
+    return MiniPlayer.trickplayPolicyEnabled("videoframe", policy, ngSession, true);
+  }
+
+  static boolean shouldUsePendingSkipTarget(long reported, long target, long age,
+      long window, long tolerance, long start, long end)
+  {
+    return age <= window &&
+        !(end > start && (target < start - tolerance || target > end + tolerance)) &&
+        Math.abs(reported - target) > tolerance;
   }
 
   // File-timeline playback position to use as the BASE for a relative skip
@@ -4023,7 +4135,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   }
 
   // Increment 1c (pull path) -- live-edge / DVR-window clamp for relative skips
-  // (skip forward/back). Default OFF: videoframe/live_skip_edge_clamp. For an in-progress
+  // (skip forward/back). Enabled by default for NG sessions only. For an in-progress
   // recording the seekable window in file-epoch ms is [getStart(segment), getEnd(segment)]
   // where getEnd() returns Sage.time() (the live edge) while still recording -- valid even
   // though the player reports realDur=0. A relative skip that would land before the start
@@ -6147,6 +6259,18 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   /** Returns Sage.eventTime() of the most recent user-initiated WATCH_MF submission, or 0 if none. */
   public long getLastUserWatchAttemptTime() { return lastUserWatchAttemptTime; }
 
+  boolean suppressDefaultWatchAfterFailure()
+  {
+    SageRenderer renderer = uiMgr.getRootPanel().getRenderEngine();
+    return suppressDefaultWatchAfterFailure(renderer instanceof MiniClientSageRenderer &&
+        ((MiniClientSageRenderer) renderer).isNgCapableSession(), playbackLoadFailed);
+  }
+
+  static boolean suppressDefaultWatchAfterFailure(boolean ngSession, boolean loadFailed)
+  {
+    return ngSession && loadFailed;
+  }
+
   public boolean isMediaPlayerSignaLost()
   {
     if (signalLost) return true;
@@ -6451,6 +6575,20 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       // We treat CC data differently then sub data; so separate those here
       if ((flags & sage.media.sub.SubtitleHandler.CC_SUBTITLE_MASK) == sage.media.sub.SubtitleHandler.CC_SUBTITLE_MASK)
       {
+        // ATSC 3.0 (STPP/IMSC1 TTML) sources carry no in-band line-21 608/708 --
+        // their only captions are the server-extracted STPP cues delivered via
+        // postCaptionEvents(). A legacy client (e.g. the Windows placeshifter)
+        // still scrapes the decoded video for 608 and relays whatever stray
+        // SEI/user-data bytes it finds back up through SUBTITLE_UPDATE_REPLY_TYPE.
+        // Those bytes are not real captions; fed to the 608 renderer they come
+        // out as garbage (e.g. "HDHDHD", the 0x48/0x44 control bytes rendered as
+        // literal 'H'/'D') and fight the authoritative STPP push. While that live
+        // push owns display for this file, drop the spurious in-band CC relay --
+        // the same single-owner gate reloadExternalSubHandlerAndApplyCC already
+        // honors, closing the one path (the client CC relay) it never covered.
+        if (currFile != null &&
+            sage.captions.CaptionExtractionManager.getInstance().isLiveCaptionPushActive(currFile))
+          return;
         // Ignore empty subs if we don't have a handler setup yet
         if (ccHandler == null && rawText.length == 0)
           return;
@@ -6971,6 +7109,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   // failure (codec/container mismatch) does not silently bounce the user to
   // live TV. See java/sage/ZRoot.java DefaultAsyncWatch comment.
   protected long lastUserWatchAttemptTime;
+  private volatile boolean playbackLoadFailed;
 
   protected Playlist nowPlayingPlaylist;
 
@@ -6978,6 +7117,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   // to pass through (like with local file playback). This is needed for repeat play of a single
   // item to work correctly.
   protected boolean restartOnRedundantWatch;
+  protected boolean iWantToStartAtBeginning;
 
   // Commercial skip state — loaded from SkipMatrix on playback start, checked in monitoring loop
   private sage.commercial.SkipMatrix commSkipMatrix;

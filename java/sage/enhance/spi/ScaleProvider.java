@@ -41,6 +41,15 @@ public interface ScaleProvider
   /** Cheap, side-effect-free check that this request can be handled now. */
   ScaleProviderAvailability probe(ScaleRequest request);
 
+  /**
+   * Typed profile-specific availability and capacity assessment.
+   * Existing providers remain compatible through the unmeasured probe adapter.
+   */
+  default ScaleProviderAssessment assess(ScaleRequest request)
+  {
+    return ScaleProviderAssessment.fromAvailability(request, probe(request));
+  }
+
   /** Produce the immutable scale stage for this request. */
   ScaleExecutionPlan plan(ScaleRequest request);
 
@@ -61,8 +70,11 @@ public interface ScaleProvider
    * treated by the core as "warmup failed" &mdash; the context is discarded and
    * the session cold-starts through {@link #plan(ScaleRequest)} as usual.
    *
-   * <p>Default: returns {@code null} (no warmup). Providers that start quickly
-   * (&lt; 500&nbsp;ms), and every filter-form provider, should not override this.
+   * <p>Default: supplies a default {@link WarmupBudget} ({@link
+   * WarmupBudget#DEFAULT_ACQUIRE_MILLIS} / {@link WarmupBudget#DEFAULT_READY_MILLIS})
+   * and delegates to {@link #warmup(ScaleRequest, WarmupBudget)}, which is the
+   * primitive a warmup-capable provider overrides. Providers that start quickly
+   * (&lt; 500&nbsp;ms), and every filter-form provider, should not override either.
    *
    * @param request the anticipated scale request. The actual request at play
    *        time may differ slightly (e.g. aspect-ratio correction), but the
@@ -72,7 +84,52 @@ public interface ScaleProvider
    */
   default WarmContext warmup(ScaleRequest request)
   {
+    return warmup(request,
+        new WarmupBudget(WarmupBudget.DEFAULT_ACQUIRE_MILLIS,
+            WarmupBudget.DEFAULT_READY_MILLIS));
+  }
+
+  /**
+   * Pre-warm this provider under an explicit time {@link WarmupBudget}.
+   *
+   * <p>This is the warmup <b>primitive</b>: {@link #warmup(ScaleRequest)} calls it
+   * with a default budget, so a warmup-capable provider need only override this
+   * one. The core supplies the deadline it is prepared to wait rather than letting
+   * the provider pick its own. A provider whose warmup must bound an admission
+   * round-trip (acquire a GPU lease / broker grant, then bring a worker to ready)
+   * should honour {@link WarmupBudget#remainingMillis()} and abandon the attempt
+   * when it hits zero.
+   *
+   * <p>Default: returns {@code null} (no warmup).
+   *
+   * @param request the anticipated scale request
+   * @param budget  the time budget for this warm attempt; never {@code null} when
+   *        the core calls this
+   * @return a warm context, or {@code null} if warmup is not needed or not
+   *         possible within the budget
+   */
+  default WarmContext warmup(ScaleRequest request, WarmupBudget budget)
+  {
     return null;
+  }
+
+  /**
+   * Whether this provider owns its own warmup-time admission.
+   *
+   * <p>A provider that returns {@code true} acquires whatever cross-tenant
+   * admission it needs (e.g. a GPU lease / broker grant) itself, inside
+   * {@link #warmup(ScaleRequest, WarmupBudget)}, and will only produce a
+   * renderable plan once that admission is held. The core must not additionally
+   * gate such a provider through its local enhancement admission &mdash; doing so
+   * would double-count the resource. A provider that returns {@code false} (the
+   * default) is admitted by the core's ordinary governor path.
+   *
+   * @return {@code true} if the provider self-admits during warmup; default
+   *         {@code false}
+   */
+  default boolean managesWarmupAdmission()
+  {
+    return false;
   }
 
   /**

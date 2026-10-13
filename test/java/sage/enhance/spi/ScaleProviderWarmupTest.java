@@ -69,6 +69,37 @@ public class ScaleProviderWarmupTest
     assertNull(new ColdOnlyProvider().warmup(req()), "default warmup is a no-op");
   }
 
+  /** A provider that overrides ONLY the budget-aware warmup primitive. */
+  private static final class BudgetOnlyProvider implements ScaleProvider
+  {
+    WarmupBudget seen;
+    final RecordingWarm warm = new RecordingWarm(true);
+    public String id() { return "budget-only"; }
+    public ScaleProviderCapabilities capabilities() { return null; }
+    public ScaleProviderAvailability probe(ScaleRequest r) { return null; }
+    public ScaleExecutionPlan plan(ScaleRequest r) { return null; }
+    public WarmContext warmup(ScaleRequest r, WarmupBudget b) { seen = b; return warm; }
+  }
+
+  @Test
+  public void oneArgWarmupDelegatesToBudgetPrimitive()
+  {
+    BudgetOnlyProvider p = new BudgetOnlyProvider();
+    WarmContext out = p.warmup(req());
+    assertSame(out, p.warm, "1-arg warmup must reach a provider that overrides only the 2-arg primitive");
+    assertEquals(p.seen.acquireTimeoutMillis(), WarmupBudget.DEFAULT_ACQUIRE_MILLIS,
+        "default acquire budget supplied");
+    assertEquals(p.seen.readyTimeoutMillis(), WarmupBudget.DEFAULT_READY_MILLIS,
+        "default ready budget supplied");
+  }
+
+  @Test
+  public void managesWarmupAdmissionDefaultsFalse()
+  {
+    assertFalse(new ColdOnlyProvider().managesWarmupAdmission(),
+        "a provider that does not self-admit returns false by default");
+  }
+
   @Test
   public void defaultWarmPlanClosesContextAndColdPlans()
   {

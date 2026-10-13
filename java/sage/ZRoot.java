@@ -1230,7 +1230,8 @@ public class ZRoot extends java.awt.Canvas
               if (thisRenderHasVideo && ("XAlways".equals(uiMgr.get("display_video_on_menus", null)) || !lastRenderHadVideo ||
                   lastActiveMenu != uiMgr.getCurrUI()))
               {
-                if (!isFileLoaded && !uiMgr.getBoolean("ui/disable_default_async_watch", false))
+                if (!isFileLoaded && !uiMgr.getBoolean("ui/disable_default_async_watch", false)
+                    && !vf.suppressDefaultWatchAfterFailure())
                 {
                   // Stock behavior: when a menu's preview pane has nothing loaded,
                   // auto-launch live TV so the pane shows something. This is awful UX

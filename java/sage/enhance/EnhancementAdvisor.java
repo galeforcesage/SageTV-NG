@@ -269,6 +269,18 @@ public final class EnhancementAdvisor
       String localPref, String localStatus, boolean gpuSupported,
       long sourceBitrateKbps, long availableBandwidthKbps)
   {
+    return advise(sourceWidth, sourceHeight, sourceInterlaced, sourceFps, sinkWidth,
+        sinkHeight, surface, constraints, formFactor, localPref, localStatus, gpuSupported,
+        sourceBitrateKbps, availableBandwidthKbps, sourceFps, "", 0);
+  }
+
+  public static Advice advise(int sourceWidth, int sourceHeight, boolean sourceInterlaced,
+      int sourceFps, int sinkWidth, int sinkHeight, PlaybackSurface surface,
+      ClientConstraints constraints, String formFactor,
+      String localPref, String localStatus, boolean gpuSupported,
+      long sourceBitrateKbps, long availableBandwidthKbps, double sourceFpsExact,
+      String sourcePixelFormat, int sourceBitDepth)
+  {
     if (!isEnabled()) return NONE_DISABLED;
     // A client that explicitly chose "never" is a hard opt-out that outranks
     // every server-side heuristic (and even GPU/source checks): the viewer has
@@ -374,9 +386,9 @@ public final class EnhancementAdvisor
     // to a plain remux -- promising the client a 4K enhance it never gets. Probe
     // with the resolved tier and, if it cannot render, drop to the deinterlace
     // floor exactly as if no provider were installed.
-    sage.enhance.spi.ScaleRequest offerProbe = new sage.enhance.spi.ScaleRequest(tier,
-        tier.getTargetWidth(), tier.getTargetHeight(), sourceHeight, sourceInterlaced, null,
-        sage.enhance.spi.ScaleRequest.Purpose.PROBE);
+    sage.enhance.spi.ScaleRequest offerProbe = GpuEnhancePipeline.exactScaleRequest(tier,
+        sourceWidth, sourceHeight, sourceInterlaced, sourceFpsExact, sourcePixelFormat,
+        sourceBitDepth, null, sage.enhance.spi.ScaleRequest.Purpose.PROBE);
     if (!sage.enhance.spi.ScaleProviderRegistry.getInstance().selectedProviderCanUpscale(offerProbe))
       return finish(deintFloor, Verdict.UPSCALE_PROVIDER_UNAVAILABLE, surface, constraints,
           deintFloor, sourceFps, sourceBitrateKbps, availableBandwidthKbps);
@@ -387,8 +399,8 @@ public final class EnhancementAdvisor
     // playback/gpu_enhance/scale/warmup_enabled is set and a provider overrides
     // warmup(); never blocks the offer (runs on the warmup executor).
     sage.enhance.spi.ScaleProviderRegistry.getInstance().warmupSelectedProvider(
-        new sage.enhance.spi.ScaleRequest(tier, tier.getTargetWidth(), tier.getTargetHeight(),
-            sourceWidth, sourceHeight, sourceInterlaced, null,
+        GpuEnhancePipeline.exactScaleRequest(tier, sourceWidth, sourceHeight,
+            sourceInterlaced, sourceFpsExact, sourcePixelFormat, sourceBitDepth, null,
             sage.enhance.spi.ScaleRequest.Purpose.LIVE));
 
     return finish(tier, Verdict.OFFERED, surface, constraints, deintFloor, sourceFps, sourceBitrateKbps, availableBandwidthKbps);

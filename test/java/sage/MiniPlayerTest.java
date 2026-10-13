@@ -20,6 +20,255 @@ public class MiniPlayerTest
 {
   private static final String OVERRIDE_PROP = "miniplayer/legacy_h264_push_override";
 
+  @Test
+  public void testNgDirectPushFrozenReportDoesNotInventPlaybackProgress() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    MiniPlayer player = new MiniPlayer()
+    {
+      @Override
+      protected boolean isNgTrickplaySession() { return true; }
+    };
+    setPlayerField(player, "currState", MediaPlayer.PLAY_STATE);
+    setPlayerField(player, "myRate", 1.0f);
+    setPlayerField(player, "pushMode", true);
+    setPlayerField(player, "detailedPushBufferStats", true);
+    setPlayerField(player, "mpegSrc", new FastMpeg2Reader(new java.io.File("unused-clock-test.mpg")));
+    setPlayerField(player, "directPushSeekFloor", 1427188L);
+    setPlayerField(player, "directPushSentThrough", 1500000L);
+    setPlayerField(player, "clientReportedMediaTime", 1429335);
+    assertEquals(player.getMediaTimeMillis(), 1429335L);
+    setPlayerField(player, "lastMediaTimeCacheTime", Sage.eventTime() - 60000L);
+    assertEquals(player.getMediaTimeMillis(), 1429335L,
+        "A renderer stuck at one frame must not advance by a minute merely because server state is PLAY");
+    setPlayerField(player, "clientReportedMediaTime", 1431000);
+    assertEquals(player.getMediaTimeMillis(), 1431000L);
+  }
+
+  @Test
+  public void testEnhancedPushClockCannotAdvanceBeyondSentPts() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    MiniPlayer player = new MiniPlayer()
+    {
+      @Override
+      protected boolean isNgTrickplaySession() { return true; }
+    };
+    setPlayerField(player, "currState", MediaPlayer.PLAY_STATE);
+    setPlayerField(player, "myRate", 1.0f);
+    setPlayerField(player, "pushMode", true);
+    setPlayerField(player, "serverSideTranscoding", true);
+    setPlayerField(player, "detailedPushBufferStats", true);
+    setPlayerField(player, "timestampOffset", 562253L);
+    setPlayerField(player, "timestampOffsetWallTime", Sage.eventTime() - 104723L);
+    setPlayerField(player, "lastParserTimestamp", 561753L);
+    setPlayerField(player, "directPushSentThrough", -1L);
+    assertEquals(player.getSeekBaseMediaTimeMillis(), 562253L,
+        "No sent timestamp must not allow the wall clock to invent 104 seconds of playback");
+    setPlayerField(player, "directPushSentThrough", 564253L);
+    assertEquals(player.getSeekBaseMediaTimeMillis(), 564253L,
+        "Sent PTS bounds the clock even when DTS statistics stay below the seek floor");
+    setPlayerField(player, "directPushSentThrough", 700000L);
+    assertTrue(player.getSeekBaseMediaTimeMillis() > 660000L);
+    assertEquals(MiniPlayer.boundPushDisplayEstimate(500L, 1000L, 3000L), 1000L);
+    assertEquals(MiniPlayer.boundPushDisplayEstimate(2000L, 1000L, 3000L), 2000L);
+  }
+
+  @Test
+  public void testPullClockUsesSourceRelativeClientPositionAfterResumeAndSeek() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    final long[] reported = {474839L};
+    MiniPlayer player = new MiniPlayer()
+    {
+      @Override
+      protected long getMediaTimeMillis0()
+      {
+        return reported[0];
+      }
+    };
+    setPlayerField(player, "currState", MediaPlayer.PLAY_STATE);
+    setPlayerField(player, "myRate", 1.0f);
+    setPlayerField(player, "pushMode", false);
+    setPlayerField(player, "timeGuessMillis", 474839L);
+    setPlayerField(player, "guessTimestamp", Sage.eventTime() - 2000L);
+    assertEquals(player.getMediaTimeMillis(), 474839L);
+    assertEquals(player.getSeekBaseMediaTimeMillis() + 30000L, 504839L);
+    reported[0] = 508835L;
+    assertEquals(player.getMediaTimeMillis(), 508835L);
+    assertEquals(player.getSeekBaseMediaTimeMillis() + 120000L, 628835L,
+        "A resumed pull clock must not collapse to elapsed time since stream restart");
+    reported[0] = 3996L;
+    assertEquals(player.getMediaTimeMillis(), 3996L,
+        "The server cannot reconstruct an omitted source offset from an untagged client report");
+  }
+
+  @Test
+  public void testNgTrickplayPoliciesDoNotChangeLegacySettings() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    String[][] policies = {{"videoframe", "seek_target_coalesce"},
+        {"videoframe", "live_skip_edge_clamp"}, {"miniplayer", "push_seek_dvr_clamp"},
+        {"miniplayer", "push_inplace_seek"}};
+    for (String[] policy : policies)
+    {
+      String legacyKey = policy[0] + "/" + policy[1];
+      String ngKey = policy[0] + "/ng_" + policy[1];
+      String oldLegacy = Sage.get(legacyKey, null);
+      String oldNg = Sage.get(ngKey, null);
+      boolean ngDefault = !policy[1].equals("push_inplace_seek");
+      try
+      {
+        Sage.remove(legacyKey);
+        Sage.remove(ngKey);
+        assertFalse(MiniPlayer.trickplayPolicyEnabled(policy[0], policy[1], false, ngDefault));
+        assertEquals(MiniPlayer.trickplayPolicyEnabled(policy[0], policy[1], true, ngDefault), ngDefault);
+        Sage.put(ngKey, "true");
+        assertFalse(MiniPlayer.trickplayPolicyEnabled(policy[0], policy[1], false, ngDefault));
+        Sage.put(legacyKey, "true");
+        Sage.put(ngKey, "false");
+        assertTrue(MiniPlayer.trickplayPolicyEnabled(policy[0], policy[1], false, ngDefault));
+        assertFalse(MiniPlayer.trickplayPolicyEnabled(policy[0], policy[1], true, ngDefault));
+      }
+      finally
+      {
+        if (oldLegacy == null) Sage.remove(legacyKey); else Sage.put(legacyKey, oldLegacy);
+        if (oldNg == null) Sage.remove(ngKey); else Sage.put(ngKey, oldNg);
+      }
+    }
+  }
+
+  @Test
+  public void testUnsupportedRatesDoNotSeek() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    MiniPlayer player = new MiniPlayer()
+    {
+      @Override
+      protected boolean isNgTrickplaySession()
+      {
+        return true;
+      }
+
+      @Override
+      public long seek(long target)
+      {
+        throw new AssertionError("Unsupported rate request must not reposition playback");
+      }
+    };
+    assertEquals(player.setPlaybackRate(0.5f), 1.0f);
+    assertEquals(player.setPlaybackRate(2.0f), 1.0f);
+    assertEquals(player.setPlaybackRate(-2.0f), 1.0f);
+    assertEquals(player.setPlaybackRate(1.0f), 1.0f);
+    setPlayerField(player, "pushMode", true);
+    setPlayerField(player, "serverSideTranscoding", true);
+    assertEquals(player.setPlaybackRate(0.5f), 1.0f);
+    assertEquals(player.setPlaybackRate(2.0f), 1.0f);
+  }
+
+  @Test
+  public void testLegacyUnsupportedRatesPreserveSkipFallback() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    final long[] targets = new long[2];
+    MiniPlayer player = new MiniPlayer()
+    {
+      private int calls;
+
+      @Override
+      public long getMediaTimeMillis()
+      {
+        return 60000L;
+      }
+
+      @Override
+      public long seek(long target)
+      {
+        targets[calls++] = target;
+        return target;
+      }
+    };
+    assertFalse(player.isNgTrickplaySession());
+    assertEquals(player.setPlaybackRate(2.0f), 1.0f);
+    assertEquals(player.setPlaybackRate(0.5f), 1.0f);
+    assertEquals(targets[0], 75000L);
+    assertEquals(targets[1], 45000L);
+  }
+
+  @Test
+  public void testDirectPushPositionMustBelongToSentSeekWindow()
+  {
+    assertFalse(MiniPlayer.directPushPositionInWindow(54694L, 0L, 14000L));
+    assertFalse(MiniPlayer.directPushPositionInWindow(45852L, 0L, 14000L));
+    assertTrue(MiniPlayer.directPushPositionInWindow(907L, 0L, 14000L));
+    assertFalse(MiniPlayer.directPushPositionInWindow(907L, 24762L, 40000L));
+    assertTrue(MiniPlayer.directPushPositionInWindow(25164L, 24762L, 40000L));
+    assertFalse(MiniPlayer.directPushPositionInWindow(24762L, 24762L, 0L));
+    assertFalse(MiniPlayer.directPushPositionInWindow(302097L, 302097L, -1L));
+    assertTrue(MiniPlayer.directPushPositionInWindow(303209L, 302097L, 310000L));
+    assertFalse(MiniPlayer.directPushPositionInWindow(32071L, 302097L, 310000L));
+  }
+
+  @Test
+  public void testDirectPushMediaClockAcceptsPtsBoundaryWithoutDtsStats() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    MiniPlayer player = new MiniPlayer();
+    setPlayerField(player, "detailedPushBufferStats", true);
+    setPlayerField(player, "pushMode", true);
+    setPlayerField(player, "mpegSrc", new FastMpeg2Reader(new java.io.File("unused-clock-test.mpg")));
+    setPlayerField(player, "currState", MediaPlayer.PAUSE_STATE);
+    setPlayerField(player, "myRate", 1.0f);
+    setPlayerField(player, "directPushSeekFloor", 302097L);
+    setPlayerField(player, "directPushSentThrough", 310000L);
+    setPlayerField(player, "lastParserTimestamp", 0L);
+    setPlayerField(player, "clientReportedMediaTime", 303209);
+    assertEquals(player.getMediaTimeMillis(), 303209L,
+        "A zero DTS statistics counter must not freeze a valid direct-push position");
+
+    setPlayerField(player, "clientReportedMediaTime", 32071);
+    assertEquals(player.getMediaTimeMillis(), 303209L,
+        "A pre-seek report must not move the media clock backwards");
+    setPlayerField(player, "clientReportedMediaTime", 546000);
+    assertEquals(player.getMediaTimeMillis(), 303209L,
+        "A report ahead of sent data must not move the media clock forwards");
+
+    setPlayerField(player, "directPushSentThrough", 320000L);
+    setPlayerField(player, "clientReportedMediaTime", 315000);
+    assertEquals(player.getMediaTimeMillis(), 315000L,
+        "The clock must resume as valid client reports and payload boundaries advance");
+  }
+
+  private static void setPlayerField(MiniPlayer player, String name, Object value)
+      throws ReflectiveOperationException
+  {
+    java.lang.reflect.Field field = MiniPlayer.class.getDeclaredField(name);
+    field.setAccessible(true);
+    field.set(player, value);
+  }
+
+  @Test
+  public void testPausedPushSeekUsesStreamRelativeMilliseconds()
+  {
+    assertEquals(MiniPlayer.pausedPushSeekTime(199023465L, 71712L, false), 2210630L);
+    assertEquals(MiniPlayer.pausedPushSeekTime(202897335L, 71712L, false), 2253673L);
+    assertEquals(MiniPlayer.pausedPushSeekTime(71712L, 71712L, false), 55L);
+    assertEquals(MiniPlayer.pausedPushSeekTime(0L, 9000L, false), 0L);
+  }
+
+  @Test
+  public void testPausedPushSeekPreservesHardwareExtenderPts()
+  {
+    assertEquals(MiniPlayer.pausedPushSeekTime(199023465L, 71712L, true), 199028465L);
+  }
+
+  @Test
+  public void testPausedPushSeekHandlesPtsRollover()
+  {
+    long first = FastMpeg2Reader.MAX_PTS - 90000L;
+    assertEquals(MiniPlayer.pausedPushSeekTime(90000L, first, false), 2055L);
+  }
+
   @AfterMethod
   public void resetProperty() throws Throwable
   {
@@ -205,6 +454,34 @@ public class MiniPlayerTest
     assertNull(MiniPlayer.buildEffDeliveryToken(null, null,
         sage.enhance.EnhancementTier.ENHANCE_2160P),
         "An absent delivery must stay absent even with a tier set");
+  }
+
+  @Test
+  public void testEnhancementNeverRidesBarePullDirect()
+  {
+    // Regression guard for the live-TV "direct:enhance -> 352x240 DVD default"
+    // collapse. A bare "pull:direct" is a passthrough with no server transcoder,
+    // so an active enhancement tier MUST NOT be appended: emitting
+    // "pull:direct:enhance" made the msproxy bridge reject the unroutable
+    // direct:enhance mode and fall back to the legacy DVD default profile
+    // (352x240 MPEG-4 @ 300 kbps). The GPU-enhance pull upgrade in load()
+    // promotes such a tune to pull-xcode:mpeg2tsremux first; this is the
+    // last-line invariant that keeps a missed promotion from corrupting the
+    // stream. Worst case is a clean DIRECT_PLAY at source resolution.
+    assertEquals(MiniPlayer.buildEffDeliveryToken("pull", null,
+        sage.enhance.EnhancementTier.ENHANCE_2160P),
+        "pull:direct",
+        "an active tier must never ride a bare pull:direct (no transcoder)");
+    assertEquals(MiniPlayer.buildEffDeliveryToken("pull", "",
+        sage.enhance.EnhancementTier.ENHANCE_1080P),
+        "pull:direct",
+        "empty xcode mode is still a bare pull:direct -- no enhance suffix");
+    // The promoted form (what the pull upgrade produces) DOES carry the suffix:
+    // once there is a copy-family transcoder the enhancement pass can rewrite.
+    assertEquals(MiniPlayer.buildEffDeliveryToken("pull-xcode", "mpeg2tsremux",
+        sage.enhance.EnhancementTier.ENHANCE_2160P),
+        "pull-xcode:mpeg2tsremux:enhance;tier=2160p",
+        "the promoted pull-xcode:mpeg2tsremux carries enhancement normally");
   }
 
   // -------- NG output-codec resolution (resolveNgOutputCodecNames) --------

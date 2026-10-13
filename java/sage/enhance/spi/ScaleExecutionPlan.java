@@ -42,6 +42,8 @@ public final class ScaleExecutionPlan
   private final int outputWidth;
   private final int outputHeight;
   private final String pipePixelFormat;
+  private final CudaIpcExecutionDescriptor cudaIpcDescriptor;
+  private final IndexedFrameTransport indexedFrameTransport;
 
   // Pre-warmed worker for an EXTERNAL_PROCESS plan built from a WarmContext.
   // Null for a cold-start plan; when non-null the core wires this already-running
@@ -55,7 +57,7 @@ public final class ScaleExecutionPlan
   public ScaleExecutionPlan(ExecutionForm form, String ffmpegFilter,
                             String implementationLabel)
   {
-    this(form, ffmpegFilter, null, 0, 0, null, null, implementationLabel);
+    this(form, ffmpegFilter, null, 0, 0, null, null, null, null, implementationLabel);
   }
 
   /**
@@ -72,7 +74,7 @@ public final class ScaleExecutionPlan
                             int outputWidth, int outputHeight, String pipePixelFormat,
                             String implementationLabel)
   {
-    this(form, null, externalArgv, outputWidth, outputHeight, pipePixelFormat, null,
+    this(form, null, externalArgv, outputWidth, outputHeight, pipePixelFormat, null, null, null,
         implementationLabel);
   }
 
@@ -95,12 +97,32 @@ public final class ScaleExecutionPlan
       String pipePixelFormat, String implementationLabel, Process warmProcess)
   {
     return new ScaleExecutionPlan(ExecutionForm.EXTERNAL_PROCESS, null, externalArgv,
-        outputWidth, outputHeight, pipePixelFormat, warmProcess, implementationLabel);
+        outputWidth, outputHeight, pipePixelFormat, warmProcess, null, null, implementationLabel);
+  }
+
+  public static ScaleExecutionPlan externalIndexed(java.util.List<String> externalArgv,
+      int outputWidth, int outputHeight, String pipePixelFormat,
+      IndexedFrameTransport transport, String implementationLabel)
+  {
+    return new ScaleExecutionPlan(ExecutionForm.EXTERNAL_PROCESS, null, externalArgv,
+        outputWidth, outputHeight, pipePixelFormat, null, null, transport,
+        implementationLabel);
+  }
+
+  public static ScaleExecutionPlan cudaIpc(java.util.List<String> externalArgv,
+      CudaIpcExecutionDescriptor descriptor, String implementationLabel)
+  {
+    return new ScaleExecutionPlan(ExecutionForm.CUDA_IPC, null, externalArgv,
+        descriptor == null ? 0 : descriptor.getWidth(),
+        descriptor == null ? 0 : descriptor.getHeight(), null, null, descriptor, null,
+        implementationLabel);
   }
 
   private ScaleExecutionPlan(ExecutionForm form, String ffmpegFilter,
                              java.util.List<String> externalArgv, int outputWidth,
                              int outputHeight, String pipePixelFormat, Process warmProcess,
+                             CudaIpcExecutionDescriptor cudaIpcDescriptor,
+                             IndexedFrameTransport indexedFrameTransport,
                              String implementationLabel)
   {
     this.form = form;
@@ -113,6 +135,8 @@ public final class ScaleExecutionPlan
     this.pipePixelFormat = (pipePixelFormat == null || pipePixelFormat.isEmpty())
         ? "rgb24" : pipePixelFormat;
     this.warmProcess = warmProcess;
+    this.cudaIpcDescriptor = cudaIpcDescriptor;
+    this.indexedFrameTransport = indexedFrameTransport;
     this.implementationLabel = (implementationLabel == null) ? "" : implementationLabel;
   }
 
@@ -138,6 +162,8 @@ public final class ScaleExecutionPlan
 
   /** Pixel format exchanged on the worker stdio pipes ({@code rgb24} today). */
   public String getPipePixelFormat() { return pipePixelFormat; }
+  public CudaIpcExecutionDescriptor getCudaIpcDescriptor() { return cudaIpcDescriptor; }
+  public IndexedFrameTransport getIndexedFrameTransport() { return indexedFrameTransport; }
 
   /** For an {@link ExecutionForm#EXTERNAL_PROCESS} plan backed by a pre-warmed
    *  worker: the already-running process. The core wires its stdin/stdout into
@@ -160,7 +186,8 @@ public final class ScaleExecutionPlan
   {
     return form == ExecutionForm.EXTERNAL_PROCESS
         && externalArgv != null && !externalArgv.isEmpty()
-        && outputWidth > 0 && outputHeight > 0;
+        && outputWidth > 0 && outputHeight > 0
+        && indexedFrameTransport == null;
   }
 
   /** True when this plan is usable by the core. A provider that returns a

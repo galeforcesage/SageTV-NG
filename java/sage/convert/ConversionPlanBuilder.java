@@ -268,7 +268,14 @@ public final class ConversionPlanBuilder
     if (caps.scalerSupportsLanczos())
     {
       if (scaler.equals("scale")) sb.append(":flags=lanczos");
-      else sb.append(":interp_algo=lanczos");
+      else
+      {
+        // scale_cuda's Lanczos kernel paints a green edge (HwEncoder
+        // .highQualityInterpAlgo), so it resolves to bicubic; scale_npp keeps
+        // Lanczos.
+        String ia = sage.HwEncoder.highQualityInterpAlgo(scaler);
+        sb.append(":interp_algo=").append(ia != null ? ia : "lanczos");
+      }
     }
     return sb.toString();
   }

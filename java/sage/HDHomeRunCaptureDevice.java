@@ -751,6 +751,17 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
   {
     if (wantsDataScanning(cdi))
     {
+      // Defense-in-depth: never run the legacy native data scan on a confirmed
+      // ATSC 3.0 hybrid tuner. The native setupEncoding0 PSIP scan hangs on an
+      // ATSC3 multiplex, and Seeker.work() calls this while holding the global
+      // Seeker lock, which would freeze the guide and every client. requestDataScan
+      // already refuses these tuners; this is a second gate in case one is ever
+      // requested another way. ATSC3 guide data comes from Schedules Direct.
+      if (isKnownAtsc3HybridTuner())
+      {
+        if (Sage.DBG) System.out.println("HDHomeRunCaptureDevice: skipping legacy OTA data scan on ATSC 3.0 hybrid tuner " + captureDeviceName + " (native PSIP scan hangs on ATSC3; guide data comes from Schedules Direct)");
+        return;
+      }
       setFilterEnable0(pHandle, false);
       startEncoding(cdi, null, null);
       inDataScanMode = true;
@@ -771,6 +782,16 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
   }
   public boolean requestDataScan(CaptureDeviceInput cdi)
   {
+    // A confirmed ATSC 3.0 hybrid tuner must never be enrolled for the legacy
+    // OTA data scan: its native PSIP tune hangs on an ATSC3 multiplex and would
+    // wedge the global Seeker lock (frozen guide + client reconnect storm).
+    // ATSC3 lineups get their guide data from Schedules Direct, so the scan is
+    // redundant here. ATSC 1.0-only tuners are unaffected.
+    if (isKnownAtsc3HybridTuner())
+    {
+      if (Sage.DBG) System.out.println("HDHomeRunCaptureDevice: declining legacy OTA data scan request for ATSC 3.0 hybrid tuner " + captureDeviceName);
+      return false;
+    }
     return requestedDataScanCDIs.add(cdi);
   }
   public void cancelDataScanRequest(CaptureDeviceInput cdi)
@@ -831,36 +852,35 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
   private volatile HttpPullCaptureJob httpPullJob;
   private volatile Thread             httpPullThread;
 
+  /** Last UDP rediscovery attempt per device id, to throttle broadcasts. */
+  private static final java.util.concurrent.ConcurrentHashMap<String,Long> lineupDiscoverThrottle =
+      new java.util.concurrent.ConcurrentHashMap<String,Long>();
+
   /**
    * Resolve the HDHomeRun's HTTP host for /lineup.json.
    *
    * Precedence (user is NOT expected to configure anything here):
    *   1. Per-device-name property: hdhr/lineup_host_&lt;captureDeviceName&gt;
-   *   2. Per-device-id property:   hdhr/lineup_host_&lt;hexid&gt;  (auto-cached
-   *      after a successful UDP discovery — supports multi-antenna setups
-   *      where each FLEX 4K points at a different market).
-   *   3. Parse "@ip" from device name (legacy device naming).
-   *   4. UDP broadcast discovery on port 65001 (libhdhomerun protocol),
-   *      results written back to property #2 for next time.
-   *   5. Global hdhr/lineup_host (last-resort manual override; not advertised).
+   *      (absolute manual pin).
+   *   2. Parse "@ip" from device name (legacy device naming; explicit pin).
+   *   3. Per-device-id: live UDP discovery by device id is AUTHORITATIVE over
+   *      the auto-cached IP (hdhr/lineup_host_&lt;hexid&gt;). A DHCP lease change
+   *      silently moves the device; a stale cached IP makes /lineup.json time
+   *      out, which used to strand the station (the recurring 7.1 "No signal").
+   *      Discovery is throttled to a short TTL (hdhr/lineup_host_rediscover_sec,
+   *      default 60s) so we don't broadcast on every tune, and the last-known
+   *      cached IP is used as fallback when a probe finds nothing right now.
+   *   4. Global hdhr/lineup_host (last-resort manual override; not advertised).
    *
    * Returns null if no host can be determined (caller falls back to libhdhr).
    */
   private String resolveLineupHost()
   {
-    // 1. Per-device-name override
+    // 1. Per-device-name override (absolute manual pin)
     String override = Sage.get("hdhr/lineup_host_" + captureDeviceName, null);
     if (override != null && override.length() > 0) return override;
 
-    // 2. Per-device-id (hex) cached entry
-    String hexId = parseHexDeviceId(captureDeviceName);
-    if (hexId != null)
-    {
-      String byId = Sage.get("hdhr/lineup_host_" + hexId, null);
-      if (byId != null && byId.length() > 0) return byId;
-    }
-
-    // 3. Legacy "@ip" embedded in device name
+    // 2. Legacy "@ip" embedded in device name (explicit manual pin)
     if (captureDeviceName != null)
     {
       int at = captureDeviceName.indexOf('@');
@@ -868,21 +888,37 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
         return captureDeviceName.substring(at + 1);
     }
 
-    // 4. UDP discovery — automatic, no user action required
+    // 3. Per-device-id: discovery authoritative over stale auto-cache, throttled
+    String hexId = parseHexDeviceId(captureDeviceName);
     if (hexId != null)
     {
-      String ip = sage.hdhr.HDHomeRunDiscover.findIp(hexId);
-      if (ip != null && ip.length() > 0)
+      String cached = Sage.get("hdhr/lineup_host_" + hexId, null);
+      long ttlMs = Math.max(0L, Sage.getLong("hdhr/lineup_host_rediscover_sec", 60L) * 1000L);
+      Long last = lineupDiscoverThrottle.get(hexId);
+      boolean shouldProbe = cached == null || cached.length() == 0
+          || last == null || (Sage.time() - last.longValue()) >= ttlMs;
+      if (shouldProbe)
       {
-        // Cache for future tunes so we don't broadcast every recording start
-        Sage.put("hdhr/lineup_host_" + hexId, ip);
-        if (Sage.DBG) System.out.println("HDHomeRunCaptureDevice: auto-discovered "
-            + "lineup host " + ip + " for device " + hexId + " (cached)");
-        return ip;
+        lineupDiscoverThrottle.put(hexId, Sage.time());
+        String ip = sage.hdhr.HDHomeRunDiscover.findIp(hexId);
+        if (ip != null && ip.length() > 0)
+        {
+          if (!ip.equals(cached))
+          {
+            Sage.put("hdhr/lineup_host_" + hexId, ip);
+            if (Sage.DBG) System.out.println("HDHomeRunCaptureDevice: lineup host for device "
+                + hexId + " is " + ip + ((cached != null && cached.length() > 0)
+                    ? " (was " + cached + "; refreshed after rediscovery)"
+                    : " (auto-discovered, cached)"));
+          }
+          return ip;
+        }
+        // Probe found nothing right now; fall back to last-known cached IP below.
       }
+      if (cached != null && cached.length() > 0) return cached;
     }
 
-    // 5. Last-resort global override (undocumented; mainly for tests)
+    // 4. Last-resort global override (undocumented; mainly for tests)
     override = Sage.get("hdhr/lineup_host", null);
     if (override != null && override.length() > 0) return override;
 
@@ -1001,6 +1037,23 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
       // fail-fast in startEncoding throw cleanly.
       if (Sage.DBG) System.out.println("ATSC3: all variants DRM-locked for channel="
           + channel + " (policy=" + policy + ") -- recording will fail-fast");
+      return channel;
+    }
+
+    // ATSC1 is tuned PHYSICALLY through libhdhomerun: the legacy native
+    // setChannel0 runs strtol() on the leading integer of the tune string and
+    // treats it as the physical RF channel. An ATSC1 variant's tuningLocator is
+    // the HDHomeRun VIRTUAL GuideNumber (e.g. "3.1"), whose major (3) is NOT the
+    // RF channel (e.g. RF25) — returning it would mis-tune every station the
+    // variant attacher paired (strtol("3.1") -> RF3). The virtual locator is only
+    // meaningful for the ATSC3 HTTP-pull path (which consumes it below, routing
+    // around libhdhomerun). So for any non-ATSC3 pick, keep the caller's
+    // already-correct physical tune string unchanged.
+    if (!chosen.isAtsc3())
+    {
+      if (Sage.DBG) System.out.println("ATSC3: variant pick is ATSC1 for channel="
+          + channel + " — keeping physical tune string (virtual GuideNumber "
+          + chosen.getTuningLocator() + " is ATSC3/HTTP-pull only; strtol would pick the wrong RF)");
       return channel;
     }
 
@@ -1187,6 +1240,136 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
     return 0;
   }
 
+  // --- ATSC 3.0 per-tuner hardware capability (NG) --------------------------
+  // Some ATSC 3.0 HDHomeRun models have mixed tuners: only a subset can
+  // demodulate ATSC 3.0, the rest are ATSC 1.0-only. On the HDHomeRun FLEX 4K
+  // (ModelNumber "HDFX-4K") tuners 0/1 are hybrid ATSC3/ATSC1 while tuners 2/3
+  // are ATSC 1.0-only. The device-wide lineup (resolveLineupHost) lists the
+  // ATSC3 channels for the whole box, so it cannot distinguish the tuners and
+  // the scheduler could place an ATSC3 recording on a tuner that physically
+  // can't receive it. We gate on the model + this tuner's index instead.
+  private static final java.util.concurrent.ConcurrentHashMap<String,String> deviceModelCache =
+      new java.util.concurrent.ConcurrentHashMap<String,String>();
+
+  private static final java.util.regex.Pattern TUNER_INDEX_PATTERN =
+      java.util.regex.Pattern.compile("[Tt]uner\\s+(\\d+)");
+
+  /** Parse the tuner index from a device name like "HDHomeRun 10a141b7 Tuner 3". */
+  private static int parseTunerIndex(String devName)
+  {
+    if (devName == null) return -1;
+    java.util.regex.Matcher m = TUNER_INDEX_PATTERN.matcher(devName);
+    if (m.find())
+    {
+      try { return Integer.parseInt(m.group(1)); } catch (NumberFormatException e) {}
+    }
+    return -1;
+  }
+
+  /**
+   * discover.json {@code ModelNumber} for this device, cached in-memory keyed by
+   * the 8-hex device id (the model is fixed for the life of a physical box, so a
+   * single successful fetch is reused by every tuner on it). A failed fetch is
+   * NOT cached so it is retried later. Returns null when unknown.
+   */
+  private String resolveDeviceModel()
+  {
+    String hexId = parseHexDeviceId(captureDeviceName);
+    if (hexId == null) return null;
+    String cached = deviceModelCache.get(hexId);
+    if (cached != null) return cached.length() == 0 ? null : cached;
+    String host = resolveLineupHost();
+    if (host == null) return null;
+    String model = null;
+    try { model = sage.epg.ota.HdhrControl.fetchModelNumber(host); }
+    catch (Throwable t)
+    {
+      if (Sage.DBG) System.out.println("ATSC3 cap: model fetch failed for " + hexId + ": " + t);
+    }
+    if (model != null && model.length() > 0)
+    {
+      deviceModelCache.put(hexId, model);
+      return model;
+    }
+    return null; // don't cache a miss; retry next time
+  }
+
+  /**
+   * True if THIS tuner can physically demodulate ATSC 3.0. Determined from the
+   * device model + tuner index via the {@code hdhr/atsc3_capable_tuner_map}
+   * property (default {@code "HDFX-4K=0,1"}), whose value lists the ATSC3-capable
+   * tuner indices per model as {@code model=idx,idx;model=idx,idx}.
+   *
+   * <p>Fails OPEN (returns true) whenever the model is unknown, not present in
+   * the map, or the tuner index can't be parsed, so single-standard HDHomeRuns
+   * and any unmapped model keep their existing behavior and never regress.
+   */
+  private boolean isThisTunerAtsc3Capable()
+  {
+    String model = resolveDeviceModel();
+    if (model == null) return true; // unknown model -> no regression
+    String map = Sage.get("hdhr/atsc3_capable_tuner_map", "HDFX-4K=0,1");
+    String capList = null;
+    for (String entry : map.split(";"))
+    {
+      int eq = entry.indexOf('=');
+      if (eq <= 0) continue;
+      if (entry.substring(0, eq).trim().equalsIgnoreCase(model))
+      {
+        capList = entry.substring(eq + 1).trim();
+        break;
+      }
+    }
+    if (capList == null) return true; // model not in map -> treat all tuners as capable
+    int myIdx = parseTunerIndex(captureDeviceName);
+    if (myIdx < 0) return true; // can't identify the tuner -> don't block
+    for (String s : capList.split(","))
+    {
+      try { if (Integer.parseInt(s.trim()) == myIdx) return true; } catch (NumberFormatException e) {}
+    }
+    return false; // mapped model, index not in capable list -> ATSC 1.0-only tuner
+  }
+
+  /**
+   * Strict (fail-CLOSED) counterpart of {@link #isThisTunerAtsc3Capable()} used
+   * only to decide whether to SKIP the legacy OTA data scan. Returns true ONLY
+   * when the device model is positively known, is listed in
+   * {@code hdhr/atsc3_capable_tuner_map}, and THIS tuner's index is in that
+   * model's ATSC3-capable list.
+   *
+   * <p>Unknown or unmapped models return false, so long-working single-standard
+   * HDHomeRuns keep data-scanning exactly as before. Only a confirmed ATSC 3.0
+   * hybrid tuner is skipped -- the legacy data scan tunes those via the native
+   * {@code setupEncoding0} PSIP path, which hangs on an ATSC 3.0 multiplex while
+   * {@code Seeker.work()} holds the global Seeker lock, freezing the guide,
+   * playback start/stop and client cleanup for every connected client.
+   */
+  private boolean isKnownAtsc3HybridTuner()
+  {
+    String model = resolveDeviceModel();
+    if (model == null) return false; // unknown model -> scan as before
+    String map = Sage.get("hdhr/atsc3_capable_tuner_map", "HDFX-4K=0,1");
+    String capList = null;
+    for (String entry : map.split(";"))
+    {
+      int eq = entry.indexOf('=');
+      if (eq <= 0) continue;
+      if (entry.substring(0, eq).trim().equalsIgnoreCase(model))
+      {
+        capList = entry.substring(eq + 1).trim();
+        break;
+      }
+    }
+    if (capList == null) return false; // model not mapped -> not a known hybrid
+    int myIdx = parseTunerIndex(captureDeviceName);
+    if (myIdx < 0) return false; // can't identify the tuner -> scan as before
+    for (String s : capList.split(","))
+    {
+      try { if (Integer.parseInt(s.trim()) == myIdx) return true; } catch (NumberFormatException e) {}
+    }
+    return false; // known model, index not ATSC3-capable -> ATSC 1.0-only tuner, scan normally
+  }
+
   /**
    * Check if this device's HDHomeRun lineup includes the ATSC3 variant channel
    * for the given station. Used by the scheduler to prefer ATSC3-capable tuners
@@ -1195,6 +1378,14 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
   @Override
   public boolean canTuneAtsc3ForStation(int stationID)
   {
+    // Hardware gate first: an ATSC 1.0-only tuner (e.g. FLEX 4K tuner 2/3) can
+    // never tune ATSC3 even though the shared device lineup lists the channel.
+    if (!isThisTunerAtsc3Capable())
+    {
+      if (Sage.DBG) System.out.println("ATSC3: " + captureDeviceName
+          + " is ATSC 1.0-only (model-gated); cannot tune ATSC3 for stationID=" + stationID);
+      return false;
+    }
     java.util.List<ChannelVariant> vars = ChannelVariants.forStation(stationID);
     for (ChannelVariant v : vars)
     {

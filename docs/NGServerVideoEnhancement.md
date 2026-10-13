@@ -723,6 +723,43 @@ resolution automatically, with no extra client work.
 
 Worth knowing, because they explain why enhancement sometimes doesn't happen:
 
+**External-worker timing:** audio and video use the same source-relative seek
+origin, measured from the container's start time and applied explicitly to both
+source readers (not chosen independently from their selected streams).
+Before video crosses the timestamp-less raw-frame worker pipe, the server
+converts its presentation timestamps into a constant-rate frame grid at the exact
+encoder rate, preserving late starts and timestamp gaps. The audio sidecar retains
+packet offsets relative to that same origin; it is not independently re-zeroed or
+trimmed using the recording's opening A/V offset. The former
+`playback/gpu_enhance/scale/av_sync_audio_advance_ms`, `av_sync_auto_advance`,
+`av_sync_probe_ms`, `av_sync_max_advance_ms`, and `audio_sidecar_zero_origin`
+settings no longer control this path. No client protocol change is required.
+`playback/gpu_enhance/scale/source_origin_probe_ms` bounds the initial container
+probe (default 1200 ms); a failed probe is logged and the external pipeline is not
+staged rather than guessing an origin.
+A full output buffer is downstream backpressure (including paused playback),
+not evidence that the enhancement worker has stalled.
+
+Raw external-worker transfers are frame-aware: Sage derives the exact byte size
+from the negotiated pixel format and geometry, streams bounded reusable chunks,
+and flushes only at complete-frame boundaries. A truncated final raw frame is an
+error rather than input to the encoder. Bounded streaming preserves pipe overlap;
+buffering an entire 24.9 MB RGB24 frame before each write was benchmarked and
+rejected because it serialized the worker-to-encoder edge.
+The RGB worker path also gives the encode-stage color conversion four FFmpeg
+filter threads. Without that explicit setting, FFmpeg converts 2160p RGB24 to
+decoder-compatible 4:2:0 on one CPU thread and becomes the pipeline bottleneck;
+YUV/P010 transports do not receive this option because they need no RGB
+conversion.
+
+`ENHANCE_DELIVERY` diagnostics report the required frame cadence, rolling
+FFmpeg media-time rate, output-ring occupancy, and decode/worker edge ages.
+Windows containing a full output ring are excluded because they measure
+intentional downstream backpressure rather than enhancement capacity. The
+diagnostic is controlled by
+`playback/gpu_enhance/delivery_telemetry` (default `true`) and
+`playback/gpu_enhance/delivery_telemetry_interval_ms` (default `5000`).
+
 0. **It is off, and then it is still off.** Two switches guard this:
    `playback/gpu_enhance/enabled` (default false) and
    `playback/gpu_enhance/dry_run` (default **true**). Turning the feature on
