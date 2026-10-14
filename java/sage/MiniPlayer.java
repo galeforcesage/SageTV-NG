@@ -1050,6 +1050,8 @@ public class MiniPlayer implements DVDMediaPlayer
     guessTimestamp = 0;
     timestampOffset = 0;
     timestampOffsetWallTime = Sage.eventTime();
+    pushDisplayEstimate = 0;
+    pushDisplayEstimateUpdateTime = timestampOffsetWallTime;
     serverSideTranscoding = false;
     pushMode = false;
     currMute = false;
@@ -1152,6 +1154,12 @@ public class MiniPlayer implements DVDMediaPlayer
     if (detailedPushBufferStats && pushMode && rpSrc == null)
     {
       long currMediaTime = clientReportedMediaTime + timestampOffset;
+      if (serverSideTranscoding && isNgTrickplaySession())
+      {
+        lastMediaTime = lastMediaTimeBase = refreshPushDisplayEstimate(Sage.eventTime());
+        lastMediaTimeCacheTime = Sage.eventTime();
+        return lastMediaTime;
+      }
       if (!serverSideTranscoding && !byteBasedSeeking && mpegSrc != null)
       {
         if (!directPushPositionInWindow(currMediaTime, directPushSeekFloor, directPushSentThrough))
@@ -1172,8 +1180,6 @@ public class MiniPlayer implements DVDMediaPlayer
         lastMediaTime = lastMediaTimeBase = currMediaTime;
       if (!serverSideTranscoding && !byteBasedSeeking && mpegSrc != null)
         lastMediaTime = Math.min(lastMediaTime, directPushSentThrough + 2000L);
-      else if (serverSideTranscoding && isNgTrickplaySession())
-        lastMediaTime = boundPushDisplayEstimate(lastMediaTime, timestampOffset, directPushSentThrough);
       lastMediaTimeCacheTime = Sage.eventTime();
       return lastMediaTime;
     }
@@ -1202,18 +1208,17 @@ public class MiniPlayer implements DVDMediaPlayer
   //    nets forward when the read-ahead exceeds 10s.
   //
   // Server-authoritative display estimate that trusts neither the client clock nor the
-  // read-ahead: after a (re)prime the client displays from timestampOffset and advances
-  // at 1x, so displayPos ~= timestampOffset + (now - timestampOffsetWallTime) while
-  // playing, capped above by lastParserTimestamp (can't show data not yet transcoded/
-  // sent) and floored at timestampOffset. During a pause the parser stalls, so the
-  // lastParserTimestamp cap also freezes the estimate and prevents pause-time overshoot.
+  // read-ahead. It advances at 1x only while playing and is capped by media actually
+  // read from the transcoder's bounded output ring. That frontier is derived from
+  // ffmpeg's encoded-media time and byte position, so a sub-realtime encoder advances
+  // the clock at its real delivered pace instead of wall time.
   // Every other mode defers to getMediaTimeMillis(), so behavior is unchanged outside the
   // push-mode server-side-transcode path.
   public synchronized long getSeekBaseMediaTimeMillis()
   {
     // IMPORTANT: this display-model estimate is valid ONLY on the push server-side-
-    // transcode path, where timestampOffset / timestampOffsetWallTime / lastParserTimestamp
-    // are maintained by the transcode pump. On the direct-MPEG push path
+    // transcode path, where the transcode pump maintains the seek floor and delivered
+    // output frontier. On the direct-MPEG push path
     // (serverSideTranscoding == false -- e.g. an Android client decoding H.264/AC3 natively)
     // those fields stay 0, so the estimate would collapse to 0 and every relative skip would
     // be computed from the START of the file (FF from 30s lands back at 10s, REW always -> 0,
@@ -1222,6 +1227,8 @@ public class MiniPlayer implements DVDMediaPlayer
     // position calc). Hence the serverSideTranscoding guard below.
     if (serverSideTranscoding && detailedPushBufferStats && pushMode && rpSrc == null)
     {
+      if (isNgTrickplaySession())
+        return refreshPushDisplayEstimate(Sage.eventTime());
       long base = timestampOffset;
       if (currState == PLAY_STATE && timestampOffsetWallTime > 0)
       {
@@ -1229,8 +1236,6 @@ public class MiniPlayer implements DVDMediaPlayer
         if (adv > 0)
           base += adv;
       }
-      if (isNgTrickplaySession())
-        return boundPushDisplayEstimate(base, timestampOffset, directPushSentThrough);
       if (lastParserTimestamp > timestampOffset && base > lastParserTimestamp)
         base = lastParserTimestamp;
       if (base < timestampOffset)
@@ -1243,6 +1248,31 @@ public class MiniPlayer implements DVDMediaPlayer
   static long boundPushDisplayEstimate(long estimate, long seekFloor, long sentThrough)
   {
     return Math.max(seekFloor, Math.min(estimate, Math.max(seekFloor, sentThrough)));
+  }
+
+  static long advancePushDisplayEstimate(long estimate, long elapsed,
+      boolean playing, long seekFloor, long sentThrough)
+  {
+    long candidate = Math.max(seekFloor, estimate);
+    if (playing && elapsed > 0)
+      candidate += elapsed;
+    return boundPushDisplayEstimate(candidate, seekFloor, sentThrough);
+  }
+
+  private synchronized long refreshPushDisplayEstimate(long now)
+  {
+    long elapsed = pushDisplayEstimateUpdateTime > 0
+        ? Math.max(0L, now - pushDisplayEstimateUpdateTime) : 0L;
+    pushDisplayEstimate = advancePushDisplayEstimate(pushDisplayEstimate, elapsed,
+        currState == PLAY_STATE, timestampOffset, directPushSentThrough);
+    pushDisplayEstimateUpdateTime = now;
+    return pushDisplayEstimate;
+  }
+
+  private synchronized void resetPushDisplayEstimate(long position)
+  {
+    pushDisplayEstimate = position;
+    pushDisplayEstimateUpdateTime = Sage.eventTime();
   }
 
   // Increment 1b -- seek-epoch trust guard. Returns true when the client's reported
@@ -5300,6 +5330,7 @@ public class MiniPlayer implements DVDMediaPlayer
                 {
                   timestampOffset = seekTimeMillis;
                   timestampOffsetWallTime = Sage.eventTime();
+                  resetPushDisplayEstimate(seekTimeMillis);
                   seekEpoch++;
                   lastMediaTime = 0;
                   clientReportedMediaTime = 0;
@@ -6088,6 +6119,7 @@ public class MiniPlayer implements DVDMediaPlayer
                 // model (timestampOffset + elapsed) reports the new position for the next
                 // relative skip, instead of the pre-jump position.
                 timestampOffsetWallTime = Sage.eventTime() - (seekTimeMillis - timestampOffset);
+                resetPushDisplayEstimate(seekTimeMillis);
                 seekEpoch++;
               }
               else if (rpSrc != null)
@@ -6133,6 +6165,7 @@ public class MiniPlayer implements DVDMediaPlayer
                 {
                   timestampOffset = seekTimeMillis;
                   timestampOffsetWallTime = Sage.eventTime();
+                  resetPushDisplayEstimate(seekTimeMillis);
                   seekEpoch++;
                   lastMediaTime = 0;
                   clientReportedMediaTime = 0;
@@ -6925,6 +6958,8 @@ public class MiniPlayer implements DVDMediaPlayer
   private long directPushSeekFloor;
   private volatile long directPushSentThrough = -1;
   private long lastRejectedDirectPushPosition = Long.MIN_VALUE;
+  private long pushDisplayEstimate;
+  private long pushDisplayEstimateUpdateTime;
 
   protected void seekPull0(long seekTimeMillis)
   {
@@ -7580,6 +7615,8 @@ public class MiniPlayer implements DVDMediaPlayer
   protected boolean pausePush0()
   {
     if (Sage.DBG) System.out.println("pausePush0()");
+    if (serverSideTranscoding && isNgTrickplaySession())
+      refreshPushDisplayEstimate(Sage.eventTime());
     try
     {
       sockBuf.clear();
@@ -7602,6 +7639,8 @@ public class MiniPlayer implements DVDMediaPlayer
   protected boolean playPush0()
   {
     if (Sage.DBG) System.out.println("playPush0()");
+    if (serverSideTranscoding && isNgTrickplaySession())
+      refreshPushDisplayEstimate(Sage.eventTime());
     try
     {
       sockBuf.clear();
@@ -7802,6 +7841,16 @@ public class MiniPlayer implements DVDMediaPlayer
         // Read after transfer: NIO transfer parses the packet while sending it.
         // PS packets may carry PTS without DTS, and the last packet may be audio.
         directPushSentThrough = Math.max(directPushSentThrough, mpegSrc.getLastParsedTimeMillis());
+        if (serverSideTranscoding && mpegSrc.getTranscoder() instanceof FFMPEGTranscoder)
+        {
+          long deliveredTime =
+              ((FFMPEGTranscoder) mpegSrc.getTranscoder()).getDeliveredTranscodeStreamTime();
+          if (deliveredTime >= 0)
+            directPushSentThrough = Math.max(directPushSentThrough,
+                timestampOffset + deliveredTime);
+        }
+        if (serverSideTranscoding && isNgTrickplaySession())
+          refreshPushDisplayEstimate(Sage.eventTime());
       }
       long t2 = Sage.eventTime();
       pushedBytes += size;

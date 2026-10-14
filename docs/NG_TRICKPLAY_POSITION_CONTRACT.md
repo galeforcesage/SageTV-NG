@@ -54,16 +54,21 @@ by `media_server/pull_xcode_active_readrate_enabled`,
 `media_server/pull_xcode_active_initial_burst_seconds`, and
 `media_server/pull_xcode_active_catchup_rate`.
 
-For NG enhanced push, the inferred display clock is bounded by parsed PTS from
-successfully transferred payloads, not the DTS-only bitrate counter. Before any
-payload timestamp is available it stays at the seek target. This prevents a
-stalled pipeline from inventing playback progress; it does not prove which frame
-the client has rendered. Enhancement watchdogs are cancelled and joined before
-intentional seek/stop teardown, so a superseded worker cannot trigger crash
-cooldown or act on the next pipeline.
-NG reported-position clocks do not extrapolate a repeated client timestamp from
-wall time. A frozen renderer report stays frozen; legacy interpolation remains
-unchanged.
+For NG enhanced push, the server display clock advances only while PLAYING and is
+bounded by transcoded media actually read from the bounded output ring. The
+frontier scales FFmpeg's encoded-media time by the consumed/produced byte
+positions, so a sub-realtime encoder advances at its delivered-media pace rather
+than wall time. Before a delivered frontier exists, the clock stays at the seek
+target; while paused, it stays at its last estimate. This prevents a stalled
+pipeline from inventing playback progress and prevents a frozen client report
+from pinning the timeline indefinitely. It does not prove which frame the client
+has rendered. Enhancement watchdogs are cancelled and joined before intentional
+seek/stop teardown, so a superseded worker cannot trigger crash cooldown or act
+on the next pipeline.
+
+NG direct-push reported-position clocks do not extrapolate a repeated client
+timestamp from wall time. A frozen renderer report stays frozen; legacy
+interpolation remains unchanged.
 
 Completed CMAF/HLS recordings expose their full playlist from media sequence zero,
 even when LL-HLS is enabled. Sliding windows, delta skips, blocking reloads and

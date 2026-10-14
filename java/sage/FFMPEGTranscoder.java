@@ -641,6 +641,23 @@ public class FFMPEGTranscoder implements TranscodeEngine
     return lastXcodeStreamTime;
   }
 
+  long getDeliveredTranscodeStreamTime()
+  {
+    return estimateDeliveredTranscodeStreamTime(
+        xcodeBufferVirtualReadPos, lastXcodeStreamPosition, lastXcodeStreamTime);
+  }
+
+  static long estimateDeliveredTranscodeStreamTime(long readPosition,
+      long producedPosition, long producedTime)
+  {
+    if (readPosition <= 0 || producedPosition <= 0 || producedTime <= 0)
+      return -1;
+    if (readPosition >= producedPosition)
+      return producedTime;
+    return Math.max(0L, Math.round(
+        producedTime * (readPosition / (double) producedPosition)));
+  }
+
   public void seekToPosition(long offset) throws java.io.IOException
   {
     // A live ffmpeg child is the ground truth for "are we transcoding" here --
@@ -3895,6 +3912,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
       stopTranscode();
 
     xcodeBufferBaseNum = 0;
+    lastXcodeStreamTime = 0;
+    lastXcodeStreamPosition = 0;
     lastExitCode = -1;
     clearPreparedEmbeddedCcSubtitleFile();
 
@@ -8232,8 +8251,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
   protected long xcodeBufferVirtualReadPos;
 
-  protected long lastXcodeStreamTime;
-  protected long lastXcodeStreamPosition;
+  protected volatile long lastXcodeStreamTime;
+  protected volatile long lastXcodeStreamPosition;
   private volatile sage.ng.EnhancedDeliveryMetrics enhanceDeliveryMetrics =
       new sage.ng.EnhancedDeliveryMetrics(5000L);
   private volatile double enhanceRequiredFrameRate;

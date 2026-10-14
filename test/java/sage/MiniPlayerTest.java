@@ -61,17 +61,46 @@ public class MiniPlayerTest
     setPlayerField(player, "detailedPushBufferStats", true);
     setPlayerField(player, "timestampOffset", 562253L);
     setPlayerField(player, "timestampOffsetWallTime", Sage.eventTime() - 104723L);
+    setPlayerField(player, "pushDisplayEstimate", 562253L);
+    setPlayerField(player, "pushDisplayEstimateUpdateTime", Sage.eventTime() - 104723L);
     setPlayerField(player, "lastParserTimestamp", 561753L);
     setPlayerField(player, "directPushSentThrough", -1L);
     assertEquals(player.getSeekBaseMediaTimeMillis(), 562253L,
         "No sent timestamp must not allow the wall clock to invent 104 seconds of playback");
     setPlayerField(player, "directPushSentThrough", 564253L);
+    setPlayerField(player, "pushDisplayEstimateUpdateTime", Sage.eventTime() - 2000L);
     assertEquals(player.getSeekBaseMediaTimeMillis(), 564253L,
         "Sent PTS bounds the clock even when DTS statistics stay below the seek floor");
     setPlayerField(player, "directPushSentThrough", 700000L);
+    setPlayerField(player, "pushDisplayEstimateUpdateTime", Sage.eventTime() - 104723L);
     assertTrue(player.getSeekBaseMediaTimeMillis() > 660000L);
     assertEquals(MiniPlayer.boundPushDisplayEstimate(500L, 1000L, 3000L), 1000L);
     assertEquals(MiniPlayer.boundPushDisplayEstimate(2000L, 1000L, 3000L), 2000L);
+    assertEquals(FFMPEGTranscoder.estimateDeliveredTranscodeStreamTime(
+        500000L, 1000000L, 552000L), 276000L);
+    assertEquals(FFMPEGTranscoder.estimateDeliveredTranscodeStreamTime(
+        1100000L, 1000000L, 552000L), 552000L);
+  }
+
+  @Test
+  public void testEnhancedPushClockFreezesWhilePaused() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    MiniPlayer player = new MiniPlayer()
+    {
+      @Override
+      protected boolean isNgTrickplaySession() { return true; }
+    };
+    setPlayerField(player, "currState", MediaPlayer.PAUSE_STATE);
+    setPlayerField(player, "pushMode", true);
+    setPlayerField(player, "serverSideTranscoding", true);
+    setPlayerField(player, "detailedPushBufferStats", true);
+    setPlayerField(player, "timestampOffset", 562253L);
+    setPlayerField(player, "pushDisplayEstimate", 620000L);
+    setPlayerField(player, "pushDisplayEstimateUpdateTime", Sage.eventTime() - 60000L);
+    setPlayerField(player, "directPushSentThrough", 700000L);
+    assertEquals(player.getMediaTimeMillis(), 620000L);
+    assertEquals(player.getSeekBaseMediaTimeMillis(), 620000L);
   }
 
   @Test
