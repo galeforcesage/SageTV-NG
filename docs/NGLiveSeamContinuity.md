@@ -44,10 +44,13 @@ not signal it and cannot override it.
 ### Push (native MiniPlayer, legacy + Android-on-LAN) — no client change
 
 Fully server-side. On a genuine same-tuner/same-station/contiguous seam the
-server now rebuilds the exact pipeline it resolved for the prior airing
-(transcode mode, enhancement tier, sidecar channel cap, resolved AC-4 audio
-codec, or the TS→PS remux path) and fast-switches into the successor airing
-instead of tearing the player down. **Legacy and native clients need no change.**
+server now captures the exact pipeline it resolved for the prior airing in one
+immutable `PushTranscodePlan` (transcode mode, enhancement tier, sidecar channel
+cap, resolved AC-4 audio codec, or the TS→PS remux path). Before closing the old
+reader, `fastLoad` revalidates that the plan belongs to the current file and that
+the successor is still a permitted same-tuner/same-station/byte-contiguous live
+seam; only then does it reconstruct the pipeline. **Legacy and native clients
+need no change.**
 
 The server still independently requires the same-tuner/same-station/contiguous
 seam predicate (`areMediaFileFormatsSwitchable`), so this can only ever engage on

@@ -269,6 +269,20 @@ public class MiniPlayerTest
     assertEquals(MiniPlayer.pausedPushSeekTime(90000L, first, false), 2055L);
   }
 
+  @Test
+  public void testPushTranscodePlanRequiresCurrentCapturedSourceAndSafeLiveSeam()
+  {
+    assertTrue(MiniPlayer.PushTranscodePlan.seamInputsAreSafe(12, 12, true, true));
+    assertFalse(MiniPlayer.PushTranscodePlan.seamInputsAreSafe(0, 0, true, true),
+        "A plan without a captured source must never authorize teardown");
+    assertFalse(MiniPlayer.PushTranscodePlan.seamInputsAreSafe(12, 13, true, true),
+        "A stale plan from another tune must be rejected");
+    assertFalse(MiniPlayer.PushTranscodePlan.seamInputsAreSafe(12, 12, false, true),
+        "Scheduled-recording playback must not cross the EPG boundary");
+    assertFalse(MiniPlayer.PushTranscodePlan.seamInputsAreSafe(12, 12, true, false),
+        "A non-contiguous or different-tuner successor must fail closed");
+  }
+
   @AfterMethod
   public void resetProperty() throws Throwable
   {

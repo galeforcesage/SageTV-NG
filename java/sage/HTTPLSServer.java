@@ -440,6 +440,8 @@ public class HTTPLSServer implements Runnable
               sb.append("#EXT-X-SKIP:SKIPPED-SEGMENTS=" + skippedSegments + "\r\n");
             if (Sage.DBG) System.out.println("CMAF Request for fMP4 playlist at " + bwkbps + "kbps for mf=" + mfId + " seg=" + segmentNum + " clientMac=" + clientMac + " totalParts=" + numParts + " windowStart=" + windowStart + " firstListed=" + firstListedPart + (wantSkip ? " (delta skip=" + skippedSegments + ")" : ""));
             appendFmp4Parts(sb, base, mf.getDuration(segmentNum), firstListedPart, fmp4PartDur, lowLatencyPlaylist);
+            String liveEdgeBase = base;
+            int liveEdgeNumParts = numParts;
 
             // EPG-boundary seam (Path B, capability-gated). Legacy clients never
             // send x-cmaf-seam, so `ended` stays true here and they get exactly
@@ -464,8 +466,8 @@ public class HTTPLSServer implements Runnable
             }
             catch (Throwable t) {}
             boolean seamCapable = VideoFrame.liveSeamPermitted(
-                "1".equals(paramMap.get("x-cmaf-seam"))
-                    || Sage.getBoolean("httpls/fmp4_seam_default", false),
+                seamCapabilityEnabled((String)paramMap.get("x-cmaf-seam"),
+                    Sage.getBoolean("httpls/fmp4_seam_default", false)),
                 liveSeam);
             if (ended && seamCapable)
             {
@@ -478,13 +480,16 @@ public class HTTPLSServer implements Runnable
                 if (succ == null) break;
                 String succBase = "http://" + myHost + "/iosstream_" + clientMac + "_"
                     + succ.getID() + "_0_" + bwkbps;
-                sb.append("#EXT-X-DISCONTINUITY\r\n");
-                sb.append("#EXT-X-MAP:URI=\"" + succBase + "_init.mp4\"\r\n");
-                appendFmp4Parts(sb, succBase, succ.getDuration(0), 0, fmp4PartDur,
-                    lowLatencyPlaylistEnabled(llhlsEnabled, succ.isRecording(0)));
+                boolean successorLowLatency =
+                    lowLatencyPlaylistEnabled(llhlsEnabled, succ.isRecording(0));
+                appendFmp4SeamTransition(sb, succBase, succ.getDuration(0),
+                    fmp4PartDur, successorLowLatency);
                 if (Sage.DBG) System.out.println("CMAF seam: bridging mf=" + chainFile.getID()
                     + " -> successor mf=" + succ.getID() + " (link " + (links + 1) + ")");
                 chainFile = succ;
+                liveEdgeBase = succBase;
+                liveEdgeNumParts = (int)Math.ceil(
+                    (double)(succ.getDuration(0) / 1000) / fmp4PartDur);
                 links++;
               }
               ended = !chainFile.isRecording();
@@ -495,28 +500,28 @@ public class HTTPLSServer implements Runnable
               if (ended)
               {
                 long graceMs = Sage.getInt("httpls/fmp4_seam_grace_ms", 8000);
-                Long start = fmp4SeamGrace.putIfAbsent(sessionID, Long.valueOf(Sage.time()));
-                long began = (start == null) ? Sage.time() : start.longValue();
-                if (Sage.time() - began < graceMs)
+                long now = Sage.time();
+                if (fmp4SeamGrace.holdOpen(sessionID, now, graceMs))
                 {
                   ended = false; // hold the playlist open, keep the client polling
                   if (Sage.DBG) System.out.println("CMAF seam: no successor yet for mf="
-                      + chainFile.getID() + "; holding playlist open (grace "
-                      + (Sage.time() - began) + "/" + graceMs + "ms)");
+                      + chainFile.getID() + "; holding playlist open within "
+                      + graceMs + "ms grace window");
                 }
               }
               else
-                fmp4SeamGrace.remove(sessionID); // live successor found; reset grace
+                fmp4SeamGrace.clear(sessionID); // live successor found; reset grace
             }
             // LL-HLS: at the live edge, hint the next not-yet-complete part so a
             // low-latency client issues a blocking GET for it ahead of time (the
             // server produces it on demand). Live only (never past #EXT-X-ENDLIST).
             if (llhlsEnabled && !ended)
-              sb.append("#EXT-X-PRELOAD-HINT:TYPE=PART,URI=\"" + base + "_" + numParts + ".m4s\"\r\n");
+              sb.append("#EXT-X-PRELOAD-HINT:TYPE=PART,URI=\"" + liveEdgeBase + "_"
+                  + liveEdgeNumParts + ".m4s\"\r\n");
             if (ended)
             {
               sb.append("#EXT-X-ENDLIST\r\n");
-              fmp4SeamGrace.remove(sessionID);
+              fmp4SeamGrace.clear(sessionID);
             }
 
             // Warm up the transcoder + init + first part before returning the
@@ -3731,8 +3736,7 @@ public class HTTPLSServer implements Runnable
   // successor materializes -- once an HLS client sees ENDLIST it stops forever.
   // Records the wall time the drought was first observed; cleared when a live
   // successor is found or the session ends.
-  private static final java.util.concurrent.ConcurrentHashMap<String, Long> fmp4SeamGrace =
-      new java.util.concurrent.ConcurrentHashMap<String, Long>();
+  private static final Fmp4SeamGrace fmp4SeamGrace = new Fmp4SeamGrace();
 
   private static class XCodeInfo
   {
@@ -3760,6 +3764,46 @@ public class HTTPLSServer implements Runnable
     if (!lowLatencyPlaylist || windowSec <= 0) return 0;
     int windowParts = (int)Math.ceil((double)windowSec / partDuration);
     return Math.max(0, numParts - windowParts);
+  }
+
+  static boolean seamCapabilityEnabled(String headerValue, boolean serverDefault)
+  {
+    return serverDefault || "1".equals(headerValue);
+  }
+
+  static final class Fmp4SeamGrace
+  {
+    private final ConcurrentHashMap<String, Long> starts =
+        new ConcurrentHashMap<String, Long>();
+
+    boolean holdOpen(String sessionId, long now, long graceMs)
+    {
+      if (sessionId == null || graceMs <= 0)
+      {
+        clear(sessionId);
+        return false;
+      }
+      Long existing = starts.putIfAbsent(sessionId, Long.valueOf(now));
+      long began = existing == null ? now : existing.longValue();
+      if (now - began < graceMs)
+        return true;
+      starts.remove(sessionId, Long.valueOf(began));
+      return false;
+    }
+
+    void clear(String sessionId)
+    {
+      if (sessionId != null)
+        starts.remove(sessionId);
+    }
+  }
+
+  static void appendFmp4SeamTransition(StringBuffer sb, String base, long durationMs,
+      int fmp4PartDur, boolean lowLatencyPlaylist)
+  {
+    sb.append("#EXT-X-DISCONTINUITY\r\n");
+    sb.append("#EXT-X-MAP:URI=\"" + base + "_init.mp4\"\r\n");
+    appendFmp4Parts(sb, base, durationMs, 0, fmp4PartDur, lowLatencyPlaylist);
   }
 
   // Shared by the requested file and every EPG-boundary seam successor.
@@ -3858,6 +3902,7 @@ public class HTTPLSServer implements Runnable
             {
               if (Sage.DBG) System.out.println("HTTPLSCleaner found a transcoder that is not in use for " + info.mf + " segment=" + info.segment + " killing it!");
               info.transcoder.stopTranscode();
+              fmp4SeamGrace.clear(info.sessionID);
               walker.remove();
             }
           }
@@ -3869,6 +3914,7 @@ public class HTTPLSServer implements Runnable
               if (Sage.DBG) System.out.println("HTTPLSCleaner found an expired transcoder that has not been active for " + diff + " msec for " + info.mf + " and segment=" + info.segment +
                   " killing it now!");
               info.transcoder.stopTranscode();
+              fmp4SeamGrace.clear(info.sessionID);
               walker.remove();
             }
           }
