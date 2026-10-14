@@ -6263,26 +6263,6 @@ public class MiniPlayer implements DVDMediaPlayer
     }
     else
     {
-      if (!isNgTrickplaySession())
-      {
-        MediaFile currMF = VideoFrame.getMediaFileForPlayer(MiniPlayer.this);
-        VideoFrame vf = VideoFrame.getVideoFrameForPlayer(MiniPlayer.this);
-        long maxTime = (vf != null && currMF != null) ? currMF.getDuration(vf.getCurrSegment()) : Long.MAX_VALUE;
-        try
-        {
-          if (newRate > 1.0f)
-            seek(Math.min(maxTime, Math.max(0, getMediaTimeMillis() +
-                (uiMgr == null ? 15000L : uiMgr.getLong("videoframe/ff_time", 10000L)))));
-          else if (newRate < 1.0f)
-            seek(Math.min(maxTime, Math.max(0, getMediaTimeMillis() +
-                (uiMgr == null ? -15000L : uiMgr.getLong("videoframe/rew_time", -10000L)))));
-        }
-        catch (PlaybackException e)
-        {
-          System.out.println("ERROR doing seek instead of rate change of: " + e);
-        }
-        return 1.0f;
-      }
       if (newRate != 1.0f && Sage.DBG)
         System.out.println("MiniPlayer: playback rate " + newRate +
             " unsupported on this delivery path; retaining 1.0 without seeking");

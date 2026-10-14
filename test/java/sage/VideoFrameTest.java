@@ -45,21 +45,27 @@ public class VideoFrameTest
   @Test
   public void testRepeatedSkipsUsePendingTargetWhileSettling()
   {
-    long position = 600000L;
-    long pending = position;
-    for (long delta : new long[] {30000L, 30000L, -30000L, 150000L, -150000L})
-    {
-      pending += delta;
-      assertEquals(VideoFrame.shouldUsePendingSkipTarget(position, pending,
-          500L, 8000L, 2500L, 0L, 1920000L), true);
-    }
-    assertEquals(pending, 630000L);
-    assertEquals(VideoFrame.shouldUsePendingSkipTarget(pending, pending,
-        500L, 8000L, 2500L, 0L, 1920000L), false);
-    assertEquals(VideoFrame.shouldUsePendingSkipTarget(position, pending,
-        8001L, 8000L, 2500L, 0L, 1920000L), false);
-    assertEquals(VideoFrame.shouldUsePendingSkipTarget(position, 2000000L,
-        500L, 8000L, 2500L, 0L, 1920000L), false);
+    VideoFrame.PendingSeekTarget pending = new VideoFrame.PendingSeekTarget();
+    long reported = 600000L;
+    long now = 1000L;
+
+    long ff1 = reported + 30000L;
+    pending.record(ff1, now, 0L, 1920000L);
+    long ff2 = pending.selectBase(reported, now + 100L, 8000L, 2500L, 0L, 1920000L) + 30000L;
+    pending.record(ff2, now + 100L, 0L, 1920000L);
+    long rew1 = pending.selectBase(reported, now + 200L, 8000L, 2500L, 0L, 1920000L) - 30000L;
+    pending.record(rew1, now + 200L, 0L, 1920000L);
+    long rew2 = pending.selectBase(reported, now + 300L, 8000L, 2500L, 0L, 1920000L) - 30000L;
+
+    assertEquals(ff1, 630000L, "FF starts from the rendered position");
+    assertEquals(ff2, 660000L, "FF #2 starts from FF #1's intended target");
+    assertEquals(rew1, 630000L, "direction change starts from FF #2's intended target");
+    assertEquals(rew2, 600000L, "REW #2 starts from REW #1's intended target");
+
+    pending.record(750000L, now + 400L, 0L, 1920000L);
+    pending.clear();
+    assertEquals(pending.selectBase(610000L, now + 500L, 8000L, 2500L, 0L, 1920000L),
+        610000L, "a rate-mode change clears the old relative-seek target");
   }
 
   @Test

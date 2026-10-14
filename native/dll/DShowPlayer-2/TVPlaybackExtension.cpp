@@ -123,7 +123,7 @@ JNIEXPORT void JNICALL Java_sage_DShowTVPlayer_switchLoadTVFile0
 	{
 		jlong currPos = Java_sage_DShowMediaPlayer_getMediaTimeMillis0(env, jo, dataPtr);
 		jlong currDur = Java_sage_DShowMediaPlayer_getDurationMillis0(env, jo, dataPtr);
-		if (currPos/10000L < currDur)
+		if (currPos < currDur)
 		{
 			IMediaEvent* pME = NULL;
 			long evCode = 0;

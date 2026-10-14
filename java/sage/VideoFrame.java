@@ -2440,6 +2440,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     {
       if (!currFile.isLiveStream() && player != null)
       {
+        pendingSkipTarget.clear();
         float newRate = (daJob.id == RATE_ADJUST) ? (player.getPlaybackRate() * daJob.rate) : daJob.rate;
 
         if (player.getState() == MediaPlayer.PLAY_STATE || (player.getState() == MediaPlayer.EOS_STATE && newRate < 1.0f))
@@ -2463,6 +2464,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     {
       if (!currFile.isLiveStream() && player != null)
       {
+        pendingSkipTarget.clear();
         // For variable rate playback, we'll do 4, 16, 64 & 256 times for the four options
         float currRate = player.getPlaybackRate();
         float newRate;
@@ -2580,6 +2582,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     }
     else if (daJob.id == WATCH_MF)
     {
+      pendingSkipTarget.clear();
       MediaFile previousFile = currFile;
       if (currFile != null && !currFile.isAnyLiveStream())
       {
@@ -4012,9 +4015,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   // from the INTENDED position instead of the still-climbing reported position. See
   // getSkipBaseMillis() for the full rationale. With the
   // flag off these fields are never written and behavior is identical to legacy.
-  private long pendingSkipTargetMillis = 0;   // file-epoch ms of the last issued skip target
-  private long pendingSkipTargetSetTime = 0;  // Sage.eventTime() when it was issued
-  private boolean pendingSkipTargetValid = false;
+  private final PendingSeekTarget pendingSkipTarget = new PendingSeekTarget();
 
   // Base position (file-epoch ms) for a relative skip (FF/REW). Default behavior returns
   // getSeekBaseMediaTimeMillis() unchanged. When videoframe/seek_target_coalesce is ON and a
@@ -4031,15 +4032,16 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   {
     long reported = getSeekBaseMediaTimeMillis();
     if (!trickplayPolicyEnabled("seek_target_coalesce"))
+    {
+      pendingSkipTarget.clear();
       return reported;
+    }
     try
     {
-      if (!pendingSkipTargetValid)
-        return reported;
       MediaFile theFile = currFile;
       if (theFile == null || theFile.isLiveStream())
       {
-        pendingSkipTargetValid = false;
+        pendingSkipTarget.clear();
         return reported;
       }
       long now = Sage.eventTime();
@@ -4050,21 +4052,16 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       // position is trustworthy again.
       long floor = theFile.getStart(segment);
       long edge = theFile.getEnd(segment);
-      if (!shouldUsePendingSkipTarget(reported, pendingSkipTargetMillis,
-          now - pendingSkipTargetSetTime, window, tol, floor, edge))
-      {
-        pendingSkipTargetValid = false;
-        return reported;
-      }
-      if (Sage.DBG) System.out.println("NG-TRICKDIAG coalesce base reported=" + reported +
-          " -> pendingTarget=" + pendingSkipTargetMillis + " ageMs=" + (now - pendingSkipTargetSetTime) +
-          " window=" + window + " tol=" + tol);
-      return pendingSkipTargetMillis;
+      long base = pendingSkipTarget.selectBase(reported, now, window, tol, floor, edge);
+      if (Sage.DBG && base != reported)
+        System.out.println("NG-TRICKDIAG coalesce base reported=" + reported +
+            " -> pendingTarget=" + base + " window=" + window + " tol=" + tol);
+      return base;
     }
     catch (Throwable t)
     {
       if (Sage.DBG) System.out.println("NG-TRICKDIAG coalesce base skipped (exception): " + t);
-      pendingSkipTargetValid = false;
+      pendingSkipTarget.clear();
       return reported;
     }
   }
@@ -4077,10 +4074,8 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     if (!trickplayPolicyEnabled("seek_target_coalesce"))
       return;
     if (currFile == null || currFile.isLiveStream()) return;
-    pendingSkipTargetMillis = clampPendingSkipTarget(fileEpochTarget,
+    pendingSkipTarget.record(fileEpochTarget, Sage.eventTime(),
         currFile.getStart(segment), currFile.getEnd(segment));
-    pendingSkipTargetSetTime = Sage.eventTime();
-    pendingSkipTargetValid = true;
   }
 
   static long clampPendingSkipTarget(long target, long start, long end)
@@ -4102,6 +4097,37 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     return age <= window &&
         !(end > start && (target < start - tolerance || target > end + tolerance)) &&
         Math.abs(reported - target) > tolerance;
+  }
+
+  static final class PendingSeekTarget
+  {
+    private long target;
+    private long setTime;
+    private boolean valid;
+
+    synchronized long selectBase(long reported, long now, long window, long tolerance,
+        long start, long end)
+    {
+      if (!valid || !shouldUsePendingSkipTarget(
+          reported, target, now - setTime, window, tolerance, start, end))
+      {
+        valid = false;
+        return reported;
+      }
+      return target;
+    }
+
+    synchronized void record(long target, long now, long start, long end)
+    {
+      this.target = clampPendingSkipTarget(target, start, end);
+      setTime = now;
+      valid = true;
+    }
+
+    synchronized void clear()
+    {
+      valid = false;
+    }
   }
 
   // File-timeline playback position to use as the BASE for a relative skip
@@ -4242,6 +4268,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
 
   private void closeMediaFile(boolean killFile, boolean logThisWatch, boolean fixNativeResolution)
   {
+    pendingSkipTarget.clear();
     if (player == null)
     {
       if (currFile != null)

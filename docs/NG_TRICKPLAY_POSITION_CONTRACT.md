@@ -119,16 +119,16 @@ negotiated by the same mechanism as `STREAMINFO` / `DETAILED_BUFFER_STATS` /
 | Capability | Unlocks | Requires |
 |---|---|---|
 | `TRICKPLAY_POSITION_V1` | Correct relative-skip base; eligibility for the fast path | Section 2, 3 |
-| `SEEK_EPOCH_V1` | Structural elimination of stale-position bugs; exact fast-path gating | Section 4 |
+| `SEEK_EPOCH_V1` | Reserved for a future versioned wire extension; do not advertise yet | Section 4 |
 | `DVR_WINDOW_V1` | Accurate scrubber/live-edge UI; out-of-range clamping | Section 5 |
 
 `TRICKPLAY_POSITION_V1` is the single most important one — it is the root-cause fix.
-`SEEK_EPOCH_V1` is strongly recommended alongside it. `DVR_WINDOW_V1` is UI polish plus a
-safety clamp and can follow later.
+`DVR_WINDOW_V1` is UI polish plus a safety clamp and can follow later.
 
-The server checks each capability independently. Advertising `TRICKPLAY_POSITION_V1`
-without `SEEK_EPOCH_V1` is valid (the server uses its inferred epoch guard); advertising
-both is the intended target and is what makes the fast path safe.
+The server checks each implemented capability independently. Clients must not advertise
+`SEEK_EPOCH_V1` until a versioned carrier has been specified and implemented on both ends.
+Until then the server uses the known seek target, its delivered-media window, and pending
+relative-target coalescing; those protections do not claim to identify a report's epoch.
 
 ---
 
@@ -222,14 +222,18 @@ it describes, so a report sampled *before* a reposition can never be applied *af
 which is precisely the "backward skip goes forward" / "session poisoned, everything flushes
 to 0:00" failure class.
 
-### 4.1 Server → Client
-On each reposition the server communicates the new current epoch id. (Carried additively
-alongside the existing `MEDIACMD_SEEK` (29) / `MEDIACMD_FLUSH` (22) for clients that
-advertise `SEEK_EPOCH_V1`; the exact carrier is finalized in the locked spec — clients
-should treat "a reposition occurred" and "here is the new epoch id" as the two facts to
-consume.)
+### 4.1 Current wire status
+No epoch field is present in the existing 5-byte detailed `MEDIACMD_GETMEDIATIME`
+response or 9-byte detailed `MEDIACMD_PUSHBUFFER` response. The server rejects positions
+outside the known post-seek delivered-media window and coalesces rapid relative seeks from
+the last intended target. It cannot prove that an in-window report belongs to the current
+epoch. `SEEK_EPOCH_V1` is reserved; advertising it does not currently change framing and
+must not be used to imply that reports are tagged.
 
-### 4.2 Client MUST
+A future epoch carrier must use a separately negotiated, versioned response extension;
+it must not append bytes to the legacy detailed responses based only on the current token.
+
+### 4.2 Future versioned extension: client MUST
 1. On epoch change: **discard** any queued data and in-flight position samples from the
    prior epoch.
 2. **Reset** the demuxer/renderer at the boundary (for MPEG-TS: re-initialize on the next
@@ -238,7 +242,7 @@ consume.)
    report a position stamped with a superseded epoch.
 4. Resume reporting per Section 3 in the new client-local base.
 
-### 4.3 Result
+### 4.3 Future result
 The server accepts a client position only when it matches the current epoch, eliminating
 the "catch-up guessing" the inferred guard must otherwise do — and making the in-place fast
 path (Section 6) safe to enable.
@@ -290,12 +294,11 @@ When a forward absolute/relative target lands inside data already transcoded and
 by the client, the server can satisfy it with an **in-place** client seek
 (`MEDIACMD_SEEK`) — no transcoder restart, near-instant — **iff**:
 - the client advertises `PUSH_BUFFER_SEEKING` **and** `TRICKPLAY_POSITION_V1`, and
-- (recommended) `SEEK_EPOCH_V1`, so the server can trust the client's position across the
-  jump.
+- a future versioned epoch extension is negotiated, so the server can prove the client's
+  position belongs to the current reposition.
 
-Otherwise the server performs a full reprime (correct, but ~2–5 s). Meeting this contract
-is what moves an NG client from "always reprime" to "in-place when possible." The precise
-trust threshold is finalized after Phase 0.
+Otherwise the server performs a full reprime (correct, but ~2–5 s). In-place push seeking
+remains disabled by default until that proof exists.
 
 ### 6.2 Pull-xcode (server-transcoded pull) seeking — client MUST re-open with `ss=` (NORMATIVE)
 
@@ -452,10 +455,9 @@ directly). No new vocabulary is introduced by this contract.
 ## 9. Legacy Contract (non-negotiable)
 
 - A client advertising **none** of Section 1's capabilities keeps the **exact current
-  behavior**. The server computes position from an inferred server-side display model
-  (`timestampOffset + wall-elapsed-since-reprime`, clamped by the parser timestamp), applies
-  an inferred epoch guard, and clamps seeks to the recording window server-side. Nothing on
-  the wire changes for these clients.
+  behavior**. NG-scoped default policies do not alter legacy property defaults. Existing
+  player-specific position and seek behavior remains in force, and nothing on the wire
+  changes for these clients.
 - Every capability is **independently** additive. Turning any of them on never alters the
   bytes seen by a client that didn't ask for it.
 - Existing framing (`MEDIACMD_*`, the detailed-push trailer) is **byte-for-byte
@@ -478,13 +480,13 @@ implementation of this contract:
 3. **Relative correctness:** REW 10s from a known frame lands ~10 s earlier (not forward);
    FF 10s lands ~10 s later; repeat rapidly and confirm no cumulative drift.
 4. **No poisoning:** issue a bad/edge skip, then a normal FF; confirm the normal FF still
-   works (no flush-to-0 cascade). With `SEEK_EPOCH_V1`, confirm stale-epoch reports are
-   dropped.
+   works (no flush-to-0 cascade). Once a versioned epoch extension exists, also confirm
+   stale-epoch reports are dropped.
 5. **DVR window:** for an in-progress recording, confirm forward skips saturate at the live
    edge and the scrubber reflects the sliding window.
-6. **Fast path:** with `PUSH_BUFFER_SEEKING` + `TRICKPLAY_POSITION_V1` (+ `SEEK_EPOCH_V1`),
-   confirm forward in-buffer targets land sub-second (branch `in-place(seekPull0)`), while
-   backward / out-of-buffer targets take the reprime branch and remain correct.
+6. **Future fast path:** with `PUSH_BUFFER_SEEKING` + `TRICKPLAY_POSITION_V1` plus a
+   versioned epoch extension, confirm forward in-buffer targets land sub-second (branch
+   `in-place(seekPull0)`), while backward / out-of-buffer targets take the reprime branch.
 
 ---
 

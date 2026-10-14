@@ -145,12 +145,6 @@ public class MiniPlayerTest
     MiniPlayer player = new MiniPlayer()
     {
       @Override
-      protected boolean isNgTrickplaySession()
-      {
-        return true;
-      }
-
-      @Override
       public long seek(long target)
       {
         throw new AssertionError("Unsupported rate request must not reposition playback");
@@ -160,39 +154,12 @@ public class MiniPlayerTest
     assertEquals(player.setPlaybackRate(2.0f), 1.0f);
     assertEquals(player.setPlaybackRate(-2.0f), 1.0f);
     assertEquals(player.setPlaybackRate(1.0f), 1.0f);
+    assertFalse(player.isNgTrickplaySession(),
+        "legacy clients use the same unsupported-rate contract instead of synthetic skips");
     setPlayerField(player, "pushMode", true);
     setPlayerField(player, "serverSideTranscoding", true);
     assertEquals(player.setPlaybackRate(0.5f), 1.0f);
     assertEquals(player.setPlaybackRate(2.0f), 1.0f);
-  }
-
-  @Test
-  public void testLegacyUnsupportedRatesPreserveSkipFallback() throws Throwable
-  {
-    TestUtils.initializeSageTVForTesting();
-    final long[] targets = new long[2];
-    MiniPlayer player = new MiniPlayer()
-    {
-      private int calls;
-
-      @Override
-      public long getMediaTimeMillis()
-      {
-        return 60000L;
-      }
-
-      @Override
-      public long seek(long target)
-      {
-        targets[calls++] = target;
-        return target;
-      }
-    };
-    assertFalse(player.isNgTrickplaySession());
-    assertEquals(player.setPlaybackRate(2.0f), 1.0f);
-    assertEquals(player.setPlaybackRate(0.5f), 1.0f);
-    assertEquals(targets[0], 75000L);
-    assertEquals(targets[1], 45000L);
   }
 
   @Test
