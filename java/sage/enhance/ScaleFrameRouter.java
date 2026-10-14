@@ -22,6 +22,12 @@ public final class ScaleFrameRouter
 {
   public enum Source { PRIMARY, FALLBACK }
 
+  public interface DegradeTransition
+  {
+    void startFallbackAfter(long lastCommittedFrameIndex, long lastCommittedPts)
+        throws IOException;
+  }
+
   public interface Sink
   {
     void write(long frameIndex, long pts, byte[] frame) throws IOException;
@@ -41,6 +47,7 @@ public final class ScaleFrameRouter
   private long lastCommittedPts = Long.MIN_VALUE;
   private boolean degraded;
   private long primaryCheckpoint = Long.MAX_VALUE;
+  private long primaryCheckpointPts = Long.MIN_VALUE;
 
   public ScaleFrameRouter(long firstFrameIndex, int maxPendingFrames, Sink sink)
   {
@@ -54,12 +61,44 @@ public final class ScaleFrameRouter
 
   public synchronized void degrade(long lastCompletedFrameIndex, long lastCompletedPts)
   {
-    if (lastCompletedFrameIndex < nextFrameIndex - 1L)
-      throw new IllegalArgumentException("degrade checkpoint precedes committed output");
-    if (lastCommittedPts != Long.MIN_VALUE && lastCompletedPts < lastCommittedPts)
-      throw new IllegalArgumentException("degrade PTS regresses");
+    try
+    {
+      degrade(lastCompletedFrameIndex, lastCompletedPts, null);
+    }
+    catch (IOException impossible)
+    {
+      throw new IllegalStateException(impossible);
+    }
+  }
+
+  /**
+   * Atomically starts a fallback producer and commits the source switch at the
+   * encoder's last committed frame. A producer started by {@code transition}
+   * may immediately submit on another thread; that submit waits on this router
+   * until the switch is committed.
+   */
+  public synchronized void degrade(long lastCompletedFrameIndex, long lastCompletedPts,
+      DegradeTransition transition) throws IOException
+  {
+    if (degraded)
+    {
+      if (lastCompletedFrameIndex == primaryCheckpoint
+          && lastCompletedPts == primaryCheckpointPts)
+        return;
+      throw new IllegalArgumentException("degrade checkpoint changed after transition");
+    }
+    long committedIndex = nextFrameIndex - 1L;
+    if (lastCompletedFrameIndex != committedIndex)
+      throw new IllegalArgumentException("degrade checkpoint " + lastCompletedFrameIndex
+          + " does not equal committed output " + committedIndex);
+    if (lastCompletedPts != lastCommittedPts)
+      throw new IllegalArgumentException("degrade PTS " + lastCompletedPts
+          + " does not equal committed output PTS " + lastCommittedPts);
+    if (transition != null)
+      transition.startFallbackAfter(lastCompletedFrameIndex, lastCompletedPts);
     degraded = true;
     primaryCheckpoint = lastCompletedFrameIndex;
+    primaryCheckpointPts = lastCompletedPts;
     pending.tailMap(lastCompletedFrameIndex + 1L).clear();
   }
 
@@ -83,6 +122,7 @@ public final class ScaleFrameRouter
   }
 
   public synchronized long getNextFrameIndex() { return nextFrameIndex; }
+  public synchronized long getLastCommittedPts() { return lastCommittedPts; }
   public synchronized boolean isDegraded() { return degraded; }
   public synchronized int getPendingFrameCount() { return pending.size(); }
 

@@ -187,11 +187,23 @@ kills the worker and the session tears down.
 
 `ScaleExecutionPlan.externalIndexed(...)`, `IndexedFrameTransport`,
 `ScaleRuntimeSignal`, and the bounded `ScaleFrameRouter` define the checkpointed
-frame-index/PTS seam required for controlled degradation without replay. Indexed
-plans deliberately fail `isRenderable()` until the process wiring supplies both
-primary and fallback producers; this prevents versioned frame headers from ever
-being mistaken for legacy rawvideo. Runtime activation must be coordinated with
-a provider that emits the versioned transport and health protocol.
+frame-index/PTS seam required for controlled degradation without replay.
+`ScaleRuntimeSupervisor` additionally requires an independently routable
+fallback producer with exactly matching geometry, pixel format, frame size,
+transport version, and PTS timescale. Its transition is committed only at the
+encoder sink's exact last-committed checkpoint; a worker-ahead checkpoint is
+rejected, and a fallback startup failure leaves the primary route intact.
+
+Indexed plans deliberately fail `isRenderable()` until the process wiring
+supplies both primary and fallback producers; this prevents versioned frame
+headers from ever being mistaken for legacy rawvideo. As of
+[SageTV-NG-VSR-Plugin PR 15](https://github.com/galeforcesage/SageTV-NG-VSR-Plugin/pull/15),
+the live worker protocol is unframed `rgb24`/`nv12` rawvideo plus a `READY`
+startup line. It does not emit frame identity, PTS, `SCALE_HEALTH` checkpoints,
+or a separately routable same-geometry CUDA-Lanczos stream. Consequently the
+current transcoder must keep indexed/hot-degradation activation fail-closed.
+Treating process byte counts, wall-clock time, or worker exit as a checkpoint
+would risk replay or omission and is not an acceptable workaround.
 
 **No vendor code lives in the core.** The core only knows how to spawn the argv
 the plan hands it and pipe raw frames; the worker, its model, and any EULA'd
