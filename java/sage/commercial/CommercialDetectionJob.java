@@ -155,7 +155,7 @@ public class CommercialDetectionJob implements Runnable
    */
   private void runComskip() throws Exception
   {
-    String comskipPath = sage.Sage.get("commercial_detection/comskip_path", "/opt/sagetv/server/comskip");
+    String comskipPath = CommercialDetectionManager.getInstance().getComskipPath();
     File comskipBin = new File(comskipPath);
     if (!comskipBin.exists())
     {

@@ -31,7 +31,7 @@ import java.text.SimpleDateFormat;
  *   commercial_detection/run_on_recording_start - auto-run when recording starts (default true)
  *   commercial_detection/max_concurrent_jobs   - thread pool size (default 1)
  *   commercial_detection/engine               - "comskip" or "external" (default "comskip")
- *   commercial_detection/comskip_path          - path to comskip binary (default "/opt/sagetv/server/comskip")
+ *   commercial_detection/comskip_path          - path to comskip binary (default "/opt/sagetv/comskip/comskip")
  *   commercial_detection/comskip_ini           - path to comskip.ini (default "")
  *   commercial_detection/external_engine_path  - path to custom engine binary (default "")
  *   commercial_detection/output_formats        - comma-separated: edl,vprj,csv (default "edl")
@@ -39,6 +39,11 @@ import java.text.SimpleDateFormat;
  */
 public class CommercialDetectionManager
 {
+  static final String COMSKIP_PATH_KEY = "commercial_detection/comskip_path";
+  static final String LEGACY_COMSKIP_PATH = "/opt/sagetv/server/comskip";
+  static final String BUNDLED_COMSKIP_PATH = "/opt/sagetv/comskip/comskip";
+  static final String SYSTEM_COMSKIP_PATH = "/usr/bin/comskip";
+
   private static CommercialDetectionManager instance;
 
   private ExecutorService threadPool;
@@ -245,12 +250,33 @@ public class CommercialDetectionManager
 
   public String getComskipPath()
   {
-    return Sage.get("commercial_detection/comskip_path", "/opt/sagetv/server/comskip");
+    return resolveComskipPath(
+        Sage.get(COMSKIP_PATH_KEY, ""),
+        new File(BUNDLED_COMSKIP_PATH),
+        new File(SYSTEM_COMSKIP_PATH));
   }
 
   public void setComskipPath(String path)
   {
-    Sage.put("commercial_detection/comskip_path", path);
+    Sage.put(COMSKIP_PATH_KEY, path);
+  }
+
+  static String resolveComskipPath(String configuredPath, File bundledPath, File systemPath)
+  {
+    String configured = configuredPath == null ? "" : configuredPath.trim();
+    if (!configured.isEmpty())
+    {
+      File configuredFile = new File(configured);
+      if (configuredFile.isFile() || !LEGACY_COMSKIP_PATH.equals(configured))
+        return configured;
+    }
+
+    if (bundledPath != null && bundledPath.isFile())
+      return bundledPath.getAbsolutePath();
+    if (systemPath != null && systemPath.isFile())
+      return systemPath.getAbsolutePath();
+
+    return configured.isEmpty() ? BUNDLED_COMSKIP_PATH : configured;
   }
 
   public String getComskipIni()
