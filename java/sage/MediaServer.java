@@ -221,6 +221,12 @@ public class MediaServer implements Runnable
       req = true;
       mode = mode.substring(0, mode.length() - ":enhance".length()).trim();
     }
+    // A raw direct pull has no transcoder and cannot execute enhancement.
+    // Defensively promote a valid direct enhancement request to the TV/AVPlay
+    // copy-family transcoder if an older or third-party client emits one.
+    if (req && "direct".equalsIgnoreCase(mode)
+        && sage.enhance.EnhancementTier.fromToken(tier).isActive())
+      mode = "mpeg2tsremux";
     return new XcodeEnhanceRequest(mode, req, tier);
   }
 

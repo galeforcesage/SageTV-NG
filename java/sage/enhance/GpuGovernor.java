@@ -87,20 +87,28 @@ public final class GpuGovernor
     private final String reason;
     private final int gpuIndex;
     private final String sessionId;
+    private final boolean externalAuthorityPresent;
     private final boolean externalGrant;
 
     Admission(String sessionId, EnhancementTier granted, int gpuIndex, String reason)
     {
-      this(sessionId, granted, gpuIndex, reason, false);
+      this(sessionId, granted, gpuIndex, reason, false, false);
     }
 
     Admission(String sessionId, EnhancementTier granted, int gpuIndex, String reason,
               boolean externalGrant)
     {
+      this(sessionId, granted, gpuIndex, reason, externalGrant, externalGrant);
+    }
+
+    Admission(String sessionId, EnhancementTier granted, int gpuIndex, String reason,
+              boolean externalAuthorityPresent, boolean externalGrant)
+    {
       this.sessionId = sessionId;
       this.granted = granted;
       this.gpuIndex = gpuIndex;
       this.reason = reason;
+      this.externalAuthorityPresent = externalAuthorityPresent;
       this.externalGrant = externalGrant;
     }
 
@@ -119,6 +127,15 @@ public final class GpuGovernor
      * the ordinary decision budget.
      */
     public boolean isExternalGrant() { return externalGrant; }
+    /**
+     * Specialized scaling is safe with no external authority, or after an
+     * installed authority explicitly granted this session. A fail-open local
+     * admission remains eligible for the deterministic scaler only.
+     */
+    public boolean permitsSpecializedScale()
+    {
+      return !externalAuthorityPresent || externalGrant;
+    }
     /** Always populated, including on success — this is the telemetry record. */
     public String getReason() { return reason; }
     public String getSessionId() { return sessionId; }
@@ -297,8 +314,12 @@ public final class GpuGovernor
       if (!capped.tier.isActive())
         return deny(sessionId, "authority deferred (" + decision.getReason()
             + "); local ceiling denies (" + join(capped.whyNot) + ")");
+      String authorityOutcome = decision.isExternalResourceDeclined()
+          ? "external resource declined" : "authority deferred";
       return registerGrant(sessionId, capped.tier, desired, gpuIndex, estBitrateKbps,
-          offline, snap, load, whyNot, "authority deferred: " + decision.getReason());
+          offline, snap, load, whyNot,
+          authorityOutcome + ": " + decision.getReason() + "; deterministic local fallback",
+          true, false);
     }
 
     if (decision.isDeny())
@@ -314,7 +335,7 @@ public final class GpuGovernor
       return deny(sessionId, "authority grant " + decision.getTier().token()
           + " exceeds local budgets");
     return registerGrant(sessionId, granted, desired, gpuIndex, estBitrateKbps,
-        offline, snap, load, whyNot, "authority: " + safeName(auth), true);
+        offline, snap, load, whyNot, "authority: " + safeName(auth), true, true);
   }
 
   /** Result of a ladder walk: the best admissible tier and why higher tiers failed. */
@@ -353,13 +374,14 @@ public final class GpuGovernor
                                   List<String> whyNot, String extraNote)
   {
     return registerGrant(sessionId, tier, desired, gpuIndex, estBitrateKbps, offline,
-        snap, load, whyNot, extraNote, false);
+        snap, load, whyNot, extraNote, false, false);
   }
 
   private Admission registerGrant(String sessionId, EnhancementTier tier, EnhancementTier desired,
                                   int gpuIndex, long estBitrateKbps, boolean offline,
                                   GpuSnapshot snap, RecordingGuard.CaptureLoad load,
-                                  List<String> whyNot, String extraNote, boolean externalGrant)
+                                  List<String> whyNot, String extraNote,
+                                  boolean externalAuthorityPresent, boolean externalGrant)
   {
     Session s = new Session(sessionId, tier, gpuIndex,
         effectiveBitrateKbps(tier, estBitrateKbps), offline);
@@ -372,7 +394,8 @@ public final class GpuGovernor
     if (extraNote != null && extraNote.length() > 0) reason += " [" + extraNote + "]";
     if (Sage.DBG) System.out.println("GpuGovernor: " + sessionId + " " + reason
         + " [" + snap + ", " + load + "]");
-    return new Admission(sessionId, tier, gpuIndex, reason, externalGrant);
+    return new Admission(sessionId, tier, gpuIndex, reason,
+        externalAuthorityPresent, externalGrant);
   }
 
   /**

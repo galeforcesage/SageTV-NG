@@ -103,6 +103,31 @@ public class MediaServerXcodeEnhanceTest
   }
 
   @Test
+  public void directEnhanceRoutesToEnhanceableCopyFamily()
+  {
+    MediaServer.XcodeEnhanceRequest req = MediaServer.parseXcodeEnhanceRequest(
+        "direct:enhance;tier=2160p;bw=50000");
+    assertEquals(req.baseMode, "mpeg2tsremux");
+    assertTrue(req.enhanceRequested);
+    assertEquals(req.tierToken, "2160p");
+  }
+
+  @Test
+  public void ordinaryAndUntargetedDirectRemainUnchanged()
+  {
+    MediaServer.XcodeEnhanceRequest plain =
+        MediaServer.parseXcodeEnhanceRequest("direct");
+    assertEquals(plain.baseMode, "direct");
+    assertFalse(plain.enhanceRequested);
+
+    MediaServer.XcodeEnhanceRequest untargeted =
+        MediaServer.parseXcodeEnhanceRequest("direct:enhance");
+    assertEquals(untargeted.baseMode, "direct");
+    assertTrue(untargeted.enhanceRequested);
+    assertNull(untargeted.tierToken);
+  }
+
+  @Test
   public void baseModeNeverRetainsEnhanceToken()
   {
     // The exact regression: the transcoder must never see ":enhance" in the mode.

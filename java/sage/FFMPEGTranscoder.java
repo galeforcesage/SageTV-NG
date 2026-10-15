@@ -3235,8 +3235,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
       }
 
       sage.enhance.EnhancementTier granted = adm.getTier();
+      boolean deterministicOnly = !adm.permitsSpecializedScale();
       sage.enhance.EnhancementPlan plan = sage.enhance.GpuEnhancePipeline.buildPlan(
-          granted, interlaced, srcW, srcH, estKbps, false, srcFpsExact,
+          granted, interlaced, srcW, srcH, estKbps, deterministicOnly, srcFpsExact,
           srcPixelFormat, srcBitDepth);
       if (plan == null || !plan.isActive())
       {
@@ -3248,6 +3249,9 @@ public class FFMPEGTranscoder implements TranscodeEngine
             + granted.token() + " (" + (plan == null ? "null" : plan.getReason()) + ")");
         return;
       }
+      if (Sage.DBG && deterministicOnly)
+        System.out.println("GPU_ENHANCE apply: external authority did not grant specialized"
+            + " scaling; using deterministic provider path (" + adm.getReason() + ")");
 
       // External-process (upscale worker) plan: build the decode/encode stages
       // that bracket the worker from the copy-family base command BEFORE the

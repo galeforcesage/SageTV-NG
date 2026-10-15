@@ -317,17 +317,26 @@ runs out of process. The core is explicit about what it renders today:
 An `EXTERNAL_PROCESS` provider may need seconds to become ready (model load,
 shader compile, GPU context init). Paid at play-start that cost is a black
 screen. The advisory phase evaluates providers seconds *before* playback begins,
-which is a natural window to pre-warm one. The seam is two `default` methods on
-`ScaleProvider` plus an opaque `WarmContext` handle the core holds between the
+which is a natural window to pre-warm one. The seam is four `default` methods on `ScaleProvider`, a bounded
+`WarmupBudget`, and an opaque `WarmContext` handle the core holds between the
 advisory phase and pipeline build:
 
 ```java
 public interface ScaleProvider {
   // ... id(), capabilities(), probe(), plan(ScaleRequest) ...
 
-  /** Begin expensive init for an anticipated session; return a handle the core
-   *  holds and passes back at build time, or null for no warmup. May block. */
-  default WarmContext warmup(ScaleRequest request) { return null; }
+  /** Compatibility entry point; delegates to the budget-aware primitive. */
+  default WarmContext warmup(ScaleRequest request) {
+    return warmup(request, new WarmupBudget(8000, 12000));
+  }
+
+  /** Begin expensive init within the core-supplied acquire/ready deadline. */
+  default WarmContext warmup(ScaleRequest request, WarmupBudget budget) {
+    return null;
+  }
+
+  /** True only when this provider obtains its own warm-resource admission. */
+  default boolean managesWarmupAdmission() { return false; }
 
   /** Build a plan using a still-valid pre-warmed context. If unusable, close it,
    *  fall back to plan(request), and let the core cold-start. */
@@ -352,7 +361,13 @@ Guarantees the core gives a provider:
 - **Single-owner.** A `WarmContext` is consumed at most once, then closed; it is
   never shared across concurrent sessions.
 - **Bounded.** If the offer is never taken, a reaper calls `close()` after
-  `ttlMillis()` — a warm worker cannot leak VRAM indefinitely.
+  `ttlMillis()` — a warm worker cannot leak VRAM indefinitely. The core also
+  interrupts a warm attempt that exceeds the configured ready deadline (hard
+  capped at 20 seconds) and closes any context returned after that deadline.
+- **Authority-safe.** When an external admission authority is installed, the
+  core skips proactive warmup unless the provider returns `true` from
+  `managesWarmupAdmission()`. This prevents an unmanaged neural worker from
+  starting before it owns a broker grant.
 - **Matched by exact profile.** The core only hands a warm context back to
   `plan(req, warm)` when provider, source/target geometry and rational cadence,
   interlace, pixel format/bit depth, model, backend, device, and driver match.
@@ -498,6 +513,9 @@ Registration rules:
 | `playback/gpu_enhance/scale/external_worker_stall_timeout_seconds` | `5` | Idle-frame watchdog: if no frames flow for this long, the core kills the worker and tears the session down. |
 | `playback/gpu_enhance/scale/warmup_enabled` | `false` | Master switch for the §5.1 warmup path. When off (default) the advisor never calls `warmup()` and `select()` never consults the warm stash — behavior is identical to no-warmup. Turn on only with a provider that overrides `warmup()`. |
 | `playback/gpu_enhance/scale/warmup_max_ttl_seconds` | `60` | Upper bound the core clamps a provider's `WarmContext.ttlMillis()` to, so a misbehaving provider cannot pin a warm worker (and its VRAM) indefinitely. |
+| `playback/gpu_enhance/scale/warmup_acquire_timeout_ms` | `8000` | Soft allowance passed to the provider for acquiring its warm resource; clamped to the ready deadline. |
+| `playback/gpu_enhance/scale/warmup_ready_timeout_ms` | `12000` | Hard overall warmup deadline; clamped to 20 seconds. The core interrupts overrun work and rejects late contexts. |
+| `playback/gpu_enhance/scale/warmup_consume_wait_ms` | `0` | Optional bounded wait at play-start for an in-flight warmup. Zero means immediate cold fallback. |
 
 ---
 

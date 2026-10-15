@@ -234,6 +234,7 @@ public class GpuGovernorExternalAuthorityTest
     GpuGovernor.Admission ext = new GpuGovernor.Admission(
         "s-ext", EnhancementTier.ENHANCE_2160P, 0, "external authority granted", true);
     assertTrue(ext.isExternalGrant());
+    assertTrue(ext.permitsSpecializedScale());
     assertTrue(ext.isGranted());
     assertEquals(ext.getTier(), EnhancementTier.ENHANCE_2160P);
   }
@@ -246,9 +247,18 @@ public class GpuGovernorExternalAuthorityTest
     GpuGovernor.Admission legacy = new GpuGovernor.Admission(
         "s-loc", EnhancementTier.ENHANCE_2160P, 0, "local ceiling");
     assertFalse(legacy.isExternalGrant());
+    assertTrue(legacy.permitsSpecializedScale(),
+        "without an external authority, specialized providers remain eligible");
 
     GpuGovernor.Admission explicitFalse = new GpuGovernor.Admission(
         "s-loc2", EnhancementTier.ENHANCE_1440P, 0, "defer-to-local", false);
     assertFalse(explicitFalse.isExternalGrant());
+
+    GpuGovernor.Admission brokerFallback = new GpuGovernor.Admission(
+        "s-fallback", EnhancementTier.ENHANCE_1440P, 0,
+        "external resource declined; deterministic local fallback", true, false);
+    assertFalse(brokerFallback.isExternalGrant());
+    assertFalse(brokerFallback.permitsSpecializedScale(),
+        "an installed authority must explicitly grant specialized scaling");
   }
 }

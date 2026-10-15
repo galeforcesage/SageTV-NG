@@ -377,6 +377,17 @@ public final class ScaleProviderRegistry
         ScaleProviderCapabilities caps = p.capabilities();
         if (caps != null && caps.isSpecialized())
         {
+          // Warmup may spawn a worker before normal session admission. With an
+          // external authority installed, only a provider that explicitly owns
+          // its warm-resource admission may do that work.
+          if (sage.enhance.GpuGovernor.getInstance().getExternalAuthority() != null
+              && !p.managesWarmupAdmission())
+          {
+            if (Sage.DBG) System.out.println("SCALE_WARMUP skip provider '" + p.id()
+                + "' -- external authority installed and provider does not"
+                + " manage warmup admission");
+            continue;
+          }
           ScaleProviderAssessment assessment = p.assess(req);
           if (!assessmentUsable(assessment, req))
           {
