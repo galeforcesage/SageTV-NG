@@ -280,6 +280,10 @@ public class CaptureDeviceInput
 
   public void setProvider(long inProvID)
   {
+    // A configured source must be available to the scheduler. This also repairs
+    // stale disabled state when setup re-applies the input's existing lineup.
+    if (inProvID != 0 && capDev.isDisabled())
+      capDev.setDisabled(false);
     if (providerID == inProvID) return;
     // NOTE: For digital TV sources; if we're re-using a provider that was already scanned on another
     // device we want to copy over the .frq file which defines all the specific channel carriers.
