@@ -633,13 +633,13 @@ These options remain disabled by default when their additional latency is undesi
 The implementation must distinguish:
 
 ```text
-RTX 5080 + scale_npp
+RTX-class GPU + scale_npp
     = conventional NPP GPU scaling plus NVENC encoding
 
-RTX 5080 + integrated RTX Video SDK/VSR path
+RTX-class GPU + integrated RTX Video SDK/VSR path
     = RTX AI artifact reduction and super-resolution processing
 
-RTX 5080 + another AI model
+RTX-class GPU + another AI model
     = quality determined by that model and its settings
 ```
 

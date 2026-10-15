@@ -20,7 +20,7 @@ public class ScaleProfileAssessmentTest
     return new ScaleRequest(EnhancementTier.ENHANCE_2160P, 3840, 2160,
         1920, 1080, true, "scale_npp", ScaleRequest.Purpose.LIVE,
         source, target, sourceFormat, sourceFormat.indexOf("10") >= 0 ? 10 : 8,
-        "p010le", 10, "tensorrt", model, "GPU-1", "595.84");
+        "p010le", 10, "tensorrt", model, "GPU-1", "driver-version");
   }
 
   @Test

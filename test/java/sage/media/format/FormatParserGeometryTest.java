@@ -172,8 +172,8 @@ public class FormatParserGeometryTest
   }
 
   /**
-   * End-to-end against real ffmpeg output captured from an ATSC 3.0 recording
-   * on the dev server. This is the half the merge test cannot cover: that the
+   * End-to-end against representative ffmpeg output from an ATSC 3.0 recording.
+   * This is the half the merge test cannot cover: that the
    * ffmpeg text actually yields geometry for an HEVC stream, including the
    * decorated codec token ("hevc (Main 10) ([36][0][0][0] / 0x0024)") and the
    * "1920x1080 [SAR 1:1 DAR 16:9]" form that carries the resolution.
@@ -182,7 +182,7 @@ public class FormatParserGeometryTest
   public void testParsesGeometryFromRealAtsc3FfmpegOutput()
   {
     String info =
-        "Input #0, mpegts, from '/media/sagetv/SageTV9/109_109.1_0510_2207-0.mpg':\n" +
+        "Input #0, mpegts, from '/recordings/atsc3-sample.mpg':\n" +
         "  Duration: 00:52:17.68, start: 86390.498300, bitrate: 4936 kb/s\n" +
         "  Program 3 \n" +
         "  Stream #0:0[0x31]: Video: hevc (Main 10) ([36][0][0][0] / 0x0024), " +

@@ -1,9 +1,9 @@
 # Upscale + Recording — capacity planning
 
-Working notes on how many concurrent live GPU upscales an RTX-class GPU can
-sustain, and how that interacts with recording OTA to disk. **Everything below
-the measured RTX 5080 line is an estimate** and will be replaced with real data
-once we benchmark upscale-while-recording on live OTA.
+Working notes on how many concurrent live GPU upscales an RTX-class GPU may
+sustain, and how that interacts with recording OTA to disk. The figures below
+are illustrative estimates, not guarantees; deployments should use measured
+capacity calibration for their own GPU, driver, source, and encoder settings.
 
 > **Scaler backend:** these numbers are for the GPU **Lanczos** path shipping today
 > (`scale_npp` + `hevc_nvenc`), which is NVENC-bound. An AI VSR tier (Maxine SuperRes /
@@ -24,31 +24,13 @@ once we benchmark upscale-while-recording on live OTA.
   recording, disk throughput, VRAM under simultaneous record+upscale) will we
   revisit auto-sizing the governor per host.
 
-## Measured baseline — RTX 5080
+## Capacity considerations
 
-Single live `720p → 2160p60` HEVC upscale, `scale_npp` + `hevc_nvenc`, ~40 Mbps,
-paced to real time (`speed ≈ 1.06x`):
-
-| Metric | Value |
-| --- | --- |
-| SM / CUDA (scale_npp resize) | 1–4% |
-| NVENC (encoder) | **~21% avg, bursts to ~50%** |
-| NVDEC (decoder, MPEG-2 in) | 1–4% |
-| VRAM | ~5 GB / 16 GB |
-| Power | ~46–49 W / 360 W |
-| Temp | ~49–51 °C |
-
-Sustained 14 min continuous: **~21% avg NVENC, bursts to ~50%, no VRAM growth
-(flat ~5 GB) and no thermal drift (~51 °C)**; encoder held `speed ≈ 1.01x` the
-whole time (tracking real time exactly, never falling behind).
-
-**Caveat:** these numbers are the *real-time-paced* cost, not max throughput.
-ffmpeg is throttled to delivery, so the GPU is far from saturated. NVENC load is
-**bursty, not steady** — a sawtooth of ~50% peaks and near-0% idles as it encodes
-a GOP then waits for the next delivery window. The dominant engine is NVENC; the
-actual upscale filter and decode are nearly free. Capacity scales roughly as
-NVENC throughput ÷ per-stream NVENC cost, but the burst peaks matter: concurrent
-streams whose bursts align contend more than the ~21% average implies.
+Real-time delivery is normally paced, so instantaneous encoder load can be
+bursty rather than steady. Capacity depends on sustained throughput, aligned
+burst peaks, VRAM per session, decoder pressure, recording I/O, source cadence,
+and the selected enhancement provider. The governor must therefore use runtime
+measurement and conservative admission rather than a GPU-model lookup table.
 
 ## Cross-GPU projection
 
@@ -56,23 +38,20 @@ NVENC-bound, one engine per encode session. Generations and engine counts matter
 
 | GPU | NVENC gen | Engines | VRAM | Est. concurrent **4K** real-time upscales | Est. **1080p** |
 | --- | --- | --- | --- | --- | --- |
-| **RTX 5080** (this box) | 9th (Blackwell) | 2 | 16 GB | **~4 (burst) – ~6–8 (avg)**, measured ~21% avg / ~50% peak per stream | ~15+ |
+| RTX 5090 / 5080 | 9th (Blackwell) | 2+ | 16–32 GB | Benchmark locally | Benchmark locally |
 | RTX 4090 / 4080 | 8th (Ada) | 2 | 16–24 GB | ~4–7 | ~12+ |
 | RTX 4070 | 8th (Ada) | 1 | 12 GB | ~2–4 | ~8 |
 | RTX 3080 / 3090 | 7th (Ampere) | 1 | 10–24 GB | ~2–3 | ~6 |
 | **RTX 2060** | 7th (Turing) | **1** | **6 GB** | **1 comfortably, 2 tight** | ~4–5 |
 
-The 4K range reflects the bursty NVENC profile measured on the 5080: the upper
-bound is **average-limited** (~21%/stream → ~6–8), the lower bound is
-**peak/burst-limited** when independent streams' ~50% bursts align (~4 per
-engine). Independent viewers jitter and smooth out in practice, so the real
-ceiling sits between — to be pinned down by the live-OTA + recording benchmark.
+The ranges are planning estimates only. Independent viewers may smooth burst
+load, but aligned GOP work can also produce short periods of contention.
+Calibrate with the exact live-OTA and recording workload before raising limits.
 
 ### Notes on the low end (RTX 2060)
 
-- One NVENC engine, ~half the per-engine HEVC throughput of Blackwell, so a
-  single 4K60 real-time stream is expected to use a large fraction of its one
-  encoder rather than the ~26% seen here.
+- One NVENC engine and older HEVC throughput mean a single 4K60 real-time stream
+  may use a large fraction of available encoder capacity.
 - 6 GB VRAM is the harder limit — each session is ~1.5–2 GB with CUDA context,
   so 2–3 sessions pressures VRAM, especially alongside anything else on the GPU.
 - Turing consumer cards historically carry a driver-side NVENC session cap

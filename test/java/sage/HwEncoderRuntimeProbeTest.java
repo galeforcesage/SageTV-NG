@@ -129,10 +129,9 @@ public class HwEncoderRuntimeProbeTest
    *
    * SageTV ships a custom ffmpeg built without libavdevice, so `-f lavfi`
    * fails with "Unknown input format: 'lavfi'". A lavfi-based probe reported
-   * "GPU enhancement unsupported" on a host whose GPU pipeline was verified
-   * working (real 1080i -> 3840x2160 HEVC at 59.94fps on an RTX 5080),
-   * silently disabling the feature. Confirmed on that host: `ffmpeg -devices`
-   * printed an empty list.
+   * "GPU enhancement unsupported" even when the real CUDA/NVENC pipeline was
+   * usable, silently disabling the feature. A device-disabled ffmpeg build may
+   * report an empty list from `ffmpeg -devices`.
    */
   @Test
   public void testProbeDoesNotUseLavfi()
