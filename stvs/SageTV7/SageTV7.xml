@@ -51157,8 +51157,7 @@
                                          <ns0:Branch Name="false" Sym="OPUS4A-211527">
                                           <ns0:Action Name="TriedPwdCache = true" Sym="OPUS4A-211532">
                                            <ns0:Action Name="PwdCacheSubgroup = GetSubgroup( NetworkPathPwdCache, BrowserCurFilePath )" Sym="OPUS4A-211533">
-                                            <ns0:Action Name="DebugLog(&quot;PwdCacheSubgroup=[&quot; + PwdCacheSubgroup + &quot;]&quot; )" Sym="OPUS4A-211534">
-                                             <ns0:Conditional Name="PwdCacheSubgroup" Sym="OPUS4A-211535">
+                                            <ns0:Conditional Name="PwdCacheSubgroup" Sym="OPUS4A-211535">
                                               <ns0:Branch Name="null" Sym="OPUS4A-211536">
                                                <ns0:Action Name="&quot;REM No cached password for this path; just continue.&quot;" Sym="OPUS4A-211538">
                                                 <ns0:Action Ref="18479" Name="DebugLog(&quot;Prompting fo..." />
@@ -51169,7 +51168,7 @@
                                                 <ns0:Action Name="PwdCacheSubgroup = GetElement( PwdCacheSubgroup, 0 )" Sym="OPUS4A-211540">
                                                  <ns0:Action Name="CachedUsername = GetElement( PwdCacheSubgroup, 0 )" Sym="OPUS4A-211541">
                                                   <ns0:Action Name="CachedPassword = GetElement( PwdCacheSubgroup, 1 )" Sym="OPUS4A-211542">
-                                                   <ns0:Action Name="TestNetworkFilePath = new_jcifs_smb_SmbFile(&quot;smb://&quot; + CachedUsername + &quot;:&quot; + CachedPassword + &quot;@&quot; + Substring(BrowserCurFilePath, 6, -1))" Sym="OPUS4A-211543">
+                                                   <ns0:Action Name="TestNetworkFilePath = new_jcifs_smb_SmbFile(&quot;smb://&quot; + java_net_URLEncoder_encode(CachedUsername, &quot;UTF-8&quot;) + &quot;:&quot; + java_net_URLEncoder_encode(CachedPassword, &quot;UTF-8&quot;) + &quot;@&quot; + Substring(BrowserCurFilePath, 6, -1))" Sym="OPUS4A-211543">
                                                     <ns0:Action Ref="18464" Name="&quot;REM Try accessing Tes..." />
                                                    </ns0:Action>
                                                   </ns0:Action>
@@ -51178,7 +51177,6 @@
                                                </ns0:Action>
                                               </ns0:Branch>
                                              </ns0:Conditional>
-                                            </ns0:Action>
                                            </ns0:Action>
                                           </ns0:Action>
                                          </ns0:Branch>
@@ -51577,7 +51575,7 @@
                                   </ns0:Panel>
                                   <ns0:Listener Name="Select" Sym="OPUS4A-211461">
                                    <ns0:ListenerEvent>Select</ns0:ListenerEvent>
-                                   <ns0:Action Name="BrowserFileCell = new_jcifs_smb_SmbFile(&quot;smb://&quot; + SMBUsername + &quot;:&quot; + SMBPassword + &quot;@&quot; + Substring(BrowserCurFilePath, 6, -1))" Sym="OPUS4A-211462">
+                                   <ns0:Action Name="BrowserFileCell = new_jcifs_smb_SmbFile(&quot;smb://&quot; + java_net_URLEncoder_encode(SMBUsername, &quot;UTF-8&quot;) + &quot;:&quot; + java_net_URLEncoder_encode(SMBPassword, &quot;UTF-8&quot;) + &quot;@&quot; + Substring(BrowserCurFilePath, 6, -1))" Sym="OPUS4A-211462">
                                     <ns0:Action Name="&quot;REM Check to see if the username + password is correct.&quot;" Sym="OPUS4A-211463">
                                      <ns0:Action Name="TestDirContents = jcifs_smb_SmbFile_listFiles(BrowserFileCell)" Sym="OPUS4A-211464">
                                       <ns0:Conditional Name="SAGEEXCEPTION != null" Sym="OPUS4A-211465">
@@ -51628,12 +51626,7 @@
                                              </ns0:Conditional>
                                             </ns0:Action>
                                             <ns0:Action Name="NewSubgroup = DataUnion( SMBUsername, SMBPassword )" Sym="OPUS4A-211476">
-                                             <ns0:Action Name="AddToGrouping( NetworkPathPwdCache, SMBProtectedPath, NewSubgroup )" Sym="OPUS4A-211477">
-                                              <ns0:Action Name="DebugLog(&quot;SMBProtectedPath=[&quot; + SMBProtectedPath + &quot;], SMBUsername=[&quot; + SMBUsername + &quot;], SMBPassword=[&quot; + SMBPassword + &quot;]&quot; )" Sym="OPUS4A-211478">
-                                               <ns0:Action Name="DebugLog(&quot;NewSubgroup=[&quot; + NewSubgroup + &quot;]&quot; )" Sym="OPUS4A-211479" />
-                                              </ns0:Action>
-                                              <ns0:Action Name="DebugLog(&quot;New NetworkPathPwdCache=[&quot; + NetworkPathPwdCache + &quot;]&quot; )" Sym="OPUS4A-211480" />
-                                             </ns0:Action>
+                                             <ns0:Action Name="AddToGrouping( NetworkPathPwdCache, SMBProtectedPath, NewSubgroup )" Sym="OPUS4A-211477" />
                                             </ns0:Action>
                                            </ns0:Conditional>
                                           </ns0:Action>
@@ -57113,9 +57106,7 @@
                    <ns0:Conditional Name="CurFolderStyle" Sym="OPUS4A-215730">
                     <ns0:Branch Name="&quot;xNetwork&quot;" Sym="OPUS4A-215731">
                      <ns0:Action Name="&quot;REM Use network calls.&quot;" Sym="OPUS4A-215744">
-                      <ns0:Action Name="DebugLog( &quot;BrowserCurFilePath: [&quot; + BrowserCurFilePath + &quot;]&quot; )" Sym="OPUS4A-215771" />
                       <ns0:Action Name="NewPath = new_jcifs_smb_SmbFile( BrowserCurFilePath, NewDirectoryName )" Sym="OPUS4A-215770">
-                       <ns0:Action Name="DebugLog( &quot;Attempting to create new network folder: [&quot; + NewPath + &quot;]&quot; )" Sym="OPUS4A-215772" />
                        <ns0:Action Name="&quot;REM Does 'NewPath' already exist?&quot;" Sym="OPUS4A-215776">
                         <ns0:Conditional Name="jcifs_smb_SmbFile_exists(NewPath)" Sym="OPUS4A-215777">
                          <ns0:Branch Name="true" Sym="OPUS4A-215778">
@@ -57463,7 +57454,6 @@
                           </ns0:Action>
                          </ns0:Branch>
                         </ns0:Conditional>
-                        <ns0:Action Name="DebugLog( &quot;Manually entered NewPath=[&quot; + NewPath + &quot;], SMBNewPath=[&quot; + SMBNewPath + &quot;]&quot; )" Sym="OPUS4A-185840" />
                        </ns0:Action>
                        <ns0:Action Name="&quot;REM Have SMBNewPath; see if it is a valid path by trying to get the folder contents.&quot;" Sym="OPUS4A-185841">
                         <ns0:Action Name="SMBAccessGoalAction = &quot;xAccessEnteredPath&quot;" Sym="OPUS4A-185842" />
@@ -57474,11 +57464,6 @@
                            <ns0:Action Name="SMBUsername = &quot;&quot;" Sym="OPUS4A-211553">
                             <ns0:Action Name="SMBPassword = &quot;&quot;" Sym="OPUS4A-211554">
                              <ns0:Action ID="19749" Name="&quot;REM Try accessing the SMB path 'SMBTestPath'.&quot;" Sym="OPUS4A-185849">
-                              <ns0:Action Name="DebugLog( &quot;Trying to access SMBTestPath=[&quot; + SMBTestPath + &quot;]&quot; )" Sym="OPUS4A-185850">
-                               <ns0:Conditional Name="IsEmbeddedSystem()" Sym="OPUS4A-211555">
-                                <ns0:Action Name="DebugLog(&quot;NetworkPathPwdCache=[&quot; + NetworkPathPwdCache + &quot;]&quot; )" Sym="OPUS4A-211556" />
-                               </ns0:Conditional>
-                              </ns0:Action>
                               <ns0:Action Name="TestDirContents = jcifs_smb_SmbFile_listFiles(SMBTestPath)" Sym="OPUS4A-185852">
                                <ns0:Action Name="&quot;REM Embedded systems can check for authorization failure.&quot;" Sym="OPUS4A-211557">
                                 <ns0:Conditional Name="IsEmbeddedSystem()" Sym="OPUS4A-211558">
@@ -57492,7 +57477,6 @@
                                        <ns0:Branch Name="false" Sym="OPUS4A-211605">
                                         <ns0:Action Name="TriedPwdCache = true" Sym="OPUS4A-211608">
                                          <ns0:Action Name="PwdCacheSubgroup = GetSubgroup( NetworkPathPwdCache, OrigSMBTestPath )" Sym="OPUS4A-211609">
-                                          <ns0:Action Name="DebugLog(&quot;PwdCacheSubgroup=[&quot; + PwdCacheSubgroup + &quot;]&quot; )" Sym="OPUS4A-211610" />
                                           <ns0:Conditional Name="PwdCacheSubgroup" Sym="OPUS4A-211611">
                                            <ns0:Branch Name="null" Sym="OPUS4A-211612">
                                             <ns0:Action Name="&quot;REM No cached password for this path; just continue.&quot;" Sym="OPUS4A-211614">
@@ -57504,8 +57488,7 @@
                                              <ns0:Action Name="PwdCacheSubgroup = GetElement( PwdCacheSubgroup, 0 )" Sym="OPUS4A-211616">
                                               <ns0:Action Name="CachedUsername = GetElement( PwdCacheSubgroup, 0 )" Sym="OPUS4A-211617">
                                                <ns0:Action Name="CachedPassword = GetElement( PwdCacheSubgroup, 1 )" Sym="OPUS4A-211618">
-                                                <ns0:Action Name="DebugLog(&quot;CachedUsername=[&quot; + CachedUsername + &quot;], CachedPassword=[&quot; + CachedPassword + &quot;]&quot; )" Sym="OPUS4A-211619" />
-                                                <ns0:Action Name="SMBTestPath = new_jcifs_smb_SmbFile(&quot;smb://&quot; + CachedUsername + &quot;:&quot; + CachedPassword + &quot;@&quot; + Substring(OrigSMBTestPath, 6, -1))" Sym="OPUS4A-211620">
+                                                <ns0:Action Name="SMBTestPath = new_jcifs_smb_SmbFile(&quot;smb://&quot; + java_net_URLEncoder_encode(CachedUsername, &quot;UTF-8&quot;) + &quot;:&quot; + java_net_URLEncoder_encode(CachedPassword, &quot;UTF-8&quot;) + &quot;@&quot; + Substring(OrigSMBTestPath, 6, -1))" Sym="OPUS4A-211620">
                                                  <ns0:Action Ref="19749" Name="&quot;REM Try accessing the..." />
                                                 </ns0:Action>
                                                </ns0:Action>
@@ -57635,7 +57618,7 @@
                                                   <ns0:ListenerEvent>Select</ns0:ListenerEvent>
                                                   <ns0:Action Name="&quot;REM Have a username + password, so try accessing the path again.&quot;" Sym="OPUS4A-211652">
                                                    <ns0:Action Name="DialogSource = &quot;SMBAskForPassword&quot;" Sym="OPUS4A-211653">
-                                                    <ns0:Action Name="SMBTestPath = new_jcifs_smb_SmbFile(&quot;smb://&quot; + SMBUsername + &quot;:&quot; + SMBPassword + &quot;@&quot; + Substring(OrigSMBTestPath, 6, -1))" Sym="OPUS4A-211654">
+                                                    <ns0:Action Name="SMBTestPath = new_jcifs_smb_SmbFile(&quot;smb://&quot; + java_net_URLEncoder_encode(SMBUsername, &quot;UTF-8&quot;) + &quot;:&quot; + java_net_URLEncoder_encode(SMBPassword, &quot;UTF-8&quot;) + &quot;@&quot; + Substring(OrigSMBTestPath, 6, -1))" Sym="OPUS4A-211654">
                                                      <ns0:Action Ref="19749" Name="&quot;REM Try accessing the..." />
                                                     </ns0:Action>
                                                    </ns0:Action>
@@ -217853,9 +217836,7 @@
    </ns0:Action>
    <ns0:Action Name="&quot;REM Init network path username + pwd combos&quot;" Sym="OPUS4A-211481">
     <ns0:Conditional Name="NetworkPathPwdCache == null" Sym="OPUS4A-211482">
-     <ns0:Action Name="AddGlobalContext( &quot;NetworkPathPwdCache&quot;, new_java_util_HashMap() )" Sym="OPUS4A-211483">
-      <ns0:Action Name="DebugLog(&quot;Orig NetworkPathPwdCache=[&quot; + NetworkPathPwdCache + &quot;]&quot; )" Sym="OPUS4A-211484" />
-     </ns0:Action>
+     <ns0:Action Name="AddGlobalContext( &quot;NetworkPathPwdCache&quot;, new_java_util_HashMap() )" Sym="OPUS4A-211483" />
     </ns0:Conditional>
    </ns0:Action>
    <ns0:Action Ref="26159" Name="&quot;REM Mark Permissions ..." />
