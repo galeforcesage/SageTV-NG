@@ -1,0 +1,3 @@
+# The container entrypoint scripts must keep LF line endings so they run
+# correctly inside the Linux image regardless of the checkout platform.
+docker/*.sh text eol=lf
