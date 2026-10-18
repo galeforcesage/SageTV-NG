@@ -104,6 +104,43 @@ public class MiniPlayerTest
   }
 
   @Test
+  public void testPushDisplayRefreshDoesNotAcquirePlayerMonitor() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    MiniPlayer player = new MiniPlayer();
+    setPlayerField(player, "currState", MediaPlayer.PLAY_STATE);
+    setPlayerField(player, "timestampOffset", 1000L);
+    setPlayerField(player, "pushDisplayEstimate", 1000L);
+    setPlayerField(player, "pushDisplayEstimateUpdateTime", Sage.eventTime());
+    setPlayerField(player, "directPushSentThrough", 2000L);
+
+    final Throwable[] failure = new Throwable[1];
+    Thread refreshThread;
+    synchronized (player)
+    {
+      refreshThread = new Thread(() -> {
+        try
+        {
+          java.lang.reflect.Method method =
+              MiniPlayer.class.getDeclaredMethod("refreshPushDisplayEstimate", long.class);
+          method.setAccessible(true);
+          method.invoke(player, Sage.eventTime());
+        }
+        catch (Throwable t)
+        {
+          failure[0] = t;
+        }
+      });
+      refreshThread.start();
+      refreshThread.join(1000);
+      assertFalse(refreshThread.isAlive(),
+          "The pusher must update its display estimate without acquiring the MiniPlayer monitor");
+    }
+    if (failure[0] != null)
+      throw new AssertionError("Display estimate refresh failed", failure[0]);
+  }
+
+  @Test
   public void testPullClockUsesSourceRelativeClientPositionAfterResumeAndSeek() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();

@@ -1259,20 +1259,26 @@ public class MiniPlayer implements DVDMediaPlayer
     return boundPushDisplayEstimate(candidate, seekFloor, sentThrough);
   }
 
-  private synchronized long refreshPushDisplayEstimate(long now)
+  private long refreshPushDisplayEstimate(long now)
   {
-    long elapsed = pushDisplayEstimateUpdateTime > 0
-        ? Math.max(0L, now - pushDisplayEstimateUpdateTime) : 0L;
-    pushDisplayEstimate = advancePushDisplayEstimate(pushDisplayEstimate, elapsed,
-        currState == PLAY_STATE, timestampOffset, directPushSentThrough);
-    pushDisplayEstimateUpdateTime = now;
-    return pushDisplayEstimate;
+    synchronized (pushDisplayEstimateLock)
+    {
+      long elapsed = pushDisplayEstimateUpdateTime > 0
+          ? Math.max(0L, now - pushDisplayEstimateUpdateTime) : 0L;
+      pushDisplayEstimate = advancePushDisplayEstimate(pushDisplayEstimate, elapsed,
+          currState == PLAY_STATE, timestampOffset, directPushSentThrough);
+      pushDisplayEstimateUpdateTime = now;
+      return pushDisplayEstimate;
+    }
   }
 
-  private synchronized void resetPushDisplayEstimate(long position)
+  private void resetPushDisplayEstimate(long position)
   {
-    pushDisplayEstimate = position;
-    pushDisplayEstimateUpdateTime = Sage.eventTime();
+    synchronized (pushDisplayEstimateLock)
+    {
+      pushDisplayEstimate = position;
+      pushDisplayEstimateUpdateTime = Sage.eventTime();
+    }
   }
 
   // Increment 1b -- seek-epoch trust guard. Returns true when the client's reported
@@ -6958,6 +6964,7 @@ public class MiniPlayer implements DVDMediaPlayer
   private long directPushSeekFloor;
   private volatile long directPushSentThrough = -1;
   private long lastRejectedDirectPushPosition = Long.MIN_VALUE;
+  private final Object pushDisplayEstimateLock = new Object();
   private long pushDisplayEstimate;
   private long pushDisplayEstimateUpdateTime;
 
