@@ -179,6 +179,8 @@ public final class Atsc1EITScanner
 
   private void runCoverageCycle()
   {
+    OtaGuideAliasManager.getInstance().apply();
+
     String deviceIp = Sage.get(PROP_DEVICE_IP, "");
     if (deviceIp.isEmpty()) return;
     if (!safetyGateOpen(deviceIp, "coverage")) return;
@@ -689,10 +691,16 @@ public final class Atsc1EITScanner
       HdhrControl ctrl = new HdhrControl(deviceId);
       int tunerCount = inferTunerCount(deviceId);
       boolean dedicated = Sage.getBoolean(PROP_DEDICATED, false);
-      int idleNeeded = dedicated ? 1 : Math.max(1, tunerCount - 1);
+      // A dedicated scan device is not part of MMC and cannot be preempted by
+      // SageTV recording/live-TV. Its tuner may still be acquiring lock when
+      // this callback first runs, so treating "not locked yet" as preemption
+      // aborts every scan before the first UDP packet arrives.
+      if (!runtimeYieldChecksRequired(dedicated)) return false;
+      int idleNeeded = Math.max(1, tunerCount - 1);
 
       HdhrControl.Status st = ctrl.queryStatus(tunerIdx);
-      if (st == null || !st.isLocked() || !st.isStreaming())
+      if (st == null || ownTunerStateRequiresYield(
+          st.isLocked(), st.isStreaming()))
       {
         if (Sage.DBG) System.out.println("Atsc1EITScanner: yielding, tuner " + tunerIdx + " no longer held by scan");
         return true;
@@ -704,14 +712,11 @@ public final class Atsc1EITScanner
         return true;
       }
 
-      if (!dedicated)
+      long lookahead = Sage.getLong(PROP_REC_LOOKAHEAD_MS, DEFAULT_REC_LOOKAHEAD_MS);
+      if (hasUpcomingRecordingOnDevice(deviceId, lookahead))
       {
-        long lookahead = Sage.getLong(PROP_REC_LOOKAHEAD_MS, DEFAULT_REC_LOOKAHEAD_MS);
-        if (hasUpcomingRecordingOnDevice(deviceId, lookahead))
-        {
-          if (Sage.DBG) System.out.println("Atsc1EITScanner: yielding, upcoming recording detected on device");
-          return true;
-        }
+        if (Sage.DBG) System.out.println("Atsc1EITScanner: yielding, upcoming recording detected on device");
+        return true;
       }
 
       return false;
@@ -720,6 +725,16 @@ public final class Atsc1EITScanner
     {
       return true;
     }
+  }
+
+  static boolean runtimeYieldChecksRequired(boolean dedicated)
+  {
+    return !dedicated;
+  }
+
+  static boolean ownTunerStateRequiresYield(boolean locked, boolean streaming)
+  {
+    return !locked || !streaming;
   }
 
   private int countIdleTuners(HdhrControl ctrl, int tunerCount)

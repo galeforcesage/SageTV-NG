@@ -333,7 +333,8 @@ Background PSIP/EIT scanner that fills in subchannel guide gaps that
 Schedules Direct misses.
 
 - `java/sage/epg/ota/`: `Atsc1EITScanner`, `OtaEpgIngestor`,
-  `PsipTables`, `TsSectionAssembler`, `HdhrControl`, `MssDecoder`.
+  `OtaGuideAliasManager`, `PsipTables`, `TsSectionAssembler`,
+  `HdhrControl`, `MssDecoder`.
 - **Two cadences**:
   - 4 h coverage scan — skip RFs already covered ≥6 h ahead by SD.
   - 10 min sports refresh — fires only when sports overrun could
@@ -342,6 +343,10 @@ Schedules Direct misses.
 - **Safety gates**: idle-tuner check, 5 min recording-lookahead,
   dual-tuner opt-in, dedicated-device override, per-hour budget
   (default 10 min/hr).
+- **Guide aliases**: optional `epg/ota_guide_aliases` mappings reconcile a
+  tunable OTA number with a guide-bearing lineup number
+  (`broadcast>guide`). The guide station is exposed on the broadcast number
+  and the duplicate no-data stub is hidden.
 - **Knobs**: `epg/ota_scan_{enabled, device_id, device_ip, tuner,
   tuners, allow_dual_tuner, device_dedicated,
   recording_lookahead_ms, interval_ms, sports_interval_ms,
