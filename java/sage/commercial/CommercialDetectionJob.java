@@ -16,8 +16,10 @@
 package sage.commercial;
 
 import java.io.*;
-import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * A single commercial detection job that runs comskip (or a custom external engine)
@@ -186,7 +188,7 @@ public class CommercialDetectionJob implements Runnable
           iniPath = defaultIni.getAbsolutePath();
       }
     }
-    // For live detection, create a temp ini with live_tv settings appended.
+    // For live detection, flatten the selected INI with live settings at highest precedence.
     // Comskip's native live_tv mode (BuildCommListAsYouGo) processes the growing
     // file in real-time, retrying at EOF until the file stops growing.
     File tempLiveIni = null;
@@ -200,16 +202,13 @@ public class CommercialDetectionJob implements Runnable
           try
           {
             int retries = sage.Sage.getInt("commercial_detection/live_tv_retries", 120);
-            tempLiveIni = File.createTempFile("comskip_live_", ".ini", recordingFile.getParentFile());
-            String baseIni = new String(Files.readAllBytes(iniFile.toPath()), "UTF-8");
-            try (FileWriter fw = new FileWriter(tempLiveIni))
-            {
-              fw.write(baseIni);
-              if (!baseIni.endsWith("\n")) fw.write("\n");
-              fw.write("\n[Live TV]\n");
-              fw.write("live_tv=1\n");
-              fw.write("live_tv_retries=" + retries + "\n");
-            }
+            Map<String, String> liveOverrides = new LinkedHashMap<>();
+            liveOverrides.put("live_tv", "1");
+            liveOverrides.put("live_tv_retries", Integer.toString(retries));
+            Map<String, String> effective = ComskipIni.mergeLayers(
+                Collections.singletonList(iniFile.toPath()), liveOverrides);
+            tempLiveIni = ComskipIni.writeEffectiveIni(effective, "live",
+                recordingFile.getParentFile().toPath()).toFile();
             cmd.add("--ini=" + tempLiveIni.getAbsolutePath());
             if (sage.Sage.DBG) System.out.println("CommercialDetectionJob: Created live_tv ini with " + retries + " retries");
           }

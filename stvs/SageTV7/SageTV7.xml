@@ -85148,28 +85148,6 @@
            </ns0:Item>
            <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
           </ns0:Panel>
-          <ns0:Panel Name="ContentProfiles" Sym="COMSKIP-640">
-           <ns0:Text Name="Content Profiles" Sym="COMSKIP-641" />
-           <ns0:Item Name="Toggle" Sym="COMSKIP-642">
-            <ns0:Action Name="IsCommercialDetectProfilesEnabled()" Sym="COMSKIP-643">
-             <ns0:Action Name="SetCommercialDetectProfilesEnabled(!this)" Sym="COMSKIP-644">
-              <ns0:Action Name="Refresh()" Sym="COMSKIP-645" />
-             </ns0:Action>
-            </ns0:Action>
-            <ns0:Conditional Name="IsCommercialDetectProfilesEnabled()" Sym="COMSKIP-646">
-             <ns0:Branch Name="true" Sym="COMSKIP-647">
-              <ns0:Text Name="Enabled" Sym="COMSKIP-648" />
-             </ns0:Branch>
-             <ns0:Branch Name="false" Sym="COMSKIP-649">
-              <ns0:Text Name="Disabled" Sym="COMSKIP-650" />
-             </ns0:Branch>
-            </ns0:Conditional>
-            <ns0:Attribute Name="HelpText" Sym="COMSKIP-651">
-             <ns0:Value>"Auto-select comskip INI profiles based on content type (Sports, News, Default). Uses base INI + content-specific delta overlays. When disabled, only the standard comskip.ini is used."</ns0:Value>
-            </ns0:Attribute>
-           </ns0:Item>
-           <ns0:Theme Ref="5454" Name="WideLeftRowPanelTheme ..." />
-          </ns0:Panel>
           <ns0:Panel Name="BatchCommercialDetection" Sym="COMSKIP-540">
            <ns0:WrapHNav>false</ns0:WrapHNav>
            <ns0:WrapVNav>false</ns0:WrapVNav>

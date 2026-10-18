@@ -1,0 +1,51 @@
+{
+  "profiles": {
+    "DRAMA_SCRIPTED": [
+      "Drama", "Crime drama", "Comedy drama", "Courtroom Drama",
+      "Historical drama", "Docudrama", "Dramedy", "Independent Drama",
+      "Inspirational Drama", "Crime", "Mystery", "Law", "Horror",
+      "Romance", "Soap"
+    ],
+    "SITCOM": [
+      "Comedy", "Sitcom", "Dark comedy", "Romantic comedy",
+      "Musical comedy", "Political Comedies"
+    ],
+    "SPORTS": [
+      "Sports", "Sports event", "Playoff sports", "Football", "Baseball",
+      "Basketball", "Hockey", "Soccer", "Golf", "Auto racing",
+      "Horse racing", "Pro wrestling"
+    ],
+    "NEWS": [
+      "News", "News & Information", "News & Opinion", "Newsmagazine",
+      "Public affairs", "Politics", "Debate", "Interview", "Talk",
+      "Business", "Bus./financial", "Weather"
+    ],
+    "GAME_REALITY": [
+      "Game show", "Game Shows", "Dating Show", "Reality", "Reality TV",
+      "Reality Competition", "Competition reality", "Medical Reality",
+      "Variety"
+    ],
+    "MOVIE": ["Movie"],
+    "BASE": [
+      "True Crime", "Documentary", "History", "Science", "Nature",
+      "Biography", "Animals", "Children", "Family", "Cooking",
+      "Lifestyle", "Travel", "Special"
+    ]
+  },
+  "precedence": [
+    "MOVIE",
+    "SPORTS_EVENT_EXPLICIT",
+    "NEWS",
+    "GAME_REALITY",
+    "SITCOM",
+    "DRAMA_SCRIPTED",
+    "FACTUAL_BASE_EXPLICIT",
+    "SPORTS_TOPIC_OR_NAME",
+    "BROAD_BASE_FALLBACK"
+  ],
+  "strongSportsEventLabels": ["Sports event", "Playoff sports"],
+  "weakSportsTopicLabels": [
+    "Sports", "Football", "Baseball", "Basketball", "Hockey", "Soccer",
+    "Golf", "Auto racing", "Horse racing", "Pro wrestling"
+  ]
+}

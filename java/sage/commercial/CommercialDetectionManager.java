@@ -17,6 +17,7 @@ package sage.commercial;
 
 import sage.*;
 import java.io.*;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
 import java.text.SimpleDateFormat;
@@ -537,7 +538,7 @@ public class CommercialDetectionManager
    * Lookup order:
    * 1. ShowName.ini in the ini directory (spaces removed from show title)
    * 2. ChannelName.ini in the ini directory
-   * 3. Profile-based INI (base + content-type delta), if profiles enabled
+   * 3. Profile-based INI (base + content-type delta)
    * 4. Default configured ini path
    */
   public String resolveComskipIni(MediaFile mf)
@@ -548,20 +549,16 @@ public class CommercialDetectionManager
       File dir = new File(iniDir);
       if (dir.exists() && dir.isDirectory())
       {
+        File showIni = null;
+        File channelIni = null;
+
         // Try show name
         Show show = mf.getShow();
         if (show != null)
         {
           String showName = show.getTitle();
           if (showName != null && !showName.isEmpty())
-          {
-            File showIni = new File(dir, showName.replaceAll("\\s+", "") + ".ini");
-            if (showIni.exists())
-            {
-              if (Sage.DBG) System.out.println("CommercialDetectionManager: Using show-specific ini: " + showIni);
-              return showIni.getAbsolutePath();
-            }
-          }
+            showIni = new File(dir, showName.replaceAll("\\s+", "") + ".ini");
         }
 
         // Try channel name
@@ -570,57 +567,91 @@ public class CommercialDetectionManager
         {
           String channelName = airing.getChannelName();
           if (channelName != null && !channelName.isEmpty())
-          {
-            File channelIni = new File(dir, channelName + ".ini");
-            if (channelIni.exists())
-            {
-              if (Sage.DBG) System.out.println("CommercialDetectionManager: Using channel-specific ini: " + channelIni);
-              return channelIni.getAbsolutePath();
-            }
-          }
+            channelIni = new File(dir, channelName + ".ini");
+        }
+
+        String specificIni = selectSpecificIni(showIni, channelIni);
+        if (specificIni != null)
+        {
+          if (Sage.DBG) System.out.println("CommercialDetectionManager: Using specific ini: " +
+              specificIni);
+          return specificIni;
         }
       }
     }
 
-    // Profile-based INI: detect content type and merge base + delta
-    if (isProfilesEnabled())
-    {
-      String profileIni = buildProfileIni(mf);
-      if (profileIni != null)
-        return profileIni;
-    }
+    // Commercial detection always uses the profile system when its base is
+    // available. Administrators can leave content deltas empty for base-only
+    // behavior without maintaining a separate enable switch.
+    String profileIni = buildProfileIni(mf);
+    if (profileIni != null)
+      return profileIni;
 
     // Fall back to configured default
     return Sage.get("commercial_detection/comskip_ini", "");
   }
 
+  /**
+   * Selects the highest-priority existing show or channel INI.
+   *
+   * @param showIni show-specific candidate
+   * @param channelIni channel-specific candidate
+   * @return absolute path to the selected file, or null
+   */
+  static String selectSpecificIni(File showIni, File channelIni)
+  {
+    if (showIni != null && showIni.isFile())
+      return showIni.getAbsolutePath();
+    if (channelIni != null && channelIni.isFile())
+      return channelIni.getAbsolutePath();
+    return null;
+  }
+
   // ── Comskip Profile System ──
   // Profiles use a base INI + content-type delta overlay:
-  //   0 = comskip_base.ini (adaptive defaults, works alone)
-  //   1 = comskip_sports.delta.ini (conservative bias for sports)
-  //   2 = comskip_news.delta.ini (aggressive bias for news/talk)
-  //   3 = comskip_hdhomerun.delta.ini (OTA signal tuning)
-  // Effective INI = base(0) + delta(X). Later values override earlier ones.
+  //   BASE = comskip_base.ini only
+  //   DRAMA_SCRIPTED, SITCOM, SPORTS, NEWS, GAME_REALITY, MOVIE = base + delta
+  // Capture-source and station/channel behavior are independent overlay dimensions.
 
   /**
    * Content type detected from SageTV metadata.
    */
   public enum ContentProfile
   {
-    DEFAULT,   // base only
-    SPORTS,    // base + sports delta
-    NEWS       // base + news delta
+    BASE,
+    DRAMA_SCRIPTED,
+    SITCOM,
+    SPORTS,
+    NEWS,
+    GAME_REALITY,
+    MOVIE
   }
 
-  public boolean isProfilesEnabled()
-  {
-    return Sage.getBoolean("commercial_detection/profiles_enabled", false);
-  }
-
-  public void setProfilesEnabled(boolean enabled)
-  {
-    Sage.putBoolean("commercial_detection/profiles_enabled", enabled);
-  }
+  private static final Set<String> MOVIE_CATEGORIES = normalizedSet("Movie");
+  private static final Set<String> STRONG_SPORTS_CATEGORIES = normalizedSet(
+      "Sports event", "Playoff sports");
+  private static final Set<String> NEWS_CATEGORIES = normalizedSet(
+      "News", "News & Information", "News & Opinion", "Newsmagazine",
+      "Public affairs", "Politics", "Debate", "Interview", "Talk",
+      "Business", "Bus./financial", "Weather");
+  private static final Set<String> GAME_REALITY_CATEGORIES = normalizedSet(
+      "Game show", "Game Shows", "Dating Show", "Reality", "Reality TV",
+      "Reality Competition", "Competition reality", "Medical Reality", "Variety");
+  private static final Set<String> SITCOM_CATEGORIES = normalizedSet(
+      "Comedy", "Sitcom", "Dark comedy", "Romantic comedy",
+      "Musical comedy", "Political Comedies");
+  private static final Set<String> DRAMA_CATEGORIES = normalizedSet(
+      "Drama", "Crime drama", "Comedy drama", "Courtroom Drama",
+      "Historical drama", "Docudrama", "Dramedy", "Independent Drama",
+      "Inspirational Drama", "Crime", "Mystery", "Law", "Horror",
+      "Romance", "Soap");
+  private static final Set<String> FACTUAL_BASE_CATEGORIES = normalizedSet(
+      "True Crime", "Documentary", "History", "Science", "Nature",
+      "Biography", "Animals", "Children", "Family", "Cooking",
+      "Lifestyle", "Travel", "Special");
+  private static final Set<String> WEAK_SPORTS_CATEGORIES = normalizedSet(
+      "Sports", "Football", "Baseball", "Basketball", "Hockey", "Soccer",
+      "Golf", "Auto racing", "Horse racing", "Pro wrestling");
 
   public String getProfileDirectory()
   {
@@ -637,54 +668,76 @@ public class CommercialDetectionManager
    */
   public ContentProfile detectContentProfile(MediaFile mf)
   {
-    if (mf == null) return ContentProfile.DEFAULT;
+    if (mf == null) return ContentProfile.BASE;
     Show show = mf.getShow();
-    if (show == null) return ContentProfile.DEFAULT;
+    if (show == null) return ContentProfile.BASE;
+    return detectContentProfile(show.getCategories());
+  }
 
-    // Check all categories for sports or news keywords
-    String[] categories = show.getCategories();
+  /**
+   * Detects a content profile from category metadata with fixed priority.
+   *
+   * @param categories SageTV category strings
+   * @return the selected content profile
+   */
+  static ContentProfile detectContentProfile(String[] categories)
+  {
+    Set<String> normalized = new HashSet<>();
     if (categories != null)
     {
       for (String cat : categories)
       {
-        if (cat == null) continue;
-        String lower = cat.toLowerCase();
-        // Sports detection
-        if (lower.contains("sport") || lower.contains("football") || lower.contains("basketball") ||
-            lower.contains("baseball") || lower.contains("hockey") || lower.contains("soccer") ||
-            lower.contains("tennis") || lower.contains("golf") || lower.contains("racing") ||
-            lower.contains("boxing") || lower.contains("wrestling") || lower.contains("mma") ||
-            lower.contains("olympics") || lower.equals("athletic event"))
+        if (cat != null)
         {
-          return ContentProfile.SPORTS;
-        }
-        // News detection
-        if (lower.contains("news") || lower.contains("public affairs") ||
-            lower.contains("newsmagazine") || lower.contains("interview") ||
-            lower.contains("talk") || lower.contains("politics") ||
-            lower.contains("business") || lower.equals("debate"))
-        {
-          return ContentProfile.NEWS;
+          String value = cat.trim().toLowerCase(Locale.ROOT);
+          if (!value.isEmpty())
+            normalized.add(value);
         }
       }
     }
 
-    return ContentProfile.DEFAULT;
+    if (containsAny(normalized, MOVIE_CATEGORIES))
+      return ContentProfile.MOVIE;
+    if (containsAny(normalized, STRONG_SPORTS_CATEGORIES))
+      return ContentProfile.SPORTS;
+    if (containsAny(normalized, NEWS_CATEGORIES))
+      return ContentProfile.NEWS;
+    if (containsAny(normalized, GAME_REALITY_CATEGORIES))
+      return ContentProfile.GAME_REALITY;
+    if (containsAny(normalized, SITCOM_CATEGORIES))
+      return ContentProfile.SITCOM;
+    if (containsAny(normalized, DRAMA_CATEGORIES))
+      return ContentProfile.DRAMA_SCRIPTED;
+    if (containsAny(normalized, FACTUAL_BASE_CATEGORIES))
+      return ContentProfile.BASE;
+    if (containsAny(normalized, WEAK_SPORTS_CATEGORIES))
+      return ContentProfile.SPORTS;
+    return ContentProfile.BASE;
   }
 
-  /**
-   * Check if the recording source is an HDHomeRun tuner.
-   */
-  private boolean isHDHomeRunSource(MediaFile mf)
+  private static boolean containsAny(Set<String> categories, Set<String> candidates)
   {
-    String encoder = mf.getEncodedBy();
-    return encoder != null && encoder.toLowerCase().contains("hdhomerun");
+    for (String candidate : candidates)
+      if (categories.contains(candidate))
+        return true;
+    return false;
+  }
+
+  private static Set<String> normalizedSet(String... values)
+  {
+    Set<String> normalized = new HashSet<>();
+    for (String value : values)
+      normalized.add(value.toLowerCase(Locale.ROOT));
+    return Collections.unmodifiableSet(normalized);
   }
 
   /**
-   * Build an effective INI file by merging base + content delta [+ HDHomeRun delta].
+   * Builds an effective INI by merging the base and selected content layer.
+   *
+   * <p>Each layer keeps Comskip's first-definition behavior internally. Later
+   * layers replace earlier values in the generated unique-key INI.</p>
+   *
    * Returns the path to a temp INI file, or null if profiles are not configured.
-   * Comskip INI works like properties: later values override earlier ones when concatenated.
    */
   private String buildProfileIni(MediaFile mf)
   {
@@ -698,63 +751,72 @@ public class CommercialDetectionManager
     }
 
     ContentProfile profile = detectContentProfile(mf);
-    boolean hdhr = isHDHomeRunSource(mf);
 
-    // If DEFAULT and not HDHomeRun, just use base directly (no temp file needed)
-    if (profile == ContentProfile.DEFAULT && !hdhr)
-    {
-      if (Sage.DBG) System.out.println("CommercialDetectionManager: Using base profile ini: " + baseIni);
-      return baseIni.getAbsolutePath();
-    }
-
-    // Need to merge: build a temp file
     try
     {
-      // Read base
-      StringBuilder sb = new StringBuilder();
-      sb.append(new String(java.nio.file.Files.readAllBytes(baseIni.toPath()), "UTF-8"));
+      List<Path> layers = new ArrayList<>();
+      layers.add(baseIni.toPath());
 
-      // Append content-type delta
-      File deltaFile = null;
-      if (profile == ContentProfile.SPORTS)
-        deltaFile = new File(dir, "comskip_sports.delta.ini");
-      else if (profile == ContentProfile.NEWS)
-        deltaFile = new File(dir, "comskip_news.delta.ini");
-
-      if (deltaFile != null && deltaFile.exists())
+      File contentDelta = getContentDelta(dir, profile);
+      if (contentDelta != null)
       {
-        sb.append("\n");
-        sb.append(new String(java.nio.file.Files.readAllBytes(deltaFile.toPath()), "UTF-8"));
-        if (Sage.DBG) System.out.println("CommercialDetectionManager: Applying " + profile + " delta: " + deltaFile.getName());
+        if (addOptionalLayer(layers, contentDelta, profile.toString()))
+          if (Sage.DBG) System.out.println("CommercialDetectionManager: Applying " + profile +
+              " delta: " + contentDelta.getName());
       }
 
-      // Append HDHomeRun delta if applicable
-      if (hdhr)
-      {
-        File hdhrDelta = new File(dir, "comskip_hdhomerun.delta.ini");
-        if (hdhrDelta.exists())
-        {
-          sb.append("\n");
-          sb.append(new String(java.nio.file.Files.readAllBytes(hdhrDelta.toPath()), "UTF-8"));
-          if (Sage.DBG) System.out.println("CommercialDetectionManager: Applying HDHomeRun delta");
-        }
-      }
-
-      // Write merged ini to temp file
-      File tempIni = File.createTempFile("comskip_profile_", ".ini");
-      tempIni.deleteOnExit();
-      try (FileWriter fw = new FileWriter(tempIni))
-      {
-        fw.write(sb.toString());
-      }
-      if (Sage.DBG) System.out.println("CommercialDetectionManager: Built profile ini [" + profile +
-          (hdhr ? "+HDHR" : "") + "] -> " + tempIni.getAbsolutePath());
-      return tempIni.getAbsolutePath();
+      LinkedHashMap<String, String> effective = ComskipIni.mergeLayers(layers, null);
+      Path tempIni = ComskipIni.writeEffectiveIni(effective,
+          "profile_" + profile.name(), null);
+      if (Sage.DBG) System.out.println("CommercialDetectionManager: Built profile ini [" +
+          profile + "] -> " + tempIni);
+      return tempIni.toAbsolutePath().toString();
     }
     catch (IOException e)
     {
       if (Sage.DBG) System.out.println("CommercialDetectionManager: Failed to build profile ini: " + e);
       return null;
+    }
+  }
+
+  /**
+   * Adds an optional profile layer or logs that it is unavailable.
+   *
+   * @param layers destination layer list
+   * @param candidate optional INI file
+   * @param label profile label for diagnostics
+   * @return true when the layer was added
+   */
+  static boolean addOptionalLayer(List<Path> layers, File candidate, String label)
+  {
+    if (candidate != null && candidate.isFile())
+    {
+      layers.add(candidate.toPath());
+      return true;
+    }
+    System.out.println("CommercialDetectionManager WARNING: Optional " + label +
+        " delta not found: " + candidate);
+    return false;
+  }
+
+  static File getContentDelta(File profileDir, ContentProfile profile)
+  {
+    switch (profile)
+    {
+      case DRAMA_SCRIPTED:
+        return new File(profileDir, "comskip_drama.delta.ini");
+      case SITCOM:
+        return new File(profileDir, "comskip_sitcom.delta.ini");
+      case SPORTS:
+        return new File(profileDir, "comskip_sports.delta.ini");
+      case NEWS:
+        return new File(profileDir, "comskip_news.delta.ini");
+      case GAME_REALITY:
+        return new File(profileDir, "comskip_game_reality.delta.ini");
+      case MOVIE:
+        return new File(profileDir, "comskip_movie.delta.ini");
+      default:
+        return null;
     }
   }
 

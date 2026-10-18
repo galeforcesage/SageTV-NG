@@ -56,9 +56,14 @@ When opening this repo for an AI-assisted task:
 
 2. **`comskip/`** (repo root) — our **profile INI files**:
    - `comskip_base.ini` — master config
+   - `comskip_drama.delta.ini` — scripted-drama overlay
+   - `comskip_sitcom.delta.ini` — sitcom/comedy overlay
    - `comskip_sports.delta.ini` — sports overlay
    - `comskip_news.delta.ini` — news overlay
-   - `comskip_hdhomerun.delta.ini` — HDHomeRun-specific tuning
+   - `comskip_game_reality.delta.ini` — game/reality overlay
+   - `comskip_movie.delta.ini` — movie overlay
+   - `channel_override.example.delta.ini` — inactive station/channel skeleton
+   - `category-profile-map.json` — exact category routing reference
 
    Copied into `serverrelease/comskip_profiles/` by
    `build/copyserverfiles.sh` during release packaging.
@@ -75,10 +80,11 @@ When opening this repo for an AI-assisted task:
 
 #### Profile system architecture
 
-- "Sports / News / Default" are **content types**, not three separate
-  full INIs. They use **base INI + content-specific delta overlays**.
-- Toggled via STV: `IsCommercialDetectProfilesEnabled()` /
-  `SetCommercialDetectProfilesEnabled(...)` (STV `COMSKIP-640..651`).
+- Content profiles are **content types**, not separate full INIs. They use
+  **base INI + content-specific delta overlays** whenever commercial detection
+  is enabled. There is no separate profile toggle.
+- Empty content delta files are valid no-op layers, allowing administrators to
+  customize only `comskip_base.ini` for base-only behavior.
 - Per-channel / per-show INIs go in an external directory configured
   via `GetComskipIniDirectory()` / `SetComskipIniDirectory()`. Drop
   `ShowName.ini` or `ChannelName.ini` files there for custom profiles

@@ -754,35 +754,6 @@ public class CommercialSkipAPI {
 
     // ── Profile System ──
 
-    rft.put(new PredefinedJEPFunction("CommercialSkip", "IsCommercialDetectProfilesEnabled", true)
-    {
-      /**
-       * Returns whether the comskip profile system is enabled.
-       * When enabled, the system auto-selects base + delta INI based on content type.
-       * @return true if profiles are enabled
-       * @since 9.3
-       *
-       * @declaration public boolean IsCommercialDetectProfilesEnabled();
-       */
-      public Object runSafely(Catbert.FastStack stack) throws Exception{
-        return CommercialDetectionManager.getInstance().isProfilesEnabled();
-      }});
-
-    rft.put(new PredefinedJEPFunction("CommercialSkip", "SetCommercialDetectProfilesEnabled", new String[] { "Enabled" }, true)
-    {
-      /**
-       * Enables or disables the comskip profile system.
-       * @param Enabled true to enable content-based profile selection
-       * @since 9.3
-       *
-       * @declaration public void SetCommercialDetectProfilesEnabled(boolean Enabled);
-       */
-      public Object runSafely(Catbert.FastStack stack) throws Exception{
-        boolean enabled = evalBool(stack.pop());
-        CommercialDetectionManager.getInstance().setProfilesEnabled(enabled);
-        return null;
-      }});
-
     rft.put(new PredefinedJEPFunction("CommercialSkip", "GetCommercialDetectProfileDirectory", true)
     {
       /**
