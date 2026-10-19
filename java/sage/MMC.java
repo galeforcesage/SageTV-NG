@@ -152,6 +152,95 @@ public class MMC
     return (CaptureDevice[]) globalEncoderMap.values().toArray(new CaptureDevice[0]);
   }
 
+  /**
+   * Returns capture device names with the requested reachability classification.
+   *
+   * @param reachability requested reachability classification
+   * @return sorted capture device names with the requested reachability
+   */
+  public String[] getCaptureDeviceNamesByReachability(CaptureDevice.Reachability reachability)
+  {
+    CaptureDevice[] captureDevices = getCaptureDevices();
+    java.util.ArrayList matches = new java.util.ArrayList();
+    for (int i = 0; i < captureDevices.length; i++)
+    {
+      if (captureDevices[i].getReachability() == reachability)
+        matches.add(captureDevices[i].getName());
+    }
+    java.util.Collections.sort(matches);
+    return (String[]) matches.toArray(Pooler.EMPTY_STRING_ARRAY);
+  }
+
+  /**
+   * Removes a stale, inactive capture device from live and persisted configuration.
+   *
+   * @param captureDeviceName capture device name
+   * @throws IllegalArgumentException if the capture device does not exist
+   * @throws IllegalStateException if the capture device is reachable or active
+   */
+  public void removeStaleCaptureDevice(String captureDeviceName)
+  {
+    CaptureDevice captureDevice = getCaptureDeviceNamed(captureDeviceName);
+    if (captureDevice == null)
+      throw new IllegalArgumentException("Unknown capture device: " + captureDeviceName);
+    if (getCurrentReachability(captureDevice) != CaptureDevice.Reachability.STALE)
+      throw new IllegalStateException("Capture device is not confirmed stale: " + captureDeviceName);
+    removeInactiveCaptureDevice(captureDeviceName, captureDevice);
+  }
+
+  /**
+   * Removes an inactive capture device whose individual reachability cannot be verified.
+   *
+   * @param captureDeviceName capture device name
+   * @param confirmation exact confirmation token, which must be {@code DELETE}
+   * @throws IllegalArgumentException if the capture device does not exist or confirmation is invalid
+   * @throws IllegalStateException if the capture device is not unverified or is active
+   */
+  public void removeUnverifiedCaptureDevice(String captureDeviceName, String confirmation)
+  {
+    if (!"DELETE".equals(confirmation))
+      throw new IllegalArgumentException("Type DELETE to confirm removal.");
+    CaptureDevice captureDevice = getCaptureDeviceNamed(captureDeviceName);
+    if (captureDevice == null)
+      throw new IllegalArgumentException("Unknown capture device: " + captureDeviceName);
+    if (getCurrentReachability(captureDevice) != CaptureDevice.Reachability.UNKNOWN)
+      throw new IllegalStateException("Capture device reachability is known and cannot be removed here: " +
+          captureDeviceName);
+    removeInactiveCaptureDevice(captureDeviceName, captureDevice);
+  }
+
+  private void removeInactiveCaptureDevice(String captureDeviceName, CaptureDevice captureDevice)
+  {
+    if (SeekerSelector.getInstance().getCurrRecordMediaFile(captureDevice) != null)
+      throw new IllegalStateException("Capture device is currently recording: " + captureDeviceName);
+    if (SeekerSelector.getInstance().isAClientControllingCaptureDevice(captureDevice))
+      throw new IllegalStateException("Capture device is currently controlled by a live client: " + captureDeviceName);
+
+    CaptureDeviceInput[] inputs = captureDevice.getInputs();
+    for (int i = 0; i < inputs.length; i++)
+      inputs[i].setProvider(0);
+    captureDevice.setDisabled(true);
+    synchronized (globalEncoderMap)
+    {
+      if (globalEncoderMap.get(captureDeviceName) != captureDevice)
+        throw new IllegalStateException("Capture device changed while it was being removed: " + captureDeviceName);
+      globalEncoderMap.remove(captureDeviceName);
+    }
+    captureDevice.clearPrefs();
+    Sage.remove("seeker/last_channel/" + captureDeviceName);
+    Sage.savePrefs();
+    NetworkClient.distributeRecursivePropertyChange("mmc/encoders");
+    cleanupUnusedLineups();
+    SeekerSelector.getInstance().kick();
+    SchedulerSelector.getInstance().kick(true);
+  }
+
+  private CaptureDevice.Reachability getCurrentReachability(CaptureDevice captureDevice)
+  {
+    return captureDevice instanceof NetworkCaptureDevice ?
+        ((NetworkCaptureDevice) captureDevice).refreshReachability() : captureDevice.getReachability();
+  }
+
   public CaptureDevice getPreferredCaptureDevice()
   {
     CaptureDevice cd = (CaptureDevice) globalEncoderMap.get(lastEncoderName);

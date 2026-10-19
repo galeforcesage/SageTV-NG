@@ -361,6 +361,34 @@ public abstract class CaptureDevice
   }
 
   public boolean isFunctioning() { return !encoderDisabled; }
+  /** Describes whether a specific capture device can be validated independently. */
+  public enum Reachability
+  {
+    REACHABLE,
+    STALE,
+    UNKNOWN
+  }
+
+  /**
+   * Returns the current reachability classification for this specific capture device.
+   *
+   * <p>Most capture devices have device-specific functioning checks. Network encoders can return
+   * {@link Reachability#UNKNOWN} when their shared endpoint responds but does not provide a usable
+   * per-device roster.</p>
+   *
+   * @return current reachability classification
+   */
+  public Reachability getReachability()
+  {
+    return isFunctioning() ? Reachability.REACHABLE : Reachability.STALE;
+  }
+
+  /**
+   * Returns whether this capture device is not known to be stale.
+   *
+   * @return {@code false} only when this specific device is known to be stale
+   */
+  public boolean isReachable() { return getReachability() != Reachability.STALE; }
   public boolean isDisabled() { return encoderDisabled; }
   public void setDisabled(boolean disabled)
   {

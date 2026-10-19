@@ -24,6 +24,8 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
+import java.nio.file.FileStore;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -2021,20 +2023,136 @@ public class Seeker implements Hunter
     synchronized (videoStore)
     {
       for (int i = 0; i < videoStore.size(); i++)
-        videoStore.elementAt(i).addUsedTotalVideoDiskspace(usedTotalRV);
+        usedTotalRV[0] += videoStore.elementAt(i).getUsedVideoDiskspace();
+      usedTotalRV[1] = saturatedAdd(usedTotalRV[0],
+          calculateAvailableVideoDiskspace(videoStore));
     }
     return usedTotalRV;
   }
 
   public long getAvailVideoDiskspace()
   {
-    long freeSpace = 0;
     synchronized (videoStore)
     {
-      for (int i = 0; i < videoStore.size(); i++)
-        freeSpace += videoStore.elementAt(i).getAvailVideoDiskspace();
+      return calculateAvailableVideoDiskspace(videoStore);
     }
-    return freeSpace;
+  }
+
+  static long calculateAvailableVideoDiskspace(Collection<VideoStorage> stores)
+  {
+    return calculateAvailableVideoDiskspace(stores, DEFAULT_DISK_SPACE_PROBE);
+  }
+
+  static long calculateAvailableVideoDiskspace(
+      Collection<VideoStorage> stores, VideoDiskSpaceProbe probe)
+  {
+    Map<Object, VideoFilesystemAvailability> filesystems = new HashMap<Object, VideoFilesystemAvailability>();
+    for (VideoStorage store : stores)
+    {
+      Object filesystemKey = probe.getFilesystemKey(store);
+
+      VideoFilesystemAvailability availability = filesystems.get(filesystemKey);
+      if (availability == null)
+      {
+        availability = new VideoFilesystemAvailability();
+        filesystems.put(filesystemKey, availability);
+      }
+      availability.add(store.videoDiskspaceRule,
+          probe.getPhysicalFree(store), probe.getAvailable(store));
+    }
+
+    long total = 0;
+    for (VideoFilesystemAvailability availability : filesystems.values())
+      total = saturatedAdd(total, availability.getAvailable());
+    return total;
+  }
+
+  interface VideoDiskSpaceProbe
+  {
+    Object getFilesystemKey(VideoStorage store);
+
+    long getPhysicalFree(VideoStorage store);
+
+    long getAvailable(VideoStorage store);
+  }
+
+  private static final VideoDiskSpaceProbe DEFAULT_DISK_SPACE_PROBE =
+      new VideoDiskSpaceProbe()
+      {
+        public Object getFilesystemKey(VideoStorage store)
+        {
+          try
+          {
+            Object unixDevice = Files.getAttribute(
+                store.videoDir.toPath(), "unix:dev");
+            if (unixDevice != null)
+              return "unix:" + unixDevice;
+          }
+          catch (UnsupportedOperationException e)
+          {
+            // Non-Unix providers fall back to FileStore identity below.
+          }
+          catch (IOException e)
+          {
+            if (Sage.DBG)
+              System.out.println("Unable to read filesystem device for video directory " +
+                  store.videoDir + ": " + e);
+          }
+
+          try
+          {
+            FileStore fileStore = Files.getFileStore(store.videoDir.toPath());
+            return fileStore;
+          }
+          catch (IOException e)
+          {
+            if (Sage.DBG)
+              System.out.println("Unable to identify filesystem for video directory " +
+                  store.videoDir + ": " + e);
+            return store.videoDir.getAbsolutePath();
+          }
+        }
+
+        public long getPhysicalFree(VideoStorage store)
+        {
+          return FSManager.getInstance().getDiskFreeSpace(
+              store.videoDir.toString());
+        }
+
+        public long getAvailable(VideoStorage store)
+        {
+          return store.getAvailVideoDiskspace();
+        }
+      };
+
+  private static long saturatedAdd(long left, long right)
+  {
+    if (right > 0 && left > Long.MAX_VALUE - right)
+      return Long.MAX_VALUE;
+    return left + right;
+  }
+
+  private static final class VideoFilesystemAvailability
+  {
+    private long physicalFree;
+    private long sharedAvailable;
+    private long quotaAvailable;
+
+    void add(int rule, long diskFree, long available)
+    {
+      diskFree = Math.max(0, diskFree);
+      available = Math.max(0, available);
+      physicalFree = Math.max(physicalFree, diskFree);
+      if (rule == VIDEO_DISKSPACE_USE_ONLY)
+        quotaAvailable = saturatedAdd(quotaAvailable, available);
+      else
+        sharedAvailable = Math.max(sharedAvailable, available);
+    }
+
+    long getAvailable()
+    {
+      return Math.max(sharedAvailable, Math.min(physicalFree, quotaAvailable));
+    }
   }
 
   public long getUsedVideoDiskspace()

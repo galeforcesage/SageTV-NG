@@ -80041,6 +80041,10 @@
      <ns0:Menu Ref="907" Name="Setup Wizard - Capture..." />
      <ns0:Theme Ref="30350" Name="SetupWizSummaryButton" />
     </ns0:Item>
+    <ns0:Item Name="Remove Stale / Unverified Sources" Sym="STALESRC-001">
+     <ns0:Menu Ref="99001" Name="Setup Wizard - Stale So..." />
+     <ns0:Theme Ref="30350" Name="SetupWizSummaryButton" />
+    </ns0:Item>
     <ns0:Item Name="Finish Source Setup" Sym="BASE-54956">
      <ns0:Attribute Name="DefaultFocus" Sym="BASE-54957">
       <ns0:Value>Size(GetConfiguredCaptureDeviceInputs()) &gt; 0</ns0:Value>
@@ -80210,6 +80214,228 @@
   </ns0:Attribute>
   <ns0:Attribute Name="SourceTextPlural" Sym="OPUS4A-181520">
    <ns0:Value>"Configured Sources"</ns0:Value>
+  </ns0:Attribute>
+ </ns0:Menu>
+ <ns0:Menu ID="99001" Name="Setup Wizard - Stale Sources" Sym="STALESRC-002">
+  <ns0:Theme Ref="30309" Name="SetupWizardMenuTheme 7" />
+  <ns0:Panel Name="MenuContainer" Sym="STALESRC-003">
+   <ns0:AnchorX>0.04</ns0:AnchorX>
+   <ns0:AnchorY>0.15</ns0:AnchorY>
+   <ns0:AnchorPointX>0.0</ns0:AnchorPointX>
+   <ns0:AnchorPointY>0.0</ns0:AnchorPointY>
+   <ns0:FixedWidth>0.92</ns0:FixedWidth>
+   <ns0:FixedHeight>0.8</ns0:FixedHeight>
+   <ns0:Theme Ref="7380" Name="Free Form Full Menu Co..." />
+   <ns0:Panel Name="SourceLists" Sym="STALESRC-004">
+    <ns0:Layout>Vertical</ns0:Layout>
+    <ns0:FixedWidth>1.0</ns0:FixedWidth>
+    <ns0:FixedHeight>1.0</ns0:FixedHeight>
+    <ns0:PadY>0.01</ns0:PadY>
+    <ns0:Text Name="Stale / Unreachable Sources" Sym="STALESRC-005">
+     <ns0:AutosizeText>false</ns0:AutosizeText>
+     <ns0:WrapText>true</ns0:WrapText>
+     <ns0:TextAlignment>0.5</ns0:TextAlignment>
+     <ns0:Theme Ref="30313" Name="SetupSubTitleTextTheme" />
+    </ns0:Text>
+    <ns0:Action Name="StaleSourceList = GetStaleCaptureDevices()" Sym="STALESRC-006">
+     <ns0:Conditional Name="Size(StaleSourceList) &gt; 0" Sym="STALESRC-007">
+      <ns0:Branch Name="true" Sym="STALESRC-008">
+       <ns0:Action Name="StaleSourceList" Sym="STALESRC-064">
+       <ns0:Table Name="Stale Sources" Sym="STALESRC-009">
+        <ns0:FixedWidth>1.0</ns0:FixedWidth>
+        <ns0:FixedHeight>0.18</ns0:FixedHeight>
+        <ns0:NumRows>2</ns0:NumRows>
+        <ns0:NumCols>1</ns0:NumCols>
+        <ns0:TableComponent Name="StaleCaptureDevice" Sym="STALESRC-010">
+         <ns0:Item Name="" Sym="STALESRC-011">
+          <ns0:Insets>=gButtonHighlightUIWidgetInsetsLarge</ns0:Insets>
+          <ns0:Action Name="StaleCaptureDevice" Sym="STALESRC-012">
+           <ns0:Text Name="" Sym="STALESRC-013">
+            <ns0:WrapText>true</ns0:WrapText>
+           </ns0:Text>
+          </ns0:Action>
+          <ns0:OptionsMenu Name="Confirm" Sym="STALESRC-014">
+           <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+           <ns0:Action Name="&quot;Remove stale source: &quot; + StaleCaptureDevice + &quot;? This releases its configured inputs and removes its saved device definition.&quot;" Sym="STALESRC-015">
+            <ns0:Text Name="" Sym="STALESRC-016">
+             <ns0:AnchorX>0.5</ns0:AnchorX>
+             <ns0:AutosizeText>false</ns0:AutosizeText>
+             <ns0:WrapText>true</ns0:WrapText>
+             <ns0:TextAlignment>0.5</ns0:TextAlignment>
+            </ns0:Text>
+           </ns0:Action>
+           <ns0:Item Name="Yes" Sym="STALESRC-017">
+            <ns0:Action Name="RemoveStaleCaptureDevice(StaleCaptureDevice)" Sym="STALESRC-018">
+             <ns0:Action Name="CloseOptionsMenu()" Sym="STALESRC-019">
+              <ns0:Action Name="Refresh()" Sym="STALESRC-020" />
+             </ns0:Action>
+            </ns0:Action>
+           </ns0:Item>
+           <ns0:Item Name="No" Sym="STALESRC-021">
+            <ns0:Action Name="CloseOptionsMenu()" Sym="STALESRC-022" />
+            <ns0:Attribute Name="DefaultFocus" Sym="STALESRC-023">
+             <ns0:Value>true</ns0:Value>
+            </ns0:Attribute>
+           </ns0:Item>
+          </ns0:OptionsMenu>
+         </ns0:Item>
+        </ns0:TableComponent>
+        <ns0:Theme Ref="30373" Name="Wide4RowVTable" />
+       </ns0:Table>
+       </ns0:Action>
+      </ns0:Branch>
+      <ns0:Branch Name="else" Sym="STALESRC-024">
+       <ns0:Text Name="No stale or unreachable sources were found." Sym="STALESRC-025">
+        <ns0:TextAlignment>0.5</ns0:TextAlignment>
+       </ns0:Text>
+      </ns0:Branch>
+     </ns0:Conditional>
+    </ns0:Action>
+    <ns0:Text Name="Unverified Sources" Sym="STALESRC-040">
+     <ns0:AutosizeText>false</ns0:AutosizeText>
+     <ns0:WrapText>true</ns0:WrapText>
+     <ns0:TextAlignment>0.5</ns0:TextAlignment>
+     <ns0:Theme Ref="30313" Name="SetupSubTitleTextTheme" />
+    </ns0:Text>
+    <ns0:Action Name="UnverifiedSourceList = GetUnverifiedCaptureDevices()" Sym="STALESRC-041">
+     <ns0:Conditional Name="Size(UnverifiedSourceList) &gt; 0" Sym="STALESRC-042">
+      <ns0:Branch Name="true" Sym="STALESRC-043">
+       <ns0:Action Name="UnverifiedSourceList" Sym="STALESRC-065">
+       <ns0:Table Name="Unverified Sources" Sym="STALESRC-044">
+        <ns0:FixedWidth>1.0</ns0:FixedWidth>
+        <ns0:FixedHeight>0.18</ns0:FixedHeight>
+        <ns0:NumRows>2</ns0:NumRows>
+        <ns0:NumCols>1</ns0:NumCols>
+        <ns0:TableComponent Name="UnverifiedCaptureDevice" Sym="STALESRC-045">
+         <ns0:Item Name="" Sym="STALESRC-046">
+          <ns0:Insets>=gButtonHighlightUIWidgetInsetsLarge</ns0:Insets>
+          <ns0:Action Name="UnverifiedCaptureDevice" Sym="STALESRC-047">
+           <ns0:Text Name="" Sym="STALESRC-048">
+            <ns0:WrapText>true</ns0:WrapText>
+           </ns0:Text>
+          </ns0:Action>
+          <ns0:Action Name="DeleteConfirmation = &quot;&quot;" Sym="STALESRC-049">
+           <ns0:OptionsMenu Name="Confirm Unverified Source Removal" Sym="STALESRC-050">
+            <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+            <ns0:Listener Name="Select" Sym="STALESRC-051">
+             <ns0:ListenerEvent>Select</ns0:ListenerEvent>
+             <ns0:Conditional Name="DeleteConfirmation == &quot;DELETE&quot;" Sym="STALESRC-067">
+              <ns0:Branch Name="true" Sym="STALESRC-068">
+               <ns0:Action Name="CloseOptionsMenu()" Sym="STALESRC-052" />
+              </ns0:Branch>
+              <ns0:Branch Name="else" Sym="STALESRC-069">
+               <ns0:Action Name="CloseOptionsMenu()" Sym="STALESRC-070">
+                <ns0:OptionsMenu Name="Incorrect Confirmation" Sym="STALESRC-071">
+                 <ns0:Theme Ref="954" Name="OptionsConfirmTheme" />
+                 <ns0:Text Name="The source was not removed because the confirmation text was not exactly DELETE." Sym="STALESRC-072">
+                  <ns0:AutosizeText>false</ns0:AutosizeText>
+                  <ns0:WrapText>true</ns0:WrapText>
+                  <ns0:TextAlignment>0.5</ns0:TextAlignment>
+                 </ns0:Text>
+                 <ns0:Item Name="OK" Sym="STALESRC-073">
+                  <ns0:Action Name="CloseOptionsMenu()" Sym="STALESRC-074" />
+                 </ns0:Item>
+                </ns0:OptionsMenu>
+               </ns0:Action>
+              </ns0:Branch>
+             </ns0:Conditional>
+            </ns0:Listener>
+            <ns0:Listener Name="" Sym="STALESRC-053">
+             <ns0:ListenerEvent>Options</ns0:ListenerEvent>
+             <ns0:Action Name="DeleteConfirmation = &quot;&quot;" Sym="STALESRC-054">
+              <ns0:Action Name="CloseOptionsMenu()" Sym="STALESRC-055" />
+             </ns0:Action>
+            </ns0:Listener>
+            <ns0:Text Name="This source cannot be validated as active or stale. Type DELETE to remove it and release its configured inputs." Sym="STALESRC-056">
+             <ns0:AnchorX>0.5</ns0:AnchorX>
+             <ns0:AnchorY>0.5</ns0:AnchorY>
+             <ns0:FixedWidth>1.0</ns0:FixedWidth>
+             <ns0:FixedHeight>1.0</ns0:FixedHeight>
+             <ns0:AutosizeText>false</ns0:AutosizeText>
+             <ns0:WrapText>true</ns0:WrapText>
+             <ns0:TextAlignment>0.5</ns0:TextAlignment>
+            </ns0:Text>
+            <ns0:Panel Name="InputArea" Sym="STALESRC-057">
+             <ns0:Layout>Horizontal</ns0:Layout>
+             <ns0:FixedWidth>0.95</ns0:FixedWidth>
+             <ns0:TextAlignment>0.5</ns0:TextAlignment>
+             <ns0:IgnoreThemeProps>true</ns0:IgnoreThemeProps>
+             <ns0:TextInput Name="DeleteConfirmation" Sym="STALESRC-058">
+              <ns0:AutosizeText>false</ns0:AutosizeText>
+              <ns0:WrapText>false</ns0:WrapText>
+              <ns0:HideText>false</ns0:HideText>
+              <ns0:TextShadow>false</ns0:TextShadow>
+              <ns0:DisableFontScaling>false</ns0:DisableFontScaling>
+              <ns0:IgnoreThemeProps>false</ns0:IgnoreThemeProps>
+              <ns0:Shape Ref="941" Name="InputBorder" />
+             </ns0:TextInput>
+            </ns0:Panel>
+            <ns0:Theme Ref="22900" Name="OptionsTextEntryTheme_..." />
+           </ns0:OptionsMenu>
+           <ns0:Conditional Name="DeleteConfirmation == &quot;DELETE&quot;" Sym="STALESRC-059">
+            <ns0:Action Name="RemoveUnverifiedCaptureDevice(UnverifiedCaptureDevice, DeleteConfirmation)" Sym="STALESRC-060">
+              <ns0:Action Name="SageCommand(&quot;Back&quot;)" Sym="STALESRC-061" />
+            </ns0:Action>
+           </ns0:Conditional>
+          </ns0:Action>
+         </ns0:Item>
+        </ns0:TableComponent>
+        <ns0:Theme Ref="30373" Name="Wide4RowVTable" />
+       </ns0:Table>
+       </ns0:Action>
+      </ns0:Branch>
+      <ns0:Branch Name="else" Sym="STALESRC-062">
+       <ns0:Text Name="No unverified sources were found." Sym="STALESRC-063">
+        <ns0:TextAlignment>0.5</ns0:TextAlignment>
+       </ns0:Text>
+      </ns0:Branch>
+     </ns0:Conditional>
+    </ns0:Action>
+    <ns0:Text Name="Reachable Sources" Sym="STALESRC-026">
+     <ns0:AutosizeText>false</ns0:AutosizeText>
+     <ns0:WrapText>true</ns0:WrapText>
+     <ns0:TextAlignment>0.5</ns0:TextAlignment>
+     <ns0:Theme Ref="30313" Name="SetupSubTitleTextTheme" />
+    </ns0:Text>
+    <ns0:Action Name="ReachableSourceList = GetReachableCaptureDevices()" Sym="STALESRC-027">
+     <ns0:Conditional Name="Size(ReachableSourceList) &gt; 0" Sym="STALESRC-028">
+      <ns0:Branch Name="true" Sym="STALESRC-029">
+       <ns0:Action Name="ReachableSourceList" Sym="STALESRC-066">
+       <ns0:Table Name="Reachable Sources" Sym="STALESRC-030">
+        <ns0:FixedWidth>1.0</ns0:FixedWidth>
+        <ns0:FixedHeight>0.18</ns0:FixedHeight>
+        <ns0:NumRows>2</ns0:NumRows>
+        <ns0:NumCols>1</ns0:NumCols>
+        <ns0:TableComponent Name="ReachableCaptureDevice" Sym="STALESRC-031">
+         <ns0:Action Name="ReachableCaptureDevice" Sym="STALESRC-032">
+          <ns0:Text Name="" Sym="STALESRC-033">
+           <ns0:WrapText>true</ns0:WrapText>
+          </ns0:Text>
+         </ns0:Action>
+        </ns0:TableComponent>
+        <ns0:Theme Ref="30373" Name="Wide4RowVTable" />
+       </ns0:Table>
+       </ns0:Action>
+      </ns0:Branch>
+      <ns0:Branch Name="else" Sym="STALESRC-034">
+       <ns0:Text Name="No reachable sources were found." Sym="STALESRC-035">
+        <ns0:TextAlignment>0.5</ns0:TextAlignment>
+       </ns0:Text>
+      </ns0:Branch>
+     </ns0:Conditional>
+    </ns0:Action>
+    <ns0:Item Name="Back to Source Setup" Sym="STALESRC-036">
+     <ns0:Action Name="SageCommand(&quot;Back&quot;)" Sym="STALESRC-037" />
+     <ns0:Attribute Name="DefaultFocus" Sym="STALESRC-038">
+      <ns0:Value>Size(GetStaleCaptureDevices()) == 0 &amp;&amp; Size(GetUnverifiedCaptureDevices()) == 0</ns0:Value>
+     </ns0:Attribute>
+     <ns0:Theme Ref="30350" Name="SetupWizSummaryButton" />
+    </ns0:Item>
+   </ns0:Panel>
+  </ns0:Panel>
+  <ns0:Listener Ref="7370" Name="Left-Back" />
+  <ns0:Attribute Name="MenuTitle" Sym="STALESRC-039">
+   <ns0:Value>"Remove Stale / Unverified Sources"</ns0:Value>
   </ns0:Attribute>
  </ns0:Menu>
  <ns0:Menu ID="957" Name="Parental Controls" Sym="BASE-52072">
@@ -188257,7 +188483,7 @@
  <ns0:Menu Name="Xtra: Disk Space Bar" Sym="BASE-85950">
   <ns0:Conditional ID="65177" Name="GetProperty(&quot;opus4/diskbar_enabled&quot;, false) &amp;&amp; (ConnectionLost != true)" Sym="BASE-55053">
    <ns0:Panel Name="DiskSpaceBar/DefaultLocation (Link property above check under VideoBG Theme-MainHeader)" Sym="BASE-55054">
-    <ns0:AnchorX>0.46</ns0:AnchorX>
+    <ns0:AnchorX>0.42</ns0:AnchorX>
     <ns0:AnchorY>0.0</ns0:AnchorY>
     <ns0:AnchorPointX>0.5</ns0:AnchorPointX>
     <ns0:AnchorPointY>0.0</ns0:AnchorPointY>

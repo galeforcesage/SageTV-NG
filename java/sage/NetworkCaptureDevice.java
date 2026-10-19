@@ -90,6 +90,8 @@ public final class NetworkCaptureDevice extends CaptureDevice
   private java.io.DataOutputStream outStream = null;
   private java.io.DataInputStream inStream = null;
   private long lastCommTime;
+  private volatile long lastReachabilityCheck;
+  private volatile Reachability lastReachability;
 
   private void connectToHost() throws java.io.IOException
   {
@@ -395,6 +397,39 @@ public final class NetworkCaptureDevice extends CaptureDevice
     }
     if(Sage.getBoolean("mmc/fake_functioning_tuners", false)) return true;
     return rv;
+  }
+
+  /**
+   * Returns device-specific reachability when the encoder provides a usable roster.
+   *
+   * @return {@link Reachability#UNKNOWN} when the shared endpoint responds but cannot validate its
+   *     individual logical devices
+   */
+  @Override
+  public synchronized Reachability getReachability()
+  {
+    if (lastReachability != null && Sage.eventTime() - lastReachabilityCheck < 5000)
+      return lastReachability;
+    return refreshReachability();
+  }
+
+  synchronized Reachability refreshReachability()
+  {
+    if (!isFunctioning())
+      return cacheReachability(Reachability.STALE);
+
+    Boolean advertised = NetworkEncoderManager.isEncoderAdvertised(hostName, hostPort,
+        getCaptureDeviceName(), getCaptureDeviceNum());
+    if (advertised == null)
+      return cacheReachability(Reachability.UNKNOWN);
+    return cacheReachability(advertised.booleanValue() ? Reachability.REACHABLE : Reachability.STALE);
+  }
+
+  private Reachability cacheReachability(Reachability reachability)
+  {
+    lastReachability = reachability;
+    lastReachabilityCheck = Sage.eventTime();
+    return reachability;
   }
 
   public boolean isLoaded()

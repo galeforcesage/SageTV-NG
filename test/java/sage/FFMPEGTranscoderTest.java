@@ -121,6 +121,30 @@ public class FFMPEGTranscoderTest
   }
 
   @Test
+  public void bufferedGenerationResetDiscardsFailedChildUnreadBytes() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.bufferOutput = true;
+    t.xcodeBufferBaseNum = 7;
+    t.numFilledXcodeBuffers = 12;
+    t.xcodeBufferVirtualOffset = 3_000_000L;
+    t.xcodeBufferVirtualReadPos = 3_538_944L;
+    t.xcodeBufferVirtualSize = 6_160_384L;
+    t.xcodeStdoutGeneration = 4;
+
+    t.resetBufferedOutputGeneration();
+
+    assertEquals(t.xcodeBufferBaseNum, 0);
+    assertEquals(t.numFilledXcodeBuffers, 0);
+    assertEquals(t.xcodeBufferVirtualOffset, 3_538_944L);
+    assertEquals(t.xcodeBufferVirtualSize, 3_538_944L,
+        "replacement output must begin at the consumer frontier, not after stale failed-child bytes");
+    assertEquals(t.xcodeBufferVirtualReadPos, 3_538_944L);
+    assertEquals(t.xcodeStdoutGeneration, 5);
+  }
+
+  @Test
   public void testParseFrameSize() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();

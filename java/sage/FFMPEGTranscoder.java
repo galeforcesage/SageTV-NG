@@ -3915,7 +3915,6 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (xcodeProcess != null)
       stopTranscode();
 
-    xcodeBufferBaseNum = 0;
     lastXcodeStreamTime = 0;
     lastXcodeStreamPosition = 0;
     lastExitCode = -1;
@@ -6137,17 +6136,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
     };
     xcodeStderrThread.setDaemon(true);
     xcodeStderrThread.start();
-    // Reset the fill counter and advance the writer generation atomically so any
-    // still-draining writer from a prior generation (whose join() may have timed
-    // out) can observe the change and retire instead of corrupting the reused ring.
-    synchronized (xcodeSyncLock)
-    {
-      numFilledXcodeBuffers = 0;
-      xcodeStdoutGeneration++;
-      // Wake any prior-generation writer parked in wait() so it re-checks the
-      // generation and retires immediately instead of after its wait timeout.
-      xcodeSyncLock.notifyAll();
-    }
+    resetBufferedOutputGeneration();
     final int myXcodeGen = xcodeStdoutGeneration;
     xcodeStdout = xcodeProcess.getInputStream();
     forciblyStopped = false;
@@ -6778,6 +6767,26 @@ public class FFMPEGTranscoder implements TranscodeEngine
         && sourceFormat.getAudioFormat() != null
         && sage.media.format.MediaFormat.AAC.equals(sourceFormat.getAudioFormat().getFormatName())
         && !xcodeParamsVec.contains("aac_adtstoasc");
+  }
+
+  /**
+   * Starts a fresh buffered-output generation at the consumer's current byte
+   * frontier. Any unread bytes belong to the retired child and cannot be exposed
+   * ahead of the replacement stream.
+   */
+  void resetBufferedOutputGeneration()
+  {
+    synchronized (xcodeSyncLock)
+    {
+      xcodeBufferBaseNum = 0;
+      numFilledXcodeBuffers = 0;
+      if (bufferOutput)
+        xcodeBufferVirtualOffset = xcodeBufferVirtualSize = xcodeBufferVirtualReadPos;
+      xcodeStdoutGeneration++;
+      // Wake any prior-generation writer parked in wait() so it re-checks the
+      // generation and retires immediately instead of after its wait timeout.
+      xcodeSyncLock.notifyAll();
+    }
   }
 
   public void stopTranscode()

@@ -72,6 +72,73 @@ public class CaptureDeviceAPI{
       public Object runSafely(Catbert.FastStack stack) throws Exception{
         return Boolean.valueOf(getCapDev(stack).isFunctioning());
       }});
+    rft.put(new PredefinedJEPFunction("CaptureDevice", "GetStaleCaptureDevices", true)
+    {
+      /**
+        * Returns capture devices that are currently stale or unreachable.
+        * @return the names of capture devices that are stale or unreachable
+        *
+        * @declaration public String[] GetStaleCaptureDevices();
+        */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+         return MMC.getInstance().getCaptureDeviceNamesByReachability(CaptureDevice.Reachability.STALE);
+      }});
+    rft.put(new PredefinedJEPFunction("CaptureDevice", "GetUnverifiedCaptureDevices", true)
+    {
+      /**
+        * Returns capture devices whose individual reachability cannot currently be verified.
+        * @return the names of capture devices with unknown reachability
+        *
+        * @declaration public String[] GetUnverifiedCaptureDevices();
+        */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+         return MMC.getInstance().getCaptureDeviceNamesByReachability(CaptureDevice.Reachability.UNKNOWN);
+      }});
+    rft.put(new PredefinedJEPFunction("CaptureDevice", "GetReachableCaptureDevices", true)
+    {
+      /**
+        * Returns capture devices that are currently reachable.
+        * @return the names of capture devices that are currently reachable
+        *
+        * @declaration public String[] GetReachableCaptureDevices();
+        */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+         return MMC.getInstance().getCaptureDeviceNamesByReachability(CaptureDevice.Reachability.REACHABLE);
+      }});
+    rft.put(new PredefinedJEPFunction("CaptureDevice", "RemoveStaleCaptureDevice", 1,
+         new String[] {"CaptureDevice"}, true)
+    {
+      /**
+        * Removes a stale capture device from SageTV's configuration.
+        *
+        * <p>The operation is refused if the device is reachable, recording, or controlled by a live
+        * client. Any configured inputs are released and unused lineups are cleaned up.</p>
+        *
+        * @param CaptureDevice the name of the stale capture device to remove
+        *
+        * @declaration public void RemoveStaleCaptureDevice(String CaptureDevice);
+        */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+         MMC.getInstance().removeStaleCaptureDevice(getString(stack));
+         return null;
+      }});
+    rft.put(new PredefinedJEPFunction("CaptureDevice", "RemoveUnverifiedCaptureDevice", 2,
+         new String[] {"CaptureDevice", "Confirmation"}, true)
+    {
+      /**
+        * Removes an inactive capture device whose reachability cannot be independently verified.
+        *
+        * @param CaptureDevice the name of the unverified capture device to remove
+        * @param Confirmation the exact text {@code DELETE}
+        *
+        * @declaration public void RemoveUnverifiedCaptureDevice(String CaptureDevice, String Confirmation);
+        */
+      public Object runSafely(Catbert.FastStack stack) throws Exception{
+         String confirmation = getString(stack);
+         String captureDevice = getString(stack);
+         MMC.getInstance().removeUnverifiedCaptureDevice(captureDevice, confirmation);
+         return null;
+      }});
     rft.put(new PredefinedJEPFunction("CaptureDevice", "IsCaptureDeviceANetworkEncoder", 1, new String[] {"CaptureDevice"}, true)
     {
       /**

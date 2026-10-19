@@ -17,6 +17,105 @@ package sage;
 
 public class NetworkEncoderManager implements CaptureDeviceManager
 {
+  /**
+   * Checks whether an encoder server's authoritative property roster contains a device.
+   *
+   * @param hostName encoder server host name
+   * @param hostPort encoder server port
+   * @param deviceName capture device name
+   * @param deviceNum capture device number
+   * @return {@code true} if advertised, {@code false} if definitively absent, or {@code null}
+   *     when the server does not provide a usable property roster
+   */
+  static Boolean isEncoderAdvertised(String hostName, int hostPort, String deviceName, int deviceNum)
+  {
+    java.net.Socket s = null;
+    java.io.DataOutputStream os = null;
+    java.io.DataInputStream is = null;
+    try
+    {
+      s = new java.net.Socket();
+      s.connect(new java.net.InetSocketAddress(hostName, hostPort),
+          Sage.getInt("mmc/net_encoding_connection_timeout", 2000));
+      s.setSoTimeout(Sage.getInt("mmc/net_encoding_timeout", 15000));
+      os = new java.io.DataOutputStream(new java.io.BufferedOutputStream(s.getOutputStream()));
+      is = new java.io.DataInputStream(new java.io.BufferedInputStream(s.getInputStream()));
+      os.write("PROPERTIES\r\n".getBytes(Sage.BYTE_CHARSET));
+      os.flush();
+      String propCount = Sage.readLineBytes(is);
+      if (propCount == null)
+        return null;
+
+      int numProps;
+      try
+      {
+        numProps = Integer.parseInt(propCount);
+      }
+      catch (NumberFormatException e)
+      {
+        return null;
+      }
+      if (numProps <= 0)
+        return null;
+
+      java.util.Map encoderNames = new java.util.HashMap();
+      java.util.Map encoderNums = new java.util.HashMap();
+      for (int i = 0; i < numProps; i++)
+      {
+        String currProp = Sage.readLineBytes(is);
+        if (currProp == null)
+          return null;
+        int eqIdx = currProp.indexOf('=');
+        int propSlashIdx = currProp.indexOf('/', "mmc/encoders/".length());
+        if (!currProp.startsWith("mmc/encoders/") || eqIdx == -1 || propSlashIdx == -1)
+          continue;
+        String currEncoderID = currProp.substring("mmc/encoders/".length(), propSlashIdx);
+        String key = currProp.substring(propSlashIdx + 1, eqIdx);
+        String value = currProp.substring(eqIdx + 1);
+        if (CaptureDevice.VIDEO_CAPTURE_DEVICE_NAME.equals(key))
+          encoderNames.put(currEncoderID, value);
+        else if (CaptureDevice.VIDEO_CAPTURE_DEVICE_NUM.equals(key))
+          encoderNums.put(currEncoderID, value);
+      }
+
+      java.util.Iterator walker = encoderNames.entrySet().iterator();
+      while (walker.hasNext())
+      {
+        java.util.Map.Entry currEntry = (java.util.Map.Entry) walker.next();
+        if (!deviceName.equals(currEntry.getValue()))
+          continue;
+        try
+        {
+          if (deviceNum == Integer.parseInt(String.valueOf(encoderNums.get(currEntry.getKey()))))
+            return Boolean.TRUE;
+        }
+        catch (NumberFormatException e){}
+      }
+      return Boolean.FALSE;
+    }
+    catch (java.io.IOException e)
+    {
+      return null;
+    }
+    finally
+    {
+      if (os != null)
+      {
+        try { os.write("QUIT\r\n".getBytes(Sage.BYTE_CHARSET)); os.flush(); }
+        catch (Exception e){}
+        try { os.close(); } catch (Exception e){}
+      }
+      if (is != null)
+      {
+        try { is.close(); } catch (Exception e){}
+      }
+      if (s != null)
+      {
+        try { s.close(); } catch (Exception e){}
+      }
+    }
+  }
+
   public NetworkEncoderManager()
   {
     capDevs = new CaptureDevice[0];
