@@ -84,14 +84,18 @@ public final class ChannelVariantAttacher
 
       HDHomeRunLineup.Entry atsc3 = pickByCodec(group, true);
       HDHomeRunLineup.Entry atsc1 = pickByCodec(group, false);
+      if (atsc3 != null && atsc1 == null)
+        atsc1 = findMajorOffsetTwin(all, atsc3);
 
-      // Find the SageTV Channel: prefer pairing against the ATSC1 twin;
-      // fall back to the ATSC3 entry's metadata if ATSC1 is absent. We collect
-      // ALL matching channels (not just the first) because users sometimes
+      // Find the SageTV Channel from the ATSC3 station identity when present;
+      // ATSC1 lineup labels are often network branding instead of callsigns.
+      // We collect ALL matching channels (not just the first) because users sometimes
       // hand-create a placeholder NG channel alongside the Schedules-Direct
       // entry; both must receive the variant attachment or recordings booked
       // against the SD station won't see the variant and won't get remapped.
-      HDHomeRunLineup.Entry probe = (atsc1 != null) ? atsc1 : atsc3;
+      // The ATSC3 callsign identifies the Sage station more reliably than the
+      // ATSC1 lineup label (for example WBBM-NG versus CBS2-HD).
+      HDHomeRunLineup.Entry probe = (atsc3 != null) ? atsc3 : atsc1;
       java.util.List<Channel> chans = findChannels(allChannels, probe, major);
 
       if (chans.isEmpty())
@@ -188,6 +192,28 @@ public final class ChannelVariantAttacher
     {
       boolean isHevc = "HEVC".equalsIgnoreCase(e.videoCodec);
       if (isHevc == wantHevc) return e;
+    }
+    return null;
+  }
+
+  /**
+   * Find the ATSC 1.0 twin for the common HDHomeRun numbering convention in
+   * which ATSC 3.0 adds 100 to the virtual major (for example 2.1/102.1).
+   */
+  static HDHomeRunLineup.Entry findMajorOffsetTwin(
+      List<HDHomeRunLineup.Entry> all, HDHomeRunLineup.Entry atsc3)
+  {
+    if (all == null || atsc3 == null || atsc3.guideNumber == null) return null;
+    int dot = atsc3.guideNumber.indexOf('.');
+    if (dot <= 0 || dot == atsc3.guideNumber.length() - 1) return null;
+    int atsc3Major = parseIntOr(atsc3.guideNumber.substring(0, dot), -1);
+    if (atsc3Major < 100) return null;
+    String wanted = (atsc3Major - 100) + atsc3.guideNumber.substring(dot);
+    for (HDHomeRunLineup.Entry candidate : all)
+    {
+      if (candidate != null && wanted.equals(candidate.guideNumber)
+          && !"HEVC".equalsIgnoreCase(candidate.videoCodec))
+        return candidate;
     }
     return null;
   }

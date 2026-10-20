@@ -160,14 +160,10 @@ public class HDHomeRunLineup
     // Direct hit (e.g. "109.1" matches GuideNumber "109.1").
     Entry e = snap.get(channelNumber);
     if (e != null) return e;
-    // Sage stores ATSC channels in dash form ("109-1") after the STV's scan
-    // parser splits major/minor on '-'. /lineup.json uses dot form ("109.1"),
-    // so try the dash->dot translation before falling through to major-only.
-    int dash = channelNumber.indexOf('-');
-    if (dash > 0 && channelNumber.indexOf('.') < 0)
+    String guideNumber = toGuideNumber(channelNumber);
+    if (!channelNumber.equals(guideNumber))
     {
-      String dotted = channelNumber.substring(0, dash) + "." + channelNumber.substring(dash + 1);
-      e = snap.get(dotted);
+      e = snap.get(guideNumber);
       if (e != null) return e;
     }
     // Major-only key (e.g. Sage tunes "109" but lineup uses "109.1"). Find any
@@ -195,6 +191,24 @@ public class HDHomeRunLineup
       return best;
     }
     return null;
+  }
+
+  /**
+   * Convert Sage's ATSC tune strings to the virtual channel syntax used by
+   * {@code lineup.json}. Accepts both major-minor and RF-major-minor forms.
+   */
+  static String toGuideNumber(String channelNumber)
+  {
+    if (channelNumber == null || channelNumber.indexOf('.') >= 0)
+      return channelNumber;
+    int firstDash = channelNumber.indexOf('-');
+    if (firstDash <= 0) return channelNumber;
+    int lastDash = channelNumber.lastIndexOf('-');
+    if (lastDash > firstDash)
+      return channelNumber.substring(firstDash + 1, lastDash)
+          + "." + channelNumber.substring(lastDash + 1);
+    return channelNumber.substring(0, firstDash)
+        + "." + channelNumber.substring(firstDash + 1);
   }
 
   /**
