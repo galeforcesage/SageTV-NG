@@ -38,7 +38,7 @@ public class FFMPEGTranscoderTest
   }
 
   @Test
-  public void nvencFallbackCanOnlyResetAnUndeliveredGeneration()
+  public void nvencFallbackCanResetAZeroOutputUndeliveredGeneration()
   {
     FFMPEGTranscoder t = new FFMPEGTranscoder();
     t.bufferOutput = true;
@@ -47,13 +47,44 @@ public class FFMPEGTranscoderTest
     t.xcodeOutputGenerationOrigin = 0L;
     t.xcodeBufferVirtualOffset = 0L;
     t.xcodeBufferVirtualReadPos = 0L;
-    t.xcodeBufferVirtualSize = 8L;
-    t.numFilledXcodeBuffers = 1;
+    t.xcodeBufferVirtualSize = 0L;
+    t.numFilledXcodeBuffers = 0;
 
     assertTrue(t.prepareCleanNvencFallbackRelaunch());
     assertEquals(t.xcodeBufferVirtualSize, 0L);
     assertEquals(t.numFilledXcodeBuffers, 0);
+  }
 
+  @Test
+  public void nvencFallbackRejectsAudioOnlyBytesBeforeAnyVideoFrameOrRead()
+  {
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.bufferOutput = true;
+    t.protocol21PullSession = true;
+    t.xcodeBuffer = new byte[2][65536];
+    t.xcodeOutputGenerationOrigin = 0L;
+    t.xcodeOutputGenerationBytesProduced = 31020L;
+    t.xcodeBufferVirtualOffset = 0L;
+    t.xcodeBufferVirtualReadPos = 0L;
+    t.xcodeBufferVirtualSize = 0L;
+    t.numFilledXcodeBuffers = 0;
+
+    assertFalse(t.prepareCleanNvencFallbackRelaunch(),
+        "Muxed/audio bytes from a frame-zero failure must force a clean reconnect"
+            + " even when the partial ring chunk was never advertised or read");
+    assertEquals(t.xcodeBufferVirtualSize, 0L);
+    assertEquals(t.numFilledXcodeBuffers, 0);
+  }
+
+  @Test
+  public void nvencFallbackRejectsExternallyVisibleGeneration()
+  {
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.bufferOutput = true;
+    t.protocol21PullSession = true;
+    t.xcodeBuffer = new byte[2][8];
+    t.xcodeOutputGenerationOrigin = 0L;
+    t.xcodeBufferVirtualOffset = 0L;
     t.xcodeBufferVirtualSize = 16L;
     t.xcodeBufferVirtualReadPos = 8L;
     t.numFilledXcodeBuffers = 1;
@@ -64,6 +95,7 @@ public class FFMPEGTranscoderTest
     assertEquals(t.numFilledXcodeBuffers, 1);
 
     t.xcodeBufferVirtualReadPos = 0L;
+    t.xcodeOutputGenerationBytesProduced = 0L;
     t.xcodeOutputGenerationDeliveryStarted = true;
     assertFalse(t.prepareCleanNvencFallbackRelaunch(),
         "An in-flight socket write counts as externally visible before the cursor advances");
