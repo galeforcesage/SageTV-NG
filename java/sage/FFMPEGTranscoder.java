@@ -3945,10 +3945,13 @@ public class FFMPEGTranscoder implements TranscodeEngine
    * consumer, because {@link #stopTranscode()} joins that thread. It is written to
    * be safe against the client's own pull-driven relaunch racing it: it never
    * blindly stops a child, so it cannot kill a healthy relaunch a still-connected
-   * client already performed. It only relaunches in-place when no byte from the
-   * failed generation has been served. Once delivery began, appending a plain
-   * remux would create one externally visible stream with two codec/config
-   * generations, so the method ends this stream and requires a clean reopen.
+   * client already performed. It only relaunches in-place when the failed
+   * generation produced zero bytes and no byte was externally served. Output
+   * production is stricter than the published ring frontier because a short
+   * failed stream can leave an unpublished partial chunk in the stdout consumer.
+   * Once any output exists, appending a plain remux risks exposing one stream
+   * with two codec/config generations, so the method ends this stream and
+   * requires a clean reopen.
    * {@link #suppressEnhanceThisLaunch} (armed by the caller, re-armed here)
    * guarantees a safe in-place relaunch cannot re-inject the encoder that died.
    */
@@ -3957,6 +3960,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (!bufferOutput) return false;
     synchronized (xcodeSyncLock)
     {
+      if (xcodeOutputGenerationBytesProduced != 0)
+        return false;
       if (xcodeBufferVirtualReadPos != xcodeOutputGenerationOrigin)
         return false;
       if (xcodeOutputGenerationDeliveryStarted)
@@ -3991,7 +3996,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
       if (protocol21PullSession && !prepareCleanNvencFallbackRelaunch())
       {
         System.out.println("ENHANCE_LADDER degrade-relaunch suppressed: failed NVENC"
-            + " output was already served; ending this stream so the client reopens"
+            + " generation produced or served output; ending this stream so the client reopens"
             + " a clean plain remux");
         return;
       }
@@ -4044,6 +4049,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
     xcodeBufferBaseNum = 0;
     xcodeOutputGenerationOrigin = xcodeBufferVirtualReadPos;
+    xcodeOutputGenerationBytesProduced = 0;
     xcodeOutputGenerationDeliveryStarted = false;
     lastXcodeStreamTime = 0;
     lastXcodeStreamPosition = 0;
@@ -6365,6 +6371,15 @@ public class FFMPEGTranscoder implements TranscodeEngine
               {
                 numRead = xcodeStdout.read(xcodeBuffer[currBuffNum], xcodeBuffer[currBuffNum].length - leftToRead, leftToRead);
                 if (XCODE_DEBUG_IO) System.out.println("Read " + numRead + " bytes from transcoder");
+                if (numRead > 0)
+                {
+                  synchronized (xcodeSyncLock)
+                  {
+                    if (xcodeStdoutGeneration != myXcodeGen)
+                      return;
+                    xcodeOutputGenerationBytesProduced += numRead;
+                  }
+                }
                 leftToRead -= numRead;
               } while (numRead != -1 && leftToRead > 0);
               if (numRead == -1)
@@ -8484,6 +8499,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
   private volatile boolean suppressEnhanceThisLaunch;
   /** Byte origin of the current child generation, used to detect external delivery. */
   volatile long xcodeOutputGenerationOrigin;
+  /** Raw stdout bytes emitted by the current child, including an unpublished partial ring chunk. */
+  volatile long xcodeOutputGenerationBytesProduced;
   /** True once a READ began exposing bytes from the current child generation. */
   volatile boolean xcodeOutputGenerationDeliveryStarted;
   /** Terminal guard: a replacement must arrive on a new MediaServer byte stream. */
