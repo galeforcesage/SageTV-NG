@@ -22,6 +22,89 @@ import static org.testng.Assert.*;
 public class FFMPEGTranscoderTest
 {
   @Test
+  public void frameZeroNvencCapacityFailureIsDetectedBeforeFirstFrame()
+  {
+    assertTrue(FFMPEGTranscoder.isNvencInitFailureLine(
+        "[hevc_nvenc @ 0x1] Failed locking bitstream buffer: out of memory"));
+    assertTrue(FFMPEGTranscoder.isNvencCapacityFailureLine(
+        "[hevc_nvenc @ 0x1] Failed locking bitstream buffer: out of memory"));
+    assertTrue(FFMPEGTranscoder.isFrameZeroEnhanceNvencFailure(
+        "enhance-1", false, false, 200L, 5000L));
+    assertFalse(FFMPEGTranscoder.isFrameZeroEnhanceNvencFailure(
+        "enhance-1", false, true, 200L, 5000L),
+        "A failure after the first encoded frame must not be classified as frame-zero");
+    assertFalse(FFMPEGTranscoder.isFrameZeroEnhanceNvencFailure(
+        "enhance-1", false, false, 5001L, 5000L));
+  }
+
+  @Test
+  public void nvencFallbackCanOnlyResetAnUndeliveredGeneration()
+  {
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.bufferOutput = true;
+    t.protocol21PullSession = true;
+    t.xcodeBuffer = new byte[2][8];
+    t.xcodeOutputGenerationOrigin = 0L;
+    t.xcodeBufferVirtualOffset = 0L;
+    t.xcodeBufferVirtualReadPos = 0L;
+    t.xcodeBufferVirtualSize = 8L;
+    t.numFilledXcodeBuffers = 1;
+
+    assertTrue(t.prepareCleanNvencFallbackRelaunch());
+    assertEquals(t.xcodeBufferVirtualSize, 0L);
+    assertEquals(t.numFilledXcodeBuffers, 0);
+
+    t.xcodeBufferVirtualSize = 16L;
+    t.xcodeBufferVirtualReadPos = 8L;
+    t.numFilledXcodeBuffers = 1;
+    assertFalse(t.prepareCleanNvencFallbackRelaunch(),
+        "Once failed-generation bytes were served, replacement bytes require a new stream");
+    assertEquals(t.xcodeBufferVirtualSize, 16L,
+        "The failed stream frontier must not be rewritten into a mixed-codec stream");
+    assertEquals(t.numFilledXcodeBuffers, 1);
+
+    t.xcodeBufferVirtualReadPos = 0L;
+    t.xcodeOutputGenerationDeliveryStarted = true;
+    assertFalse(t.prepareCleanNvencFallbackRelaunch(),
+        "An in-flight socket write counts as externally visible before the cursor advances");
+  }
+
+  @Test
+  public void repeatedFrameZeroCapacityFailuresLatchUntilRestartSignal() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder.clearEnhanceNvencFailureStateForTests();
+    Sage.put("playback/gpu_enhance/nvenc_failure_latch_threshold", "2");
+    Sage.put("playback/gpu_enhance/nvenc_failure_latch_window_ms", "60000");
+    Sage.put("playback/gpu_enhance/nvenc_failure_source_cooldown_seconds", "60");
+    try
+    {
+      File source = new File("frame-zero-source.ts");
+      FFMPEGTranscoder.noteEnhanceNvencFrameZeroCapacityFailure(source);
+      assertTrue(FFMPEGTranscoder.enhanceNvencFailureCoolingDown(source));
+      assertFalse(FFMPEGTranscoder.enhanceNvencCapacityLatched());
+
+      FFMPEGTranscoder.noteEnhanceNvencFrameSuccess();
+      FFMPEGTranscoder.noteEnhanceNvencFrameZeroCapacityFailure(source);
+      assertFalse(FFMPEGTranscoder.enhanceNvencCapacityLatched(),
+          "A proven successful enhanced frame must clear the pre-latch failure history");
+
+      FFMPEGTranscoder.noteEnhanceNvencFrameZeroCapacityFailure(new File("second-source.ts"));
+      assertTrue(FFMPEGTranscoder.enhanceNvencCapacityLatched());
+      FFMPEGTranscoder.noteEnhanceNvencFrameSuccess();
+      assertTrue(FFMPEGTranscoder.enhanceNvencCapacityLatched(),
+          "Once repeated frame-zero failures latch enhancement off, only restart/operator reset recovers it");
+    }
+    finally
+    {
+      Sage.remove("playback/gpu_enhance/nvenc_failure_latch_threshold");
+      Sage.remove("playback/gpu_enhance/nvenc_failure_latch_window_ms");
+      Sage.remove("playback/gpu_enhance/nvenc_failure_source_cooldown_seconds");
+      FFMPEGTranscoder.clearEnhanceNvencFailureStateForTests();
+    }
+  }
+
+  @Test
   public void framePumpPreservesFragmentedFrameBoundaries() throws Exception
   {
     byte[] input = new byte[37];
