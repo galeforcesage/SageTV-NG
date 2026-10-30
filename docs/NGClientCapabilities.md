@@ -13,6 +13,14 @@ properties in this spec, it ignores all six legacy toggles for that client.
 
 ## Versioning
 
+Prospective ordinary native media ownership is separately optional via
+`NATIVE_PLAYBACK_OWNERSHIP_V1`. Its exact actual-Socket Java API, pre-OPENURL
+publication, immutable server-selected resource, Stop/generation fences,
+same-resource retirement/reissue and conditional secure native-cookie boundary
+are canonical in [NativePlaybackOwnershipV1.md](NativePlaybackOwnershipV1.md).
+It changes neither normal playback selection nor legacy defaults and is not a
+Party capability or an HTTP credential by itself.
+
 Party Mode is a separately negotiated, session-authorized, opt-in extension, not implied
 by the NG version. Its exact capability tokens, `PARTY_V1` transport, server
 enablement/admission prerequisites, schemas and executable integration examples are

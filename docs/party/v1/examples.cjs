@@ -98,8 +98,17 @@ function selectedMsePath(selection, loaded) {
   return loaded.delivery; // Not admission/readiness or a decoder-observed output proof.
 }
 
+function validateNativeReissue(previous, next) {
+  // API values already verified by Java against the actual owned gfx Socket, not HTTP inputs.
+  assert.notEqual(next.contextId, previous.contextId);
+  assert.equal(next.ownershipGeneration, previous.ownershipGeneration + 1);
+  for (const field of ['serverEpoch', 'rendererHandle', 'mediaFileId', 'segmentIndex',
+    'resourcePath', 'surface', 'mode', 'xcodeMode', 'playbackGeneration', 'pathGeneration', 'durationMs'])
+    assert.equal(next[field], previous[field], field);
+}
+
 module.exports = { clientFrame, decodeServerFrame, localDeadline, predictedPosition,
-  mediaBindingCommand, executionAck, joinWithCode, prepareJoined, selectedMsePath };
+  mediaBindingCommand, executionAck, joinWithCode, prepareJoined, selectedMsePath, validateNativeReissue };
 
 test('golden client framing preserves the existing 16-byte UI envelope', () => {
   const frame = clientFrame(golden.hello);
@@ -233,4 +242,17 @@ test('admission context correlates the exact request and generation without shar
   assert.equal(golden.mediaAdmissionRevoked.handle, undefined);
   assert.equal(typeof admission.requestSeq, 'number');
   // Java bridge must verify with claim(handle, its actual owned Socket); this JSON is not HTTP authority.
+});
+
+test('ordinary native reissue preserves the immutable server resource, not caller file or mode', () => {
+  const previous = golden.nativeOwnershipContext;
+  const next = { ...previous, contextId: 'example-next-native-context',
+    ownershipGeneration: 1, expiresAtServerMonoMs: 200000 };
+  validateNativeReissue(previous, next);
+  assert.throws(() => validateNativeReissue(previous, { ...next, resourcePath: 'another-file' }));
+  assert.throws(() => validateNativeReissue(previous, { ...next, mode: 'pull' }));
+  assert.throws(() => validateNativeReissue(previous, { ...next, segmentIndex: 0 }));
+  assert.throws(() => validateNativeReissue(previous, previous));
+  assert.equal(previous.type, undefined); // Not a Party or HTTP credential envelope.
+  // release/isCurrent=false never proves teardown; await the bridge's real resource terminal future.
 });

@@ -643,6 +643,15 @@ preparing/recovering/buffering members may request one.
 
 #### Same-JVM opaque ownership proof for a transparent bridge
 
+For **prospective ordinary native** playback before entering Party, see the
+separate [NativePlaybackOwnershipV1.md](NativePlaybackOwnershipV1.md).
+That optional exact-Socket API can establish ownership before the native OPENURL
+reply; it cannot adopt pre-existing unassociated producers, replace actual
+teardown proof, or bypass this Party admission protocol. Native cookie transport
+is bridge-owned and conditional on trusted HTTPS/secure control and device
+validation; Safari's approved same-origin shared media-use boundary is not
+per-tab cryptographic identity.
+
 The bridge cannot authenticate server approvals by scanning relayed bytes:
 normal control encryption/compression remains unchanged. The implemented Java
 boundary is `java/sage/PartyMediaAdmissionBridge.java`, loaded from the server's
@@ -891,8 +900,10 @@ Known limitations, not claims of completed PRD acceptance:
   not an unimplemented server resource grant.
 * The opaque bridge API requires a shared server JVM/Sage classloader and an
   exact live control-socket endpoint pair. Separate-JVM/NAT/unmatched association
-  and headerless native HTTP paths have no Party ownership fallback. Actual
-  platform MSE probing/codec/contiguous-buffer support remains client work.
+  has no ownership fallback. Prospective native ownership has the separate
+  conditional secure-cookie/teardown contract above; unassociated native streams
+  remain unclaimable. Actual native cookie/device behavior and platform MSE
+  probing/codec/contiguous-buffer support remain client acceptance work.
 * Transparent socket-only reconnect does not reauthorize Party Mode; a fresh
   server-admitted NG session plus recovery token is required. LAN needs no login
   under existing LAN admission policy. Single-segment known-duration media only.

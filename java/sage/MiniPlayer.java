@@ -755,6 +755,7 @@ public class MiniPlayer implements DVDMediaPlayer
 
   public synchronized void fastLoad(byte majorTypeHint, byte minorTypeHint, String encodingHint, java.io.File file, String hostname, boolean timeshifted, long bufferSize, boolean waitUntilDone) throws PlaybackException
   {
+    invalidateNativeOwnership();
     partyPlaybackGeneration++;
     if (Sage.DBG) System.out.println("Mini Fast Load");
     PushTranscodePlan seamPlan = null;
@@ -1003,6 +1004,7 @@ public class MiniPlayer implements DVDMediaPlayer
 
   public synchronized void free()
   {
+    invalidateNativeOwnership();
     partyPlaybackGeneration++;
     // --- NG Context wiring: close provider session ---
     ngContextWiring.onPlaybackClose();
@@ -1545,6 +1547,15 @@ public class MiniPlayer implements DVDMediaPlayer
   }
   
   public void load(byte majorTypeHint, byte minorTypeHint, String encodingHint, java.io.File file, String hostname, boolean timeshifted, long bufferSize) throws PlaybackException
+  {
+    long nativeIntent = invalidateNativeOwnership();
+    try { loadInternal(majorTypeHint, minorTypeHint, encodingHint, file, hostname, timeshifted, bufferSize, nativeIntent); }
+    catch (PlaybackException | RuntimeException e)
+    { invalidateNativeOwnership(); throw e; }
+  }
+
+  private void loadInternal(byte majorTypeHint, byte minorTypeHint, String encodingHint, java.io.File file,
+      String hostname, boolean timeshifted, long bufferSize, long nativeIntent) throws PlaybackException
   {
     partyPlaybackGeneration++;
     VideoFrame vf = VideoFrame.getVideoFrameForPlayer(MiniPlayer.this);
@@ -4826,7 +4837,7 @@ public class MiniPlayer implements DVDMediaPlayer
             sendStreamInfo0(pullCf, null, pullDur, pullLive);
           }
         }
-        if (!openURL0(theURL))
+        if (!openOrdinaryURL0(theURL, currMF, file, vf, nativeIntent))
           throw new PlaybackException();
       }
       // For extenders, set the correct audio stream we're using for playback
@@ -6387,6 +6398,7 @@ public class MiniPlayer implements DVDMediaPlayer
 
   public void stop()
   {
+    invalidateNativeOwnership();
     persistSessionBandwidthFromTranscoder();
     if (currState == PLAY_STATE || currState == PAUSE_STATE)
     {
@@ -7019,6 +7031,42 @@ public class MiniPlayer implements DVDMediaPlayer
     if (mcsr != null && mcsr.supportsHlsFmp4())
       return "_" + Sage.getInt("httpls_fmp4_bwkbps", 6000) + "_fmp4.m3u8";
     return "_list.m3u8";
+  }
+
+  private final java.util.concurrent.atomic.AtomicLong nativeOwnershipFence = new java.util.concurrent.atomic.AtomicLong();
+
+  long invalidateNativeOwnership()
+  {
+    long fence = nativeOwnershipFence.incrementAndGet();
+    NativePlaybackOwnershipBridge.REGISTRY.revokePlayer(this);
+    return fence;
+  }
+
+  boolean openOrdinaryURL0(String url, MediaFile media, java.io.File source, VideoFrame frame, long intent)
+  {
+    publishNativeOpenIntent(media, source, frame, intent);
+    boolean success = false;
+    try { success = openURL0(url); return success; }
+    finally { if (!success) invalidateNativeOwnership(); }
+  }
+
+  boolean publishNativeOpenIntent(MediaFile media, java.io.File source, VideoFrame frame, long intent)
+  {
+    if (mcsr == null || media == null || source == null || frame == null || frame.isPartyProgressOwned()
+        || mcsr.hasPartySurface() || !mcsr.hasClientCapability(NativePlaybackOwnershipBridge.CAPABILITY))
+      return false;
+    int segment = -1;
+    for (int i = 0; i < media.getNumSegments(); i++)
+      if (source.equals(media.getFile(i))) { if (segment >= 0) return false; segment = i; }
+    if (segment < 0) return false;
+    MiniClientSageRenderer renderer = mcsr;
+    long generation = partyPlaybackGeneration, pathGeneration = renderer.getPartyPathGeneration();
+    String mode = renderer.getCurrentSurfaceDeliveryMode(), surface = renderer.getCurrentSurfaceId();
+    return NativePlaybackOwnershipBridge.REGISTRY.publish(this, renderer, media.getID(), segment,
+        source.getAbsolutePath(), surface, mode, partyXcodeMode, generation, pathGeneration, media.getDuration(segment),
+        () -> nativeOwnershipFence.get() == intent && frame.getPartyPlayer() == this && frame.getCurrFile() == media
+            && partyPlaybackGeneration == generation && renderer.getPartyPathGeneration() == pathGeneration
+            && mode.equals(renderer.getCurrentSurfaceDeliveryMode()) && surface.equals(renderer.getCurrentSurfaceId()));
   }
 
   protected boolean openURL0(String url)

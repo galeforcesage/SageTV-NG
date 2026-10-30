@@ -1,6 +1,22 @@
 {
   "schemaVersion": 1,
   "property": "PARTY_V1",
+  "nativeOwnershipContext": {
+    "contextId": "example-native-context",
+    "serverEpoch": "example-native-epoch",
+    "rendererHandle": "example-native-renderer",
+    "mediaFileId": 42,
+    "segmentIndex": 1,
+    "resourcePath": "C:\\SageTV\\Recordings\\example-segment.ts",
+    "surface": "pwa_native",
+    "mode": "pull-xcode",
+    "xcodeMode": "mpeg2tsremux",
+    "playbackGeneration": 7,
+    "pathGeneration": 0,
+    "expiresAtServerMonoMs": 160000,
+    "durationMs": 900000,
+    "ownershipGeneration": 0
+  },
   "selectSurface": {
     "schemaVersion": 1,
     "type": "SELECT_SURFACE",

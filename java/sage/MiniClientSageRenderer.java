@@ -8273,6 +8273,7 @@ public class MiniClientSageRenderer extends SageRenderer
     {
       if (partyPathGeneration != expectedGeneration || partyPlaybackSurfaces != null || selected == null || selected.size() != 1)
         throw new sage.party.PartyProtocol.Fault("SURFACE_CHANGED");
+      NativePlaybackOwnershipBridge.REGISTRY.revokeRenderer(this);
       partyPlaybackSurfaces = selected;
       return ++partyPathGeneration;
     }
@@ -8283,7 +8284,7 @@ public class MiniClientSageRenderer extends SageRenderer
     synchronized (partySurfaceLock)
     {
       if (partyPlaybackSurfaces != null)
-      { partyPlaybackSurfaces = null; ++partyPathGeneration; }
+      { NativePlaybackOwnershipBridge.REGISTRY.revokeRenderer(this); partyPlaybackSurfaces = null; ++partyPathGeneration; }
       return partyPathGeneration;
     }
   }
@@ -9309,6 +9310,7 @@ public class MiniClientSageRenderer extends SageRenderer
 
   private void invalidatePartyAuthorization()
   {
+    NativePlaybackOwnershipBridge.REGISTRY.revokeRenderer(this);
     if (partyConnection != null) partyConnection.disconnect();
     partyConnection = null;
     partyPrincipal = null;

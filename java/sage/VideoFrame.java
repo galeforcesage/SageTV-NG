@@ -585,7 +585,11 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       partyWatchGeneration.incrementAndGet();
       if (preparation == null && uiMgr != null && uiMgr.getRootPanel() != null
           && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
-        ((MiniClientSageRenderer)uiMgr.getRootPanel().getRenderEngine()).restorePartySurface();
+      {
+        MiniClientSageRenderer renderer = (MiniClientSageRenderer)uiMgr.getRootPanel().getRenderEngine();
+        NativePlaybackOwnershipBridge.REGISTRY.revokeRenderer(renderer);
+        renderer.restorePartySurface();
+      }
     }
     try { return watchInternal(watchAir, forceLive, forceBeginning, sourcePlaylist, watchThisFile, lockTunerOnly, preparation); }
     finally { synchronized (queueLock) { partyWatchRequests--; } }
