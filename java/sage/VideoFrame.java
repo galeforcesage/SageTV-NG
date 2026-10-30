@@ -574,7 +574,14 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   }
   private int watch(Airing watchAir, boolean forceLive, boolean forceBeginning,
       Playlist sourcePlaylist, MediaFile watchThisFile, boolean lockTunerOnly)
+  { return watch(watchAir, forceLive, forceBeginning, sourcePlaylist, watchThisFile, lockTunerOnly, null); }
+
+  private int watch(Airing watchAir, boolean forceLive, boolean forceBeginning,
+      Playlist sourcePlaylist, MediaFile watchThisFile, boolean lockTunerOnly, PartyPreparation preparation)
   {
+    if (preparation == null && partyPreparation != null)
+    { partyPreparation.cancelled = true; partyPreparation = null; }
+    if (preparation != null && !preparation.active()) return WATCH_FAILED_USER_REJECTED_CONFLICT;
     if (Sage.DBG) System.out.println("VideoFrame.watch(" + watchAir + ")");
     if (watchAir == null) return WATCH_FAILED_NULL_AIRING;
     try
@@ -614,6 +621,11 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         }
         if (!mustWatchThis)
         {
+          if (preparation != null)
+          {
+            holdPartyPreparation(preparation);
+            return preparation.watchCode;
+          }
           if (forceLive)
           {
             submitJob(new VFJob(TIME_SET, Long.MAX_VALUE));
@@ -696,7 +708,10 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
               Sage.getRawProperties().updateMRUList("recent_channels", Integer.toString(watchAir.stationID), 10);
             lastUserWatchAttemptTime = Sage.eventTime();
             playbackLoadFailed = false;
-            submitJob(new VFJob(WATCH_MF, watchThisFile, sourcePlaylist));
+            if (preparation != null && !preparation.active()) return WATCH_FAILED_USER_REJECTED_CONFLICT;
+            VFJob watchJob = new VFJob(WATCH_MF, watchThisFile, sourcePlaylist);
+            watchJob.partyPreparation = preparation;
+            submitJob(watchJob);
             iWantToBeLive = forceLive;
             iWantToStartAtBeginning = forceBeginning;
           }
@@ -1972,6 +1987,11 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
 
   private void processJob(VFJob daJob)
   {
+    if (daJob.partyPreparation != null && !daJob.partyPreparation.active())
+    { watchQueue.remove(daJob); return; }
+    if (partyPreparation != null && partyPreparation.held && currFile == partyPreparation.media
+        && (daJob.id == PLAY || daJob.id == PLAY_PAUSE))
+    { watchQueue.remove(daJob); return; }
     if (!watchQueue.contains(daJob))
     {
       if (Sage.DBG) System.out.println("VF ignoring job because it's already been removed from the queue:" + daJob);
@@ -2605,7 +2625,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
 
       // Get the correct MediaPlayer object for the new file. This may require unloading the current player.
       // Check if we have to close down the file due to an encoding change
-      if (player != null && (!Sage.getBoolean("videoframe/safe_fast_file_switching", true) ||
+      if (player != null && (daJob.partyPreparation != null || !Sage.getBoolean("videoframe/safe_fast_file_switching", true) ||
           !player.canFastLoad(daJob.file.getLegacyMediaType(), daJob.file.getLegacyMediaSubtype(), daJob.file.encodedBy, daJob.file.getFile(0)) ||
           !areMediaFileFormatsSwitchable(previousFile, daJob.file)))
       {
@@ -2623,7 +2643,9 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         downer = null;
 
       watchQueue.remove(daJob);
-      watchQueue.insertElementAt(new VFJob(LOAD_MF, daJob.file, (Playlist)null), 0);
+      VFJob loadJob = new VFJob(LOAD_MF, daJob.file, (Playlist)null);
+      loadJob.partyPreparation = daJob.partyPreparation;
+      watchQueue.insertElementAt(loadJob, 0);
       autoplaying = false;
 
       // Since we've got the new file considered loaded we should trigger a UI refresh now.
@@ -2826,11 +2848,12 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
             boolean timeSelRes;
             synchronized (player)
             {
-              timeSelRes = timeSelected(targetTime, true);
+              timeSelRes = timeSelected(targetTime, true, daJob.partyPreparation != null);
               lastVideoOpTime = Sage.eventTime();
               if (!timeSelRes)
               {
                 playbackLoadFailed = true;
+                if (daJob.partyPreparation != null) daJob.partyPreparation.watchCode = WATCH_FAILED_UNKNOWN;
                 System.out.println("VideoFrame had an error loading the file. It must abort the file load.");
                 mightWait = 0;
                 closeMediaFile(true, false, true);
@@ -2881,6 +2904,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
           if (Sage.DBG) System.out.println("Channel Change Time=" + (Sage.time() - channelChangeTime) + " NOTE: Not valid if this was not a direct channel change!");
           if (currFile != null)
           {
+            if (daJob.partyPreparation != null) holdPartyPreparation(daJob.partyPreparation);
             currFileLoaded = true;
             // Now load any subtitle handler that we need
             if (!alreadyDidSubCheck && downer == null)
@@ -3705,6 +3729,9 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   }
 
   protected boolean timeSelected(long milliTime, boolean forward)
+  { return timeSelected(milliTime, forward, false); }
+
+  private boolean timeSelected(long milliTime, boolean forward, boolean holdPaused)
   {
     if (currFile == null || player == null) return false;
     long currTime = Sage.time() - getEncodeToPlaybackDelay();
@@ -3771,7 +3798,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         segment = newSeg;
         // Don't allow fast switching between segments of a media file; only allow it on switching between different files
         // since that's the only real time a seamless transition will occur.
-        if (player.getState() != MediaPlayer.NO_STATE && oldSegment == -1 &&
+        if (!holdPaused && player.getState() != MediaPlayer.NO_STATE && oldSegment == -1 &&
             player.canFastLoad(currFile.getLegacyMediaType(), currFile.getLegacyMediaSubtype(), currFile.encodedBy, newSegFile))
         {
           try
@@ -3791,7 +3818,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
               if (Sage.DBG) System.out.println("VF detected file state change after load, reloading it...");
               // File has changed since tried to load it, do it again. This can
               // happen due to asynchronous verification between the client & server
-              return timeSelected(milliTime, forward);
+              return timeSelected(milliTime, forward, holdPaused);
             }
             if (!hasPendingContentJob())
             {
@@ -3855,7 +3882,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
                 closeMediaFile(true, false, false);
                 // File has changed since tried to load it, do it again. This can
                 // happen due to asynchronous verification between the client & server
-                return timeSelected(milliTime, forward);
+                return timeSelected(milliTime, forward, holdPaused);
               }
               if (!hasPendingContentJob())
               {
@@ -3922,7 +3949,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     }
     if (loadedFile)
     {
-      if (oldState != MediaPlayer.PAUSE_STATE)
+      if (!holdPaused && oldState != MediaPlayer.PAUSE_STATE)
       {
         // If we loaded up a new file we need to start playing it if it already was playing
         player.play();
@@ -4567,10 +4594,73 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   }
 
   private volatile boolean partyProgressOwned;
+  private volatile PartyPreparation partyPreparation;
+
+  static final class PartyPreparation
+  {
+    final MediaFile media;
+    final String id;
+    final java.util.function.BooleanSupplier authorized;
+    volatile boolean cancelled, held = true, loaded;
+    volatile int watchCode = WATCH_OK;
+    volatile long generation = -1;
+    PartyPreparation(MediaFile media, String id, java.util.function.BooleanSupplier authorized)
+    { this.media = media; this.id = id; this.authorized = authorized; }
+    boolean active() { return !cancelled && authorized.getAsBoolean(); }
+  }
+
+  /** Uses ordinary Watch checks but tags the asynchronous jobs and suppresses automatic play. */
+  PartyPreparation preparePartyMedia(MediaFile media, String id, java.util.function.BooleanSupplier authorized)
+  {
+    cancelPartyPreparation();
+    PartyPreparation preparation = new PartyPreparation(media, id, authorized);
+    partyPreparation = preparation;
+    if (!partyProgressOwned || !preparation.active()) preparation.watchCode = WATCH_FAILED_INSUFFICIENT_PERMISSIONS;
+    else preparation.watchCode = watchPartyMedia(preparation);
+    return preparation;
+  }
+
+  int watchPartyMedia(PartyPreparation preparation)
+  {
+    return watch(preparation.media.getContentAiring(), false, false, null, preparation.media, false, preparation);
+  }
+
+  private void holdPartyPreparation(PartyPreparation preparation)
+  {
+    if (!preparation.active())
+    { preparation.watchCode = WATCH_FAILED_USER_REJECTED_CONFLICT; return; }
+    MiniPlayer mp = getPartyPlayer();
+    if (mp == null || currFile != preparation.media)
+    { preparation.watchCode = WATCH_FAILED_NO_MEDIA_PLAYER_FOR_FILE; return; }
+    long generation = mp.getPartyPlaybackGeneration();
+    if (!mp.pause() || player != mp || currFile != preparation.media
+        || mp.getPartyPlaybackGeneration() != generation || mp.getState() != MediaPlayer.PAUSE_STATE)
+    { preparation.watchCode = WATCH_FAILED_UNKNOWN; return; }
+    preparation.generation = generation;
+    preparation.loaded = true;
+  }
+
+  /** Cancels stale queued preparation without sending playback Stop. */
+  void cancelPartyPreparation()
+  {
+    PartyPreparation preparation = partyPreparation;
+    if (preparation != null) preparation.cancelled = true;
+    // Keep an already-loaded stage held until an explicit canonical transition or normal Watch.
+  }
+
+  boolean isPartyPreparationLoaded(PartyPreparation preparation)
+  {
+    MiniPlayer mp = getPartyPlayer();
+    return preparation.active() && preparation.loaded && preparation.watchCode == WATCH_OK
+        && currFile == preparation.media && mp != null
+        && mp.getPartyPlaybackGeneration() == preparation.generation && mp.getState() == MediaPlayer.PAUSE_STATE;
+  }
 
   /** Prevents per-viewer writes while party progress owns the shared account's history. */
   public void setPartyProgressOwned(boolean owned)
   {
+    if (!owned && partyPreparation != null)
+    { partyPreparation.cancelled = true; partyPreparation.held = false; }
     if (partyProgressOwned && !owned) loggedWatch = true;
     partyProgressOwned = owned;
   }
@@ -4583,6 +4673,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   {
     MediaFile mf = currFile;
     if (!partyProgressOwned || mf == null || mf.getID() != mediaFileId) return;
+    if (partyPreparation != null && partyPreparation.media == mf) partyPreparation.held = false;
     submitJob(new VFJob(TIME_SET, mf.getRecordTime() + positionMs));
     submitJob(new VFJob(playing ? PLAY : PAUSE));
   }
@@ -4641,6 +4732,27 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   { return player instanceof MiniPlayer && ((MiniPlayer)player).hasPartyPushAdmission(); }
 
   MiniPlayer getPartyPlayer() { return player instanceof MiniPlayer ? (MiniPlayer)player : null; }
+
+  /** Samples normal server playback time only while this exact loaded generation remains current. */
+  long partyCurrentPosition(int mediaFileId)
+  {
+    MiniPlayer expectedPlayer = getPartyPlayer();
+    MediaFile expectedMedia = currFile;
+    if (expectedPlayer == null || expectedMedia == null || expectedMedia.getID() != mediaFileId
+        || expectedMedia.getNumSegments() != 1 || !isMediaPlayerLoaded()
+        || (expectedPlayer.getState() != MediaPlayer.PLAY_STATE && expectedPlayer.getState() != MediaPlayer.PAUSE_STATE))
+      throw new sage.party.PartyProtocol.Fault("CURRENT_POSITION_UNAVAILABLE");
+    long generation = expectedPlayer.getPartyPlaybackGeneration();
+    long duration = expectedMedia.getRecordDuration();
+    long start = expectedMedia.getStart(0);
+    long observed = getMediaTimeMillis(false);
+    if (player != expectedPlayer || currFile != expectedMedia || duration <= 0
+        || expectedPlayer.getPartyPlaybackGeneration() != generation || !isMediaPlayerLoaded()
+        || (expectedPlayer.getState() != MediaPlayer.PLAY_STATE && expectedPlayer.getState() != MediaPlayer.PAUSE_STATE))
+      throw new sage.party.PartyProtocol.Fault("CURRENT_POSITION_UNAVAILABLE");
+    try { return Math.max(0, Math.min(duration, Math.subtractExact(observed, start))); }
+    catch (ArithmeticException e) { throw new sage.party.PartyProtocol.Fault("CURRENT_POSITION_UNAVAILABLE"); }
+  }
 
   public void play() { if (!partyAction("PLAY")) submitJob(new VFJob(PLAY)); }
   public void pause() { if (!partyAction("PAUSE")) submitJob(new VFJob(PAUSE)); }
@@ -7370,6 +7482,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     int playaIdx;
     boolean useSyncClose;
     boolean passesPC;
+    PartyPreparation partyPreparation;
   }
 
   private static MediaFile[] cachedSortedMusicFiles;

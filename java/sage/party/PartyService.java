@@ -32,6 +32,8 @@ public final class PartyService
     void send(JsonObject message);
     /** Validates eligible accessible media and returns its stable duration. */
     long duration(int mediaFileId);
+    /** Samples the initiating renderer's loaded media position, validating its exact playback generation. */
+    default long currentPosition(int mediaFileId) { throw new Fault("CURRENT_POSITION_UNAVAILABLE"); }
     /** Evaluates this viewer's normal NG surface plan before preparation consumes resources. */
     Delivery plan(int mediaFileId);
     /** Returns actual server-selected playback metadata, or throws until prepared. */
@@ -42,6 +44,10 @@ public final class PartyService
     default boolean mediaAdmitted(int mediaFileId) { return false; }
     /** Revokes pending or confirmed media correlation without touching another viewer. */
     default void releaseMediaAdmission() {}
+    /** Stages only the joined canonical media through this renderer's ordinary Watch checks. */
+    default void prepare(int mediaFileId, String preparationId) { throw new Fault("PREPARE_UNSUPPORTED"); }
+    /** Invalidates asynchronous preparation on membership or local lifecycle changes. */
+    default void cancelPreparation() {}
     /** Resolves initiating-client skip settings, using existing Sage semantics. */
     long skip(String action);
     /** Suppresses ordinary per-viewer progress logging while party playback owns it. */
@@ -58,13 +64,16 @@ public final class PartyService
   public record Delivery(String surface, String mode, String videoCodec, String audioCodec,
       int bitrateKbps, boolean transcode) {}
 
-  private static final long GRACE_MS = 15000, TOKEN_MS = 300000;
+  private static final long GRACE_MS = 15000;
   private final LongSupplier time;
   private final boolean enabled;
   private final int maxKbps, maxTranscodes;
   private final SecureRandom random = new SecureRandom();
   private final Map<String, Party> parties = new LinkedHashMap<>();
   private final Map<Peer, Link> links = new HashMap<>();
+  private final PartyJoinCodes joinCodes = new PartyJoinCodes();
+  private final Deque<Long> joinAttempts = new ArrayDeque<>();
+  private final Deque<Long> codeIssues = new ArrayDeque<>();
   private boolean closed;
 
   private static final class Link
@@ -76,6 +85,7 @@ public final class PartyService
     long window;
     long highWater;
     int requests;
+    final Deque<Long> joinAttempts = new ArrayDeque<>();
     Link(String handle) { this.handle = handle; }
   }
   private record Cached(String input, JsonObject result) {}
@@ -96,6 +106,8 @@ public final class PartyService
     long precision = 0, ackSeq;
     String correctionId;
     String correctionKind;
+    String preparationId;
+    boolean preparationPending;
     long correctionSkew, correctionDue;
     boolean rateAdjust;
     final Deque<Long> failures = new ArrayDeque<>();
@@ -109,8 +121,8 @@ public final class PartyService
     final long duration, created;
     final LinkedHashMap<String, Member> members = new LinkedHashMap<>();
     final LinkedHashMap<Long, CommandOutcome> outcomes = new LinkedHashMap<>();
-    String host, token, state = "PAUSED";
-    long tokenExpires, version, seq, anchor, anchorAt;
+    String host, state = "PAUSED";
+    long version, seq, anchor, anchorAt;
     boolean hostOnly, pauseOnBuffer;
     boolean majorityNotified;
     long lastBufferNotice = -1;
@@ -167,6 +179,16 @@ public final class PartyService
     if (link.token == null || link.tokenExpires - now < 60000)
     { link.token = opaque(); link.tokenExpires = now + 1800000; }
     JsonObject out = envelope("AVAILABLE");
+    JsonArray starts = new JsonArray();
+    starts.add("BEGINNING");
+    if (peer.capabilities().contains("PARTY_START_POSITION_V1")) starts.add("CURRENT_POSITION");
+    out.add("supportedStartModes", starts);
+    out.addProperty("prepareSupported", peer.capabilities().contains("PARTY_PREPARE_V1"));
+    out.addProperty("joinCodeDigits", 3);
+    out.addProperty("joinCodeLifetimeMs", PartyJoinCodes.LIFETIME_MS);
+    out.addProperty("joinAttemptWindowMs", 60000);
+    out.addProperty("joinAttemptsPerSession", 3);
+    out.addProperty("joinAttemptsGlobal", 6);
     out.addProperty("serverEpoch", epoch);
     out.addProperty("sessionHandle", link.handle);
     out.addProperty("sessionToken", link.token);
@@ -226,6 +248,12 @@ public final class PartyService
     {
       response = envelope("ERROR");
       response.addProperty("code", f.getMessage());
+      if ("JOIN_RATE_LIMITED".equals(f.getMessage()))
+        response.addProperty("retryAfterMs", joinRetryAfter(link, time.getAsLong()));
+      if ("CODE_ROTATION_COOLDOWN".equals(f.getMessage()) && request != null && request.has("partyId"))
+        response.addProperty("retryAfterMs", joinCodes.rotationRetryAfter(text(request, "partyId"), time.getAsLong()));
+      if ("CODE_ISSUE_RATE_LIMITED".equals(f.getMessage()))
+        response.addProperty("retryAfterMs", codeIssueRetryAfter(time.getAsLong()));
       diagnostic(null, null, "REJECT_" + f.getMessage(), time.getAsLong());
       if (request != null) response.addProperty("requestId", text(request, "requestId"));
     }
@@ -256,28 +284,47 @@ public final class PartyService
       if (find(peer) != null) throw new Fault("ALREADY_JOINED");
       if (parties.size() >= 16) throw new Fault("SERVER_CAPACITY");
       int media = (int)number(r, "mediaFileId", 1, Integer.MAX_VALUE);
+      String startMode = r.has("startMode") ? text(r, "startMode") : "BEGINNING";
+      if (!Set.of("BEGINNING", "CURRENT_POSITION").contains(startMode)
+          || r.has("startPositionMs") || r.has("positionMs"))
+        throw new Fault("INVALID_REQUEST");
+      if ("CURRENT_POSITION".equals(startMode) && !peer.capabilities().contains("PARTY_START_POSITION_V1"))
+        throw new Fault("START_MODE_UNSUPPORTED");
       long duration = peer.duration(media);
       if (duration <= 0) throw new Fault("MEDIA_UNAVAILABLE");
       Party p = new Party(opaque(), media, duration, now);
       Member m = member(peer);
       m.reservation = peer.plan(media);
       admit(m, m.reservation);
+      if ("CURRENT_POSITION".equals(startMode))
+        p.anchor = Math.max(0, Math.min(duration, peer.currentPosition(media)));
       m.preparingSince = now;
       p.members.put(m.id, m);
       p.host = m.id;
-      rotate(p, now);
+      issueCode(p.id, now);
       parties.put(p.id, p);
       peer.progressOwner(true);
-      return joined(p, m, "CREATED", now, true);
+      JsonObject created = joined(p, m, "CREATED", now, true);
+      created.addProperty("startMode", startMode);
+      created.addProperty("startPositionMs", p.anchor);
+      return created;
     }
-    Party p = parties.get(text(r, "partyId"));
+    String partyId;
+    if ("JOIN".equals(type))
+    {
+      if (find(peer) != null) throw new Fault("ALREADY_JOINED");
+      attemptJoin(links.get(peer), now);
+      if (r.has("joinToken") || !r.has("joinCode")) throw new Fault("JOIN_DENIED");
+      partyId = joinCodes.resolve(text(r, "joinCode"), now);
+      if (r.has("partyId") && !partyId.equals(text(r, "partyId"))) throw new Fault("JOIN_DENIED");
+    }
+    else partyId = text(r, "partyId");
+    Party p = parties.get(partyId);
     if (p == null) throw new Fault("PARTY_GONE");
     if ("JOIN".equals(type))
     {
       if (find(peer) != null) throw new Fault("ALREADY_JOINED");
-      if (p.tokenExpires <= now || !constantEquals(p.token, text(r, "joinToken")))
-        throw new Fault("JOIN_DENIED");
-      if (number(r, "mediaFileId", 1, Integer.MAX_VALUE) != p.media)
+      if (r.has("mediaFileId") && number(r, "mediaFileId", 1, Integer.MAX_VALUE) != p.media)
         throw new Fault("MEDIA_MISMATCH");
       if (peer.duration(p.media) != p.duration) throw new Fault("MEDIA_MISMATCH");
       if (p.members.size() >= 5) throw new Fault("PARTY_FULL");
@@ -325,19 +372,21 @@ public final class PartyService
             JsonObject invite = envelope("INVITED");
             invite.addProperty("partyId", p.id);
             invite.addProperty("mediaFileId", p.media);
-            invite.addProperty("joinToken", p.token);
-            invite.addProperty("expiresAtServerMonoMs", p.tokenExpires);
+            invite.addProperty("joinCodeRequired", true);
             entry.getKey().send(invite);
             return envelope("ACK");
           }
         throw new Fault("CLIENT_UNAVAILABLE");
       }
-      case "ROTATE_TOKEN":
-        host(p, m); rotate(p, now);
-        JsonObject token = envelope("TOKEN");
-        token.addProperty("joinToken", p.token);
-        token.addProperty("expiresAtServerMonoMs", p.tokenExpires);
-        return token;
+      case "ROTATE_CODE":
+      case "JOIN_CODE":
+        host(p, m);
+        PartyJoinCodes.Grant code = "ROTATE_CODE".equals(type) ? issueCode(p.id, now) : joinCodes.current(p.id, now);
+        JsonObject codeReply = envelope("JOIN_CODE");
+        codeReply.addProperty("partyId", p.id);
+        codeReply.addProperty("joinCode", code.code());
+        codeReply.addProperty("expiresAtServerMonoMs", code.expiresAt());
+        return codeReply;
       case "POLICY":
         host(p, m);
         boolean hostOnly = flag(r, "hostOnly");
@@ -371,11 +420,34 @@ public final class PartyService
         return out;
       }
       case "MEDIA_ADMISSION":
+        if (m.preparationPending) throw new Fault("PREPARATION_PENDING");
         if (!Set.of("PREPARING", "RECOVERING", "BUFFERING").contains(m.status))
           throw new Fault("REJOIN_REQUIRED");
         return peer.mediaAdmission(p.media);
+      case "PREPARE":
+      {
+        if (!peer.capabilities().contains("PARTY_PREPARE_V1")) throw new Fault("PREPARE_UNSUPPORTED");
+        if (!"JOIN_AND_PREPARE".equals(text(r, "intent")) || !flag(r, "confirmReplace")
+            || r.has("mediaFileId") || r.has("positionMs"))
+          throw new Fault("INVALID_REQUEST");
+        if (!Set.of("PREPARING", "RECOVERING", "BUFFERING").contains(m.status))
+          throw new Fault("REJOIN_REQUIRED");
+        if (m.preparationPending) throw new Fault("PREPARATION_PENDING");
+        peer.duration(p.media);
+        reset(m);
+        m.preparingSince = now;
+        m.preparationId = opaque(); m.preparationPending = true;
+        try { peer.prepare(p.media, m.preparationId); }
+        catch (Fault f) { m.preparationPending = false; m.preparationId = null; throw f; }
+        JsonObject accepted = envelope("PREPARE_ACCEPTED");
+        accepted.addProperty("partyId", p.id); accepted.addProperty("mediaFileId", p.media);
+        accepted.addProperty("preparationId", m.preparationId);
+        accepted.addProperty("holdPlayback", true);
+        return accepted;
+      }
       case "READY":
       {
+        if (m.preparationPending) throw new Fault("PREPARATION_PENDING");
         current(p, r);
         if (!"PREPARING".equals(m.status) && !"RECOVERING".equals(m.status)
             && !"BUFFERING".equals(m.status)) throw new Fault("REJOIN_REQUIRED");
@@ -422,6 +494,8 @@ public final class PartyService
         m.peer.cancelScheduled();
         if (!"BUFFERING".equals(status)) { m.clock.reset(); m.delivery = null; }
         if (!"BUFFERING".equals(status)) m.peer.releaseMediaAdmission();
+        if (!"BUFFERING".equals(status))
+        { m.peer.cancelPreparation(); m.preparationId = null; m.preparationPending = false; }
         if ("LOCALLY_STOPPED".equals(status)) m.reservation = null;
         if ("LOCALLY_STOPPED".equals(status)) m.correctionId = null;
         roster(p, m);
@@ -476,7 +550,33 @@ public final class PartyService
     return java.security.MessageDigest.isEqual(a.getBytes(java.nio.charset.StandardCharsets.US_ASCII),
         b.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
   }
-  private void rotate(Party p, long now) { p.token = opaque(); p.tokenExpires = now + TOKEN_MS; }
+  private long joinRetryAfter(Link link, long now)
+  {
+    while (!joinAttempts.isEmpty() && joinAttempts.peekFirst() <= now - 60000) joinAttempts.removeFirst();
+    if (link != null)
+      while (!link.joinAttempts.isEmpty() && link.joinAttempts.peekFirst() <= now - 60000)
+        link.joinAttempts.removeFirst();
+    long global = joinAttempts.size() >= 6 ? joinAttempts.peekFirst() + 60000 - now : 0;
+    long local = link != null && link.joinAttempts.size() >= 3 ? link.joinAttempts.peekFirst() + 60000 - now : 0;
+    return Math.max(global, local);
+  }
+  private void attemptJoin(Link link, long now)
+  {
+    if (joinRetryAfter(link, now) > 0) throw new Fault("JOIN_RATE_LIMITED");
+    joinAttempts.addLast(now); link.joinAttempts.addLast(now);
+  }
+  private long codeIssueRetryAfter(long now)
+  {
+    while (!codeIssues.isEmpty() && codeIssues.peekFirst() <= now - 60000) codeIssues.removeFirst();
+    return codeIssues.size() >= 12 ? codeIssues.peekFirst() + 60000 - now : 0;
+  }
+  private PartyJoinCodes.Grant issueCode(String party, long now)
+  {
+    if (codeIssueRetryAfter(now) > 0) throw new Fault("CODE_ISSUE_RATE_LIMITED");
+    PartyJoinCodes.Grant grant = joinCodes.issue(party, now);
+    codeIssues.addLast(now);
+    return grant;
+  }
   private Party find(Peer peer)
   {
     for (Party p : parties.values())
@@ -496,7 +596,8 @@ public final class PartyService
   }
   private void reset(Member m)
   {
-    if (m.peer != null) { m.peer.cancelScheduled(); m.peer.releaseMediaAdmission(); }
+    if (m.peer != null) { m.peer.cancelScheduled(); m.peer.releaseMediaAdmission(); m.peer.cancelPreparation(); }
+    m.preparationId = null; m.preparationPending = false;
     m.status = "PREPARING"; m.clock.reset(); m.probes.clear(); m.delivery = null;
     m.lastReport = m.lastSample = m.correctionAt = -1; m.correctionId = null; m.failures.clear();
   }
@@ -807,10 +908,15 @@ public final class PartyService
     out.addProperty("recoveryToken", m.recovery);
     out.addProperty("recoveryTokenExpiresAtServerMonoMs", m.recoveryExpires);
     out.addProperty("reconnectGraceMs", GRACE_MS);
-    out.addProperty("prepareVia", "NORMAL_NG_WATCH");
+    out.addProperty("prepareVia", m.peer.capabilities().contains("PARTY_PREPARE_V1") ? "PARTY_PREPARE" : "NORMAL_NG_WATCH");
     if (m.reservation != null) out.add("preparation", deliveryJson(m.reservation));
     out.add("snapshot", snapshot(p, now));
-    if (token) { out.addProperty("joinToken", p.token); out.addProperty("expiresAtServerMonoMs", p.tokenExpires); }
+    if (token)
+    {
+      PartyJoinCodes.Grant code = joinCodes.current(p.id, now);
+      out.addProperty("joinCode", code.code());
+      out.addProperty("expiresAtServerMonoMs", code.expiresAt());
+    }
     return out;
   }
   private JsonObject snapshot(Party p, long now)
@@ -893,12 +999,14 @@ public final class PartyService
   /** Retains the logical slot for reconnect; physical socket IDs are never identities. */
   public synchronized void disconnected(Peer peer)
   {
+    peer.cancelPreparation();
     links.remove(peer);
     Party p = find(peer);
     if (p == null) return;
     Member m = requireMember(p, peer);
     peer.cancelScheduled();
     m.peer = null; m.disconnectedAt = time.getAsLong(); m.clock.reset();
+    m.preparationPending = false; m.preparationId = null;
     m.correctionId = null;
     m.probes.clear();
     m.status = "DISCONNECTED";
@@ -918,12 +1026,13 @@ public final class PartyService
     if (m.peer != null)
     {
       m.peer.cancelScheduled();
+      m.peer.cancelPreparation();
       if (commit && m.admitted) m.peer.commit(p.media, position(p, now));
       m.peer.progressOwner(false);
     }
     p.members.remove(m.id);
     m.status = "LEFT"; roster(p, m);
-    if (p.members.isEmpty()) parties.remove(p.id);
+    if (p.members.isEmpty()) { parties.remove(p.id); joinCodes.remove(p.id, now); }
     else if (m.id.equals(p.host)) transfer(p);
   }
   private void end(Party p, boolean commit, String reason, long now)
@@ -932,7 +1041,7 @@ public final class PartyService
     o.addProperty("partyId", p.id); o.addProperty("reason", reason);
     broadcast(p, o);
     for (Member m : new ArrayList<>(p.members.values())) remove(p, m, commit, now);
-    parties.remove(p.id);
+    parties.remove(p.id); joinCodes.remove(p.id, now);
   }
 
   /** Advances deadlines, invalidates stale clocks, expires grace slots and abandoned parties. */
@@ -968,7 +1077,7 @@ public final class PartyService
           roster(p, m);
         }
         if (m.peer == null && now - m.disconnectedAt > GRACE_MS) { remove(p, m, false, now); continue; }
-        if ("PREPARING".equals(m.status) && now - m.preparingSince > 60000)
+        if (("PREPARING".equals(m.status) || m.preparationPending) && now - m.preparingSince > 60000)
         {
           JsonObject error = envelope("ERROR");
           error.addProperty("code", "PREPARATION_EXPIRED");
@@ -990,7 +1099,26 @@ public final class PartyService
   public synchronized void shutdown()
   {
     for (Party p : new ArrayList<>(parties.values())) end(p, false, "SERVER_SHUTDOWN", time.getAsLong());
-    parties.clear(); links.clear(); closed = true;
+    parties.clear(); links.clear(); joinCodes.clear(); joinAttempts.clear(); codeIssues.clear(); closed = true;
+  }
+
+  /** Reports one bounded asynchronous ordinary-Watch outcome to its exact active operation only. */
+  public synchronized void preparationResult(Peer peer, String preparationId, int watchCode, long generation)
+  {
+    Party p = find(peer);
+    if (p == null || !eligible(peer)) return;
+    Member m = requireMember(p, peer);
+    if (!m.preparationPending || !preparationId.equals(m.preparationId)) return;
+    if (watchCode == 0 && generation < 0) watchCode = -13;
+    m.preparationPending = false;
+    JsonObject result = envelope("PREPARATION_RESULT");
+    result.addProperty("partyId", p.id); result.addProperty("mediaFileId", p.media);
+    result.addProperty("preparationId", preparationId);
+    result.addProperty("status", watchCode == 0 ? "LOADED" : "FAILED");
+    result.addProperty("watchCode", watchCode);
+    if (watchCode == 0) result.addProperty("playbackGeneration", generation);
+    else { result.addProperty("code", "PREPARATION_FAILED"); peer.cancelPreparation(); }
+    peer.send(result);
   }
 
   private void diagnostic(Party p, Member m, String outcome, long now)

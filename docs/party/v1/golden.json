@@ -25,7 +25,7 @@
     "sessionToken": "EXAMPLE_NOT_A_REAL_SESSION_TOKEN",
     "partyId": "example-party",
     "mediaFileId": 42,
-    "joinToken": "EXAMPLE_NOT_A_REAL_JOIN_TOKEN"
+    "joinCode": "042"
   },
   "ready": {
     "schemaVersion": 1,
@@ -246,6 +246,55 @@
     "partyId": "example-party",
     "stateVersion": 1,
     "action": "STOP"
+  },
+  "createCurrent": {
+    "schemaVersion": 1, "type": "CREATE", "requestId": "c2", "requestSeq": 2,
+    "serverEpoch": "example-epoch", "sessionToken": "EXAMPLE_NOT_A_REAL_SESSION_TOKEN",
+    "mediaFileId": 42, "startMode": "CURRENT_POSITION"
+  },
+  "createdCurrent": {
+    "schemaVersion": 1, "type": "CREATED", "requestId": "c2", "serverMonoMs": 100000,
+    "partyId": "example-party", "participantId": "example-host",
+    "recoveryToken": "EXAMPLE_NOT_A_REAL_RECOVERY_TOKEN", "recoveryTokenExpiresAtServerMonoMs": 1900000,
+    "reconnectGraceMs": 15000, "prepareVia": "PARTY_PREPARE",
+    "preparation": {"surface": "android", "mode": "push", "videoCodec": "H264", "audioCodec": "AAC", "budgetKbps": 8000, "transcode": false},
+    "joinCode": "042", "expiresAtServerMonoMs": 220000,
+    "startMode": "CURRENT_POSITION", "startPositionMs": 123456,
+    "snapshot": {
+      "schemaVersion": 1, "type": "SNAPSHOT", "partyId": "example-party", "serverEpoch": "example-epoch",
+      "mediaFileId": 42, "durationMs": 3600000, "stateVersion": 0, "commandSeq": 0,
+      "anchorPositionMs": 123456, "anchorServerMonoMs": 100000, "state": "PAUSED", "rate": 1,
+      "serverMonoMs": 100000, "hostParticipantId": "example-host", "hostOnly": false, "pauseOnBuffer": false,
+      "roster": [{"participantId": "example-host", "status": "PREPARING", "clockConfident": false,
+        "p95RttMs": 2000, "uncertaintyMs": 1000000, "ackCommandSeq": 0}]
+    }
+  },
+  "invited": {
+    "schemaVersion": 1, "type": "INVITED", "partyId": "example-party", "mediaFileId": 42, "joinCodeRequired": true
+  },
+  "joinCodeReply": {
+    "schemaVersion": 1, "type": "JOIN_CODE", "requestId": "code1", "serverMonoMs": 100000,
+    "partyId": "example-party", "joinCode": "042", "expiresAtServerMonoMs": 220000
+  },
+  "prepare": {
+    "schemaVersion": 1, "type": "PREPARE", "requestId": "prepare1", "requestSeq": 3,
+    "serverEpoch": "example-epoch", "sessionToken": "EXAMPLE_NOT_A_REAL_SESSION_TOKEN",
+    "partyId": "example-party", "intent": "JOIN_AND_PREPARE", "confirmReplace": true
+  },
+  "prepareAccepted": {
+    "schemaVersion": 1, "type": "PREPARE_ACCEPTED", "requestId": "prepare1", "serverMonoMs": 100000,
+    "partyId": "example-party", "mediaFileId": 42, "preparationId": "example-preparation", "holdPlayback": true
+  },
+  "preparationLoaded": {
+    "schemaVersion": 1, "type": "PREPARATION_RESULT", "partyId": "example-party", "mediaFileId": 42,
+    "preparationId": "example-preparation", "status": "LOADED", "watchCode": 0, "playbackGeneration": 7
+  },
+  "preparationFailed": {
+    "schemaVersion": 1, "type": "PREPARATION_RESULT", "partyId": "example-party", "mediaFileId": 42,
+    "preparationId": "example-preparation", "status": "FAILED", "watchCode": -3, "code": "PREPARATION_FAILED"
+  },
+  "joinRateLimited": {
+    "schemaVersion": 1, "type": "ERROR", "requestId": "j2", "code": "JOIN_RATE_LIMITED", "retryAfterMs": 60000
   },
   "invalidStopReply": {
     "schemaVersion": 1,

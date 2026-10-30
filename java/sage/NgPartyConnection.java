@@ -31,6 +31,8 @@ final class NgPartyConnection implements PartyService.Peer
   private final java.util.function.LongSupplier monotonicMs;
   private final ThreadPoolExecutor input = executor("PartyInput");
   private final ThreadPoolExecutor output = executor("PartyOutput");
+  private final ThreadPoolExecutor preparation = executor("PartyPrepare");
+  private volatile long preparationGeneration;
   private volatile boolean closed;
   private volatile MiniPlayer admittedPushPlayer;
   private volatile long admittedPushGeneration = -1;
@@ -89,7 +91,7 @@ final class NgPartyConnection implements PartyService.Peer
     cancelScheduled();
     service.disconnected(this);
     if (ui.getVideoFrame() != null) ui.getVideoFrame().setPartyProgressOwned(false);
-    input.shutdownNow(); output.shutdownNow();
+    input.shutdownNow(); output.shutdownNow(); preparation.shutdownNow();
   }
 
   private void failTransport(String reason)
@@ -130,11 +132,20 @@ final class NgPartyConnection implements PartyService.Peer
     if (mf == null || !mf.isVideo() || mf.isDVD() || mf.isBluRay() || mf.isAnyLiveStream()
         || mf.isRecording() || (mf.isTV() && !mf.isCompleteRecording())
         || mf.getNumSegments() != 1 || !mf.verifyFiles(true)
-        || mf.getContentAiring() == null
-        || (ui.getVideoFrame().doesAiringRequirePC(mf.getContentAiring())
-            && ui.getVideoFrame().getCurrFile() != mf))
+        || mf.getContentAiring() == null)
       throw new PartyProtocol.Fault("MEDIA_UNAVAILABLE");
     return mf.getRecordDuration();
+  }
+
+  @Override public long currentPosition(int media)
+  {
+    duration(media);
+    String principal = principal();
+    if (closed || principal == null) throw new PartyProtocol.Fault("CURRENT_POSITION_UNAVAILABLE");
+    long position = ui.getVideoFrame().partyCurrentPosition(media);
+    if (closed || !principal.equals(principal()))
+      throw new PartyProtocol.Fault("CURRENT_POSITION_UNAVAILABLE");
+    return position;
   }
 
   @Override public PartyService.Delivery delivery(int media)
@@ -187,6 +198,51 @@ final class NgPartyConnection implements PartyService.Peer
   {
     admittedPushPlayer = null; admittedPushGeneration = -1;
     NgPartyMediaAdmission.INSTANCE.revoke(this);
+  }
+
+  @Override public void prepare(int media, String id)
+  {
+    duration(media);
+    String principal = principal();
+    long generation = ++preparationGeneration;
+    try
+    {
+      preparation.execute(() -> {
+        java.util.function.BooleanSupplier authorized = () -> !closed
+            && preparationGeneration == generation && principal != null && principal.equals(principal())
+            && capabilities().containsAll(PartyProtocol.REQUIRED) && capabilities().contains("PARTY_PREPARE_V1");
+        if (!authorized.getAsBoolean()) return;
+        MediaFile target = preparationMedia(media);
+        if (target == null)
+        { service.preparationResult(this, id, VideoFrame.WATCH_FAILED_FILES_NOT_ON_DISK, -1); return; }
+        VideoFrame.PartyPreparation stage = ui.getVideoFrame().preparePartyMedia(target, id, authorized);
+        pollPreparation(stage, monotonicMs.getAsLong() + 60000, generation);
+      });
+    }
+    catch (java.util.concurrent.RejectedExecutionException e)
+    { throw new PartyProtocol.Fault("PREPARATION_BUSY"); }
+  }
+
+  MediaFile preparationMedia(int media) { return Wizard.getInstance().getFileForID(media); }
+
+  private void pollPreparation(VideoFrame.PartyPreparation stage, long deadline, long generation)
+  {
+    if (closed || preparationGeneration != generation) return;
+    if (stage.watchCode != VideoFrame.WATCH_OK)
+      service.preparationResult(this, stage.id, stage.watchCode, -1);
+    else if (!stage.active())
+      service.preparationResult(this, stage.id, VideoFrame.WATCH_FAILED_USER_REJECTED_CONFLICT, -1);
+    else if (ui.getVideoFrame().isPartyPreparationLoaded(stage))
+      service.preparationResult(this, stage.id, VideoFrame.WATCH_OK, stage.generation);
+    else if (stage.loaded || monotonicMs.getAsLong() >= deadline)
+      service.preparationResult(this, stage.id, VideoFrame.WATCH_FAILED_UNKNOWN, -1);
+    else TIMER.schedule(() -> pollPreparation(stage, deadline, generation), 100, TimeUnit.MILLISECONDS);
+  }
+
+  @Override public void cancelPreparation()
+  {
+    preparationGeneration++;
+    if (ui.getVideoFrame() != null) ui.getVideoFrame().cancelPartyPreparation();
   }
 
   @Override public PartyService.Delivery plan(int media)

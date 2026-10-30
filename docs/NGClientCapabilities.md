@@ -22,6 +22,15 @@ Legacy/unnegotiated clients are ineligible; normal playback defaults are unchang
 Party v1 additionally requires separate receipt/execution reports and server-confirmed
 media admission. Future pull bridges must relay the canonical per-playback admission
 handle on their own producer; client readiness flags are not resource admission.
+`PARTY_JOIN_CODE_V1` is now a required guarantee: even selected connected invitees
+must enter the host's three-digit code on their existing admitted session. No
+join-token bypass or deep link is offered. Optional `PARTY_START_POSITION_V1`
+allows server-sampled Beginning/Current Position creation; `PARTY_PREPARE_V1`
+allows explicit confirmed Join & Prepare through the exact renderer's normal
+Watch/parental/resource checks with a paused-load and readiness barrier. See the
+canonical contract for code expiry/global cooldowns, asynchronous result schemas
+and required future bridge admission routing; these capabilities are not yet
+implemented by today's PWA/Android clients.
 
 Bump `SAGETV_NG_VERSION` to `2.0.0` when this spec is implemented.
 The server uses this as a single gate — if it sees `2.0.0+` it expects

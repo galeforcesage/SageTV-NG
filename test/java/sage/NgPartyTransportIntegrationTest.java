@@ -98,7 +98,7 @@ public class NgPartyTransportIntegrationTest
       verify(host.video).setPartyProgressOwned(true);
       JsonObject join = new JsonObject();
       join.add("partyId", created.get("partyId")); join.addProperty("mediaFileId", 42);
-      join.add("joinToken", created.get("joinToken"));
+      join.add("joinCode", created.get("joinCode"));
       JsonObject joined = guest.exchange("JOIN", join);
       assertEquals(joined.get("type").getAsString(), "JOINED");
       assertEquals(joined.getAsJsonObject("snapshot").getAsJsonArray("roster").size(), 2);
@@ -306,6 +306,211 @@ public class NgPartyTransportIntegrationTest
       assertFalse(client.connection.mediaAdmitted(42));
       client.connection.releaseMediaAdmission();
       assertTrue(client.connection.mediaAdmitted(42), "A fresh readiness barrier may admit the new generation");
+    }
+  }
+
+  private static void videoField(VideoFrame video, String name, Object value) throws Exception
+  {
+    Field field = (java.util.Set.of("queueLock", "uiMgr").contains(name)
+        ? BasicVideoFrame.class : VideoFrame.class).getDeclaredField(name);
+    field.setAccessible(true); field.set(video, value);
+  }
+
+  @Test public void currentPositionUsesOnlySameRendererSameMediaGenerationAndClampsServerTime() throws Exception
+  {
+    PartyService service = new PartyService(() -> 100000, true, 100000, 2);
+    try (Transport client = new Transport(service, "pull"))
+    {
+      MediaFile media = mock(MediaFile.class);
+      MiniPlayer player = mock(MiniPlayer.class);
+      doReturn(42).when(media).getID(); doReturn(1).when(media).getNumSegments();
+      doReturn(900000L).when(media).getRecordDuration(); doReturn(500000L).when(media).getStart(0);
+      doReturn(MediaPlayer.PLAY_STATE).when(player).getState();
+      videoField(client.video, "player", player); videoField(client.video, "currFile", media);
+      doCallRealMethod().when(client.video).getPartyPlayer();
+      doCallRealMethod().when(client.video).partyCurrentPosition(anyInt());
+      doReturn(true).when(client.video).isMediaPlayerLoaded();
+      doReturn(623456L).when(client.video).getMediaTimeMillis(false);
+      assertEquals(client.connection.currentPosition(42), 123456);
+      assertThrows(PartyProtocol.Fault.class, () -> client.video.partyCurrentPosition(99));
+      doReturn(499999L).when(client.video).getMediaTimeMillis(false);
+      assertEquals(client.connection.currentPosition(42), 0);
+      doReturn(Long.MAX_VALUE).when(client.video).getMediaTimeMillis(false);
+      assertEquals(client.connection.currentPosition(42), 900000);
+      doAnswer(call -> { doReturn(1L).when(player).getPartyPlaybackGeneration(); return 623456L; })
+          .when(client.video).getMediaTimeMillis(false);
+      assertThrows(PartyProtocol.Fault.class, () -> client.connection.currentPosition(42));
+      doReturn(MediaPlayer.STOPPED_STATE).when(player).getState();
+      assertThrows(PartyProtocol.Fault.class, () -> client.connection.currentPosition(42));
+    }
+  }
+
+  @Test public void actualRendererCreateCurrentPositionRemainsPausedAndDefaultBeginningDoesNotSample() throws Exception
+  {
+    PartyService service = new PartyService(() -> 100000, true, 100000, 2);
+    try (Transport client = new Transport(service, "pull"))
+    {
+      java.util.Set<String> caps = new java.util.HashSet<>(PartyProtocol.REQUIRED);
+      caps.add("PARTY_START_POSITION_V1");
+      doReturn(caps).when(client.renderer).getClientCapabilities();
+      doReturn(456789L).when(client.video).partyCurrentPosition(42);
+      JsonObject create = new JsonObject(); create.addProperty("mediaFileId", 42);
+      create.addProperty("startMode", "CURRENT_POSITION");
+      JsonObject created = client.exchange("CREATE", create);
+      assertEquals(created.get("startPositionMs").getAsLong(), 456789);
+      assertEquals(created.getAsJsonObject("snapshot").get("state").getAsString(), "PAUSED");
+      verify(client.video).partyCurrentPosition(42);
+      JsonObject leave = new JsonObject(); leave.add("partyId", created.get("partyId"));
+      client.exchange("LEAVE", leave);
+      clearInvocations(client.video);
+      create = new JsonObject(); create.addProperty("mediaFileId", 42);
+      assertEquals(client.exchange("CREATE", create).get("startPositionMs").getAsLong(), 0);
+      verify(client.video, never()).partyCurrentPosition(anyInt());
+    }
+  }
+
+  @Test public void explicitRendererPrepareUsesOnlyCanonicalMediaAndAsyncWatchResult() throws Exception
+  {
+    PartyService service = new PartyService(() -> 100000, true, 100000, 2);
+    try (Transport client = new Transport(service, "pull"))
+    {
+      java.util.Set<String> caps = new java.util.HashSet<>(PartyProtocol.REQUIRED);
+      caps.add("PARTY_PREPARE_V1"); doReturn(caps).when(client.renderer).getClientCapabilities();
+      JsonObject create = new JsonObject(); create.addProperty("mediaFileId", 42);
+      JsonObject created = client.exchange("CREATE", create);
+      MediaFile media = mock(MediaFile.class); doReturn(42).when(media).getID();
+      doReturn(media).when(client.connection).preparationMedia(42);
+      videoField(client.video, "partyProgressOwned", true);
+      doCallRealMethod().when(client.video).cancelPartyPreparation();
+      doCallRealMethod().when(client.video).preparePartyMedia(any(), anyString(), any());
+      doReturn(VideoFrame.WATCH_FAILED_PARENTAL_CHECK_FAILED).when(client.video).watchPartyMedia(any());
+      verify(client.video, never()).watchPartyMedia(any());
+      JsonObject fields = new JsonObject(); fields.add("partyId", created.get("partyId"));
+      fields.addProperty("intent", "JOIN_AND_PREPARE"); fields.addProperty("confirmReplace", true);
+      JsonObject accepted = client.exchange("PREPARE", fields);
+      assertEquals(accepted.get("type").getAsString(), "PREPARE_ACCEPTED");
+      long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      while (client.observed.stream().noneMatch(m -> "PREPARATION_RESULT".equals(m.get("type").getAsString()))
+          && System.nanoTime() < until) Thread.sleep(10);
+      JsonObject failure = client.observed.stream().filter(m -> "PREPARATION_RESULT".equals(m.get("type").getAsString()))
+          .findFirst().orElseThrow();
+      assertEquals(failure.get("watchCode").getAsInt(), VideoFrame.WATCH_FAILED_PARENTAL_CHECK_FAILED);
+      assertEquals(failure.get("preparationId"), accepted.get("preparationId"));
+      verify(client.video).watchPartyMedia(argThat(stage -> stage.media == media && stage.held));
+      verify(client.video, never()).play();
+    }
+  }
+
+  @Test public void preparingAlreadyLoadedSameMediaUsesOrdinaryWatchShortcutPausedAndExactGeneration() throws Exception
+  {
+    PartyService service = new PartyService(() -> 100000, true, 100000, 2);
+    try (Transport client = new Transport(service, "pull"))
+    {
+      java.util.Set<String> caps = new java.util.HashSet<>(PartyProtocol.REQUIRED);
+      caps.add("PARTY_PREPARE_V1"); doReturn(caps).when(client.renderer).getClientCapabilities();
+      JsonObject create = new JsonObject(); create.addProperty("mediaFileId", 42);
+      JsonObject created = client.exchange("CREATE", create);
+      MediaFile media = mock(MediaFile.class); Airing airing = mock(Airing.class);
+      MiniPlayer player = mock(MiniPlayer.class);
+      java.util.concurrent.atomic.AtomicInteger state = new java.util.concurrent.atomic.AtomicInteger(MediaPlayer.PLAY_STATE);
+      doReturn(42).when(media).getID(); doReturn(airing).when(media).getContentAiring();
+      doReturn(7L).when(player).getPartyPlaybackGeneration();
+      doAnswer(call -> state.get()).when(player).getState();
+      doAnswer(call -> { state.set(MediaPlayer.PAUSE_STATE); return true; }).when(player).pause();
+      videoField(client.video, "partyProgressOwned", true);
+      videoField(client.video, "currFile", media); videoField(client.video, "player", player);
+      videoField(client.video, "queueLock", new Object());
+      videoField(client.video, "watchQueue", new java.util.Vector<>());
+      doReturn(media).when(client.connection).preparationMedia(42);
+      doCallRealMethod().when(client.video).getPartyPlayer();
+      doCallRealMethod().when(client.video).cancelPartyPreparation();
+      doCallRealMethod().when(client.video).preparePartyMedia(any(), anyString(), any());
+      doCallRealMethod().when(client.video).watchPartyMedia(any());
+      doCallRealMethod().when(client.video).isPartyPreparationLoaded(any());
+      JsonObject fields = new JsonObject(); fields.add("partyId", created.get("partyId"));
+      fields.addProperty("intent", "JOIN_AND_PREPARE"); fields.addProperty("confirmReplace", true);
+      JsonObject accepted = client.exchange("PREPARE", fields);
+      long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      while (client.observed.stream().noneMatch(m -> "PREPARATION_RESULT".equals(m.get("type").getAsString()))
+          && System.nanoTime() < until) Thread.sleep(10);
+      JsonObject loaded = client.observed.stream().filter(m -> "PREPARATION_RESULT".equals(m.get("type").getAsString()))
+          .findFirst().orElseThrow();
+      assertEquals(loaded.get("preparationId"), accepted.get("preparationId"));
+      assertEquals(loaded.get("status").getAsString(), "LOADED");
+      assertEquals(loaded.get("playbackGeneration").getAsLong(), 7);
+      verify(player).pause(); verify(player, never()).play();
+      assertEquals(state.get(), MediaPlayer.PAUSE_STATE);
+      VideoFrame.PartyPreparation stage = new VideoFrame.PartyPreparation(media, "old", () -> true);
+      stage.loaded = true; stage.generation = 6;
+      assertFalse(client.video.isPartyPreparationLoaded(stage), "Same file with another generation is not completion");
+    }
+  }
+
+  @Test public void stagedNewLoadSeeksButCannotAutoplayWhileNormalLoadStillPlays() throws Exception
+  {
+    for (boolean staged : new boolean[] {true, false})
+    {
+      VideoFrame video = mock(VideoFrame.class); MediaFile media = mock(MediaFile.class);
+      MiniPlayer player = mock(MiniPlayer.class); UIManager ui = mock(UIManager.class);
+      videoField(video, "uiMgr", ui); videoField(video, "player", player);
+      videoField(video, "currFile", media); videoField(video, "segment", -1);
+      doReturn(100000L).when(media).getRecordTime(); doReturn(900000L).when(media).getRecordEnd();
+      doReturn(100000L).when(media).getStart(0); doReturn(900000L).when(media).getEnd(0);
+      doReturn(new java.io.File("party-completed.ts")).when(media).getFile(0);
+      doReturn(MediaPlayer.PLAY_STATE).when(player).getState();
+      java.lang.reflect.Method select = VideoFrame.class.getDeclaredMethod("timeSelected", long.class, boolean.class, boolean.class);
+      select.setAccessible(true);
+      assertEquals(select.invoke(video, 112345L, true, staged), true);
+      verify(player).seek(12345L);
+      verify(player).load(anyByte(), anyByte(), nullable(String.class), any(java.io.File.class),
+          nullable(String.class), eq(false), eq(0L));
+      if (staged) { verify(player).pause(); verify(player, never()).play(); }
+      else { verify(player).play(); verify(player, never()).pause(); }
+    }
+  }
+
+  @Test public void preparationResourcePermissionAndAsyncLoadFailuresNeverReportLoaded() throws Exception
+  {
+    for (int failureCode : new int[] {VideoFrame.WATCH_FAILED_INSUFFICIENT_RESOURCES_WHILE_RECORDING,
+        VideoFrame.WATCH_FAILED_INSUFFICIENT_PERMISSIONS, VideoFrame.WATCH_FAILED_UNKNOWN})
+    {
+      PartyService service = new PartyService(() -> 100000, true, 100000, 2);
+      try (Transport client = new Transport(service, "pull"))
+      {
+        java.util.Set<String> caps = new java.util.HashSet<>(PartyProtocol.REQUIRED);
+        caps.add("PARTY_PREPARE_V1"); doReturn(caps).when(client.renderer).getClientCapabilities();
+        JsonObject create = new JsonObject(); create.addProperty("mediaFileId", 42);
+        JsonObject created = client.exchange("CREATE", create);
+        MediaFile media = mock(MediaFile.class); doReturn(media).when(client.connection).preparationMedia(42);
+        videoField(client.video, "partyProgressOwned", true);
+        doCallRealMethod().when(client.video).cancelPartyPreparation();
+        doCallRealMethod().when(client.video).preparePartyMedia(any(), anyString(), any());
+        java.util.concurrent.atomic.AtomicReference<VideoFrame.PartyPreparation> pending = new java.util.concurrent.atomic.AtomicReference<>();
+        doAnswer(call -> {
+          pending.set(call.getArgument(0));
+          return failureCode == VideoFrame.WATCH_FAILED_UNKNOWN ? VideoFrame.WATCH_OK : failureCode;
+        }).when(client.video).watchPartyMedia(any());
+        JsonObject fields = new JsonObject(); fields.add("partyId", created.get("partyId"));
+        fields.addProperty("intent", "JOIN_AND_PREPARE"); fields.addProperty("confirmReplace", true);
+        JsonObject accepted = client.exchange("PREPARE", fields);
+        if (failureCode == VideoFrame.WATCH_FAILED_UNKNOWN)
+        {
+          long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+          while (pending.get() == null && System.nanoTime() < until) Thread.sleep(10);
+          assertNotNull(pending.get());
+          pending.get().watchCode = VideoFrame.WATCH_FAILED_UNKNOWN;
+        }
+        long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (client.observed.stream().noneMatch(m -> "PREPARATION_RESULT".equals(m.get("type").getAsString()))
+            && System.nanoTime() < until) Thread.sleep(10);
+        JsonObject failure = client.observed.stream().filter(m -> "PREPARATION_RESULT".equals(m.get("type").getAsString()))
+            .findFirst().orElseThrow();
+        assertEquals(failure.get("preparationId"), accepted.get("preparationId"));
+        assertEquals(failure.get("status").getAsString(), "FAILED");
+        assertEquals(failure.get("watchCode").getAsInt(), failureCode);
+        assertFalse(failure.has("playbackGeneration"));
+        assertFalse(pending.get().active());
+      }
     }
   }
 }

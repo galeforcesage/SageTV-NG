@@ -27,6 +27,9 @@ public class PartyServiceTest
     long sequence;
     boolean owned;
     boolean mediaAdmitted = true;
+    long currentPosition;
+    int currentPositionReads, prepares;
+    String preparationId;
     int commits, skips;
     long committedPosition;
     PartyService.Delivery path = new PartyService.Delivery("android", "push", "H264", "AAC", 8000, false);
@@ -69,7 +72,7 @@ public class PartyServiceTest
       JsonObject r = request("CREATE"); r.addProperty("mediaFileId", 42);
       JsonObject out = sendRequest(r);
       remember(out);
-      token = out.get("joinToken").getAsString();
+      token = out.get("joinCode").getAsString();
       return out;
     }
 
@@ -77,7 +80,7 @@ public class PartyServiceTest
     {
       hello(); party = host.party;
       JsonObject r = request("JOIN");
-      r.addProperty("mediaFileId", 42); r.addProperty("joinToken", host.token);
+      r.addProperty("mediaFileId", 42); r.addProperty("joinCode", host.token);
       JsonObject out = sendRequest(r);
       if ("JOINED".equals(out.get("type").getAsString())) remember(out);
       return out;
@@ -160,6 +163,8 @@ public class PartyServiceTest
     @Override public void send(JsonObject message) { messages.add(copy(message)); }
     @Override public long duration(int id)
     { if (id != 42) throw new Fault("MEDIA_UNAVAILABLE"); return 3600000; }
+    @Override public long currentPosition(int media) { currentPositionReads++; return currentPosition; }
+    @Override public void prepare(int media, String id) { assertEquals(media, 42); prepares++; preparationId = id; }
     @Override public PartyService.Delivery delivery(int media) { return path; }
     @Override public boolean mediaAdmitted(int media) { return mediaAdmitted; }
     @Override public PartyService.Delivery plan(int media) { return path; }
@@ -203,10 +208,14 @@ public class PartyServiceTest
     Client stranger = r.client(); stranger.hello(); stranger.party = host.party;
     error(stranger.snapshot(), "NOT_MEMBER");
     JsonObject bad = stranger.request("JOIN");
-    bad.addProperty("joinToken", host.token); bad.addProperty("mediaFileId", 99);
+    bad.addProperty("joinCode", host.token); bad.addProperty("mediaFileId", 99);
     error(stranger.sendRequest(bad), "MEDIA_MISMATCH");
+    r.now.addAndGet(1000);
+    JsonObject retry = stranger.request("JOIN"); retry.addProperty("joinCode", "000");
+    error(stranger.sendRequest(retry), "JOIN_RATE_LIMITED");
+    r.now.addAndGet(60000);
     JsonObject invalid = stranger.request("JOIN");
-    invalid.addProperty("joinToken", "wrong"); invalid.addProperty("mediaFileId", 42);
+    invalid.addProperty("joinCode", "wrong"); invalid.addProperty("mediaFileId", 42);
     error(stranger.sendRequest(invalid), "JOIN_DENIED");
   }
 
@@ -465,10 +474,11 @@ public class PartyServiceTest
     h.sendRequest(invite);
     assertEquals(c.messages.get(c.messages.size() - 1).get("type").getAsString(), "INVITED");
     String old = h.token;
-    JsonObject rotated = h.sendRequest(h.request("ROTATE_TOKEN"));
-    assertNotEquals(rotated.get("joinToken").getAsString(), old);
+    r.now.addAndGet(10000);
+    JsonObject rotated = h.sendRequest(h.request("ROTATE_CODE"));
+    assertNotEquals(rotated.get("joinCode").getAsString(), old);
     error(c.join(h), "JOIN_DENIED");
-    h.token = rotated.get("joinToken").getAsString();
+    h.token = rotated.get("joinCode").getAsString();
     assertEquals(c.join(h).get("type").getAsString(), "JOINED");
     r.now.addAndGet(60001); r.service.tick();
     error(h.snapshot(), "PARTY_GONE");
@@ -548,6 +558,7 @@ public class PartyServiceTest
     }
     error(h.sendRequest(action), "STALE_REQUEST");
     assertEquals(h.snapshot().get("commandSeq").getAsLong(), 1);
+    h.token = h.sendRequest(h.request("ROTATE_CODE")).get("joinCode").getAsString();
     Client c = r.client(); c.join(h); String old = c.recovery;
     r.service.disconnected(c);
     Client replacement = r.client(); replacement.hello(); replacement.party = c.party;
@@ -798,5 +809,294 @@ public class PartyServiceTest
     actual.getAsJsonArray("participants").get(1).getAsJsonObject().addProperty("participantId", "example-guest");
     assertEquals(actual, golden().getAsJsonObject("commandOutcome"));
     assertTrue(h.snapshot().toString().getBytes(StandardCharsets.UTF_8).length <= MAX_BYTES);
+  }
+
+  private static void capabilities(Client client, String... optional)
+  {
+    client.caps = new java.util.HashSet<>(REQUIRED);
+    client.caps.addAll(List.of(optional));
+  }
+
+  @Test public void currentStartIsServerSampledClampedPausedAndNeverAnArbitraryClientSeek()
+  {
+    Rig r = new Rig(); Client h = r.client(); capabilities(h, "PARTY_START_POSITION_V1");
+    h.currentPosition = 123456; h.hello();
+    JsonObject create = h.request("CREATE"); create.addProperty("mediaFileId", 42);
+    create.addProperty("startMode", "CURRENT_POSITION");
+    JsonObject created = h.sendRequest(create); h.remember(created);
+    h.token = created.get("joinCode").getAsString();
+    assertEquals(created.get("startPositionMs").getAsLong(), 123456);
+    assertEquals(text(created, "startMode"), "CURRENT_POSITION");
+    JsonObject snapshot = created.getAsJsonObject("snapshot");
+    assertEquals(text(snapshot, "state"), "PAUSED");
+    assertEquals(snapshot.get("anchorPositionMs").getAsLong(), 123456);
+    assertEquals(snapshot.get("stateVersion").getAsInt(), 0);
+    assertEquals(snapshot.get("commandSeq").getAsInt(), 0);
+    assertEquals(h.sendRequest(copy(create)), created);
+    assertEquals(h.currentPositionReads, 1, "Exact retry cannot resample a later playback position");
+    r.now.addAndGet(1000);
+    assertEquals(h.ready().get("targetPositionMs").getAsLong(), 123456);
+    Client guest = r.client(); guest.join(h);
+    assertEquals(guest.ready().get("targetPositionMs").getAsLong(), 123456);
+    assertEquals(guest.currentPositionReads, 0);
+    for (long position : new long[] {-1, Long.MIN_VALUE, Long.MAX_VALUE})
+    {
+      Rig clamped = new Rig(); Client c = clamped.client(); capabilities(c, "PARTY_START_POSITION_V1");
+      c.currentPosition = position; c.hello();
+      JsonObject request = c.request("CREATE"); request.addProperty("mediaFileId", 42);
+      request.addProperty("startMode", "CURRENT_POSITION");
+      assertEquals(c.sendRequest(request).get("startPositionMs").getAsLong(), position < 0 ? 0 : 3600000);
+    }
+  }
+
+  @Test public void omittedBeginningRemainsCompatibleAndCurrentModeRequiresExplicitGuarantee()
+  {
+    Rig r = new Rig(); Client h = r.client(); JsonObject created = h.create();
+    assertEquals(created.get("startPositionMs").getAsLong(), 0);
+    assertEquals(text(created, "startMode"), "BEGINNING");
+    assertEquals(h.currentPositionReads, 0);
+    Client c = r.client(); c.hello();
+    JsonObject create = c.request("CREATE"); create.addProperty("mediaFileId", 42);
+    create.addProperty("startMode", "CURRENT_POSITION");
+    error(c.sendRequest(create), "START_MODE_UNSUPPORTED");
+    create = c.request("CREATE"); create.addProperty("mediaFileId", 42);
+    create.addProperty("startMode", "BEGINNING"); create.addProperty("startPositionMs", 9000);
+    error(c.sendRequest(create), "INVALID_REQUEST");
+    assertFalse(c.owned);
+    create = c.request("CREATE"); create.addProperty("mediaFileId", 42);
+    create.addProperty("startMode", "SEEK");
+    error(c.sendRequest(create), "INVALID_REQUEST");
+    assertEquals(c.currentPositionReads, 0);
+    capabilities(c, "PARTY_START_POSITION_V1", "PARTY_PREPARE_V1");
+    JsonObject hello = c.sendRequest(c.request("HELLO"));
+    assertTrue(hello.get("prepareSupported").getAsBoolean());
+    assertEquals(hello.getAsJsonArray("supportedStartModes").get(1).getAsString(), "CURRENT_POSITION");
+  }
+
+  @Test public void explicitPreparationIsCanonicalOnlyIdempotentAndWaitsForAsyncResult()
+  {
+    Rig r = new Rig(); Client h = r.client(); h.create();
+    Client guest = r.client(); capabilities(guest, "PARTY_PREPARE_V1"); guest.join(h);
+    assertEquals(guest.prepares, 0, "Invitation/JOIN must never force an open");
+    JsonObject prepare = guest.request("PREPARE");
+    prepare.addProperty("intent", "JOIN_AND_PREPARE"); prepare.addProperty("confirmReplace", true);
+    JsonObject accepted = guest.sendRequest(prepare);
+    assertEquals(text(accepted, "type"), "PREPARE_ACCEPTED");
+    assertTrue(accepted.get("holdPlayback").getAsBoolean());
+    assertEquals(accepted.get("mediaFileId").getAsInt(), 42);
+    assertEquals(guest.sendRequest(copy(prepare)), accepted);
+    assertEquals(guest.prepares, 1);
+    error(guest.sendRequest(guest.request("READY")), "PREPARATION_PENDING");
+    error(guest.sendRequest(guest.request("MEDIA_ADMISSION")), "PREPARATION_PENDING");
+    int before = guest.messages.size();
+    r.service.preparationResult(guest, "wrong-operation", 0, 7);
+    assertEquals(guest.messages.size(), before);
+    r.service.preparationResult(guest, guest.preparationId, 0, 7);
+    JsonObject loaded = guest.messages.get(guest.messages.size() - 1);
+    assertEquals(text(loaded, "status"), "LOADED");
+    assertEquals(loaded.get("playbackGeneration").getAsLong(), 7);
+    r.service.preparationResult(guest, guest.preparationId, 0, 8);
+    assertEquals(guest.messages.get(guest.messages.size() - 1), loaded);
+    error(guest.action("PLAY"), "NOT_READY");
+    guest.ready();
+    assertEquals(guest.prepares, 1);
+    assertEquals(h.snapshot().get("commandSeq").getAsInt(), 0);
+  }
+
+  @Test public void prepareRequiresConfirmationAndNegotiationAndFailureNeverMutatesTimeline()
+  {
+    Rig r = new Rig(); Client h = r.client(); h.create();
+    JsonObject p = h.request("PREPARE"); p.addProperty("intent", "JOIN_AND_PREPARE"); p.addProperty("confirmReplace", true);
+    error(h.sendRequest(p), "PREPARE_UNSUPPORTED");
+    capabilities(h, "PARTY_PREPARE_V1");
+    p = h.request("PREPARE"); p.addProperty("intent", "JOIN_AND_PREPARE"); p.addProperty("confirmReplace", false);
+    error(h.sendRequest(p), "INVALID_REQUEST");
+    p = h.request("PREPARE"); p.addProperty("intent", "JOIN_AND_PREPARE"); p.addProperty("confirmReplace", true);
+    p.addProperty("mediaFileId", 99); error(h.sendRequest(p), "INVALID_REQUEST");
+    p = h.request("PREPARE"); p.addProperty("intent", "JOIN_AND_PREPARE"); p.addProperty("confirmReplace", true);
+    h.sendRequest(p); String old = h.preparationId;
+    r.service.preparationResult(h, old, -3, -1);
+    JsonObject failure = h.messages.get(h.messages.size() - 1);
+    assertEquals(text(failure, "status"), "FAILED");
+    assertEquals(failure.get("watchCode").getAsInt(), -3);
+    assertFalse(failure.has("playbackGeneration"));
+    p = h.request("PREPARE"); p.addProperty("intent", "JOIN_AND_PREPARE"); p.addProperty("confirmReplace", true);
+    h.sendRequest(p); String next = h.preparationId;
+    assertNotEquals(next, old);
+    h.status("LOCALLY_STOPPED"); int before = h.messages.size();
+    r.service.preparationResult(h, next, 0, 1);
+    assertEquals(h.messages.size(), before);
+    assertEquals(h.snapshot().get("stateVersion").getAsInt(), 0);
+    assertEquals(h.snapshot().get("commandSeq").getAsInt(), 0);
+  }
+
+  @Test public void invitedSessionsCannotBypassMandatoryCodeAndManualJoinCreatesNoNewSession()
+  {
+    Rig r = new Rig(); Client h = r.client(); JsonObject created = h.create();
+    assertFalse(created.has("joinToken")); assertTrue(h.token.matches("[0-9]{3}"));
+    Client guest = r.client(); guest.hello();
+    JsonObject available = guest.sendRequest(guest.request("HELLO"));
+    JsonObject invite = h.request("INVITE"); invite.addProperty("sessionHandle", available.get("sessionHandle").getAsString());
+    h.sendRequest(invite);
+    JsonObject invited = guest.messages.get(guest.messages.size() - 1);
+    assertTrue(invited.get("joinCodeRequired").getAsBoolean());
+    assertFalse(invited.has("joinToken")); assertFalse(invited.has("joinCode"));
+    guest.party = h.party;
+    JsonObject bypass = guest.request("JOIN"); bypass.addProperty("joinToken", h.token);
+    error(guest.sendRequest(bypass), "JOIN_DENIED");
+    JsonObject manual = guest.request("JOIN"); manual.remove("partyId"); manual.addProperty("joinCode", h.token);
+    JsonObject joined = guest.sendRequest(manual);
+    assertEquals(text(joined, "type"), "JOINED");
+    assertFalse(joined.has("joinCode")); assertFalse(joined.has("joinToken"));
+    guest.remember(joined);
+    error(guest.sendRequest(guest.request("JOIN_CODE")), "HOST_REQUIRED");
+    error(guest.sendRequest(guest.request("ROTATE_CODE")), "HOST_REQUIRED");
+    JsonObject rotation = h.sendRequest(h.request("ROTATE_CODE"));
+    error(rotation, "CODE_ROTATION_COOLDOWN");
+    assertEquals(rotation.get("retryAfterMs").getAsLong(), 10000);
+    assertEquals(h.sendRequest(h.request("JOIN_CODE")).get("joinCode").getAsString(), h.token);
+    assertEquals(h.snapshot().getAsJsonArray("roster").size(), 2);
+  }
+
+  @Test public void guessingLimitsIncludeSuccessfulAttemptsAndCannotBeResetByReconnectOrCachedRetries()
+  {
+    Rig r = new Rig(); Client h = r.client(); h.create(); h.ready();
+    Client c = r.client(); c.hello();
+    String wrongCode = "000".equals(h.token) ? "001" : "000";
+    JsonObject wrong = c.request("JOIN"); wrong.addProperty("joinCode", wrongCode);
+    error(c.sendRequest(wrong), "JOIN_DENIED");
+    for (int i = 0; i < 8; i++) error(c.sendRequest(copy(wrong)), "JOIN_DENIED");
+    for (int i = 0; i < 2; i++)
+    {
+      JsonObject request = c.request("JOIN"); request.addProperty("joinCode", wrongCode);
+      error(c.sendRequest(request), "JOIN_DENIED");
+    }
+    JsonObject blocked = c.request("JOIN"); blocked.addProperty("joinCode", h.token);
+    JsonObject denied = c.sendRequest(blocked); error(denied, "JOIN_RATE_LIMITED");
+    assertEquals(denied.get("retryAfterMs").getAsLong(), 60000);
+    r.service.disconnected(c);
+    for (int i = 0; i < 3; i++)
+    {
+      Client replacement = r.client(); replacement.hello();
+      JsonObject request = replacement.request("JOIN"); request.addProperty("joinCode", wrongCode);
+      error(replacement.sendRequest(request), "JOIN_DENIED");
+      r.service.disconnected(replacement);
+    }
+    Client fresh = r.client(); fresh.hello();
+    JsonObject request = fresh.request("JOIN"); request.addProperty("joinCode", h.token);
+    denied = fresh.sendRequest(request); error(denied, "JOIN_RATE_LIMITED");
+    assertEquals(denied.get("retryAfterMs").getAsLong(), 60000);
+    r.now.addAndGet(60000);
+    request = fresh.request("JOIN"); request.addProperty("joinCode", h.token);
+    assertEquals(text(fresh.sendRequest(request), "type"), "JOINED");
+  }
+
+  @Test public void shortCodeExpiresWithoutBypassingRecoveryOrLegacyGates()
+  {
+    Rig r = new Rig(); Client h = r.client(); h.create(); h.ready();
+    Client guest = r.client(); guest.join(h); r.service.disconnected(guest);
+    Client replacement = r.client(); replacement.hello(); replacement.party = guest.party;
+    JsonObject recover = replacement.request("RESUME");
+    recover.addProperty("participantId", guest.participant); recover.addProperty("recoveryToken", guest.recovery);
+    assertEquals(text(replacement.sendRequest(recover), "type"), "JOINED");
+    r.now.addAndGet(120000);
+    Client late = r.client(); error(late.join(h), "JOIN_DENIED");
+    error(h.sendRequest(h.request("JOIN_CODE")), "JOIN_CODE_EXPIRED");
+    Client oldProtocol = r.client(); capabilities(oldProtocol);
+    oldProtocol.caps.remove("PARTY_JOIN_CODE_V1");
+    error(oldProtocol.sendRequest(oldProtocol.request("HELLO")), "NOT_AVAILABLE");
+    assertFalse(h.snapshot().has("joinCode"));
+  }
+
+  @Test public void startAndPrepareGoldensMatchActualServiceRepliesAndEvents() throws Exception
+  {
+    JsonObject fixtures = golden();
+    Rig r = new Rig(); Client h = r.client();
+    capabilities(h, "PARTY_START_POSITION_V1", "PARTY_PREPARE_V1"); h.currentPosition = 123456; h.hello();
+    JsonObject create = copy(fixtures.getAsJsonObject("createCurrent"));
+    create.addProperty("serverEpoch", h.epoch); create.addProperty("sessionToken", h.sessionToken); h.sequence = 2;
+    JsonObject created = copy(h.sendRequest(create)); h.remember(created);
+    created.addProperty("partyId", "example-party"); created.addProperty("participantId", "example-host");
+    created.addProperty("recoveryToken", "EXAMPLE_NOT_A_REAL_RECOVERY_TOKEN"); created.addProperty("joinCode", "042");
+    JsonObject snapshot = created.getAsJsonObject("snapshot");
+    snapshot.addProperty("partyId", "example-party"); snapshot.addProperty("serverEpoch", "example-epoch");
+    snapshot.addProperty("hostParticipantId", "example-host");
+    snapshot.getAsJsonArray("roster").get(0).getAsJsonObject().addProperty("participantId", "example-host");
+    assertEquals(created, fixtures.getAsJsonObject("createdCurrent"));
+    JsonObject prepare = copy(fixtures.getAsJsonObject("prepare"));
+    prepare.addProperty("serverEpoch", h.epoch); prepare.addProperty("sessionToken", h.sessionToken);
+    prepare.addProperty("partyId", h.party); h.sequence = 3;
+    JsonObject accepted = copy(h.sendRequest(prepare));
+    accepted.addProperty("partyId", "example-party"); accepted.addProperty("preparationId", "example-preparation");
+    assertEquals(accepted, fixtures.getAsJsonObject("prepareAccepted"));
+    r.service.preparationResult(h, h.preparationId, 0, 7);
+    JsonObject loaded = copy(h.messages.get(h.messages.size() - 1));
+    loaded.addProperty("partyId", "example-party"); loaded.addProperty("preparationId", "example-preparation");
+    assertEquals(loaded, fixtures.getAsJsonObject("preparationLoaded"));
+    prepare.addProperty("requestId", "prepare2"); prepare.addProperty("requestSeq", 4); h.sequence = 4;
+    h.sendRequest(prepare); r.service.preparationResult(h, h.preparationId, -3, -1);
+    JsonObject failed = copy(h.messages.get(h.messages.size() - 1));
+    failed.addProperty("partyId", "example-party"); failed.addProperty("preparationId", "example-preparation");
+    assertEquals(failed, fixtures.getAsJsonObject("preparationFailed"));
+  }
+
+  @Test public void codeIssuanceCannotExhaustNamespaceThroughNewRendererChurn()
+  {
+    Rig r = new Rig();
+    for (int i = 0; i < 12; i++)
+    {
+      Client creator = r.client(); creator.create(); creator.sendRequest(creator.request("LEAVE"));
+      r.service.disconnected(creator);
+    }
+    Client fresh = r.client(); fresh.hello();
+    JsonObject create = fresh.request("CREATE"); create.addProperty("mediaFileId", 42);
+    JsonObject rejected = fresh.sendRequest(create);
+    error(rejected, "CODE_ISSUE_RATE_LIMITED"); assertEquals(rejected.get("retryAfterMs").getAsLong(), 60000);
+    assertFalse(fresh.owned);
+    r.now.addAndGet(60000);
+    create = fresh.request("CREATE"); create.addProperty("mediaFileId", 42);
+    assertEquals(text(fresh.sendRequest(create), "type"), "CREATED");
+  }
+
+  @Test public void hostSidecarCodeRetrievalAfterResumeDoesNotRotateOrMutateTimeline()
+  {
+    Rig r = new Rig(); Client host = r.client(); host.create(); host.ready();
+    r.service.disconnected(host);
+    Client replacement = r.client(); replacement.hello(); replacement.party = host.party;
+    JsonObject resume = replacement.request("RESUME");
+    resume.addProperty("participantId", host.participant); resume.addProperty("recoveryToken", host.recovery);
+    replacement.remember(replacement.sendRequest(resume));
+    JsonObject before = replacement.snapshot();
+    JsonObject code = replacement.sendRequest(replacement.request("JOIN_CODE"));
+    JsonObject reopened = replacement.sendRequest(replacement.request("JOIN_CODE"));
+    assertEquals(code.get("joinCode").getAsString(), host.token);
+    assertEquals(code.get("expiresAtServerMonoMs"), reopened.get("expiresAtServerMonoMs"));
+    JsonObject after = replacement.snapshot();
+    for (String field : List.of("stateVersion", "commandSeq", "anchorPositionMs", "anchorServerMonoMs", "state"))
+      assertEquals(after.get(field), before.get(field));
+    assertFalse(after.has("joinCode"));
+  }
+
+  @Test public void pendingPrepareLeaseCannotBeBypassedByBufferingAndDisconnectRetainsRecoveryGrace()
+  {
+    Rig r = new Rig(); Client h = r.client(); h.create(); h.ready();
+    Client guest = r.client(); capabilities(guest, "PARTY_PREPARE_V1"); guest.join(h);
+    JsonObject prepare = guest.request("PREPARE");
+    prepare.addProperty("intent", "JOIN_AND_PREPARE"); prepare.addProperty("confirmReplace", true);
+    guest.sendRequest(prepare); String old = guest.preparationId;
+    guest.status("BUFFERING"); r.now.addAndGet(60001); r.service.tick();
+    assertTrue(guest.messages.stream().anyMatch(m -> m.has("code") && "PREPARATION_EXPIRED".equals(text(m, "code"))));
+    int before = guest.messages.size(); r.service.preparationResult(guest, old, 0, 7);
+    assertEquals(guest.messages.size(), before);
+    Client reconnecting = r.client(); capabilities(reconnecting, "PARTY_PREPARE_V1"); reconnecting.join(h);
+    prepare = reconnecting.request("PREPARE");
+    prepare.addProperty("intent", "JOIN_AND_PREPARE"); prepare.addProperty("confirmReplace", true);
+    reconnecting.sendRequest(prepare);
+    r.now.addAndGet(59000); r.service.disconnected(reconnecting);
+    r.now.addAndGet(2000); r.service.tick();
+    Client replacement = r.client(); replacement.hello(); replacement.party = reconnecting.party;
+    JsonObject resume = replacement.request("RESUME");
+    resume.addProperty("participantId", reconnecting.participant); resume.addProperty("recoveryToken", reconnecting.recovery);
+    assertEquals(text(replacement.sendRequest(resume), "type"), "JOINED");
   }
 }

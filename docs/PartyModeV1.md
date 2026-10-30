@@ -20,12 +20,17 @@ Parties expire after 24 hours; unprepared Party budget leases expire after 60 se
 In the existing `SAGETV_NG_CAPABILITIES` reply, advertise **all** these exact tokens:
 
 ```
-PARTY_V1,PARTY_MONOTONIC_V1,PARTY_POSITION_V1,PARTY_SCHEDULED_V1,PARTY_SEEK_V1,PARTY_LOCAL_STOP_V1
+PARTY_V1,PARTY_JOIN_CODE_V1,PARTY_MONOTONIC_V1,PARTY_POSITION_V1,PARTY_SCHEDULED_V1,PARTY_SEEK_V1,PARTY_LOCAL_STOP_V1
 ```
 
-Optional: `PARTY_RATE_ADJUST_V1`. Existing NG version and surface negotiation
+Optional: `PARTY_RATE_ADJUST_V1`, `PARTY_START_POSITION_V1`, `PARTY_PREPARE_V1`.
+The latter two mean server-sampled Current Position creation and explicit
+joined-media preparation with paused asynchronous Watch respectively.
+`PARTY_JOIN_CODE_V1` is mandatory: clients predating mandatory code entry are
+ineligible, even if they implement the earlier six Party guarantees.
+Existing NG version and surface negotiation
 remain required for normal NG playback. These new tokens attest respectively to
-schema v1, a monotonic clock, observed position reports, scheduled play/pause,
+schema v1, mandatory three-digit guest confirmation, a monotonic clock, observed position reports, scheduled play/pause,
 seek-with-landing reports, and **local Stop interception plus explicit rejoin**.
 Do not advertise until the adapter implements every guarantee. No property is
 silently inferred from an NG boolean, client type, IP, VPN label or client ID.
@@ -42,8 +47,8 @@ Sessions admitted under the existing LAN trust policy receive a short-lived,
 random, exact-renderer-bound session token after full NG guarantee negotiation.
 This token limits authorization to that session; **minting it does not independently
 authenticate a person or strengthen the server's existing LAN trust boundary**.
-Party-scoped invite tokens provide self-service invitation to other admitted NG
-sessions, with no administrator approval.
+Server-issued three-digit codes provide self-service guest confirmation on other
+already-admitted NG sessions, with no administrator approval.
 
 Where existing server admission requires login, the same full NG capability set
 and a **verified Placeshifter principal bound to the exact renderer/session** are
@@ -99,7 +104,7 @@ Unknown extra fields are ignored in v1; unknown types fail explicitly.
 
 All requests require `requestId` and positive `requestSeq`. All except HELLO also
 require `serverEpoch` and `sessionToken` from AVAILABLE. Membership requests require `partyId`, except
-HELLO, LIST_CLIENTS, CREATE. No request accepts an asserted principal/participant
+HELLO, LIST_CLIENTS, CREATE and manual code-only JOIN. No request accepts an asserted principal/participant
 identity as authority. `participantId` in RESUME is only a lookup key, additionally
 requiring the same server-authorized account/LAN realm and the private recovery token.
 
@@ -115,12 +120,59 @@ server-generated 192-bit random URL-safe strings. Physical socket IDs and
 currently server-authorized, compatible renderer handles; they are invitation addresses,
 not stable identities. No account names or file paths are exposed.
 
-CREATE returns a party-scoped join token valid for 300000 ms. It may admit
-multiple server-authorized participants up to the cap. Host ROTATE_TOKEN revokes the
-old token immediately; END/expiry/restart revoke all authority. INVITE sends the
-current token privately to a selected compatible handle. Treat join links/codes as
-secrets: do not log them or put them in referrers/analytics. There is no public
-party enumeration. JOIN must supply matching MediaFile ID.
+**User-directed invitation revision:** CREATE returns `joinCode`, a string of
+exactly three ASCII digits, including leading zeros (`"000"` through `"999"`).
+It is a confirmation challenge, **not standalone authentication**. The creator
+is already a member; every guest, including a selected connected invitee, must
+enter the code on its existing admitted, fully negotiated control session.
+There are no URLs, deep links, new-session joins or usable `joinToken` routes.
+The obsolete `ROTATE_TOKEN` operation is not implemented.
+
+Codes are uniformly cryptographically sampled from currently available values,
+unique among all live codes on this server. They expire after **120000 ms**,
+are reusable by several guests up to the five-slot cap, and are never included
+in INVITED, JOINED, rosters or snapshots. INVITED contains `partyId`,
+`mediaFileId`, `joinCodeRequired:true` only; it is a notification, not admission.
+Host-only JOIN_CODE retrieves the current code; ROTATE_CODE replaces it
+immediately, with a **10000 ms** per-party rotation cooldown. Expired codes are
+not automatically renewed. Removed/rotated codes remain unavailable for another
+120000 ms; expired codes are quarantined until 120000 ms after their expiry.
+END, last-member removal and restart revoke them. A new host may retrieve/rotate
+the code; cached old replies never make old codes valid again.
+
+For either PWA or future Android sidecars, show the code/countdown only to the
+current host using CREATED's private reply or **JOIN_CODE on sidecar open/reopen**.
+JOIN_CODE neither rotates the code nor changes the timeline/versions; it also
+works after successful host RESUME. Retain the private reply only in host session
+memory and replace its displayed expiry with the latest retrieval. An expired
+code is shown as expired and requires explicit ROTATE_CODE, never an automatic
+side effect of opening the UI. Guest sidecars show code entry, including when
+INVITED; opening them cannot retrieve the host's code. No code is recoverable
+through unauthenticated routes, a global playback context or roster snapshots.
+
+JOIN with `joinCode` looks up the party in the server-local live-code namespace.
+If an invited `partyId` is supplied it must match; optional `mediaFileId` must
+also match. All such validation attempts, successful or not, are bounded by
+**three per renderer per rolling 60000 ms and six globally per rolling 60000 ms**.
+Global history survives renderer disconnect/replacement. A rate rejection returns
+JOIN_RATE_LIMITED and numeric `retryAfterMs`; do not retry before that interval,
+then use a **new requestId/sequence**. Exact cached retries neither validate again
+nor consume another attempt. Codes never bypass normal session tokens, eligibility,
+media/permissions or per-viewer admission. Code issuance (CREATE/ROTATE_CODE) is
+also globally bounded to **12 per rolling 60000 ms** against namespace churn;
+CODE_ISSUE_RATE_LIMITED returns `retryAfterMs`. Retrieval does not issue a code.
+
+**Trust/abuse limit:** 1000 possibilities are inherently guessable by already
+admitted peers. The global limiter bounds reconnect/Sybil guessing, not human
+identity; more simultaneous live parties increase chance of guessing some party.
+Quarantined codes reduce the available space. Malicious admitted peers can also
+consume the global allowance and temporarily deny legitimate joins/creation.
+These are explicit limits of the requested no-admin three-digit confirmation,
+not strong invite secrecy. Keep normal server admission restricted to trusted
+users; stronger resistance would require an additional trust/confirmation decision,
+not silently more digits or admin approval. Never log codes/tokens, put them in
+URLs/referrers/analytics, or expose them through device discovery. There is no
+public party enumeration.
 
 AVAILABLE includes `sessionToken` valid for **1800000 ms** and
 `sessionTokenExpiresAtServerMonoMs`. Refresh with HELLO before expiry (recommended
@@ -182,12 +234,14 @@ positions are relative to the beginning of the common media, not epoch PTS.
 |---|---|---|
 | HELLO | no party/epoch needed | AVAILABLE |
 | LIST_CLIENTS | no party needed | CLIENTS |
-| CREATE | `mediaFileId` positive int32 | CREATED |
-| JOIN | `partyId, joinToken, mediaFileId` | JOINED |
+| CREATE | `mediaFileId` positive int32; optional `startMode:"BEGINNING"\|"CURRENT_POSITION"` | CREATED |
+| JOIN | `joinCode:string`; optional `partyId, mediaFileId` | JOINED |
 | RESUME | `partyId, participantId, recoveryToken` | JOINED |
 | SNAPSHOT | `partyId` | SNAPSHOT |
 | INVITE | `partyId, sessionHandle` | ACK; target receives INVITED |
-| ROTATE_TOKEN | `partyId` | TOKEN |
+| JOIN_CODE | `partyId` | JOIN_CODE; host only |
+| ROTATE_CODE | `partyId` | JOIN_CODE; host only |
+| PREPARE | `partyId, intent:"JOIN_AND_PREPARE", confirmReplace:true`; requires optional PARTY_PREPARE_V1 | PREPARE_ACCEPTED; later PREPARATION_RESULT |
 | POLICY | `partyId, hostOnly:boolean, pauseOnBuffer:boolean` | ACK; roster receives SNAPSHOT |
 | CLOCK | `partyId` | CLOCK_PROBE |
 | CLOCK_REPLY | `partyId, probeId, c1, c2` | CLOCK_MODEL |
@@ -201,6 +255,87 @@ positions are relative to the beginning of the common media, not epoch PTS.
 | REJOIN | `partyId` | JOINED; fresh prepare/clock barrier |
 | LEAVE | `partyId` | LEFT; others get LEFT participant state |
 | END | `partyId` | ENDED; roster gets ENDED |
+
+### Beginning/Current Position and explicit Join & Prepare
+
+CREATE omitting `startMode` preserves **BEGINNING**, anchor 0. CURRENT_POSITION
+requires negotiated `PARTY_START_POSITION_V1` and AVAILABLE containing that mode
+in `supportedStartModes`. The server samples only the invoking renderer's actual
+loaded MiniPlayer and requested MediaFile ID: it must be single-segment, have
+positive known duration and be PLAYING **or PAUSED**. Exact player, MediaFile and
+playback generation must still match after the read; otherwise CREATE fails
+CURRENT_POSITION_UNAVAILABLE with no party/membership side effects. File-epoch
+media time is converted to relative milliseconds with checked subtraction and
+clamped to `[0,durationMs]`. Client `positionMs` or `startPositionMs` is rejected,
+not treated as a seek. The result always starts **PAUSED**, version/sequence 0,
+with authoritative `startMode`/`startPositionMs` and matching snapshot anchor.
+An exact cached CREATE retry cannot resample a later position.
+
+Future PWA UI may pause ordinary playback when opening Start Party **before**
+CREATE; that paused same-generation position is supported. Server CREATE itself
+does not fabricate a normal Watch or resume point. Beginning and Current Position
+affect only initial creation; late join corrects to the party's current timeline.
+No general Watch-by-ID, arbitrary initial position or Party SEEK is exposed.
+
+`prepareVia:"PARTY_PREPARE"` and AVAILABLE `prepareSupported:true` occur only for
+negotiated `PARTY_PREPARE_V1`; otherwise `prepareVia:"NORMAL_NG_WATCH"` means the
+client must use its existing renderer-scoped normal Watch path. The current PWA
+has no such outbound Watch-by-ID API. Global "last-active" playback context and
+read-only context lookup are **not** per-viewer Watch authority.
+
+JOIN and INVITED never replace playback. After code-validated JOIN, explicit user
+**Join & Prepare**, including confirmation before replacing any existing playback,
+permits PREPARE `{partyId,intent:"JOIN_AND_PREPARE",confirmReplace:true}`. The
+operation takes no media ID or position: the server resolves only the joined
+party's canonical media on the exact authorized renderer. Only preparing,
+recovering or buffering members may use it; locally stopped members need REJOIN
+first. Repeated identical requests are idempotent; another request while pending
+gets PREPARATION_PENDING.
+
+The adapter must install a local **hold/autoplay-suppression before sending
+PREPARE**, not wait for the accepted reply: ordinary NG media setup and
+PREPARATION_RESULT can race the reply. Match events by `preparationId` and
+canonical media, and ignore stale/cancelled IDs. PREPARE_ACCEPTED is not a
+successful media load or permission grant. The server runs the ordinary
+UIManager/VideoFrame Watch path asynchronously, retaining its parental prompt,
+Seeker permission/resource checks, file verification and media-player selection.
+It tags WATCH/LOAD jobs with revocable operation authority, forces full switching
+for a new media load (no auto-playing fast switch), and pauses the resulting
+player. Already-loaded same media uses normal Watch's redundant-file shortcut,
+pauses it and retains its exact generation without forced reload.
+
+PREPARATION_RESULT `LOADED,watchCode:0,playbackGeneration` is emitted only after
+the requested media is loaded and paused on that generation. `FAILED` has
+`code:"PREPARATION_FAILED"` plus the ordinary integer Watch code: notably
+`-2` missing files, `-3` parental rejection, `-7` Seeker error, `-8` cancelled,
+`-13` asynchronous load failure/timeout, `-19` unsupported player,
+`-21` recording resource pressure, `-22` permission denied or
+`-23` external-client resource denial. The authoritative full Watch-code constants
+are in `VideoFrame.java`; no error is converted into successful preparation.
+Ordinary protected-media metadata/Party eligibility is not parental approval:
+the actual Watch still performs the normal check before loading.
+
+There is a 60000 ms preparation lease (including the parental dialog); expiration
+removes the member with PREPARATION_EXPIRED. Async completion is polled every
+100 ms, bounded to 60000 ms after Watch returns as well. Stop, leave/end,
+disconnect/replacement, rejoin or normal Watch revoke outstanding jobs/results.
+Already-running native media I/O may finish, but remains paused and cannot
+produce a valid stale completion or Party admission for a removed member.
+An already-opened staged player stays paused; cancellation is not a synthetic
+Stop, rollback to the replaced video or authority to resume independent playback.
+After leave/end, ordinary controls are released; a normal Watch clears the stage.
+
+`LOADED` is **not READY or producer admission**. The future client associates
+subsequent context/media setup with its exact renderer/generation, obtains
+MEDIA_ADMISSION after the load, and relays its handle through its own bridge
+producer as documented below. READY and MEDIA_ADMISSION reject while preparation
+is pending. After actual admission, buffer/activation observations and fresh
+clock calibration, READY returns the canonical correction. Keep staged playback
+nonplaying until that correction/deadline; do not execute intervening shared
+commands as an unready participant. Initial correction uses the selected
+Beginning/Current anchor, not inherited normal resume; late join uses the current
+party timeline and may then play. Preparation alone changes no shared
+anchor/version/sequence and never loads or alters another viewer's media path.
 
 ACTION enum: `PLAY, PAUSE, FF, REW, FF2, REW2`. STOP, arbitrary SEEK and raw
 keycodes are invalid. FF/REW/secondary skip values are read once from the initiating
@@ -229,7 +364,7 @@ clock confidence (use for background/network change). Reports use normalized
 state in place of separate seeking/buffering boolean flags; playback trim rate is
 commanded by CORRECTION, not accepted as a timeline override in position input.
 
-Host-only requests: INVITE, ROTATE_TOKEN, POLICY, END. ACTION is allowed to all
+Host-only requests: INVITE, JOIN_CODE, ROTATE_CODE, POLICY, END. ACTION is allowed to all
 healthy participants by default; hostOnly restricts it. Stop/leave/rejoin never
 require controller authority. Host loss transfers to the earliest still-connected
 join-order member immediately under everyone-control. Host-only locks for the
@@ -242,12 +377,14 @@ metadata above applies to replies; identical event payloads lack requestId.
 
 | Type | Additional fields |
 |---|---|
-| AVAILABLE | `serverEpoch, sessionHandle, sessionToken, sessionTokenExpiresAtServerMonoMs, maxParticipants:5`; while joined additionally `recoveryToken, recoveryTokenExpiresAtServerMonoMs` |
+| AVAILABLE | `serverEpoch, sessionHandle, sessionToken, sessionTokenExpiresAtServerMonoMs, maxParticipants:5, supportedStartModes:string[], prepareSupported:boolean, joinCodeDigits:3, joinCodeLifetimeMs:120000, joinAttemptWindowMs:60000, joinAttemptsPerSession:3, joinAttemptsGlobal:6`; while joined additionally `recoveryToken, recoveryTokenExpiresAtServerMonoMs` |
 | CLIENTS | `sessionHandles:string[]` |
-| CREATED | JOINED fields plus `joinToken, expiresAtServerMonoMs` |
-| JOINED | `partyId, participantId, recoveryToken, recoveryTokenExpiresAtServerMonoMs, reconnectGraceMs:15000, prepareVia:"NORMAL_NG_WATCH", snapshot`, optional `preparation:Delivery` |
-| INVITED | `partyId, mediaFileId, joinToken, expiresAtServerMonoMs` |
-| TOKEN | `joinToken, expiresAtServerMonoMs` |
+| CREATED | JOINED fields plus `joinCode, expiresAtServerMonoMs, startMode, startPositionMs` |
+| JOINED | `partyId, participantId, recoveryToken, recoveryTokenExpiresAtServerMonoMs, reconnectGraceMs:15000, prepareVia:"PARTY_PREPARE"\|"NORMAL_NG_WATCH", snapshot`, optional `preparation:Delivery` |
+| INVITED | `partyId, mediaFileId, joinCodeRequired:true` |
+| JOIN_CODE | `partyId, joinCode:string, expiresAtServerMonoMs` |
+| PREPARE_ACCEPTED | `partyId, mediaFileId, preparationId, holdPlayback:true` |
+| PREPARATION_RESULT | `partyId, mediaFileId, preparationId, status:"LOADED"\|"FAILED", watchCode:integer`; LOADED has `playbackGeneration`; FAILED has `code:"PREPARATION_FAILED"` |
 | CLOCK_PROBE | `probeId, s0` |
 | CLOCK_MODEL | `serverMinusClientMs:number, uncertaintyMs:number, p95RttMs, confident:boolean` |
 | MEDIA_ADMISSION_HANDLE | `handle:string, expiresInMs:60000, mediaFileId, mode:"pull"\|"pull-xcode"\|"hls"`; credential only to requesting renderer, never roster |
@@ -260,7 +397,7 @@ metadata above applies to replies; identical event payloads lack requestId.
 | ACK | no fields by default; command ACK reply adds `commandSeq, stage`; POSITION reply adds `skewMs, uncertaintyMs` |
 | LEFT | no fields |
 | ENDED | END reply has no additional fields; event has `partyId, reason:"HOST_ENDED"\|"EXPIRED"\|"SERVER_SHUTDOWN"` |
-| ERROR | `code`, optional requestId |
+| ERROR | `code`, optional requestId; JOIN_RATE_LIMITED, CODE_ROTATION_COOLDOWN and CODE_ISSUE_RATE_LIMITED additionally have `retryAfterMs` |
 
 Delivery: `{surface:string, mode:string, videoCodec:string|null,
 audioCodec:string|null, budgetKbps:positive integer, transcode:boolean}`.
@@ -518,6 +655,8 @@ Every ERROR has schemaVersion/type/code and requestId when parseable. Codes:
 
 ```
 NOT_AVAILABLE SESSION_EXPIRED SESSION_DENIED INVALID_REQUEST UNKNOWN_TYPE RATE_LIMITED REQUEST_ID_REUSED
+JOIN_RATE_LIMITED JOIN_CODE_EXPIRED JOIN_CODE_UNAVAILABLE CODE_ROTATION_COOLDOWN CODE_ISSUE_RATE_LIMITED
+START_MODE_UNSUPPORTED CURRENT_POSITION_UNAVAILABLE PREPARE_UNSUPPORTED PREPARATION_PENDING PREPARATION_BUSY
 STALE_REQUEST SERVER_EPOCH_CHANGED ALREADY_JOINED SERVER_CAPACITY MEDIA_UNAVAILABLE
 MEDIA_MISMATCH MEDIA_PATH_NOT_READY MEDIA_ADMISSION_UNCONFIRMED PARTY_GONE JOIN_DENIED PARTY_FULL REJOIN_DENIED
 NOT_MEMBER HOST_REQUIRED CLIENT_UNAVAILABLE CLOCK_SAMPLE_INVALID NOT_READY
@@ -588,7 +727,7 @@ Known limitations, not claims of completed PRD acceptance:
 Run from the repository root on Windows:
 
 ```powershell
-.\gradlew.bat test --tests sage.party.PartyServiceTest --tests sage.NgPartyTransportIntegrationTest --tests sage.NgPartyMediaAdmissionTest --tests sage.VideoFrameTest --tests sage.MiniPlayerTest --tests sage.MiniPlayerSocketReconnectTest --tests sage.client.PlaybackDecisionEngineTest --tests sage.client.PlaybackSurfaceSetTest --tests sage.MediaServerXcodeEnhanceTest --tests sage.HTTPLSServerTest
+.\gradlew.bat test --tests sage.party.PartyServiceTest --tests sage.party.PartyJoinCodesTest --tests sage.NgPartyTransportIntegrationTest --tests sage.NgPartyMediaAdmissionTest --tests sage.VideoFrameTest --tests sage.MiniPlayerTest --tests sage.MiniPlayerSocketReconnectTest --tests sage.client.PlaybackDecisionEngineTest --tests sage.client.PlaybackSurfaceSetTest --tests sage.MediaServerXcodeEnhanceTest --tests sage.HTTPLSServerTest
 node --test .\docs\party\v1\examples.cjs
 ```
 

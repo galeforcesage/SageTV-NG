@@ -71,8 +71,21 @@ function executionAck(command, commonRequest, observation) {
   };
 }
 
+function joinWithCode(commonRequest, enteredCode, invitation) {
+  assert.match(enteredCode, /^[0-9]{3}$/);
+  return { ...commonRequest, schemaVersion: 1, type: 'JOIN', joinCode: enteredCode,
+    ...(invitation ? { partyId: invitation.partyId, mediaFileId: invitation.mediaFileId } : {}) };
+}
+
+function prepareJoined(commonRequest, joined, explicitlyConfirmed) {
+  assert.equal(explicitlyConfirmed, true);
+  assert.equal(joined.prepareVia, 'PARTY_PREPARE');
+  return { ...commonRequest, schemaVersion: 1, type: 'PREPARE', partyId: joined.partyId,
+    intent: 'JOIN_AND_PREPARE', confirmReplace: true };
+}
+
 module.exports = { clientFrame, decodeServerFrame, localDeadline, predictedPosition,
-  mediaBindingCommand, executionAck };
+  mediaBindingCommand, executionAck, joinWithCode, prepareJoined };
 
 test('golden client framing preserves the existing 16-byte UI envelope', () => {
   const frame = clientFrame(golden.hello);
@@ -149,4 +162,37 @@ test('majority buffering recommendation is advisory under keep-moving policy', (
   assert.equal(recommendation.type, 'BUFFER_RECOMMENDATION');
   assert.equal(recommendation.stateVersion, golden.command.stateVersion);
   assert.equal(recommendation.commandSeq, golden.command.commandSeq);
+});
+
+test('selected invitees still enter three digits on their existing admitted session', () => {
+  const { schemaVersion, type, partyId, mediaFileId, joinCode, ...common } = golden.join;
+  assert.deepEqual(joinWithCode(common, '042', golden.invited), golden.join);
+  assert.equal(joinWithCode(common, '042').partyId, undefined);
+  assert.equal(golden.invited.joinCodeRequired, true);
+  assert.equal(golden.invited.joinCode, undefined);
+  assert.equal(golden.invited.joinToken, undefined);
+  assert.throws(() => joinWithCode(common, '42', golden.invited));
+  assert.equal(golden.joinRateLimited.retryAfterMs, 60000);
+  assert.equal(golden.joinCodeReply.expiresAtServerMonoMs - golden.joinCodeReply.serverMonoMs, 120000);
+});
+
+test('Current Position starts paused at the server anchor, never at inherited resume or zero', () => {
+  assert.equal(golden.createCurrent.startMode, 'CURRENT_POSITION');
+  assert.equal(golden.createCurrent.positionMs, undefined);
+  assert.equal(golden.createdCurrent.startPositionMs, 123456);
+  assert.equal(predictedPosition(golden.createdCurrent.snapshot, 200000), 123456);
+  assert.equal(golden.createdCurrent.snapshot.commandSeq, 0);
+});
+
+test('Join & Prepare requires explicit confirmation and loaded is not media admission/readiness', () => {
+  const { partyId, intent, confirmReplace, ...common } = golden.prepare;
+  assert.deepEqual(prepareJoined(common, golden.createdCurrent, true), golden.prepare);
+  assert.throws(() => prepareJoined(common, golden.createdCurrent, false));
+  assert.equal(golden.prepareAccepted.holdPlayback, true);
+  assert.equal(golden.preparationLoaded.preparationId, golden.prepareAccepted.preparationId);
+  assert.equal(golden.preparationLoaded.playbackGeneration, 7);
+  assert.equal(golden.preparationFailed.watchCode, -3);
+  assert.equal(golden.preparationLoaded.type, 'PREPARATION_RESULT');
+  assert.notEqual(golden.preparationLoaded.type, 'MEDIA_ADMISSION_HANDLE');
+  assert.notEqual(golden.preparationLoaded.type, 'READY');
 });
