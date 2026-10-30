@@ -201,6 +201,11 @@ behavior remains a device acceptance requirement, not a server unit-test result.
 
 ## Fixtures, tests and acceptance
 
+Cross-gfx persistent viewer recovery is not part of this implemented API.
+See [NativeViewerRecoveryProposal.md](NativeViewerRecoveryProposal.md) for the
+separate design-only denial-fence continuity proposal and its storage/identity
+limits. It does not expand current authorization or enable recovery.
+
 `docs/party/v1/golden.json` contains a `nativeOwnershipContext` API-value example,
 not a gfx/HTTP wire envelope. `docs/party/v1/examples.cjs` demonstrates fixed
 resource/reissue checks. `test/java/sage/NativePlaybackOwnershipBridgeTest.java`
