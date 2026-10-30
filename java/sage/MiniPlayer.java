@@ -1566,6 +1566,7 @@ public class MiniPlayer implements DVDMediaPlayer
     this.ngOutVideoCodec = null;
     this.ngOutAudioCodec = null;
     this.ngOutContainer = null;
+    this.partyXcodeMode = null;
     if (capDev != null && mcsr != null)
     {
       // Enable the special mode for when we are using Qian's HDHRPrime support along w/ a Bruno client.
@@ -1767,7 +1768,7 @@ public class MiniPlayer implements DVDMediaPlayer
                   sage.client.PlaybackDecisionEngine.evaluateSurfaces(ngEarlySurfaces,
                       currMF.getContainerFormat(), currMF.getPrimaryVideoFormat(),
                       currMF.getPrimaryAudioFormat(), ngEw, ngEh, ngEkbps, 0, ngEint, ngEcf,
-                      mcsr.getCurrentClientAudioLanguage(), mcsr.getClientConstraints());
+                      mcsr.getCurrentClientAudioLanguage(), mcsr.getClientConstraints(), mcsr.hasPartySurface());
               if (!ngEranked.isEmpty())
               {
                 ngEarlyDelivery = ngEranked.get(0).chosenDeliveryMode;
@@ -2248,7 +2249,7 @@ public class MiniPlayer implements DVDMediaPlayer
               sage.client.PlaybackDecisionEngine.evaluateSurfaces(surfaces,
                   mediaContainer, mediaVideo, mediaAudio,
                   mediaW, mediaH, sourceBitrateKbps, availableBwKbps, srcInterlaced,
-                  cf, clientAudioLang, constraints);
+                  cf, clientAudioLang, constraints, mcsr.hasPartySurface());
           if (!ranked.isEmpty())
           {
             sage.client.PlaybackDecisionEngine.SurfaceDecision winner = ranked.get(0);
@@ -2375,7 +2376,7 @@ public class MiniPlayer implements DVDMediaPlayer
                   sage.client.PlaybackDecisionEngine.evaluateSurfaces(retriedSurfaces,
                       mediaContainer, mediaVideo, mediaAudio,
                       mediaW, mediaH, sourceBitrateKbps, availableBwKbps, srcInterlaced,
-                      cf, clientAudioLang2, constraints);
+                      cf, clientAudioLang2, constraints, mcsr.hasPartySurface());
               if (!ranked2.isEmpty())
               {
                 sage.client.PlaybackDecisionEngine.SurfaceDecision winner2 =
@@ -3068,6 +3069,7 @@ public class MiniPlayer implements DVDMediaPlayer
             // Companion container decision so the pull STREAMINFO site reports the
             // delivery container (matching CAP_EFFECTIVE_DELIVERY), not the source.
             this.ngOutContainer = resolveNgOutputContainerName(chosenSurfaceXcodeMode);
+            this.partyXcodeMode = chosenSurfaceXcodeMode;
             if (Sage.DBG) System.out.println("MiniPlayer OPENURL emit CAP_EFFECTIVE_DELIVERY=" + effDelivery);
             try
             {
@@ -8995,6 +8997,10 @@ public class MiniPlayer implements DVDMediaPlayer
   // STREAMINFO site. null = the wire container is the source container (direct
   // play) so no override is applied.
   private volatile String ngOutContainer;
+  private volatile String partyXcodeMode;
+
+  String getPartyXcodeMode() { return partyXcodeMode; }
+  String getPartyOutputContainer() { return ngOutContainer; }
 
   // When an Android-class NG client that would DIRECT_PLAY (bare pull) has an
   // active enhancement tier but advertises NO pull-xcode delivery (only raw

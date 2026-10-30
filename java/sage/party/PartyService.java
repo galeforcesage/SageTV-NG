@@ -38,6 +38,8 @@ public final class PartyService
     Delivery plan(int mediaFileId);
     /** Returns actual server-selected playback metadata, or throws until prepared. */
     Delivery delivery(int mediaFileId);
+    /** Describes the actual paused loaded path, without claiming producer admission. */
+    default Delivery preparedDelivery(int mediaFileId) { return delivery(mediaFileId); }
     /** Issues a media-path binding credential for the current loaded playback generation. */
     default JsonObject mediaAdmission(int mediaFileId) { throw new Fault("MEDIA_ADMISSION_UNCONFIRMED"); }
     /** Checks existing media producer admission; client readiness flags are not evidence. */
@@ -48,6 +50,18 @@ public final class PartyService
     default void prepare(int mediaFileId, String preparationId) { throw new Fault("PREPARE_UNSUPPORTED"); }
     /** Invalidates asynchronous preparation on membership or local lifecycle changes. */
     default void cancelPreparation() {}
+    /** Queries and plans a renderer-only surface asynchronously without accepting JSON codec claims. */
+    default void selectSurface(int mediaFileId, String surfaceId, String selectionId) { throw new Fault("SURFACE_UNSUPPORTED"); }
+    /** Commits a queried candidate only if its original renderer/player generation is still idle. */
+    default long applySurface(String selectionId) { throw new Fault("SURFACE_UNSUPPORTED"); }
+    /** Cancels pending selection and restores pre-Party discovery for subsequent ordinary Watch. */
+    default long restoreSurface() { return 0; }
+    /** Checks whether a committed renderer-only path remains selected on its original path generation. */
+    default boolean surfaceSelected(String selectionId, long pathGeneration) { return false; }
+    /** Registers server reply metadata for same-JVM opaque bridge proof; no client metadata is trusted. */
+    default void describeMediaAdmission(JsonObject reply) {}
+    /** Performs bounded nonblocking transport/admission cleanup during maintenance. */
+    default void maintenance() {}
     /** Resolves initiating-client skip settings, using existing Sage semantics. */
     long skip(String action);
     /** Suppresses ordinary per-viewer progress logging while party playback owns it. */
@@ -62,7 +76,13 @@ public final class PartyService
 
   /** Effective per-viewer delivery, supplied by the playback core, never by JSON input. */
   public record Delivery(String surface, String mode, String videoCodec, String audioCodec,
-      int bitrateKbps, boolean transcode) {}
+      int bitrateKbps, boolean transcode, String route, String xcodeMode, String container)
+  {
+    /** Creates delivery metadata without optional conditioned-path details. */
+    public Delivery(String surface, String mode, String videoCodec, String audioCodec,
+        int bitrateKbps, boolean transcode)
+    { this(surface, mode, videoCodec, audioCodec, bitrateKbps, transcode, null, null, null); }
+  }
 
   private static final long GRACE_MS = 15000;
   private final LongSupplier time;
@@ -108,6 +128,10 @@ public final class PartyService
     String correctionKind;
     String preparationId;
     boolean preparationPending;
+    String selectionId;
+    boolean selectionPending;
+    long pathGeneration;
+    boolean surfacePrepared;
     long correctionSkew, correctionDue;
     boolean rateAdjust;
     final Deque<Long> failures = new ArrayDeque<>();
@@ -184,6 +208,8 @@ public final class PartyService
     if (peer.capabilities().contains("PARTY_START_POSITION_V1")) starts.add("CURRENT_POSITION");
     out.add("supportedStartModes", starts);
     out.addProperty("prepareSupported", peer.capabilities().contains("PARTY_PREPARE_V1"));
+    out.addProperty("surfaceSelectionSupported", peer.capabilities().contains("PARTY_SURFACE_V1")
+        && peer.capabilities().contains("PARTY_PREPARE_V1"));
     out.addProperty("joinCodeDigits", 3);
     out.addProperty("joinCodeLifetimeMs", PartyJoinCodes.LIFETIME_MS);
     out.addProperty("joinAttemptWindowMs", 60000);
@@ -242,6 +268,11 @@ public final class PartyService
       response = dispatch(peer, request, now);
       response.addProperty("requestId", id);
       response.addProperty("serverMonoMs", now);
+      if ("MEDIA_ADMISSION_HANDLE".equals(text(response, "type")))
+      {
+        response.add("requestSeq", request.get("requestSeq"));
+        peer.describeMediaAdmission(response);
+      }
       diagnostic(null, null, "REQUEST_" + text(request, "type") + "_" + response.get("type").getAsString(), now);
     }
     catch (Fault f)
@@ -349,6 +380,7 @@ public final class PartyService
       Delivery plan = peer.plan(p.media);
       admit(m, plan);
       m.peer = peer;
+      m.selectionId = null; m.selectionPending = false;
       m.disconnectedAt = -1;
       reset(m);
       m.reservation = plan;
@@ -420,10 +452,43 @@ public final class PartyService
         return out;
       }
       case "MEDIA_ADMISSION":
+        if (m.selectionPending) throw new Fault("SURFACE_SELECTION_PENDING");
+        selectedPrepared(m);
         if (m.preparationPending) throw new Fault("PREPARATION_PENDING");
         if (!Set.of("PREPARING", "RECOVERING", "BUFFERING").contains(m.status))
           throw new Fault("REJOIN_REQUIRED");
-        return peer.mediaAdmission(p.media);
+        JsonObject admission = peer.mediaAdmission(p.media);
+        admission.addProperty("serverEpoch", epoch);
+        admission.addProperty("sessionHandle", links.get(peer).handle);
+        admission.addProperty("partyId", p.id);
+        return admission;
+      case "SELECT_SURFACE":
+      {
+        if (!peer.capabilities().contains("PARTY_SURFACE_V1") || !peer.capabilities().contains("PARTY_PREPARE_V1"))
+          throw new Fault("SURFACE_UNSUPPORTED");
+        if (!Set.of("PREPARING", "RECOVERING", "BUFFERING").contains(m.status)) throw new Fault("REJOIN_REQUIRED");
+        if (m.selectionPending || m.preparationPending) throw new Fault("SURFACE_SELECTION_PENDING");
+        if (m.selectionId != null) throw new Fault("SURFACE_ALREADY_SELECTED");
+        String surface = text(r, "surfaceId");
+        if (!surface.matches("[A-Za-z0-9_]{1,64}")) throw new Fault("SURFACE_UNAVAILABLE");
+        reset(m);
+        m.selectionId = opaque(); m.selectionPending = true; m.preparingSince = now;
+        try { peer.selectSurface(p.media, surface, m.selectionId); }
+        catch (Fault f) { m.selectionId = null; m.selectionPending = false; throw f; }
+        JsonObject accepted = envelope("SURFACE_SELECTION_ACCEPTED");
+        accepted.addProperty("partyId", p.id); accepted.addProperty("selectionId", m.selectionId);
+        return accepted;
+      }
+      case "RESTORE_SURFACE":
+      {
+        if (!peer.capabilities().contains("PARTY_SURFACE_V1")) throw new Fault("SURFACE_UNSUPPORTED");
+        reset(m);
+        m.selectionPending = false; m.selectionId = null; m.reservation = null; m.preparingSince = now;
+        m.pathGeneration = peer.restoreSurface();
+        JsonObject restored = envelope("SURFACE_RESTORED");
+        restored.addProperty("partyId", p.id); restored.addProperty("pathGeneration", m.pathGeneration);
+        return restored;
+      }
       case "PREPARE":
       {
         if (!peer.capabilities().contains("PARTY_PREPARE_V1")) throw new Fault("PREPARE_UNSUPPORTED");
@@ -433,20 +498,34 @@ public final class PartyService
         if (!Set.of("PREPARING", "RECOVERING", "BUFFERING").contains(m.status))
           throw new Fault("REJOIN_REQUIRED");
         if (m.preparationPending) throw new Fault("PREPARATION_PENDING");
+        if (m.selectionPending) throw new Fault("SURFACE_SELECTION_PENDING");
+        if (m.selectionId != null && (!r.has("selectionId") || !constantEquals(m.selectionId, text(r, "selectionId")))
+            || m.selectionId == null && r.has("selectionId"))
+          throw new Fault("SURFACE_CHANGED");
+        if (m.selectionId != null && !peer.surfaceSelected(m.selectionId, m.pathGeneration))
+          throw new Fault("SURFACE_CHANGED");
         peer.duration(p.media);
+        Delivery plan = peer.plan(p.media);
+        admit(m, plan);
         reset(m);
+        m.reservation = plan;
         m.preparingSince = now;
         m.preparationId = opaque(); m.preparationPending = true;
+        m.surfacePrepared = false;
         try { peer.prepare(p.media, m.preparationId); }
         catch (Fault f) { m.preparationPending = false; m.preparationId = null; throw f; }
         JsonObject accepted = envelope("PREPARE_ACCEPTED");
         accepted.addProperty("partyId", p.id); accepted.addProperty("mediaFileId", p.media);
         accepted.addProperty("preparationId", m.preparationId);
         accepted.addProperty("holdPlayback", true);
+        if (m.selectionId != null)
+        { accepted.addProperty("selectionId", m.selectionId); accepted.addProperty("pathGeneration", m.pathGeneration); }
         return accepted;
       }
       case "READY":
       {
+        if (m.selectionPending) throw new Fault("SURFACE_SELECTION_PENDING");
+        selectedPrepared(m);
         if (m.preparationPending) throw new Fault("PREPARATION_PENDING");
         current(p, r);
         if (!"PREPARING".equals(m.status) && !"RECOVERING".equals(m.status)
@@ -462,7 +541,7 @@ public final class PartyService
         if (m.reservation != null)
           delivery = new Delivery(delivery.surface, delivery.mode, delivery.videoCodec, delivery.audioCodec,
               Math.max(delivery.bitrateKbps, m.reservation.bitrateKbps),
-              delivery.transcode || m.reservation.transcode);
+              delivery.transcode || m.reservation.transcode, delivery.route, delivery.xcodeMode, delivery.container);
         admit(m, delivery);
         m.precision = precision;
         m.rateAdjust = rate && peer.capabilities().contains("PARTY_RATE_ADJUST_V1");
@@ -498,6 +577,8 @@ public final class PartyService
         { m.peer.cancelPreparation(); m.preparationId = null; m.preparationPending = false; }
         if ("LOCALLY_STOPPED".equals(status)) m.reservation = null;
         if ("LOCALLY_STOPPED".equals(status)) m.correctionId = null;
+        if ("LOCALLY_STOPPED".equals(status))
+        { peer.restoreSurface(); m.selectionId = null; m.selectionPending = false; }
         roster(p, m);
         bufferPolicy(p, now);
         return envelope("ACK");
@@ -523,6 +604,7 @@ public final class PartyService
         return envelope("ACK");
       }
       case "REJOIN":
+        peer.restoreSurface(); m.selectionId = null; m.selectionPending = false;
         Delivery plan = peer.plan(p.media);
         admit(m, plan);
         reset(m);
@@ -564,6 +646,12 @@ public final class PartyService
   {
     if (joinRetryAfter(link, now) > 0) throw new Fault("JOIN_RATE_LIMITED");
     joinAttempts.addLast(now); link.joinAttempts.addLast(now);
+  }
+  private void selectedPrepared(Member member)
+  {
+    if (member.selectionId == null) return;
+    if (!member.peer.surfaceSelected(member.selectionId, member.pathGeneration)) throw new Fault("SURFACE_CHANGED");
+    if (!member.surfacePrepared) throw new Fault("SURFACE_PREPARATION_REQUIRED");
   }
   private long codeIssueRetryAfter(long now)
   {
@@ -897,6 +985,9 @@ public final class PartyService
     o.addProperty("surface", d.surface); o.addProperty("mode", d.mode);
     o.addProperty("videoCodec", d.videoCodec); o.addProperty("audioCodec", d.audioCodec);
     o.addProperty("budgetKbps", d.bitrateKbps); o.addProperty("transcode", d.transcode);
+    if (d.route != null) o.addProperty("route", d.route);
+    if (d.xcodeMode != null) o.addProperty("xcodeMode", d.xcodeMode);
+    if (d.container != null) o.addProperty("container", d.container);
     return o;
   }
   private JsonObject joined(Party p, Member m, String type, long now, boolean token)
@@ -999,6 +1090,7 @@ public final class PartyService
   /** Retains the logical slot for reconnect; physical socket IDs are never identities. */
   public synchronized void disconnected(Peer peer)
   {
+    peer.restoreSurface();
     peer.cancelPreparation();
     links.remove(peer);
     Party p = find(peer);
@@ -1007,6 +1099,7 @@ public final class PartyService
     peer.cancelScheduled();
     m.peer = null; m.disconnectedAt = time.getAsLong(); m.clock.reset();
     m.preparationPending = false; m.preparationId = null;
+    m.selectionPending = false; m.selectionId = null;
     m.correctionId = null;
     m.probes.clear();
     m.status = "DISCONNECTED";
@@ -1027,6 +1120,7 @@ public final class PartyService
     {
       m.peer.cancelScheduled();
       m.peer.cancelPreparation();
+      m.peer.restoreSurface();
       if (commit && m.admitted) m.peer.commit(p.media, position(p, now));
       m.peer.progressOwner(false);
     }
@@ -1048,6 +1142,7 @@ public final class PartyService
   public synchronized void tick()
   {
     long now = time.getAsLong();
+    for (Peer peer : new ArrayList<>(links.keySet())) peer.maintenance();
     for (Party p : new ArrayList<>(parties.values()))
     {
       if (p.pending != null && p.pending.get("executeAtServerMonoMs").getAsLong() <= now)
@@ -1077,7 +1172,7 @@ public final class PartyService
           roster(p, m);
         }
         if (m.peer == null && now - m.disconnectedAt > GRACE_MS) { remove(p, m, false, now); continue; }
-        if (("PREPARING".equals(m.status) || m.preparationPending) && now - m.preparingSince > 60000)
+        if (("PREPARING".equals(m.status) || m.preparationPending || m.selectionPending) && now - m.preparingSince > 60000)
         {
           JsonObject error = envelope("ERROR");
           error.addProperty("code", "PREPARATION_EXPIRED");
@@ -1110,14 +1205,55 @@ public final class PartyService
     Member m = requireMember(p, peer);
     if (!m.preparationPending || !preparationId.equals(m.preparationId)) return;
     if (watchCode == 0 && generation < 0) watchCode = -13;
+    if (watchCode == 0 && m.selectionId != null && !peer.surfaceSelected(m.selectionId, m.pathGeneration)) watchCode = -13;
+    Delivery loaded = null;
+    if (watchCode == 0 && m.selectionId != null)
+    {
+      try { loaded = peer.preparedDelivery(p.media); }
+      catch (Fault f) { watchCode = -13; }
+    }
+    m.surfacePrepared = watchCode == 0;
     m.preparationPending = false;
     JsonObject result = envelope("PREPARATION_RESULT");
     result.addProperty("partyId", p.id); result.addProperty("mediaFileId", p.media);
     result.addProperty("preparationId", preparationId);
     result.addProperty("status", watchCode == 0 ? "LOADED" : "FAILED");
     result.addProperty("watchCode", watchCode);
+    if (m.selectionId != null)
+    { result.addProperty("selectionId", m.selectionId); result.addProperty("pathGeneration", m.pathGeneration); }
+    if (watchCode == 0 && loaded != null) result.add("delivery", deliveryJson(loaded));
     if (watchCode == 0) result.addProperty("playbackGeneration", generation);
     else { result.addProperty("code", "PREPARATION_FAILED"); peer.cancelPreparation(); }
+    peer.send(result);
+  }
+
+  /** Commits one queried surface candidate under membership, policy budget and exact lifecycle fences. */
+  public synchronized void surfaceSelectionResult(Peer peer, String selectionId, Delivery plan, String failure)
+  {
+    Party p = find(peer);
+    if (p == null || !eligible(peer)) return;
+    Member m = requireMember(p, peer);
+    if (!m.selectionPending || !selectionId.equals(m.selectionId)) return;
+    JsonObject result = envelope("SURFACE_SELECTION_RESULT");
+    result.addProperty("partyId", p.id); result.addProperty("selectionId", selectionId);
+    try
+    {
+      if (failure != null) throw new Fault(failure);
+      admit(m, plan);
+      m.pathGeneration = peer.applySurface(selectionId);
+      m.surfacePrepared = false;
+      m.reservation = plan;
+      result.addProperty("status", "SELECTED");
+      result.addProperty("pathGeneration", m.pathGeneration);
+      result.addProperty("requiresPrepare", true);
+      result.add("preparation", deliveryJson(plan));
+    }
+    catch (Fault f)
+    {
+      peer.restoreSurface(); m.selectionId = null;
+      result.addProperty("status", "FAILED"); result.addProperty("code", f.getMessage());
+    }
+    m.selectionPending = false;
     peer.send(result);
   }
 

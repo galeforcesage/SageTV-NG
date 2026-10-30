@@ -1,6 +1,73 @@
 {
   "schemaVersion": 1,
   "property": "PARTY_V1",
+  "selectSurface": {
+    "schemaVersion": 1,
+    "type": "SELECT_SURFACE",
+    "requestId": "select1",
+    "requestSeq": 3,
+    "serverEpoch": "example-epoch",
+    "sessionToken": "EXAMPLE_NOT_A_REAL_SESSION_TOKEN",
+    "partyId": "example-party",
+    "surfaceId": "pwa_party_mse"
+  },
+  "surfaceSelectionAccepted": {
+    "schemaVersion": 1,
+    "type": "SURFACE_SELECTION_ACCEPTED",
+    "partyId": "example-party",
+    "selectionId": "example-selection",
+    "requestId": "select1",
+    "serverMonoMs": 100000
+  },
+  "surfaceSelected": {
+    "schemaVersion": 1,
+    "type": "SURFACE_SELECTION_RESULT",
+    "partyId": "example-party",
+    "selectionId": "example-selection",
+    "status": "SELECTED",
+    "pathGeneration": 1,
+    "requiresPrepare": true,
+    "preparation": {
+      "surface": "pwa_party_mse",
+      "mode": "pull-xcode",
+      "videoCodec": "H264",
+      "audioCodec": "AAC",
+      "budgetKbps": 8000,
+      "transcode": true,
+      "route": "mse",
+      "xcodeMode": "browserhd_remux",
+      "container": "MP4"
+    }
+  },
+  "selectedPreparationLoaded": {
+    "schemaVersion": 1,
+    "type": "PREPARATION_RESULT",
+    "partyId": "example-party",
+    "mediaFileId": 42,
+    "preparationId": "example-preparation",
+    "status": "LOADED",
+    "watchCode": 0,
+    "selectionId": "example-selection",
+    "pathGeneration": 1,
+    "playbackGeneration": 7,
+    "delivery": {
+      "surface": "pwa_party_mse",
+      "mode": "pull-xcode",
+      "videoCodec": "H264",
+      "audioCodec": "AAC",
+      "budgetKbps": 8000,
+      "transcode": true,
+      "route": "mse",
+      "xcodeMode": "browserhd_remux",
+      "container": "MP4"
+    }
+  },
+  "mediaAdmissionRevoked": {
+    "schemaVersion": 1,
+    "type": "MEDIA_ADMISSION_REVOKED",
+    "contextId": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+    "reason": "GENERATION_CHANGED"
+  },
   "hello": {
     "schemaVersion": 1,
     "type": "HELLO",
@@ -138,7 +205,15 @@
     "schemaVersion": 1,
     "type": "MEDIA_ADMISSION_HANDLE",
     "requestId": "media1",
+    "requestSeq": 8,
     "serverMonoMs": 100000,
+    "serverEpoch": "example-epoch",
+    "sessionHandle": "example-renderer",
+    "partyId": "example-party",
+    "contextId": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+    "playbackGeneration": 7,
+    "pathGeneration": 1,
+    "expiresAtServerMonoMs": 160000,
     "handle": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     "expiresInMs": 60000,
     "mediaFileId": 42,

@@ -23,7 +23,8 @@ In the existing `SAGETV_NG_CAPABILITIES` reply, advertise **all** these exact to
 PARTY_V1,PARTY_JOIN_CODE_V1,PARTY_MONOTONIC_V1,PARTY_POSITION_V1,PARTY_SCHEDULED_V1,PARTY_SEEK_V1,PARTY_LOCAL_STOP_V1
 ```
 
-Optional: `PARTY_RATE_ADJUST_V1`, `PARTY_START_POSITION_V1`, `PARTY_PREPARE_V1`.
+Optional: `PARTY_RATE_ADJUST_V1`, `PARTY_START_POSITION_V1`, `PARTY_PREPARE_V1`,
+`PARTY_SURFACE_V1` (requires `PARTY_PREPARE_V1`).
 The latter two mean server-sampled Current Position creation and explicit
 joined-media preparation with paused asynchronous Watch respectively.
 `PARTY_JOIN_CODE_V1` is mandatory: clients predating mandatory code entry are
@@ -241,7 +242,9 @@ positions are relative to the beginning of the common media, not epoch PTS.
 | INVITE | `partyId, sessionHandle` | ACK; target receives INVITED |
 | JOIN_CODE | `partyId` | JOIN_CODE; host only |
 | ROTATE_CODE | `partyId` | JOIN_CODE; host only |
-| PREPARE | `partyId, intent:"JOIN_AND_PREPARE", confirmReplace:true`; requires optional PARTY_PREPARE_V1 | PREPARE_ACCEPTED; later PREPARATION_RESULT |
+| SELECT_SURFACE | `partyId, surfaceId:string`; requires PARTY_SURFACE_V1 and PARTY_PREPARE_V1 | SURFACE_SELECTION_ACCEPTED; later SURFACE_SELECTION_RESULT |
+| RESTORE_SURFACE | `partyId`; requires PARTY_SURFACE_V1 | SURFACE_RESTORED |
+| PREPARE | `partyId, intent:"JOIN_AND_PREPARE", confirmReplace:true`; requires optional PARTY_PREPARE_V1; `selectionId` required iff a Party surface is selected | PREPARE_ACCEPTED; later PREPARATION_RESULT |
 | POLICY | `partyId, hostOnly:boolean, pauseOnBuffer:boolean` | ACK; roster receives SNAPSHOT |
 | CLOCK | `partyId` | CLOCK_PROBE |
 | CLOCK_REPLY | `partyId, probeId, c1, c2` | CLOCK_MODEL |
@@ -253,7 +256,7 @@ positions are relative to the beginning of the common media, not epoch PTS.
 | STATUS | `partyId, status` | ACK; roster gets PARTICIPANT_STATE |
 | CORRECTION_RESULT | `partyId, stateVersion:V, correctionId, success:boolean, sampleMonoMs, positionMs` | ACK; roster gets PARTICIPANT_STATE |
 | REJOIN | `partyId` | JOINED; fresh prepare/clock barrier |
-| LEAVE | `partyId` | LEFT; others get LEFT participant state |
+| LEAVE | `partyId` | LEFT; others get PARTICIPANT_STATE with status LEFT |
 | END | `partyId` | ENDED; roster gets ENDED |
 
 ### Beginning/Current Position and explicit Join & Prepare
@@ -302,7 +305,9 @@ Seeker permission/resource checks, file verification and media-player selection.
 It tags WATCH/LOAD jobs with revocable operation authority, forces full switching
 for a new media load (no auto-playing fast switch), and pauses the resulting
 player. Already-loaded same media uses normal Watch's redundant-file shortcut,
-pauses it and retains its exact generation without forced reload.
+pauses it and retains its exact generation without forced reload, **unless a
+Party surface override is selected**: that requires a full paused reload even
+for identical media, so the new route actually takes effect.
 
 PREPARATION_RESULT `LOADED,watchCode:0,playbackGeneration` is emitted only after
 the requested media is loaded and paused on that generation. `FAILED` has
@@ -336,6 +341,78 @@ commands as an unready participant. Initial correction uses the selected
 Beginning/Current anchor, not inherited normal resume; late join uses the current
 party timeline and may then play. Preparation alone changes no shared
 anchor/version/sequence and never loads or alters another viewer's media path.
+
+### Same-session Party surface selection and restoration
+
+`PARTY_SURFACE_V1` adds only a per-renderer Party override, not a generic
+client-driven codec switch. AVAILABLE `surfaceSelectionSupported:true` requires
+both that token and `PARTY_PREPARE_V1`. After CREATE/code-validated JOIN, explicit
+Join & Prepare confirmation, and pausing existing playback, send SELECT_SURFACE.
+The member must be PREPARING, RECOVERING or BUFFERING; its renderer must be idle
+or paused, with no pending ordinary Watch. Neither SELECT nor receipt of INVITED
+opens media. Install the local playback hold before PREPARE as above.
+
+`surfaceId` matches `[A-Za-z0-9_]{1,64}`. Server queries the **same renderer**
+using normal GET_PROPERTY, first `PLAYBACK_SURFACES`, then these existing fields
+under `PLAYBACK_SURFACE_<surfaceId>_`:
+
+```
+ROUTE, PRIORITY, DELIVERY_MODES, VIDEO_CODECS, AUDIO_CODECS, CONTAINERS,
+AUDIO_TRACK_ACCESS, AUDIO_TRACK_SELECTION_MODE, AUDIO_CONTAINER_RULES,
+MAX_OUTPUT_WIDTH, MAX_OUTPUT_HEIGHT, MAX_FPS, AUDIO_MAX_CHANNELS, BANDWIDTH_FEEDBACK
+```
+
+PLAYBACK_SURFACES is limited to 32 entries; each reply is at most 4096 characters.
+Empty optional values are allowed; missing replies, unsupported IDs, an empty
+canonical route/codec/container/delivery set or an invalid ID fail explicitly.
+The query has a total 10-second reply deadline. An unanswered query closes the
+unresponsive control transport using existing receiver teardown: continuing with
+misaligned FIFO property replies would be unsafe. Ordinary queries/timeouts are
+unchanged. The client must respond with genuinely probed support (including
+platform/codec constraints already negotiated under NG policy), not arbitrary
+codecs copied from this example. There is no client-supplied codec JSON in SELECT.
+
+The asynchronous result matches `selectionId`, not event arrival order. Server
+rechecks membership, permissions/policy budget, exact player/media/Watch
+generation and renderer path generation before installing the queried set.
+Installation retains the ordinary cached set unchanged as the prior-config
+snapshot; only this renderer sees the single selected surface. Normal handshake
+refresh cannot broaden that override. Query, selection and restore do not change
+the Party anchor/stateVersion/commandSeq or another viewer's path.
+
+For a truthful `pwa_party_mse` surface reporting `ROUTE=mse`, `CONTAINERS=MP4`,
+`DELIVERY_MODES=pull-xcode` and genuinely supported codecs, **selected Party
+evaluation** remuxes otherwise direct-compatible media with `browserhd_remux`.
+It does not drop the surface as an unservable raw DIRECT_PLAY. Existing codec,
+bandwidth, interlace and resource policy still selects `browserhd_copyv` for
+audio conversion or `browserhd` for full conversion where needed. These are
+existing server fragmented-MP4 XCODE_SETUP modes, not raw progressive MP4 or
+MPEG-TS. Ordinary surfaces/evaluations are unchanged. A mixed `pull,pull-xcode`
+surface does not promise conditioned output; use an honestly queried distinct
+MP4-only/MSE/pull-xcode-only surface when the adapter requires it. This is not a
+permission to advertise unsupported codecs or feed native TS to MSE.
+
+SELECT's `preparation:Delivery` is a plan. Echo its `selectionId` in PREPARE;
+PREPARE_ACCEPTED and PREPARATION_RESULT carry that selection and path generation.
+LOADED additionally carries actual loaded `delivery`, including `route`,
+canonical `container` and `xcodeMode` when known. For the selected conditioned
+MSE path, missing/non-MP4/browserhd-family output fails preparation rather than
+silently switching to raw/TS. Match preparationId, selectionId, path generation
+and loaded playbackGeneration, and confirm actual NG stream metadata before
+starting the adapter. A selected path cannot issue MEDIA_ADMISSION or READY
+until its selected paused preparation succeeds. Output admission is still separate.
+
+RESTORE_SURFACE explicitly cancels pending selection/preparation, invalidates the
+local readiness barrier and old admission, restores the untouched ordinary set,
+and returns the current pathGeneration. Restore also happens on local Stop,
+REJOIN/RESUME, leave/end, disconnect/replacement and normal Watch. The renderer's
+monotonic pathGeneration increments on installing/removing an override (no-op
+restore does not increment); it is ephemeral and scoped to that renderer, not a
+human/device or Party identity. Re-query/re-select/re-prepare after restoration
+when another Party route is needed. A stale query/result cannot reinstall a
+cancelled override. RESTORE is configuration restoration, **not** reopening the
+old video, resuming it or transcoding a currently loaded stream in place. A
+staged player stays paused; normal Watch selects from ordinary defaults again.
 
 ACTION enum: `PLAY, PAUSE, FF, REW, FF2, REW2`. STOP, arbitrary SEEK and raw
 keycodes are invalid. FF/REW/secondary skip values are read once from the initiating
@@ -377,17 +454,21 @@ metadata above applies to replies; identical event payloads lack requestId.
 
 | Type | Additional fields |
 |---|---|
-| AVAILABLE | `serverEpoch, sessionHandle, sessionToken, sessionTokenExpiresAtServerMonoMs, maxParticipants:5, supportedStartModes:string[], prepareSupported:boolean, joinCodeDigits:3, joinCodeLifetimeMs:120000, joinAttemptWindowMs:60000, joinAttemptsPerSession:3, joinAttemptsGlobal:6`; while joined additionally `recoveryToken, recoveryTokenExpiresAtServerMonoMs` |
+| AVAILABLE | `serverEpoch, sessionHandle, sessionToken, sessionTokenExpiresAtServerMonoMs, maxParticipants:5, supportedStartModes:string[], prepareSupported:boolean, surfaceSelectionSupported:boolean, joinCodeDigits:3, joinCodeLifetimeMs:120000, joinAttemptWindowMs:60000, joinAttemptsPerSession:3, joinAttemptsGlobal:6`; while joined additionally `recoveryToken, recoveryTokenExpiresAtServerMonoMs` |
 | CLIENTS | `sessionHandles:string[]` |
 | CREATED | JOINED fields plus `joinCode, expiresAtServerMonoMs, startMode, startPositionMs` |
 | JOINED | `partyId, participantId, recoveryToken, recoveryTokenExpiresAtServerMonoMs, reconnectGraceMs:15000, prepareVia:"PARTY_PREPARE"\|"NORMAL_NG_WATCH", snapshot`, optional `preparation:Delivery` |
 | INVITED | `partyId, mediaFileId, joinCodeRequired:true` |
 | JOIN_CODE | `partyId, joinCode:string, expiresAtServerMonoMs` |
-| PREPARE_ACCEPTED | `partyId, mediaFileId, preparationId, holdPlayback:true` |
-| PREPARATION_RESULT | `partyId, mediaFileId, preparationId, status:"LOADED"\|"FAILED", watchCode:integer`; LOADED has `playbackGeneration`; FAILED has `code:"PREPARATION_FAILED"` |
+| SURFACE_SELECTION_ACCEPTED | `partyId, selectionId` |
+| SURFACE_SELECTION_RESULT | `partyId, selectionId, status:"SELECTED"\|"FAILED"`; SELECTED has `pathGeneration, requiresPrepare:true, preparation:Delivery`; FAILED has `code` |
+| SURFACE_RESTORED | `partyId, pathGeneration` |
+| PREPARE_ACCEPTED | `partyId, mediaFileId, preparationId, holdPlayback:true`; selected path additionally `selectionId, pathGeneration` |
+| PREPARATION_RESULT | `partyId, mediaFileId, preparationId, status:"LOADED"\|"FAILED", watchCode:integer`; LOADED has `playbackGeneration`; FAILED has `code:"PREPARATION_FAILED"`; selected path additionally `selectionId, pathGeneration`, and LOADED `delivery:Delivery` |
 | CLOCK_PROBE | `probeId, s0` |
 | CLOCK_MODEL | `serverMinusClientMs:number, uncertaintyMs:number, p95RttMs, confident:boolean` |
-| MEDIA_ADMISSION_HANDLE | `handle:string, expiresInMs:60000, mediaFileId, mode:"pull"\|"pull-xcode"\|"hls"`; credential only to requesting renderer, never roster |
+| MEDIA_ADMISSION_HANDLE | `handle:string, contextId, serverEpoch, sessionHandle, partyId, requestSeq, playbackGeneration, pathGeneration, expiresAtServerMonoMs, expiresInMs:60000, mediaFileId, mode:"pull"\|"pull-xcode"\|"hls"`; credential only to requesting renderer, never roster |
+| MEDIA_ADMISSION_REVOKED | `contextId, reason`; targeted owning renderer only, no handle |
 | COMMAND | `partyId, commandSeq, stateVersion, cause:ACTION, targetPositionMs, targetState, targetRate:1, executeAtServerMonoMs, originParticipantId` |
 | CORRECTION | `partyId, participantId, stateVersion, commandSeq, correctionId, kind:"SOFT"\|"HARD", targetPositionMs, targetState, targetRate:number, durationMs, executeAtServerMonoMs`; READY reply additionally has `delivery:Delivery` |
 | PARTICIPANT_STATE | `partyId, participantId, status` |
@@ -400,7 +481,8 @@ metadata above applies to replies; identical event payloads lack requestId.
 | ERROR | `code`, optional requestId; JOIN_RATE_LIMITED, CODE_ROTATION_COOLDOWN and CODE_ISSUE_RATE_LIMITED additionally have `retryAfterMs` |
 
 Delivery: `{surface:string, mode:string, videoCodec:string|null,
-audioCodec:string|null, budgetKbps:positive integer, transcode:boolean}`.
+audioCodec:string|null, budgetKbps:positive integer, transcode:boolean,
+route?:string, xcodeMode?:string, container?:string}`.
 Mode is the existing selected NG delivery (`push`, `pull`, `pull-xcode`, `hls`,
 etc.), **not** a new Party transport. Codec fields are the playback core's target
 selection, not a guarantee of decoder-observed output when COPY/unspecified.
@@ -409,6 +491,11 @@ remains authoritative. Preparation is provisional, READY's delivery is revalidat
 against the actual loaded MediaFile, selected surface and confirmed downstream
 producer. `budgetKbps` is **only a Party admission estimate**, not a machine-wide
 resource reservation or evidence that the actual encoder/file path started.
+`route` is the queried surface route; `container` uses canonical NG spelling
+(`MP4`, not internal `Quicktime`). `xcodeMode` is the precise existing server
+XCODE_SETUP mode, e.g. `browserhd_remux`; omitted when none/unknown. SELECT
+describes the candidate; selected PREPARATION_RESULT and READY describe the
+loaded path. None replaces stream metadata or proof of actual media output.
 
 SNAPSHOT:
 
@@ -554,6 +641,90 @@ a participant ID and never appears in roster/snapshots/logs. Unused handles expi
 after 60000 ms; another MEDIA_ADMISSION replaces the previous handle. Only
 preparing/recovering/buffering members may request one.
 
+#### Same-JVM opaque ownership proof for a transparent bridge
+
+The bridge cannot authenticate server approvals by scanning relayed bytes:
+normal control encryption/compression remains unchanged. The implemented Java
+boundary is `java/sage/PartyMediaAdmissionBridge.java`, loaded from the server's
+Sage classes in the **same JVM and shared Sage classloader**:
+
+```java
+public static PartyMediaAdmissionBridge.Context claim(String handle, java.net.Socket upstreamControlSocket);
+public static boolean isCurrent(String contextId, java.net.Socket upstreamControlSocket);
+public static void release(String contextId, java.net.Socket upstreamControlSocket);
+```
+
+`claim` returns the public immutable record with these exact Java accessor types:
+
+```
+String contextId(), serverEpoch(), sessionHandle(), mode(), requestId()
+int mediaFileId()
+long playbackGeneration(), pathGeneration(), expiresAtServerMonoMs(), requestSeq()
+```
+
+Pass the bridge's **actual owned, connected, nonclosed, non-half-closed upstream
+graphics Socket object**, not HTTP/client fields or an endpoint reconstructed
+from them. Server checks the exact currently accepted renderer SocketChannel
+object and the reversed **full local/remote TCP endpoint pair**. A different
+socket on the same IP, a replaced channel, an unconnected/closed socket, stale
+generation or already-claimed handle is denied. The context is populated only
+by server-owned MEDIA_ADMISSION_HANDLE state, including that reply's requestId
+and requestSeq; client JSON cannot substitute context fields. The context/handle
+is valid for one viewer, player/path generation, canonical media and mode.
+`sessionHandle` stays an opaque ephemeral renderer handle, not a person/device ID.
+
+Claim atomically consumes only the bridge-registration right, **not** the
+downstream producer binding: it does not open media or make READY succeed.
+Continue with exact successful OPEN, PARTY_BIND on that producer and actual
+output. Never adopt an existing unproven producer. Retire only a producer already
+proven owned by the previous immutable context, wait for its real CLOSE, then
+OPEN the new one. Coordinator keys and lifecycle must derive from the immutable
+verified context, never URL session identity, path, IP, clientName or "last client".
+
+The bridge may expose its own connection-local registration ACK and short-lived
+request-header-only HTTP capability for that verified context; those are bridge
+implementation surfaces, **not server Party operations or new server endpoints**.
+No cookies, URL credentials, parser bypass, private-field reflection or new
+authentication store/listener is introduced here. Native/headerless `src` cannot
+use a request-header-only route by assumption: use a genuinely supported
+header-capable MSE path or report unsupported association.
+
+`claim` throws `IllegalStateException("PARTY_ASSOCIATION_DENIED")` without paths,
+credentials or endpoint details. Missing API, another JVM/classloader,
+remote/NAT/proxied topology without the exact live pair, or an ambiguous/missing
+association must fail closed for **Party only**. Do not reconnect or weaken the
+match to IP/client metadata; ordinary remote/native playback is unchanged.
+Reusing a differently constructed Socket object never passes `isCurrent`/release,
+even with copied endpoint values.
+
+Use the **same Socket object** for `isCurrent` and `release`. Check before
+HTTP admission, coordinator acquisition, producer binding and readiness, and
+poll at least every 250 ms while a Party coordinator is retained; close only
+that owned producer when false. FIN/disconnect is observed by the existing
+transport lifecycle, not guessed from IP or a JSON notification. There is no
+public callback registration and no server callback executes bridge-owned work
+under the registry lock. Registry revocations enqueue targeted renderer events
+through its bounded output worker; bridge polling is authoritative because it
+does not parse encrypted control events. Release on retirement unregisters and
+permanently revokes that context; duplicate release is harmless and a wrong
+socket cannot release another viewer's grant.
+
+At most 80 admission contexts exist. The unused deadline is 60000 ms in the
+current serverEpoch's monotonic domain; it is **not** a UTC timestamp or an active
+producer expiry. A bound current producer survives that startup TTL, while
+generation, surface/Watch, disconnect, Stop/leave/end and producer failure/close
+still revoke it. Maintenance and claim/bind/confirmation/currentness checks prune
+stale contexts, and a rejected/revoked context never revives. A duplicate cached
+MEDIA_ADMISSION reply cannot restore an expired or consumed claim; use a new
+ordered request for a new grant only after retiring the old owned producer.
+
+Targeted `MEDIA_ADMISSION_REVOKED{contextId,reason}` contains no handle or code.
+Reasons are `REPLACED`, `RELEASED`, `PRODUCER_CLOSED`, `GENERATION_CHANGED`,
+`PRODUCER_FAILED`, `EXPIRED`, `CONTROL_CLOSED`, `BRIDGE_RELEASED`. The notification
+is best-effort on a live owning stream; shutdown/disconnect may prevent delivery.
+Cancel the local context immediately, but do not depend on receiving it for
+bridge retirement or treat it as authority to operate another renderer.
+
 For existing MediaServer direct/pull-xcode:
 
 ```
@@ -657,6 +828,8 @@ Every ERROR has schemaVersion/type/code and requestId when parseable. Codes:
 NOT_AVAILABLE SESSION_EXPIRED SESSION_DENIED INVALID_REQUEST UNKNOWN_TYPE RATE_LIMITED REQUEST_ID_REUSED
 JOIN_RATE_LIMITED JOIN_CODE_EXPIRED JOIN_CODE_UNAVAILABLE CODE_ROTATION_COOLDOWN CODE_ISSUE_RATE_LIMITED
 START_MODE_UNSUPPORTED CURRENT_POSITION_UNAVAILABLE PREPARE_UNSUPPORTED PREPARATION_PENDING PREPARATION_BUSY
+SURFACE_UNSUPPORTED SURFACE_UNAVAILABLE SURFACE_QUERY_FAILED SURFACE_SELECTION_PENDING
+SURFACE_ALREADY_SELECTED SURFACE_SWITCH_UNSAFE SURFACE_CHANGED SURFACE_PREPARATION_REQUIRED
 STALE_REQUEST SERVER_EPOCH_CHANGED ALREADY_JOINED SERVER_CAPACITY MEDIA_UNAVAILABLE
 MEDIA_MISMATCH MEDIA_PATH_NOT_READY MEDIA_ADMISSION_UNCONFIRMED PARTY_GONE JOIN_DENIED PARTY_FULL REJOIN_DENIED
 NOT_MEMBER HOST_REQUIRED CLIENT_UNAVAILABLE CLOCK_SAMPLE_INVALID NOT_READY
@@ -716,6 +889,10 @@ Known limitations, not claims of completed PRD acceptance:
   admission echo/command or execution-report protocol. They cannot pass Party
   readiness by sending flags alone. This is required future client/relay integration,
   not an unimplemented server resource grant.
+* The opaque bridge API requires a shared server JVM/Sage classloader and an
+  exact live control-socket endpoint pair. Separate-JVM/NAT/unmatched association
+  and headerless native HTTP paths have no Party ownership fallback. Actual
+  platform MSE probing/codec/contiguous-buffer support remains client work.
 * Transparent socket-only reconnect does not reauthorize Party Mode; a fresh
   server-admitted NG session plus recovery token is required. LAN needs no login
   under existing LAN admission policy. Single-segment known-duration media only.

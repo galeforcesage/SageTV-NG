@@ -1504,6 +1504,40 @@ public class PlaybackDecisionEngine
       String clientLang,
       ClientConstraints constraints)
   {
+    return evaluateSurfaces(surfaces, mediaContainer, mediaVideoCodec, mediaAudioCodec,
+        mediaWidth, mediaHeight, sourceBitrateKbps, availableBandwidthKbps, sourceInterlaced,
+        cf, clientLang, constraints, false);
+  }
+
+  /**
+   * Evaluates normal policy with optional conditioning for an explicitly selected Party MSE path.
+   *
+   * @param surfaces queried renderer surfaces
+   * @param mediaContainer source container
+   * @param mediaVideoCodec source video codec
+   * @param mediaAudioCodec source audio codec
+   * @param mediaWidth source width
+   * @param mediaHeight source height
+   * @param sourceBitrateKbps source bitrate in kbps
+   * @param availableBandwidthKbps measured bandwidth in kbps
+   * @param sourceInterlaced whether source video is interlaced
+   * @param cf source streams
+   * @param clientLang preferred audio language
+   * @param constraints existing negotiated client constraints
+   * @param partyConditioned whether a server-owned Party surface override is active
+   * @return ordinarily ranked decisions, allowing compatible MP4 to be remuxed for a pull-xcode-only MSE surface
+   */
+  public static java.util.List<SurfaceDecision> evaluateSurfaces(
+      PlaybackSurfaceSet surfaces,
+      String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
+      int mediaWidth, int mediaHeight,
+      int sourceBitrateKbps, int availableBandwidthKbps,
+      boolean sourceInterlaced,
+      sage.media.format.ContainerFormat cf,
+      String clientLang,
+      ClientConstraints constraints,
+      boolean partyConditioned)
+  {
     if (surfaces == null || surfaces.isEmpty())
       return java.util.Collections.<SurfaceDecision>emptyList();
 
@@ -1556,6 +1590,11 @@ public class PlaybackDecisionEngine
       d = escalateForInterlacedIfDeclaredUndecodable(d, s, constraints,
           mediaVideoCodec, sourceInterlaced);
 
+      if (partyConditioned && d.decision == Decision.DIRECT_PLAY
+          && "mse".equalsIgnoreCase(s.getRoute()) && s.supportsContainer("MP4")
+          && s.getDeliveryModes().size() == 1 && s.getDeliveryModes().contains("pull-xcode"))
+        d = new PlaybackDecision(Decision.REMUX, "Selected Party MSE path requires fragmented MP4",
+            "MP4", d.targetVideoCodec, d.targetAudioCodec, d.targetBitrateKbps);
       String mode = pickDeliveryModeForDecision(s, d.decision, mediaContainer);
       if (mode == null)
       {

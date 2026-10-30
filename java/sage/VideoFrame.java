@@ -579,6 +579,21 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   private int watch(Airing watchAir, boolean forceLive, boolean forceBeginning,
       Playlist sourcePlaylist, MediaFile watchThisFile, boolean lockTunerOnly, PartyPreparation preparation)
   {
+    synchronized (queueLock)
+    {
+      partyWatchRequests++;
+      partyWatchGeneration.incrementAndGet();
+      if (preparation == null && uiMgr != null && uiMgr.getRootPanel() != null
+          && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
+        ((MiniClientSageRenderer)uiMgr.getRootPanel().getRenderEngine()).restorePartySurface();
+    }
+    try { return watchInternal(watchAir, forceLive, forceBeginning, sourcePlaylist, watchThisFile, lockTunerOnly, preparation); }
+    finally { synchronized (queueLock) { partyWatchRequests--; } }
+  }
+
+  private int watchInternal(Airing watchAir, boolean forceLive, boolean forceBeginning,
+      Playlist sourcePlaylist, MediaFile watchThisFile, boolean lockTunerOnly, PartyPreparation preparation)
+  {
     if (preparation == null && partyPreparation != null)
     { partyPreparation.cancelled = true; partyPreparation = null; }
     if (preparation != null && !preparation.active()) return WATCH_FAILED_USER_REJECTED_CONFLICT;
@@ -619,7 +634,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
             }
           }
         }
-        if (!mustWatchThis)
+        if (!mustWatchThis && (preparation == null || !preparation.forceReload))
         {
           if (preparation != null)
           {
@@ -4595,6 +4610,41 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
 
   private volatile boolean partyProgressOwned;
   private volatile PartyPreparation partyPreparation;
+  private final java.util.concurrent.atomic.AtomicLong partyWatchGeneration = new java.util.concurrent.atomic.AtomicLong();
+  private int partyWatchRequests;
+
+  record PartySurfaceFence(MediaFile media, MediaPlayer player, long playbackGeneration, long watchGeneration) {}
+
+  /** Captures only an idle, paused playback lifecycle suitable for changing its next-load policy. */
+  PartySurfaceFence partySurfaceFence()
+  {
+    synchronized (queueLock)
+    {
+      if (!partyProgressOwned || partyWatchRequests != 0 || processingWatchRequest || !watchQueue.isEmpty()
+          || currFile != null && (player == null || player.getState() == MediaPlayer.NO_STATE)
+          || player != null && player.getState() != MediaPlayer.PAUSE_STATE && player.getState() != MediaPlayer.NO_STATE)
+        throw new sage.party.PartyProtocol.Fault("SURFACE_SWITCH_UNSAFE");
+      if (player != null && !(player instanceof MiniPlayer))
+        throw new sage.party.PartyProtocol.Fault("SURFACE_SWITCH_UNSAFE");
+      return new PartySurfaceFence(currFile, player,
+          player == null ? -1 : ((MiniPlayer)player).getPartyPlaybackGeneration(), partyWatchGeneration.get());
+    }
+  }
+
+  boolean partySurfaceCurrent(PartySurfaceFence fence)
+  {
+    return fence != null && fence.equals(partySurfaceFence());
+  }
+
+  long commitPartySurface(PartySurfaceFence fence, MiniClientSageRenderer renderer,
+      sage.client.PlaybackSurfaceSet selected, long expectedPath)
+  {
+    synchronized (queueLock)
+    {
+      if (!partySurfaceCurrent(fence)) throw new sage.party.PartyProtocol.Fault("SURFACE_CHANGED");
+      return renderer.selectPartySurface(selected, expectedPath);
+    }
+  }
 
   static final class PartyPreparation
   {
@@ -4604,6 +4654,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     volatile boolean cancelled, held = true, loaded;
     volatile int watchCode = WATCH_OK;
     volatile long generation = -1;
+    boolean forceReload;
     PartyPreparation(MediaFile media, String id, java.util.function.BooleanSupplier authorized)
     { this.media = media; this.id = id; this.authorized = authorized; }
     boolean active() { return !cancelled && authorized.getAsBoolean(); }
@@ -4611,9 +4662,13 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
 
   /** Uses ordinary Watch checks but tags the asynchronous jobs and suppresses automatic play. */
   PartyPreparation preparePartyMedia(MediaFile media, String id, java.util.function.BooleanSupplier authorized)
+  { return preparePartyMedia(media, id, authorized, false); }
+
+  PartyPreparation preparePartyMedia(MediaFile media, String id, java.util.function.BooleanSupplier authorized, boolean forceReload)
   {
     cancelPartyPreparation();
     PartyPreparation preparation = new PartyPreparation(media, id, authorized);
+    preparation.forceReload = forceReload;
     partyPreparation = preparation;
     if (!partyProgressOwned || !preparation.active()) preparation.watchCode = WATCH_FAILED_INSUFFICIENT_PERMISSIONS;
     else preparation.watchCode = watchPartyMedia(preparation);
@@ -4701,22 +4756,30 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         || renderer.getCurrentSurfaceDeliveryMode().isEmpty())
       throw new sage.party.PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
     // This is a conservative Party-only budget, not proof of downstream admission.
+    sage.client.PlaybackSurface surface = renderer.getPlaybackSurfaces().get(renderer.getCurrentSurfaceId());
     return new sage.party.PartyService.Delivery(renderer.getCurrentSurfaceId(),
         renderer.getCurrentSurfaceDeliveryMode(), renderer.getCurrentSurfaceTargetVideoCodec(),
         renderer.getCurrentSurfaceTargetAudioCodec(), (int)Math.min(Integer.MAX_VALUE, kbps * 2L),
         ((MiniPlayer)player).isTranscoding()
             || "pull-xcode".equals(renderer.getCurrentSurfaceDeliveryMode())
-            || "hls".equals(renderer.getCurrentSurfaceDeliveryMode()));
+            || "hls".equals(renderer.getCurrentSurfaceDeliveryMode()),
+        surface == null ? null : surface.getRoute(), ((MiniPlayer)player).getPartyXcodeMode(),
+        sage.client.PlaybackSurfaceSet.canonicalContainer(((MiniPlayer)player).getPartyOutputContainer()));
   }
 
   /** Binds a credential to this exact player generation, never a path or network address. */
   String issuePartyMediaAdmission(MiniClientSageRenderer renderer, NgPartyConnection owner)
+  { return issuePartyMediaAdmission(renderer, owner, reason -> {}); }
+
+  String issuePartyMediaAdmission(MiniClientSageRenderer renderer, NgPartyConnection owner,
+      java.util.function.Consumer<String> revoked)
   {
     if (!(player instanceof MiniPlayer) || currFile == null || !partyProgressOwned)
       throw new sage.party.PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
     MiniPlayer expectedPlayer = (MiniPlayer)player;
     MediaFile expectedMedia = currFile;
     long generation = expectedPlayer.getPartyPlaybackGeneration();
+    long pathGeneration = renderer.getPartyPathGeneration();
     String mode = renderer.getCurrentSurfaceDeliveryMode();
     if (!java.util.Set.of("pull", "pull-xcode", "hls").contains(mode))
       throw new sage.party.PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
@@ -4724,7 +4787,8 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         () -> partyProgressOwned && renderer.getPartyPrincipal() != null
             && player == expectedPlayer && currFile == expectedMedia
             && generation == expectedPlayer.getPartyPlaybackGeneration()
-            && mode.equals(renderer.getCurrentSurfaceDeliveryMode()));
+            && pathGeneration == renderer.getPartyPathGeneration()
+            && mode.equals(renderer.getCurrentSurfaceDeliveryMode()), revoked);
   }
 
   /** Checks the actual local push source when no downstream pull producer is involved. */

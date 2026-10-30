@@ -30,6 +30,10 @@ public class PartyServiceTest
     long currentPosition;
     int currentPositionReads, prepares;
     String preparationId;
+    String selectionId;
+    String selectedSelectionId;
+    long pathGeneration;
+    int restores, selections;
     int commits, skips;
     long committedPosition;
     PartyService.Delivery path = new PartyService.Delivery("android", "push", "H264", "AAC", 8000, false);
@@ -165,6 +169,14 @@ public class PartyServiceTest
     { if (id != 42) throw new Fault("MEDIA_UNAVAILABLE"); return 3600000; }
     @Override public long currentPosition(int media) { currentPositionReads++; return currentPosition; }
     @Override public void prepare(int media, String id) { assertEquals(media, 42); prepares++; preparationId = id; }
+    @Override public void selectSurface(int media, String surface, String id)
+    { assertEquals(media, 42); selectionId = id; selections++; }
+    @Override public long applySurface(String id)
+    { assertEquals(id, selectionId); selectedSelectionId = id; return ++pathGeneration; }
+    @Override public long restoreSurface()
+    { restores++; selectedSelectionId = null; return ++pathGeneration; }
+    @Override public boolean surfaceSelected(String id, long generation)
+    { return id.equals(selectedSelectionId) && generation == pathGeneration; }
     @Override public PartyService.Delivery delivery(int media) { return path; }
     @Override public boolean mediaAdmitted(int media) { return mediaAdmitted; }
     @Override public PartyService.Delivery plan(int media) { return path; }
@@ -1098,5 +1110,87 @@ public class PartyServiceTest
     JsonObject resume = replacement.request("RESUME");
     resume.addProperty("participantId", reconnecting.participant); resume.addProperty("recoveryToken", reconnecting.recovery);
     assertEquals(text(replacement.sendRequest(resume), "type"), "JOINED");
+  }
+
+  @Test public void negotiatedSurfaceSelectionRequiresPreparationEchoAndDoesNotAffectOtherViewers() throws Exception
+  {
+    Rig r = new Rig(); Client host = r.client(); host.create();
+    Client viewer = r.client(); capabilities(viewer, "PARTY_SURFACE_V1", "PARTY_PREPARE_V1"); viewer.join(host);
+    viewer.path = new PartyService.Delivery("pwa_party_mse", "pull-xcode", "H264", "AAC", 8000, true,
+        "mse", "browserhd_remux", "MP4");
+    JsonObject select = viewer.request("SELECT_SURFACE"); select.addProperty("surfaceId", "pwa_mse");
+    JsonObject accepted = viewer.sendRequest(select);
+    assertEquals(text(accepted, "type"), "SURFACE_SELECTION_ACCEPTED");
+    assertEquals(viewer.sendRequest(copy(select)), accepted); assertEquals(viewer.selections, 1);
+    error(viewer.sendRequest(viewer.request("MEDIA_ADMISSION")), "SURFACE_SELECTION_PENDING");
+    r.service.surfaceSelectionResult(viewer, viewer.selectionId, viewer.path, null);
+    JsonObject selected = viewer.messages.get(viewer.messages.size() - 1);
+    JsonObject normalized = copy(selected);
+    normalized.addProperty("partyId", "example-party"); normalized.addProperty("selectionId", "example-selection");
+    assertEquals(normalized, golden().getAsJsonObject("surfaceSelected"));
+    assertEquals(text(selected, "status"), "SELECTED"); assertTrue(selected.get("requiresPrepare").getAsBoolean());
+    error(viewer.sendRequest(viewer.request("READY")), "SURFACE_PREPARATION_REQUIRED");
+    JsonObject prepare = viewer.request("PREPARE");
+    prepare.addProperty("intent", "JOIN_AND_PREPARE"); prepare.addProperty("confirmReplace", true);
+    error(viewer.sendRequest(prepare), "SURFACE_CHANGED");
+    prepare = viewer.request("PREPARE"); prepare.addProperty("intent", "JOIN_AND_PREPARE"); prepare.addProperty("confirmReplace", true);
+    prepare.addProperty("selectionId", viewer.selectionId);
+    JsonObject prepared = viewer.sendRequest(prepare);
+    assertEquals(prepared.get("selectionId"), accepted.get("selectionId"));
+    r.service.preparationResult(viewer, viewer.preparationId, 0, 7);
+    normalized = copy(viewer.messages.get(viewer.messages.size() - 1));
+    normalized.addProperty("partyId", "example-party"); normalized.addProperty("selectionId", "example-selection");
+    normalized.addProperty("preparationId", "example-preparation");
+    assertEquals(normalized, golden().getAsJsonObject("selectedPreparationLoaded"));
+    assertEquals(text(viewer.ready(), "type"), "CORRECTION");
+    JsonObject restore = viewer.sendRequest(viewer.request("RESTORE_SURFACE"));
+    assertEquals(text(restore, "type"), "SURFACE_RESTORED");
+    assertEquals(host.selections, 0); assertEquals(host.restores, 0);
+    assertEquals(host.snapshot().get("commandSeq").getAsInt(), 0);
+  }
+
+  @Test public void everyPartyExitRestoresSelectedConfigurationWithoutTimelineMutation()
+  {
+    for (String exit : java.util.List.of("LEAVE", "END", "STOP", "REJOIN", "DISCONNECT", "SHUTDOWN"))
+    {
+      Rig r = new Rig(); Client host = r.client(); capabilities(host, "PARTY_SURFACE_V1", "PARTY_PREPARE_V1"); host.create();
+      JsonObject select = host.request("SELECT_SURFACE"); select.addProperty("surfaceId", "pwa_party_mse");
+      host.sendRequest(select); r.service.surfaceSelectionResult(host, host.selectionId, host.path, null);
+      assertNotNull(host.selectedSelectionId);
+      int restores = host.restores;
+      if ("STOP".equals(exit)) host.status("LOCALLY_STOPPED");
+      else if ("DISCONNECT".equals(exit)) r.service.disconnected(host);
+      else if ("SHUTDOWN".equals(exit)) r.service.shutdown();
+      else host.sendRequest(host.request(exit));
+      assertNull(host.selectedSelectionId, exit);
+      assertTrue(host.restores > restores, exit);
+      assertFalse(host.messages.stream().anyMatch(m -> "COMMAND".equals(text(m, "type"))), exit);
+    }
+  }
+
+  @Test public void surfaceQueryFailureBudgetAndCancelledCallbacksCannotInstallPolicy()
+  {
+    Rig r = new Rig(); Client host = r.client(); host.create();
+    JsonObject select = host.request("SELECT_SURFACE"); select.addProperty("surfaceId", "pwa_mse");
+    error(host.sendRequest(select), "SURFACE_UNSUPPORTED");
+    capabilities(host, "PARTY_SURFACE_V1", "PARTY_PREPARE_V1");
+    select = host.request("SELECT_SURFACE"); select.addProperty("surfaceId", "pwa_mse"); host.sendRequest(select);
+    r.service.surfaceSelectionResult(host, host.selectionId, null, "SURFACE_QUERY_FAILED");
+    assertEquals(text(host.messages.get(host.messages.size() - 1), "code"), "SURFACE_QUERY_FAILED");
+    select = host.request("SELECT_SURFACE"); select.addProperty("surfaceId", "pwa_mse"); host.sendRequest(select);
+    String cancelled = host.selectionId;
+    host.sendRequest(host.request("RESTORE_SURFACE"));
+    int before = host.messages.size();
+    r.service.surfaceSelectionResult(host, cancelled, host.path, null);
+    assertEquals(host.messages.size(), before);
+    select = host.request("SELECT_SURFACE"); select.addProperty("surfaceId", "pwa_mse"); host.sendRequest(select);
+    r.service.surfaceSelectionResult(host, host.selectionId,
+        new PartyService.Delivery("pwa_mse", "pull-xcode", "H264", "AAC", 100001, true), null);
+    assertEquals(text(host.messages.get(host.messages.size() - 1), "code"), "RESOURCE_DENIED");
+    select = host.request("SELECT_SURFACE"); select.addProperty("surfaceId", "pwa_mse"); host.sendRequest(select);
+    String pending = host.selectionId;
+    host.status("LOCALLY_STOPPED"); before = host.messages.size();
+    r.service.surfaceSelectionResult(host, pending, host.path, null);
+    assertEquals(host.messages.size(), before);
   }
 }

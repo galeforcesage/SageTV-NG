@@ -20,6 +20,34 @@ import static org.testng.Assert.*;
  */
 public class PlaybackDecisionEngineTest
 {
+  @Test
+  public void partyOnlyMseConditioningRemuxesCompatibleMp4WithoutChangingOrdinaryPolicy()
+  {
+    PlaybackSurfaceSet surfaces = PlaybackSurfaceSet.build("pwa_party_mse",
+        id -> new String[] {"mse", "1", "pull-xcode", "H264", "AAC", "MP4"});
+    assertTrue(PlaybackDecisionEngine.evaluateSurfaces(surfaces, "MP4", "H264", "AAC",
+        1920, 1080, 8000, 20000, false, null, null, null).isEmpty(),
+        "Ordinary direct-compatible pull-xcode-only surfaces remain unservable");
+    PlaybackDecisionEngine.SurfaceDecision selected = PlaybackDecisionEngine.evaluateSurfaces(surfaces,
+        "MP4", "H264", "AAC", 1920, 1080, 8000, 20000, false, null, null, null, true).get(0);
+    assertEquals(selected.decision.decision, PlaybackDecisionEngine.Decision.REMUX);
+    assertEquals(selected.chosenDeliveryMode, "pull-xcode");
+    assertEquals(selected.chosenXcodeMode, "browserhd_remux");
+    assertEquals(selected.decision.targetContainer, "MP4");
+    selected = PlaybackDecisionEngine.evaluateSurfaces(surfaces,
+        "MP4", "MPEG2-Video", "AC3", 1920, 1080, 8000, 20000, false, null, null, null, true).get(0);
+    assertEquals(selected.decision.decision, PlaybackDecisionEngine.Decision.TRANSCODE);
+    assertEquals(selected.chosenXcodeMode, "browserhd");
+    selected = PlaybackDecisionEngine.evaluateSurfaces(surfaces,
+        "MP4", "H264", "AC3", 1920, 1080, 8000, 20000, false, null, null, null, true).get(0);
+    assertEquals(selected.decision.decision, PlaybackDecisionEngine.Decision.AUDIO_TRANSCODE);
+    assertEquals(selected.chosenXcodeMode, "browserhd_copyv");
+    selected = PlaybackDecisionEngine.evaluateSurfaces(surfaces,
+        "MP4", "H264", "AAC", 1920, 1080, 8000, 1000, false, null, null, null, true).get(0);
+    assertEquals(selected.decision.decision, PlaybackDecisionEngine.Decision.TRANSCODE);
+    assertEquals(selected.chosenXcodeMode, "browserhd");
+  }
+
   private static PlaybackSurface surface(String id, int priority)
   {
     return new PlaybackSurface(id, "route", priority,

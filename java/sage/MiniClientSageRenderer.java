@@ -8212,7 +8212,96 @@ public class MiniClientSageRenderer extends SageRenderer
    */
   public sage.client.PlaybackSurfaceSet getPlaybackSurfaces()
   {
+    sage.client.PlaybackSurfaceSet selected = partyPlaybackSurfaces;
+    if (selected != null) return selected;
     return playbackSurfaces == null ? sage.client.PlaybackSurfaceSet.empty() : playbackSurfaces;
+  }
+
+  private volatile sage.client.PlaybackSurfaceSet partyPlaybackSurfaces;
+  private volatile long partyPathGeneration;
+  private final Object partySurfaceLock = new Object();
+  private long partySurfaceQueryDeadline;
+
+  /** Queries one actually advertised surface on this renderer without altering ordinary discovery. */
+  synchronized sage.client.PlaybackSurfaceSet queryPartySurface(String surfaceId) throws java.io.IOException
+  {
+    if (surfaceId == null || !surfaceId.matches("[A-Za-z0-9_]{1,64}"))
+      throw new sage.party.PartyProtocol.Fault("SURFACE_UNAVAILABLE");
+    partySurfaceQueryDeadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+    sendGetPropertyAsync("PLAYBACK_SURFACES");
+    sendBufferNow();
+    String advertised = partySurfaceReply();
+    if (advertised == null || advertised.length() > 4096)
+      throw new sage.party.PartyProtocol.Fault("SURFACE_QUERY_FAILED");
+    java.util.List<String> ids = sage.client.PlaybackSurfaceSet.split(advertised);
+    if (ids.size() > 32 || !ids.contains(surfaceId))
+      throw new sage.party.PartyProtocol.Fault("SURFACE_UNAVAILABLE");
+    String[] suffixes = {"ROUTE", "PRIORITY", "DELIVERY_MODES", "VIDEO_CODECS", "AUDIO_CODECS",
+        "CONTAINERS", "AUDIO_TRACK_ACCESS", "AUDIO_TRACK_SELECTION_MODE", "AUDIO_CONTAINER_RULES",
+        "MAX_OUTPUT_WIDTH", "MAX_OUTPUT_HEIGHT", "MAX_FPS", "AUDIO_MAX_CHANNELS", "BANDWIDTH_FEEDBACK"};
+    for (String suffix : suffixes) sendGetPropertyAsync("PLAYBACK_SURFACE_" + surfaceId + "_" + suffix);
+    sendBufferNow();
+    String[] props = new String[suffixes.length];
+    boolean invalid = false;
+    for (int i = 0; i < props.length; i++)
+    {
+      props[i] = partySurfaceReply();
+      if (props[i] == null || props[i].length() > 4096) invalid = true;
+    }
+    if (invalid) throw new sage.party.PartyProtocol.Fault("SURFACE_QUERY_FAILED");
+    sage.client.PlaybackSurfaceSet result = sage.client.PlaybackSurfaceSet.build(surfaceId, id -> props);
+    sage.client.PlaybackSurface surface = result.get(surfaceId);
+    if (surface == null || surface.getRoute().isEmpty() || surface.getDeliveryModes().isEmpty()
+        || surface.getVideoCodecs().isEmpty() || surface.getAudioCodecs().isEmpty()
+        || surface.getContainers().isEmpty())
+      throw new sage.party.PartyProtocol.Fault("SURFACE_UNAVAILABLE");
+    return result;
+  }
+
+  String partySurfaceReply()
+  {
+    long remaining = Math.max(1, java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(partySurfaceQueryDeadline - System.nanoTime()));
+    ReplyPacket reply = recvr.getReply(remaining, true);
+    return reply == null ? null : reply.getDataAsString();
+  }
+
+  long getPartyPathGeneration() { return partyPathGeneration; }
+
+  long selectPartySurface(sage.client.PlaybackSurfaceSet selected, long expectedGeneration)
+  {
+    synchronized (partySurfaceLock)
+    {
+      if (partyPathGeneration != expectedGeneration || partyPlaybackSurfaces != null || selected == null || selected.size() != 1)
+        throw new sage.party.PartyProtocol.Fault("SURFACE_CHANGED");
+      partyPlaybackSurfaces = selected;
+      return ++partyPathGeneration;
+    }
+  }
+
+  long restorePartySurface()
+  {
+    synchronized (partySurfaceLock)
+    {
+      if (partyPlaybackSurfaces != null)
+      { partyPlaybackSurfaces = null; ++partyPathGeneration; }
+      return partyPathGeneration;
+    }
+  }
+
+  boolean hasPartySurface() { return partyPlaybackSurfaces != null; }
+
+  java.nio.channels.SocketChannel partyControlChannel() { return clientSocket; }
+
+  boolean ownsPartyControlSocket(java.nio.channels.SocketChannel expected, java.net.Socket bridge)
+  {
+    java.nio.channels.SocketChannel current = clientSocket;
+    if (expected == null || current != expected || !current.isOpen() || !current.isConnected()
+        || bridge == null || !bridge.isConnected() || bridge.isClosed() || bridge.isInputShutdown() || bridge.isOutputShutdown())
+      return false;
+    java.net.Socket accepted = current.socket();
+    return accepted != null && !accepted.isClosed() && !accepted.isInputShutdown() && !accepted.isOutputShutdown()
+        && accepted.getLocalSocketAddress().equals(bridge.getRemoteSocketAddress())
+        && accepted.getRemoteSocketAddress().equals(bridge.getLocalSocketAddress());
   }
 
   /**
@@ -8235,6 +8324,7 @@ public class MiniClientSageRenderer extends SageRenderer
    */
   public synchronized boolean refreshPlaybackSurfaces()
   {
+    if (partyPlaybackSurfaces != null) return !partyPlaybackSurfaces.isEmpty();
     try
     {
       sendGetPropertyAsync("PLAYBACK_SURFACES");
@@ -11298,6 +11388,9 @@ public class MiniClientSageRenderer extends SageRenderer
     void resetThreadChecker() { singleThread = null; }
     // NOTE: Enforce that only a single thread ever calls the getReply method
     public ReplyPacket getReply()
+    { return getReply((Thread.currentThread() == ssThread) ? 10000 : 60000, false); }
+
+    private ReplyPacket getReply(long waitMax, boolean closeOnTimeout)
     {
       // NOTE: I don't believe this is necessary because the transactional nature of the reply is always
       // preserved since all operations are contained within sync blocks (i.e. all requests are made with the sync lock
@@ -11323,12 +11416,11 @@ public class MiniClientSageRenderer extends SageRenderer
         long startWait = Sage.eventTime();
         // Don't wait forever; and make it quicker if we're the main UI Server thread so we don't appear dead if the connection
         // is dropped
-        long waitMax = (Thread.currentThread() == ssThread) ? 10000 : 60000;
         while (replyQueue.size() <= intRepliesToDiscard && alive && isAlive() && master.isAlive() && Sage.eventTime() - startWait < waitMax)
         {
           try
           {
-            replyQueue.wait(5000);
+            replyQueue.wait(closeOnTimeout ? Math.max(1, Math.min(5000, waitMax - (Sage.eventTime() - startWait))) : 5000);
           }
           catch (InterruptedException e)
           {
@@ -11350,7 +11442,7 @@ public class MiniClientSageRenderer extends SageRenderer
           consecutiveReplyTimeouts++;
           if (Sage.DBG) System.out.println("ERROR: MiniUIClient receiver timed out waiting for response from the MiniClient! (consecutive=" + consecutiveReplyTimeouts + ")");
           int maxTimeouts = Sage.getInt("ui/miniclient_unresponsive_reply_timeouts", 2);
-          if (maxTimeouts > 0 && consecutiveReplyTimeouts >= maxTimeouts)
+          if (closeOnTimeout || maxTimeouts > 0 && consecutiveReplyTimeouts >= maxTimeouts)
           {
             alive = false;
             MiniClientSageRenderer.this.handleUnresponsiveClient();

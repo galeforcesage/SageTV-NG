@@ -40,6 +40,13 @@ public class NgPartyTransportIntegrationTest
     Transport(PartyService service, String mode, java.util.function.LongSupplier time) throws Exception
     {
       doReturn(video).when(ui).getVideoFrame();
+      Field partyLock = MiniClientSageRenderer.class.getDeclaredField("partySurfaceLock");
+      partyLock.setAccessible(true); partyLock.set(renderer, new Object());
+      videoField(video, "partyWatchGeneration", new java.util.concurrent.atomic.AtomicLong());
+      doCallRealMethod().when(video).preparePartyMedia(any(), anyString(), any(), anyBoolean());
+      doCallRealMethod().when(video).getPartyPlayer();
+      doCallRealMethod().when(video).issuePartyMediaAdmission(any(), any(), any());
+      doCallRealMethod().when(video).commitPartySurface(any(), any(), any(), anyLong());
       doReturn("server-admitted-lan").when(renderer).getPartyPrincipal();
       doReturn(PartyProtocol.REQUIRED).when(renderer).getClientCapabilities();
       doReturn(mode).when(renderer).getCurrentSurfaceDeliveryMode();
@@ -118,6 +125,8 @@ public class NgPartyTransportIntegrationTest
   @Test public void authenticatedNegotiatedRendererRoundTripAndLegacyRegression() throws Exception
   {
     MiniClientSageRenderer renderer = mock(MiniClientSageRenderer.class, CALLS_REAL_METHODS);
+    Field partyLock = MiniClientSageRenderer.class.getDeclaredField("partySurfaceLock");
+    partyLock.setAccessible(true); partyLock.set(renderer, new Object());
     UIManager ui = mock(UIManager.class);
     doReturn("verified-principal").when(renderer).getPartyPrincipal();
     doReturn(PartyProtocol.REQUIRED).when(renderer).getClientCapabilities();
@@ -230,8 +239,11 @@ public class NgPartyTransportIntegrationTest
   {
     java.util.concurrent.atomic.AtomicLong now = new java.util.concurrent.atomic.AtomicLong(100000);
     PartyService service = new PartyService(now::get, true, 100000, 2);
-    try (Transport client = new Transport(service, "pull-xcode", now::get))
+    try (Transport client = new Transport(service, "pull-xcode", now::get);
+        PartyMediaAdmissionBridgeTest.Pair pair = new PartyMediaAdmissionBridgeTest.Pair())
     {
+      Field channel = MiniClientSageRenderer.class.getDeclaredField("clientSocket");
+      channel.setAccessible(true); channel.set(client.renderer, pair.accepted);
       MediaFile media = mock(MediaFile.class); doReturn(42).when(media).getID();
       MiniPlayer player = mock(MiniPlayer.class);
       doReturn(media).when(client.video).getCurrFile();
@@ -249,6 +261,15 @@ public class NgPartyTransportIntegrationTest
       JsonObject fields = new JsonObject(); fields.add("partyId", created.get("partyId"));
       JsonObject handle = client.exchange("MEDIA_ADMISSION", fields);
       assertEquals(handle.get("type").getAsString(), "MEDIA_ADMISSION_HANDLE");
+      assertEquals(handle.get("serverEpoch"), client.available.get("serverEpoch"));
+      assertEquals(handle.get("requestSeq").getAsLong(), client.sequence);
+      PartyMediaAdmissionBridge.Context proof = PartyMediaAdmissionBridge.claim(handle.get("handle").getAsString(), pair.bridge);
+      assertEquals(proof.contextId(), handle.get("contextId").getAsString());
+      assertEquals(proof.requestId(), handle.get("requestId").getAsString());
+      assertEquals(proof.requestSeq(), client.sequence);
+      assertEquals(proof.pathGeneration(), 0);
+      assertTrue(PartyMediaAdmissionBridge.isCurrent(proof.contextId(), pair.bridge));
+      assertFalse(client.connection.mediaAdmitted(42), "Bridge ownership is not producer admission");
       MediaServer.Connection producer = mock(MediaServer.class).new Connection(null);
       FFMPEGTranscoder engine = mock(FFMPEGTranscoder.class);
       producer.currMF = media; producer.xcoder = engine;
@@ -284,6 +305,11 @@ public class NgPartyTransportIntegrationTest
       doReturn(1L).when(player).getPartyPlaybackGeneration();
       assertFalse(client.connection.mediaAdmitted(42), "Reloading identical media still revokes old generation");
       assertFalse(producer.bindPartyAdmission(handle.get("handle").getAsString()));
+      assertFalse(PartyMediaAdmissionBridge.isCurrent(proof.contextId(), pair.bridge));
+      JsonObject revoked = awaitEvent(client, "MEDIA_ADMISSION_REVOKED");
+      assertEquals(revoked.get("contextId"), handle.get("contextId"));
+      assertEquals(revoked.get("reason").getAsString(), "GENERATION_CHANGED");
+      assertFalse(revoked.has("handle"));
     }
   }
 
@@ -511,6 +537,168 @@ public class NgPartyTransportIntegrationTest
         assertFalse(failure.has("playbackGeneration"));
         assertFalse(pending.get().active());
       }
+    }
+  }
+
+  @Test public void selectedMseLoadedMetadataRejectsRawOrTsFallback() throws Exception
+  {
+    PartyService service = new PartyService(() -> 100000, true, 100000, 2);
+    try (Transport client = new Transport(service, "pull-xcode"))
+    {
+      MediaFile media = mock(MediaFile.class); doReturn(42).when(media).getID();
+      doReturn(media).when(client.video).getCurrFile();
+      doReturn(MediaPlayer.PAUSE_STATE).when(client.video).getPlayerState();
+      client.renderer.selectPartySurface(sage.client.PlaybackSurfaceSet.build("pwa_party_mse",
+          id -> new String[] {"mse", "1", "pull-xcode", "H264", "AAC", "MP4"}), 0);
+      for (String mode : java.util.List.of("pull", "pull-xcode"))
+      {
+        PartyService.Delivery invalid = new PartyService.Delivery("pwa_party_mse", mode, "H264", "AAC",
+            8000, true, "mse", "mpeg2tsremux", "MPEG2-TS");
+        doReturn(invalid).when(client.video).getPartyDelivery(client.renderer);
+        assertThrows(PartyProtocol.Fault.class, () -> client.connection.preparedDelivery(42));
+      }
+      PartyService.Delivery valid = new PartyService.Delivery("pwa_party_mse", "pull-xcode", "H264", "AAC",
+          8000, true, "mse", "browserhd_remux", "MP4");
+      doReturn(valid).when(client.video).getPartyDelivery(client.renderer);
+      assertSame(client.connection.preparedDelivery(42), valid);
+      doReturn(MediaPlayer.PLAY_STATE).when(client.video).getPlayerState();
+      assertThrows(PartyProtocol.Fault.class, () -> client.connection.preparedDelivery(42));
+    }
+  }
+
+  private static sage.client.PlaybackSurfaceSet mseSurface()
+  {
+    return sage.client.PlaybackSurfaceSet.build("pwa_mse", id -> new String[] {
+        "htmlvideo", "1", "pull,pull-xcode", "H264", "AAC", "MP4;push=false;pull=true",
+        "primary_only", "server", "", "1920", "1080", "60", "2", "none"});
+  }
+
+  @Test public void strictSurfaceQueryUsesActualRendererRepliesAndNeverChangesOrdinaryCapabilities() throws Exception
+  {
+    MiniClientSageRenderer renderer = mock(MiniClientSageRenderer.class, CALLS_REAL_METHODS);
+    Field lock = MiniClientSageRenderer.class.getDeclaredField("partySurfaceLock");
+    lock.setAccessible(true); lock.set(renderer, new Object());
+    doNothing().when(renderer).sendGetPropertyAsync(anyString());
+    doNothing().when(renderer).sendBufferNow();
+    doReturn("pwa_native,pwa_mse", "htmlvideo", "1", "pull,pull-xcode", "H264", "AAC",
+        "MP4;push=false;pull=true", "primary_only", "server", "", "1920", "1080", "60", "2", "none")
+        .when(renderer).partySurfaceReply();
+    sage.client.PlaybackSurfaceSet ordinary = renderer.getPlaybackSurfaces();
+    sage.client.PlaybackSurfaceSet queried = renderer.queryPartySurface("pwa_mse");
+    assertEquals(queried.size(), 1);
+    assertEquals(queried.get("pwa_mse").getVideoCodecs(), java.util.List.of("H264"));
+    assertSame(renderer.getPlaybackSurfaces(), ordinary, "Query is not global capability mutation");
+    verify(renderer).sendGetPropertyAsync("PLAYBACK_SURFACES");
+    verify(renderer).sendGetPropertyAsync("PLAYBACK_SURFACE_pwa_mse_CONTAINERS");
+    assertEquals(renderer.selectPartySurface(queried, 0), 1);
+    assertSame(renderer.getPlaybackSurfaces(), queried);
+    assertTrue(renderer.refreshPlaybackSurfaces(), "Handshake retry cannot broaden selected Party path");
+    assertSame(renderer.getPlaybackSurfaces(), queried);
+    assertThrows(PartyProtocol.Fault.class, () -> renderer.selectPartySurface(queried, 0));
+    assertEquals(renderer.restorePartySurface(), 2);
+    assertSame(renderer.getPlaybackSurfaces(), ordinary);
+    doReturn("pwa_native").when(renderer).partySurfaceReply();
+    assertThrows(PartyProtocol.Fault.class, () -> renderer.queryPartySurface("pwa_mse"));
+    assertThrows(PartyProtocol.Fault.class, () -> renderer.queryPartySurface("bad\r\nproperty"));
+    doReturn("pwa_mse", "htmlvideo", "1", "pull", "UNKNOWN", "AAC", "MP4", "", "", "", "", "", "", "", "")
+        .when(renderer).partySurfaceReply();
+    assertThrows(PartyProtocol.Fault.class, () -> renderer.queryPartySurface("pwa_mse"));
+    assertSame(renderer.getPlaybackSurfaces(), ordinary);
+  }
+
+  @Test public void sameRendererSelectPrepareFenceAndLeaveRestoreAreIntegrated() throws Exception
+  {
+    PartyService service = new PartyService(() -> 100000, true, 100000, 2);
+    try (Transport client = new Transport(service, "pull"); Transport other = new Transport(service, "pull"))
+    {
+      java.util.Set<String> caps = new java.util.HashSet<>(PartyProtocol.REQUIRED);
+      caps.add("PARTY_SURFACE_V1"); caps.add("PARTY_PREPARE_V1");
+      doReturn(caps).when(client.renderer).getClientCapabilities();
+      JsonObject create = new JsonObject(); create.addProperty("mediaFileId", 42);
+      JsonObject created = client.exchange("CREATE", create);
+      MediaFile media = mock(MediaFile.class); MiniPlayer player = mock(MiniPlayer.class);
+      doReturn(42).when(media).getID(); doReturn(media).when(client.connection).preparationMedia(42);
+      doReturn(MediaPlayer.PAUSE_STATE).when(player).getState(); doReturn(7L).when(player).getPartyPlaybackGeneration();
+      videoField(client.video, "partyProgressOwned", true); videoField(client.video, "player", player);
+      videoField(client.video, "currFile", media); videoField(client.video, "queueLock", new Object());
+      videoField(client.video, "watchQueue", new java.util.Vector<>());
+      doCallRealMethod().when(client.video).partySurfaceFence();
+      doCallRealMethod().when(client.video).partySurfaceCurrent(any());
+      sage.client.PlaybackSurfaceSet queried = mseSurface();
+      doReturn(queried).when(client.renderer).queryPartySurface("pwa_mse");
+      doReturn(new PartyService.Delivery("pwa_mse", "pull-xcode", "H264", "AAC", 8000, true))
+          .when(client.connection).plan(42, queried);
+      JsonObject fields = new JsonObject(); fields.add("partyId", created.get("partyId")); fields.addProperty("surfaceId", "pwa_mse");
+      JsonObject accepted = client.exchange("SELECT_SURFACE", fields);
+      JsonObject selected = awaitEvent(client, "SURFACE_SELECTION_RESULT");
+      assertEquals(selected.get("status").getAsString(), "SELECTED");
+      assertEquals(selected.get("selectionId"), accepted.get("selectionId"));
+      assertSame(client.renderer.getPlaybackSurfaces(), queried);
+      assertFalse(other.renderer.hasPartySurface());
+      fields = new JsonObject(); fields.add("partyId", created.get("partyId"));
+      assertEquals(client.exchange("MEDIA_ADMISSION", fields).get("code").getAsString(), "SURFACE_PREPARATION_REQUIRED");
+      doCallRealMethod().when(client.video).preparePartyMedia(any(), anyString(), any());
+      doReturn(VideoFrame.WATCH_FAILED_PARENTAL_CHECK_FAILED).when(client.video).watchPartyMedia(any());
+      fields = new JsonObject(); fields.add("partyId", created.get("partyId"));
+      fields.addProperty("intent", "JOIN_AND_PREPARE"); fields.addProperty("confirmReplace", true);
+      fields.add("selectionId", accepted.get("selectionId"));
+      JsonObject preparing = client.exchange("PREPARE", fields);
+      assertEquals(preparing.get("pathGeneration").getAsLong(), 1);
+      assertEquals(awaitEvent(client, "PREPARATION_RESULT").get("watchCode").getAsInt(), -3);
+      verify(client.video).watchPartyMedia(argThat(stage -> stage.forceReload));
+      fields = new JsonObject(); fields.add("partyId", created.get("partyId")); client.exchange("LEAVE", fields);
+      assertFalse(client.renderer.hasPartySurface());
+      assertEquals(client.renderer.getPartyPathGeneration(), 2);
+      assertFalse(other.renderer.hasPartySurface());
+    }
+  }
+
+  private static JsonObject awaitEvent(Transport client, String type) throws Exception
+  {
+    long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (System.nanoTime() < until)
+    {
+      for (JsonObject message : client.observed)
+        if (type.equals(message.get("type").getAsString())) return message;
+      Thread.sleep(10);
+    }
+    throw new AssertionError("Missing Party event " + type);
+  }
+
+  @Test public void surfaceQueryCannotInstallAfterPlaybackGenerationChanges() throws Exception
+  {
+    PartyService service = new PartyService(() -> 100000, true, 100000, 2);
+    try (Transport client = new Transport(service, "pull"))
+    {
+      java.util.Set<String> caps = new java.util.HashSet<>(PartyProtocol.REQUIRED);
+      caps.add("PARTY_SURFACE_V1"); caps.add("PARTY_PREPARE_V1"); doReturn(caps).when(client.renderer).getClientCapabilities();
+      JsonObject create = new JsonObject(); create.addProperty("mediaFileId", 42);
+      JsonObject created = client.exchange("CREATE", create);
+      MediaFile media = mock(MediaFile.class); MiniPlayer player = mock(MiniPlayer.class);
+      doReturn(MediaPlayer.PAUSE_STATE).when(player).getState();
+      videoField(client.video, "partyProgressOwned", true); videoField(client.video, "player", player);
+      videoField(client.video, "currFile", media); videoField(client.video, "queueLock", new Object());
+      videoField(client.video, "watchQueue", new java.util.Vector<>());
+      doCallRealMethod().when(client.video).partySurfaceFence();
+      doCallRealMethod().when(client.video).partySurfaceCurrent(any());
+      sage.client.PlaybackSurfaceSet queried = mseSurface();
+      doAnswer(call -> { doReturn(1L).when(player).getPartyPlaybackGeneration(); return queried; })
+          .when(client.renderer).queryPartySurface("pwa_mse");
+      doReturn(new PartyService.Delivery("pwa_mse", "pull-xcode", "H264", "AAC", 8000, true))
+          .when(client.connection).plan(42, queried);
+      JsonObject fields = new JsonObject(); fields.add("partyId", created.get("partyId")); fields.addProperty("surfaceId", "pwa_mse");
+      client.exchange("SELECT_SURFACE", fields);
+      JsonObject failure = awaitEvent(client, "SURFACE_SELECTION_RESULT");
+      assertEquals(failure.get("status").getAsString(), "FAILED");
+      assertEquals(failure.get("code").getAsString(), "SURFACE_CHANGED");
+      assertFalse(client.renderer.hasPartySurface());
+      videoField(client.video, "partyWatchRequests", 1);
+      fields = new JsonObject(); fields.add("partyId", created.get("partyId")); fields.addProperty("surfaceId", "pwa_mse");
+      assertEquals(client.exchange("SELECT_SURFACE", fields).get("code").getAsString(), "SURFACE_SWITCH_UNSAFE");
+      videoField(client.video, "partyWatchRequests", 0);
+      doReturn(MediaPlayer.PLAY_STATE).when(player).getState();
+      fields = new JsonObject(); fields.add("partyId", created.get("partyId")); fields.addProperty("surfaceId", "pwa_mse");
+      assertEquals(client.exchange("SELECT_SURFACE", fields).get("code").getAsString(), "SURFACE_SWITCH_UNSAFE");
     }
   }
 }

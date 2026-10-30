@@ -30,7 +30,17 @@ allows explicit confirmed Join & Prepare through the exact renderer's normal
 Watch/parental/resource checks with a paused-load and readiness barrier. See the
 canonical contract for code expiry/global cooldowns, asynchronous result schemas
 and required future bridge admission routing; these capabilities are not yet
-implemented by today's PWA/Android clients.
+implemented by today's PWA/Android clients. Optional `PARTY_SURFACE_V1` (with
+`PARTY_PREPARE_V1`) adds exact-renderer SELECT_SURFACE/RESTORE_SURFACE before
+paused preparation. The server queries actual existing per-surface properties,
+retains ordinary defaults, and generation-fences the selected override. A truthful
+MP4-only/MSE/pull-xcode-only Party surface can use existing fragmented-MP4 remux
+for direct-compatible media, without changing ordinary raw/direct evaluation.
+The canonical contract specifies selection/preparation/generation correlation,
+actual `route/container/xcodeMode` metadata, admission revocation, and the public
+same-JVM `sage.PartyMediaAdmissionBridge` actual-Socket claim/current/release API.
+Transparent bridges must not parse encrypted/compressed relay bytes for approvals
+or infer ownership from IP/clientName/path/global context.
 
 Bump `SAGETV_NG_VERSION` to `2.0.0` when this spec is implemented.
 The server uses this as a single gate — if it sees `2.0.0+` it expects

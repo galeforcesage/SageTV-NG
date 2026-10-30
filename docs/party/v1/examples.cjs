@@ -77,15 +77,29 @@ function joinWithCode(commonRequest, enteredCode, invitation) {
     ...(invitation ? { partyId: invitation.partyId, mediaFileId: invitation.mediaFileId } : {}) };
 }
 
-function prepareJoined(commonRequest, joined, explicitlyConfirmed) {
+function prepareJoined(commonRequest, joined, explicitlyConfirmed, selection) {
   assert.equal(explicitlyConfirmed, true);
   assert.equal(joined.prepareVia, 'PARTY_PREPARE');
   return { ...commonRequest, schemaVersion: 1, type: 'PREPARE', partyId: joined.partyId,
-    intent: 'JOIN_AND_PREPARE', confirmReplace: true };
+    intent: 'JOIN_AND_PREPARE', confirmReplace: true,
+    ...(selection ? { selectionId: selection.selectionId } : {}) };
+}
+
+function selectedMsePath(selection, loaded) {
+  assert.equal(selection.status, 'SELECTED');
+  assert.equal(loaded.status, 'LOADED');
+  assert.equal(loaded.selectionId, selection.selectionId);
+  assert.equal(loaded.pathGeneration, selection.pathGeneration);
+  assert.equal(loaded.delivery.surface, selection.preparation.surface);
+  assert.equal(loaded.delivery.route, 'mse');
+  assert.equal(loaded.delivery.mode, 'pull-xcode');
+  assert.equal(loaded.delivery.container, 'MP4');
+  assert.ok(['browserhd_remux', 'browserhd_copyv', 'browserhd'].includes(loaded.delivery.xcodeMode));
+  return loaded.delivery; // Not admission/readiness or a decoder-observed output proof.
 }
 
 module.exports = { clientFrame, decodeServerFrame, localDeadline, predictedPosition,
-  mediaBindingCommand, executionAck, joinWithCode, prepareJoined };
+  mediaBindingCommand, executionAck, joinWithCode, prepareJoined, selectedMsePath };
 
 test('golden client framing preserves the existing 16-byte UI envelope', () => {
   const frame = clientFrame(golden.hello);
@@ -195,4 +209,28 @@ test('Join & Prepare requires explicit confirmation and loaded is not media admi
   assert.equal(golden.preparationLoaded.type, 'PREPARATION_RESULT');
   assert.notEqual(golden.preparationLoaded.type, 'MEDIA_ADMISSION_HANDLE');
   assert.notEqual(golden.preparationLoaded.type, 'READY');
+});
+
+test('Party-only MSE preparation echoes selection and validates the actual conditioned path', () => {
+  const prepared = prepareJoined(golden.prepare, golden.createdCurrent, true, golden.surfaceSelected);
+  assert.equal(prepared.selectionId, golden.surfaceSelectionAccepted.selectionId);
+  assert.deepEqual(selectedMsePath(golden.surfaceSelected, golden.selectedPreparationLoaded),
+    golden.surfaceSelected.preparation);
+  assert.throws(() => selectedMsePath(golden.surfaceSelected,
+    { ...golden.selectedPreparationLoaded, pathGeneration: 2 }));
+  assert.throws(() => selectedMsePath(golden.surfaceSelected,
+    { ...golden.selectedPreparationLoaded, delivery: { ...golden.selectedPreparationLoaded.delivery, container: 'MPEG2-TS' } }));
+  assert.throws(() => selectedMsePath(golden.surfaceSelected,
+    { ...golden.selectedPreparationLoaded, delivery: { ...golden.selectedPreparationLoaded.delivery, mode: 'pull' } }));
+});
+
+test('admission context correlates the exact request and generation without sharing a handle on revoke', () => {
+  const admission = golden.mediaAdmissionHandle;
+  assert.equal(admission.playbackGeneration, golden.selectedPreparationLoaded.playbackGeneration);
+  assert.equal(admission.pathGeneration, golden.selectedPreparationLoaded.pathGeneration);
+  assert.equal(admission.expiresAtServerMonoMs - admission.serverMonoMs, admission.expiresInMs);
+  assert.equal(admission.contextId, golden.mediaAdmissionRevoked.contextId);
+  assert.equal(golden.mediaAdmissionRevoked.handle, undefined);
+  assert.equal(typeof admission.requestSeq, 'number');
+  // Java bridge must verify with claim(handle, its actual owned Socket); this JSON is not HTTP authority.
 });
