@@ -755,6 +755,7 @@ public class MiniPlayer implements DVDMediaPlayer
 
   public synchronized void fastLoad(byte majorTypeHint, byte minorTypeHint, String encodingHint, java.io.File file, String hostname, boolean timeshifted, long bufferSize, boolean waitUntilDone) throws PlaybackException
   {
+    partyPlaybackGeneration++;
     if (Sage.DBG) System.out.println("Mini Fast Load");
     PushTranscodePlan seamPlan = null;
     if (serverSideTranscoding)
@@ -1002,6 +1003,7 @@ public class MiniPlayer implements DVDMediaPlayer
 
   public synchronized void free()
   {
+    partyPlaybackGeneration++;
     // --- NG Context wiring: close provider session ---
     ngContextWiring.onPlaybackClose();
     // --- end NG Context wiring ---
@@ -1527,9 +1529,24 @@ public class MiniPlayer implements DVDMediaPlayer
     
     return false;
   }
+
+  private volatile long partyPlaybackGeneration;
+
+  /** Returns a renderer-local generation invalidated on load, fast load and close. */
+  long getPartyPlaybackGeneration() { return partyPlaybackGeneration; }
+
+  /** Confirms the local push producer, not merely a selected delivery mode. */
+  boolean hasPartyPushAdmission()
+  {
+    FastMpeg2Reader source = mpegSrc;
+    return pushMode && rpSrc == null && source != null
+        && (serverSideTranscoding ? NgPartyMediaAdmission.transcodeReady(source.getTranscoder())
+            : finalLength > 0);
+  }
   
   public void load(byte majorTypeHint, byte minorTypeHint, String encodingHint, java.io.File file, String hostname, boolean timeshifted, long bufferSize) throws PlaybackException
   {
+    partyPlaybackGeneration++;
     VideoFrame vf = VideoFrame.getVideoFrameForPlayer(MiniPlayer.this);
     MediaFile currMF;
     uiMgr = vf.getUIMgr();

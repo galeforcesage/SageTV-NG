@@ -19,6 +19,9 @@ enablement/admission prerequisites, schemas and executable integration examples 
 canonical in [PartyModeV1.md](PartyModeV1.md). Existing no-login LAN admission is
 supported with transport-bound session tokens; no admin pairing is needed.
 Legacy/unnegotiated clients are ineligible; normal playback defaults are unchanged.
+Party v1 additionally requires separate receipt/execution reports and server-confirmed
+media admission. Future pull bridges must relay the canonical per-playback admission
+handle on their own producer; client readiness flags are not resource admission.
 
 Bump `SAGETV_NG_VERSION` to `2.0.0` when this spec is implemented.
 The server uses this as a single gate — if it sees `2.0.0+` it expects

@@ -147,6 +147,7 @@ public class HTTPLSServer implements Runnable
                 requestParam.substring(colonIdx + 1).trim());
           requestParam = IOUtils.readLineBytes(sake, readBuf, timeout, sb);
         }
+        partyAdmissionHandle = (String)paramMap.get("x-sagetv-party-admission");
         if (Sage.DBG) System.out.println("Complete HTTP request received! method=" + requestMethod +
           " page=" + pageRequest + " httpVer=" + httpVer + " params=" + sanitizeHeaderMapForLog(paramMap));
 
@@ -530,6 +531,7 @@ public class HTTPLSServer implements Runnable
             {
               xcode.transcoder.getFmp4InitFile();
               java.io.File warm = xcode.transcoder.getSegmentFile(0);
+              confirmPartyOutput(warm);
               if (warm != null) xcode.transcoder.markSegmentConsumed(0);
               xcode.lastActivityTime = Sage.time();
             }
@@ -551,6 +553,7 @@ public class HTTPLSServer implements Runnable
             setupTranscoder(sessionID, mf, segmentNum, bwkbps, streamPart, uiMgr == null ? null : uiMgr.getVideoFrame(), true);
             xcode.lastRequestedPart = streamPart;
             java.io.File targetFile = xcode.transcoder.getSegmentFile(streamPart);
+            confirmPartyOutput(targetFile);
             if (targetFile == null)
             {
               if (Sage.DBG) System.out.println("CMAF part " + streamPart + " not available for mf=" + mfId + "; abort");
@@ -605,7 +608,8 @@ public class HTTPLSServer implements Runnable
           {
             int prebufferPartNum = Math.max(0, xcode.lastRequestedPart - 1);
             if (Sage.DBG) System.out.println("Doing request for stream part " + prebufferPartNum + " to ensure it's buffered before we return to avoid bandwidth calculation issues...");
-            xcode.transcoder.getSegmentFile(prebufferPartNum);
+            java.io.File preparedPart = xcode.transcoder.getSegmentFile(prebufferPartNum);
+            confirmPartyOutput(preparedPart);
             xcode.transcoder.markSegmentConsumed(prebufferPartNum);
             xcode.lastActivityTime = Sage.time();
             if (xcode.transcoder.isTranscoding())
@@ -646,6 +650,7 @@ public class HTTPLSServer implements Runnable
           // Now get the segment file that's requested and send it out!
           if (Sage.DBG) System.out.println("iOS HTTP server is requesting part # " + streamPart + " from the transcoder...");
           java.io.File targetFile = xcode.transcoder.getSegmentFile(streamPart);
+          confirmPartyOutput(targetFile);
           if (Sage.DBG) System.out.println("iOS HTTP server got part # " + streamPart + " from the transcoder, send it out:" + targetFile);
           if (targetFile == null)
             break;
@@ -3024,6 +3029,7 @@ public class HTTPLSServer implements Runnable
     java.util.HashMap copy = new java.util.HashMap(source);
     maskHeader(copy, "authorization");
     maskHeader(copy, "proxy-authorization");
+    maskHeader(copy, "x-sagetv-party-admission");
     return copy;
   }
 
@@ -3252,6 +3258,27 @@ public class HTTPLSServer implements Runnable
 
   // Returns true if a new transcoder was spawned
   private static Object xcodeSetupLock = new Object();
+  private String partyAdmissionHandle;
+
+  private void confirmPartyOutput(java.io.File file)
+  {
+    if (xcode != null && file != null && file.isFile() && file.length() > 0)
+      xcode.partyOutputConfirmed = true;
+  }
+
+  private void bindPartyAdmission() throws java.io.IOException
+  {
+    if (partyAdmissionHandle == null) return;
+    XCodeInfo info = xcode;
+    if (partyAdmissionHandle.length() != 32 || info == null
+        || !NgPartyMediaAdmission.INSTANCE.bind(partyAdmissionHandle, info.mf.getID(), "hls", info.vf, info,
+            () -> cachedXCodeMap.get(info.sessionID) == info && info.partyOutputConfirmed
+                && info.transcoder != null && (info.transcoder.isTranscodeDone()
+                    ? info.transcoder.didTranscodeCompleteOK() : info.transcoder.isTranscoding()),
+            () -> info.transcoder != null && (cachedXCodeMap.get(info.sessionID) != info
+                || info.transcoder.isTranscodeDone() && !info.transcoder.didTranscodeCompleteOK())))
+      throw new java.io.IOException("Party media admission denied");
+  }
   private boolean setupTranscoder(String sessionID, MediaFile mf, int segmentNum, int bwkbps, int streamPart, VideoFrame vf) throws java.io.IOException
   {
     return setupTranscoder(sessionID, mf, segmentNum, bwkbps, streamPart, vf, false);
@@ -3281,6 +3308,7 @@ public class HTTPLSServer implements Runnable
           {
             if (Sage.DBG) System.out.println("Transcoder failure detected! Kill it and build a new one!");
             cachedXCodeMap.remove(sessionID);
+            NgPartyMediaAdmission.INSTANCE.closed(xcode);
             xcode = null;
           }
         }
@@ -3300,6 +3328,7 @@ public class HTTPLSServer implements Runnable
       }
       if (xcode.transcoder == null)
       {
+        xcode.partyOutputConfirmed = false;
         xcode.transcoder = new FFMPEGTranscoder();
         xcode.transcoder.setEstimatedBandwidth(bwkbps * 1000);
 
@@ -3395,6 +3424,7 @@ public class HTTPLSServer implements Runnable
           xcode.transcoder.setTranscodeFormat("dynamicfmp4", mf.getFileFormat());
           xcode.transcoder.seekToTime(streamPart * fmp4PartDur * 1000);
           cachedXCodeMap.put(sessionID, xcode);
+          bindPartyAdmission();
           return true;
         }
 
@@ -3411,6 +3441,7 @@ public class HTTPLSServer implements Runnable
         xcode.transcoder.setTranscodeFormat("dynamicts", mf.getFileFormat());
         xcode.transcoder.seekToTime(streamPart * partDur * 1000);
         cachedXCodeMap.put(sessionID, xcode);
+        bindPartyAdmission();
         return true;
       }
 
@@ -3477,6 +3508,7 @@ public class HTTPLSServer implements Runnable
         else
         {
           if (Sage.DBG) System.out.println("Requested bandwidth has decreased! Dump the transcoder and rebuild it!");
+          NgPartyMediaAdmission.INSTANCE.closed(xcode);
           xcode.transcoder.stopTranscode();
           //cachedXCodeMap.remove(sessionID);
           xcode.transcoder = null;
@@ -3488,6 +3520,7 @@ public class HTTPLSServer implements Runnable
         if (Sage.DBG) System.out.println("ADJUSTING HTTP streaming video bandwidth from " + xcode.transcoder.getCurrentVideoBitrateKbps() + " to " + targetVideoKbps);
         xcode.transcoder.dynamicVideoRateAdjust(targetVideoKbps - xcode.transcoder.getCurrentVideoBitrateKbps());
       }
+      bindPartyAdmission();
       return false;
     }
   }
@@ -3740,11 +3773,12 @@ public class HTTPLSServer implements Runnable
 
   private static class XCodeInfo
   {
+    volatile boolean partyOutputConfirmed;
     public String sessionID;
     public MediaFile mf;
     public int segment;
     public long lastActivityTime;
-    public FFMPEGTranscoder transcoder;
+    public volatile FFMPEGTranscoder transcoder;
     public VideoFrame vf;
     public int lastRequestedPart;
     // Server-measured delivered goodput (kbps), EWMA, for this CMAF/fMP4 session:
@@ -3902,6 +3936,7 @@ public class HTTPLSServer implements Runnable
             {
               if (Sage.DBG) System.out.println("HTTPLSCleaner found a transcoder that is not in use for " + info.mf + " segment=" + info.segment + " killing it!");
               info.transcoder.stopTranscode();
+              NgPartyMediaAdmission.INSTANCE.closed(info);
               fmp4SeamGrace.clear(info.sessionID);
               walker.remove();
             }
@@ -3914,6 +3949,7 @@ public class HTTPLSServer implements Runnable
               if (Sage.DBG) System.out.println("HTTPLSCleaner found an expired transcoder that has not been active for " + diff + " msec for " + info.mf + " and segment=" + info.segment +
                   " killing it now!");
               info.transcoder.stopTranscode();
+              NgPartyMediaAdmission.INSTANCE.closed(info);
               fmp4SeamGrace.clear(info.sessionID);
               walker.remove();
             }

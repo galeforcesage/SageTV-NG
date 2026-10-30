@@ -26,6 +26,7 @@ public class PartyServiceTest
     String epoch, party, participant, token, recovery, sessionToken;
     long sequence;
     boolean owned;
+    boolean mediaAdmitted = true;
     int commits, skips;
     long committedPosition;
     PartyService.Delivery path = new PartyService.Delivery("android", "push", "H264", "AAC", 8000, false);
@@ -160,6 +161,7 @@ public class PartyServiceTest
     @Override public long duration(int id)
     { if (id != 42) throw new Fault("MEDIA_UNAVAILABLE"); return 3600000; }
     @Override public PartyService.Delivery delivery(int media) { return path; }
+    @Override public boolean mediaAdmitted(int media) { return mediaAdmitted; }
     @Override public PartyService.Delivery plan(int media) { return path; }
     @Override public long skip(String action)
     { skips++; return action.startsWith("FF") ? 10000 : -10000; }
@@ -314,7 +316,7 @@ public class PartyServiceTest
     c.status("BUFFERING");
     JsonObject state = h.snapshot();
     assertEquals(state.get("stateVersion").getAsLong(), version + 1);
-    assertEquals(state.getAsJsonObject("pendingCommand").get("targetState").getAsString(), "PAUSED");
+    assertEquals(state.get("state").getAsString(), "PAUSED");
     error(c.sendRequest(c.request("END")), "HOST_REQUIRED");
   }
 
@@ -511,9 +513,7 @@ public class PartyServiceTest
 
   @Test public void goldenFixturesMatchActualEnvelopesAndRejectStopWithoutStateMutation() throws Exception
   {
-    java.nio.file.Path file = java.nio.file.Path.of("..", "..", "docs", "party", "v1", "golden.json");
-    JsonObject golden = new sage.epg.sd.gson.JsonParser()
-        .parse(java.nio.file.Files.readString(file)).getAsJsonObject();
+    JsonObject golden = golden();
     Rig r = new Rig(); r.now.set(98200);
     Client h = r.client(); h.create(); h.ready();
     JsonObject actual = h.action("FF");
@@ -527,6 +527,12 @@ public class PartyServiceTest
     invalid.addProperty("requestSeq", ++h.sequence);
     assertEquals(h.sendRequest(invalid), golden.getAsJsonObject("invalidStopReply"));
     assertEquals(h.snapshot().get("commandSeq").getAsLong(), 1);
+  }
+
+  private static JsonObject golden() throws java.io.IOException
+  {
+    java.nio.file.Path file = java.nio.file.Path.of("..", "..", "docs", "party", "v1", "golden.json");
+    return new sage.epg.sd.gson.JsonParser().parse(java.nio.file.Files.readString(file)).getAsJsonObject();
   }
 
   @Test public void evictionCannotReplayAnOldActionAndRecoveryTokenRotatesOnReattachment()
@@ -627,5 +633,170 @@ public class PartyServiceTest
     assertEquals(after.get("commandSeq"), before.get("commandSeq"));
     assertEquals(after.get("anchorPositionMs"), before.get("anchorPositionMs"));
     assertEquals(first.action("PLAY").get("type").getAsString(), "COMMAND");
+  }
+
+  @Test public void majorityBufferingRecommendsWithinThreeSecondsWithoutChangingTimeline() throws Exception
+  {
+    Rig r = new Rig(); Client h = r.client(); h.create(); h.ready();
+    Client a = r.client(); a.join(h); a.ready();
+    Client b = r.client(); b.join(h); b.ready();
+    JsonObject play = h.action("PLAY");
+    r.now.set(play.get("executeAtServerMonoMs").getAsLong()); r.service.tick();
+    a.status("BUFFERING");
+    assertFalse(h.messages.stream().anyMatch(m -> "BUFFER_RECOMMENDATION".equals(text(m, "type"))));
+    long began = r.now.get();
+    b.status("BUFFERING");
+    JsonObject recommendation = h.messages.stream()
+        .filter(m -> "BUFFER_RECOMMENDATION".equals(text(m, "type"))).findFirst().orElseThrow();
+    assertTrue(recommendation.get("serverMonoMs").getAsLong() - began <= 3000);
+    assertEquals(recommendation.get("bufferingCount").getAsInt(), 2);
+    assertEquals(recommendation.get("activeCount").getAsInt(), 3);
+    assertEquals(text(recommendation, "policy"), "KEEP_MOVING");
+    for (String field : List.of("schemaVersion", "type", "stateVersion", "commandSeq",
+        "policy", "recommendation", "bufferingCount", "activeCount"))
+      assertEquals(recommendation.get(field), golden().getAsJsonObject("bufferRecommendation").get(field), field);
+    for (int i = 0; i < 10; i++) { a.status("BUFFERING"); r.service.tick(); }
+    assertEquals(h.messages.stream().filter(m -> "BUFFER_RECOMMENDATION".equals(text(m, "type"))).count(), 1);
+    JsonObject snapshot = h.snapshot();
+    assertEquals(snapshot.get("commandSeq").getAsInt(), 1);
+    assertEquals(text(snapshot, "state"), "PLAYING");
+  }
+
+  @Test public void renewedMajorityDuringCooldownIsNotLostAndIsReportedWithinThreeSeconds()
+  {
+    Rig r = new Rig(); Client h = r.client(); h.create(); h.ready();
+    Client a = r.client(); a.join(h); a.ready();
+    Client b = r.client(); b.join(h); b.ready();
+    a.status("BUFFERING"); b.status("BUFFERING");
+    a.status("RECOVERING"); // Break the strict majority without locally stopping anyone.
+    a.ready();
+    long began = r.now.get();
+    a.status("BUFFERING");
+    r.now.addAndGet(1000); r.service.tick();
+    List<JsonObject> notices = h.messages.stream()
+        .filter(m -> "BUFFER_RECOMMENDATION".equals(text(m, "type"))).toList();
+    assertEquals(notices.size(), 2);
+    assertTrue(notices.get(1).get("serverMonoMs").getAsLong() - began <= 3000);
+    assertEquals(h.snapshot().get("commandSeq").getAsInt(), 0);
+  }
+
+  @Test public void configuredBufferPauseSupersedesPendingPlayAndIncludesBufferingViewer()
+  {
+    Rig r = new Rig(); Client h = r.client(); h.create(); h.ready();
+    Client a = r.client(); a.join(h); a.ready();
+    JsonObject policy = h.request("POLICY");
+    policy.addProperty("hostOnly", true); policy.addProperty("pauseOnBuffer", true); h.sendRequest(policy);
+    JsonObject play = h.action("PLAY");
+    long began = r.now.get();
+    a.status("BUFFERING");
+    JsonObject snapshot = h.snapshot();
+    JsonObject pause = snapshot.getAsJsonObject("pendingCommand");
+    assertEquals(text(pause, "cause"), "PAUSE");
+    assertEquals(text(pause, "targetState"), "PAUSED");
+    assertEquals(pause.get("commandSeq").getAsInt(), 2);
+    assertTrue(pause.get("executeAtServerMonoMs").getAsLong() - began <= 3000);
+    assertTrue(a.messages.stream().anyMatch(m -> "COMMAND".equals(text(m, "type"))
+        && "PAUSE".equals(text(m, "cause"))));
+    assertTrue(h.messages.stream().anyMatch(m -> "COMMAND_OUTCOME".equals(text(m, "type"))
+        && "SUPERSEDED".equals(text(m, "outcome")) && m.get("commandSeq").equals(play.get("commandSeq"))));
+    r.now.set(pause.get("executeAtServerMonoMs").getAsLong()); r.service.tick();
+    assertEquals(text(h.snapshot(), "state"), "PAUSED");
+    a.status("BUFFERING");
+    assertEquals(h.snapshot().get("commandSeq").getAsInt(), 2);
+  }
+
+  private static JsonObject ack(Client client, JsonObject command, String stage, long at,
+      long position, String state, boolean success)
+  {
+    JsonObject ack = client.request("ACK");
+    ack.add("stateVersion", command.get("stateVersion"));
+    ack.add("commandSeq", command.get("commandSeq")); ack.addProperty("stage", stage);
+    if ("EXECUTED".equals(stage))
+    {
+      ack.addProperty("sampleMonoMs", at - 100); ack.addProperty("positionMs", position);
+      ack.addProperty("state", state); ack.addProperty("success", success);
+    }
+    return client.sendRequest(ack);
+  }
+
+  @Test public void commandOutcomesAggregateReceiptsLandingsAndSpreadAcrossReorderedVersions()
+  {
+    Rig r = new Rig(); Client h = r.client(); h.create(); h.ready();
+    Client a = r.client(); a.join(h); a.ready();
+    JsonObject play = h.action("PLAY");
+    assertEquals(text(ack(h, play, "RECEIVED", 0, 0, "", false), "stage"), "RECEIVED");
+    ack(h, play, "RECEIVED", 0, 0, "", false);
+    error(ack(h, play, "EXECUTED", r.now.get(), 0, "PLAYING", true), "EXECUTION_PENDING");
+    long deadline = play.get("executeAtServerMonoMs").getAsLong();
+    r.now.set(deadline + 30);
+    ack(h, play, "EXECUTED", r.now.get(), 30, "PLAYING", true);
+    h.action("PAUSE"); // Execution ACK for version 1 must survive a version 2 command.
+    r.now.set(deadline + 90);
+    ack(a, play, "EXECUTED", r.now.get(), 800, "PAUSED", true);
+    JsonObject outcome = h.messages.stream().filter(m -> "COMMAND_OUTCOME".equals(text(m, "type"))
+        && "COMPLETE".equals(text(m, "outcome"))).findFirst().orElseThrow();
+    assertEquals(outcome.get("expectedCount").getAsInt(), 2);
+    assertEquals(outcome.get("receivedCount").getAsInt(), 2);
+    assertEquals(outcome.get("executedCount").getAsInt(), 2);
+    assertEquals(outcome.get("successCount").getAsInt(), 1);
+    assertEquals(outcome.get("failedCount").getAsInt(), 1);
+    assertEquals(outcome.get("missingCount").getAsInt(), 0);
+    assertEquals(outcome.get("executionSpreadMs").getAsLong(), 60);
+    assertEquals(outcome.get("spreadUncertaintyMs").getAsDouble(), 10);
+    error(ack(a, play, "EXECUTED", r.now.get(), 800, "PAUSED", true), "OUTCOME_CLOSED");
+  }
+
+  @Test public void commandOutcomesTimeoutAndLateJoinersCannotAcknowledgeOldCommands()
+  {
+    Rig r = new Rig(); Client h = r.client(); h.create(); h.ready();
+    JsonObject command = h.action("FF");
+    Client late = r.client(); late.join(h); late.ready();
+    error(ack(late, command, "RECEIVED", 0, 0, "", false), "NOT_COMMAND_RECIPIENT");
+    r.now.set(command.get("executeAtServerMonoMs").getAsLong() + 10000); r.service.tick();
+    JsonObject outcome = h.snapshot().getAsJsonObject("latestCommandOutcome");
+    assertEquals(text(outcome, "outcome"), "TIMED_OUT");
+    assertEquals(outcome.get("missingCount").getAsInt(), 1);
+    assertFalse(outcome.has("executionSpreadMs"));
+    error(ack(h, command, "RECEIVED", 0, 0, "", false), "OUTCOME_CLOSED");
+    for (int i = 0; i < 17; i++)
+    {
+      h.status("BUFFERING"); h.ready();
+      JsonObject next = h.action("FF");
+      r.now.set(next.get("executeAtServerMonoMs").getAsLong()); r.service.tick();
+    }
+    error(ack(h, command, "RECEIVED", 0, 0, "", false), "COMMAND_GONE");
+  }
+
+  @Test public void downstreamAdmissionFailureGatesOnlyAffectedViewerDespitePreparationClaims()
+  {
+    Rig r = new Rig(); Client h = r.client(); h.create(); h.ready();
+    Client denied = r.client(); denied.join(h); denied.mediaAdmitted = false;
+    error(denied.ready(), "MEDIA_ADMISSION_UNCONFIRMED");
+    assertEquals(text(h.snapshot().getAsJsonArray("roster").get(1).getAsJsonObject(), "status"), "PREPARING");
+    assertEquals(text(h.action("PLAY"), "type"), "COMMAND");
+    denied.mediaAdmitted = true; denied.ready();
+    denied.mediaAdmitted = false; r.service.tick();
+    assertEquals(text(h.snapshot().getAsJsonArray("roster").get(1).getAsJsonObject(), "status"), "RECOVERING");
+    assertEquals(h.snapshot().get("commandSeq").getAsInt(), 1);
+    assertEquals(h.snapshot().get("stateVersion").getAsInt(), 1);
+  }
+
+  @Test public void actualAggregatedExecutionOutcomeMatchesGoldenSchemaAndValues() throws Exception
+  {
+    Rig r = new Rig(); r.now.set(96400);
+    Client h = r.client(); h.create(); h.ready();
+    Client a = r.client(); a.join(h); a.ready();
+    JsonObject command = h.action("FF");
+    ack(h, command, "RECEIVED", 0, 0, "", false);
+    r.now.set(100780); ack(h, command, "EXECUTED", r.now.get(), 10000, "PAUSED", true);
+    r.now.set(100840); ack(a, command, "EXECUTED", r.now.get(), 10800, "PAUSED", true);
+    JsonObject actual = h.messages.stream().filter(m -> "COMMAND_OUTCOME".equals(text(m, "type"))
+        && "COMPLETE".equals(text(m, "outcome"))).findFirst().orElseThrow();
+    actual = copy(actual);
+    actual.addProperty("partyId", "example-party");
+    actual.getAsJsonArray("participants").get(0).getAsJsonObject().addProperty("participantId", "example-host");
+    actual.getAsJsonArray("participants").get(1).getAsJsonObject().addProperty("participantId", "example-guest");
+    assertEquals(actual, golden().getAsJsonObject("commandOutcome"));
+    assertTrue(h.snapshot().toString().getBytes(StandardCharsets.UTF_8).length <= MAX_BYTES);
   }
 }

@@ -4609,7 +4609,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     if (kbps <= 0 || renderer.getCurrentSurfaceId().isEmpty()
         || renderer.getCurrentSurfaceDeliveryMode().isEmpty())
       throw new sage.party.PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
-    // Reserve conservatively against source plus overhead, not a client-provided bitrate.
+    // This is a conservative Party-only budget, not proof of downstream admission.
     return new sage.party.PartyService.Delivery(renderer.getCurrentSurfaceId(),
         renderer.getCurrentSurfaceDeliveryMode(), renderer.getCurrentSurfaceTargetVideoCodec(),
         renderer.getCurrentSurfaceTargetAudioCodec(), (int)Math.min(Integer.MAX_VALUE, kbps * 2L),
@@ -4617,6 +4617,30 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
             || "pull-xcode".equals(renderer.getCurrentSurfaceDeliveryMode())
             || "hls".equals(renderer.getCurrentSurfaceDeliveryMode()));
   }
+
+  /** Binds a credential to this exact player generation, never a path or network address. */
+  String issuePartyMediaAdmission(MiniClientSageRenderer renderer, NgPartyConnection owner)
+  {
+    if (!(player instanceof MiniPlayer) || currFile == null || !partyProgressOwned)
+      throw new sage.party.PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
+    MiniPlayer expectedPlayer = (MiniPlayer)player;
+    MediaFile expectedMedia = currFile;
+    long generation = expectedPlayer.getPartyPlaybackGeneration();
+    String mode = renderer.getCurrentSurfaceDeliveryMode();
+    if (!java.util.Set.of("pull", "pull-xcode", "hls").contains(mode))
+      throw new sage.party.PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
+    return NgPartyMediaAdmission.INSTANCE.issue(owner, expectedMedia.getID(), mode, this,
+        () -> partyProgressOwned && renderer.getPartyPrincipal() != null
+            && player == expectedPlayer && currFile == expectedMedia
+            && generation == expectedPlayer.getPartyPlaybackGeneration()
+            && mode.equals(renderer.getCurrentSurfaceDeliveryMode()));
+  }
+
+  /** Checks the actual local push source when no downstream pull producer is involved. */
+  boolean hasPartyPushAdmission()
+  { return player instanceof MiniPlayer && ((MiniPlayer)player).hasPartyPushAdmission(); }
+
+  MiniPlayer getPartyPlayer() { return player instanceof MiniPlayer ? (MiniPlayer)player : null; }
 
   public void play() { if (!partyAction("PLAY")) submitJob(new VFJob(PLAY)); }
   public void pause() { if (!partyAction("PAUSE")) submitJob(new VFJob(PAUSE)); }

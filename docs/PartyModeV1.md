@@ -11,11 +11,11 @@ bridge authority, client player implementation, deployment, or public discovery 
 ## Enablement, negotiation and self-service session authorization
 
 Set `party/enabled=true` and restart the server process for staged integration.
-Defaults: `party/max_reserved_kbps=100000`, `party/max_transcodes=1`. These are
+Defaults: `party/max_budget_kbps=100000`, `party/max_transcodes=1`. These are
 aggregate **Party** preparation/playback budgets, not a machine-wide CPU/encoder
 governor. Configure measured headroom before enabling. At most 16 parties exist;
 each has five slots, including preparing, locally stopped and grace-retained slots.
-Parties expire after 24 hours; unprepared reservations expire after 60 seconds.
+Parties expire after 24 hours; unprepared Party budget leases expire after 60 seconds.
 
 In the existing `SAGETV_NG_CAPABILITIES` reply, advertise **all** these exact tokens:
 
@@ -91,7 +91,7 @@ Do not put a 16-byte client header on server commands.
 
 Every JSON value is an object with `schemaVersion:1` and string `type`.
 Maximum JSON length is **8192 UTF-8 bytes**; request nesting depth is at most 4
-(nested JOINED snapshots in replies can reach depth 5). Property length must
+(nested JOINED snapshots, including outcome diagnostics, can reach depth 5). Property length must
 match exactly. Identifiers/enums match `[A-Za-z0-9_.:-]{1,128}` (the final hyphen is
 literal). Numeric input is strict JSON numeric, finite safe integral milliseconds
 unless stated otherwise; no numeric-string or boolean-string coercion.
@@ -159,11 +159,13 @@ media bytes or makes one slow output block other viewers.
 
 `stateVersion` and `commandSeq` start at 0, increase together once per canonical
 timeline transition, and are scoped to a party/epoch. Roster/policy/clock/Stop
-changes do **not** increment them. ACTION, READY, ACK, POSITION and CORRECTION_RESULT
+changes do **not** increment them. ACTION, READY, POSITION and CORRECTION_RESULT
 require the exact current stateVersion. Stale input gets STALE_STATE; request a
 SNAPSHOT with a new request ID/sequence, cancel superseded deadlines/corrections,
 and re-enter readiness if needed. SNAPSHOT replaces missing history, not a request
 to replay commands 1..commandSeq. Apply a command sequence at most once.
+ACK instead references the version/sequence of its retained command, not the
+latest timeline: a delayed execution report remains valid after a newer action.
 
 One timeline transition may be pending. Additional actions get
 TRANSITION_PENDING until its execution boundary; held FF/REW should queue/coalesce
@@ -189,9 +191,10 @@ positions are relative to the beginning of the common media, not epoch PTS.
 | POLICY | `partyId, hostOnly:boolean, pauseOnBuffer:boolean` | ACK; roster receives SNAPSHOT |
 | CLOCK | `partyId` | CLOCK_PROBE |
 | CLOCK_REPLY | `partyId, probeId, c1, c2` | CLOCK_MODEL |
+| MEDIA_ADMISSION | `partyId`; only preparing/recovering/buffering members, after normal Watch loads the same media | MEDIA_ADMISSION_HANDLE |
 | READY | `partyId, stateVersion:V, prepared:boolean, activated:boolean, bufferAheadMs:0..3600000, precisionMs:0..1000, rateAdjust:boolean` | CORRECTION with delivery |
 | ACTION | `partyId, stateVersion:V, action` | COMMAND |
-| ACK | `partyId, stateVersion:V, commandSeq` equal current | ACK with commandSeq |
+| ACK | `partyId, stateVersion, commandSeq, stage:"RECEIVED"\|"EXECUTED"`; EXECUTED also requires `success:boolean, sampleMonoMs, positionMs, state` | ACK with commandSeq/stage; roster gets COMMAND_OUTCOME |
 | POSITION | `partyId, stateVersion:V, sampleMonoMs, positionMs, bufferAheadMs:0..3600000, state` | ACK with skewMs/uncertaintyMs; optional targeted CORRECTION event |
 | STATUS | `partyId, status` | ACK; roster gets PARTICIPANT_STATE |
 | CORRECTION_RESULT | `partyId, stateVersion:V, correctionId, success:boolean, sampleMonoMs, positionMs` | ACK; roster gets PARTICIPANT_STATE |
@@ -247,23 +250,28 @@ metadata above applies to replies; identical event payloads lack requestId.
 | TOKEN | `joinToken, expiresAtServerMonoMs` |
 | CLOCK_PROBE | `probeId, s0` |
 | CLOCK_MODEL | `serverMinusClientMs:number, uncertaintyMs:number, p95RttMs, confident:boolean` |
+| MEDIA_ADMISSION_HANDLE | `handle:string, expiresInMs:60000, mediaFileId, mode:"pull"\|"pull-xcode"\|"hls"`; credential only to requesting renderer, never roster |
 | COMMAND | `partyId, commandSeq, stateVersion, cause:ACTION, targetPositionMs, targetState, targetRate:1, executeAtServerMonoMs, originParticipantId` |
 | CORRECTION | `partyId, participantId, stateVersion, commandSeq, correctionId, kind:"SOFT"\|"HARD", targetPositionMs, targetState, targetRate:number, durationMs, executeAtServerMonoMs`; READY reply additionally has `delivery:Delivery` |
 | PARTICIPANT_STATE | `partyId, participantId, status` |
+| BUFFER_RECOMMENDATION | `partyId, stateVersion, commandSeq, policy:"KEEP_MOVING", recommendation:"PAUSE_OR_REDUCE_QUALITY", bufferingCount, activeCount, hostParticipantId:string|null, serverMonoMs` |
+| COMMAND_OUTCOME | schema below |
 | SNAPSHOT | schema below |
-| ACK | no fields by default; execution ACK reply adds commandSeq; POSITION reply adds `skewMs, uncertaintyMs` |
+| ACK | no fields by default; command ACK reply adds `commandSeq, stage`; POSITION reply adds `skewMs, uncertaintyMs` |
 | LEFT | no fields |
 | ENDED | END reply has no additional fields; event has `partyId, reason:"HOST_ENDED"\|"EXPIRED"\|"SERVER_SHUTDOWN"` |
 | ERROR | `code`, optional requestId |
 
 Delivery: `{surface:string, mode:string, videoCodec:string|null,
-audioCodec:string|null, reservedKbps:positive integer, transcode:boolean}`.
+audioCodec:string|null, budgetKbps:positive integer, transcode:boolean}`.
 Mode is the existing selected NG delivery (`push`, `pull`, `pull-xcode`, `hls`,
 etc.), **not** a new Party transport. Codec fields are the playback core's target
 selection, not a guarantee of decoder-observed output when COPY/unspecified.
 Do not infer codecs from Party fields; existing STREAMINFO/NG stream metadata
 remains authoritative. Preparation is provisional, READY's delivery is revalidated
-against the actual loaded MediaFile and selected surface.
+against the actual loaded MediaFile, selected surface and confirmed downstream
+producer. `budgetKbps` is **only a Party admission estimate**, not a machine-wide
+resource reservation or evidence that the actual encoder/file path started.
 
 SNAPSHOT:
 
@@ -275,6 +283,7 @@ SNAPSHOT:
   state:"PLAYING"|"PAUSED", rate:1, serverMonoMs,
   hostParticipantId:string|null, hostOnly:boolean, pauseOnBuffer:boolean,
   pendingCommand?:COMMAND,
+  latestCommandOutcome?:COMMAND_OUTCOME,
   roster:[{
     participantId, status, clockConfident:boolean, p95RttMs,
     uncertaintyMs:number, ackCommandSeq, delivery?:Delivery
@@ -294,6 +303,50 @@ PLAYING, clamped to duration. A paused snapshot is never extrapolated. A snapsho
 received after a pending deadline must project from that deadline, not its receipt.
 A late join gets a targeted catch-up CORRECTION; existing participants are not
 reanchored or rewound.
+
+COMMAND_OUTCOME:
+
+```
+{
+  schemaVersion:1, type:"COMMAND_OUTCOME", partyId, stateVersion, commandSeq,
+  executeAtServerMonoMs, reportDeadlineServerMonoMs, serverMonoMs,
+  outcome:"PENDING"|"COMPLETE"|"TIMED_OUT"|"SUPERSEDED"|"EVICTED",
+  expectedCount, receivedCount, executedCount, successCount, failedCount, missingCount,
+  executionSpreadMs?:integer, spreadUncertaintyMs?:number,
+  participants:[{
+    participantId, receivedAtServerMonoMs?:integer,
+    executedAtServerMonoMs?:integer, positionMs?:integer,
+    state?:"PLAYING"|"PAUSED"|"BUFFERING"|"SEEKING",
+    success?:boolean, skewMs?:integer, uncertaintyMs?:number
+  }]
+}
+```
+
+The recipient set is frozen at dispatch, at most five; late joiners cannot ACK old
+commands. RECEIVED records server receipt time (not claimed network latency).
+EXECUTED's `sampleMonoMs` is the client's **actual execution/landing observation
+time**, translated using its confident clock. It implicitly records receipt if
+necessary. Sample age/future checks match POSITION; before-deadline reports fail.
+The server evaluates success as client success **and** target state match **and**
+absolute landing skew within that member's deadband. For a playing target, skew
+is measured against the command's own projected position at the execution time,
+even when another command has since changed the current timeline.
+
+`executionSpreadMs` is max minus min translated execution times, included only
+after at least two reports. `spreadUncertaintyMs` is twice the greatest reporting
+clock uncertainty. These are client-observed diagnostics, **not rendered-frame
+proof**. Failed landings still contribute execution timing; missing reports do
+not become invented successes or zero spread. `missingCount=expectedCount-executedCount`;
+`failedCount=executedCount-successCount`. COMPLETE means all recipients reported,
+not necessarily all succeeded.
+
+At most 16 command records per party survive. Each closes 10000 ms after its
+execution deadline; missing/disconnected/stopped recipients remain explicitly
+missing at TIMED_OUT. A host-policy pause that supersedes a pending play closes
+it as SUPERSEDED. Eviction of an unfinished record emits EVICTED. Closed records
+reject further reports; exact request retries still return the cached response.
+Reports for evicted commands fail COMMAND_GONE. Snapshots carry only the latest
+outcome (not unbounded history); clients may retain their own diagnostics history.
 
 ## Clocks, scheduling, reports and adapter obligations
 
@@ -332,30 +385,100 @@ start unscheduled playback. Obtain activation, hold the adapter paused, buffer a
 least 1500 ms (or all remaining media when less remains), complete clock
 calibration, then READY. Do not send ordinary server
 Pause while preparing: in-party play controls are intercepted as shared actions.
-The server preflights the existing PlaybackDecisionEngine for that viewer, reserves
+The server preflights the existing PlaybackDecisionEngine for that viewer, leases
 Party bitrate/transcode budget before returning JOINED, and rechecks the actually
-loaded same MediaFile/surface/player state on READY. No raw file paths/media URLs
+loaded same MediaFile/surface/player state **and actual producer admission** on READY. No raw file paths/media URLs
 are placed in Party messages. Media must be completed seekable video, non-DVD,
 non-BluRay, one segment, available, known duration; in-progress/live/growing-file
 and multi-segment timelines are refused in this implementation.
 
 Readiness requires prepared+activated flags, minimum buffer, confident clock,
-actual server media-path check and admission. Preparation metadata never authorizes
+actual server media-path check and server-confirmed admission. Preparation metadata never authorizes
 the client to override the normal delivery decision. An admission denial requires
 the client to abandon/close its own failed prepared path and LEAVE or retry after
-quality changes; other participants are untouched. Reservations are conservative
+quality changes; other participants are untouched. Party-only budget leases are conservative
 (at least twice source/selected bitrate and no shrinking below preflight budget);
 normal downstream GPU admission remains authoritative at actual stream setup.
-Locally stopped releases Party reservation; reconnect grace retains it; leave,
+Locally stopped releases Party budget; reconnect grace retains it; leave,
 expiry and shutdown release it. Normal media-session cleanup remains in the normal
 playback/HTTP lifecycle, not in a shared Party media connection.
+
+### Actual producer admission and future thin-bridge routing
+
+This is implemented server-side on the **existing** media listeners. No additional
+public API or listener is used. It is not inferred from IP, a UI client name, a
+path, `prepared:true`, a selected transcode mode or an estimated bitrate.
+
+For pull, pull-xcode and HLS: after normal NG Watch has loaded the same media on
+the renderer, request MEDIA_ADMISSION on its Party control connection. The server
+issues a random 192-bit, 32-character URL-safe handle bound to that exact renderer,
+VideoFrame, loaded MiniPlayer generation, MediaFile and delivery mode. It is not
+a participant ID and never appears in roster/snapshots/logs. Unused handles expire
+after 60000 ms; another MEDIA_ADMISSION replaces the previous handle. Only
+preparing/recovering/buffering members may request one.
+
+For existing MediaServer direct/pull-xcode:
+
+```
+[normal XCODE_SETUP ... if needed, and normal OPEN/OPENW ... -> OK]
+PARTY_BIND <32-character handle>\r\n
+OK\r\n
+```
+
+This new optional ASCII command is sent **after successful OPEN**, on that exact
+media producer connection. Invalid/stale/wrong-media/wrong-mode/reused-producer
+bindings reply `PARTY_DENIED\r\n`; the handle is redacted in debug logging.
+Normal OPEN/XCODE_SETUP/SIZE/READ bytes and existing media authorization are
+unchanged when the command is absent. A direct producer must have an open server
+file channel. A transcode producer must have successfully produced bytes and
+be running or completed successfully; an allocated encoder alone is insufficient.
+Binding may succeed before output exists; READY remains fail-closed until output.
+OPEN failure never creates a confirmed grant.
+
+For existing `/iosstream_...` HLS requests, send HTTP header
+`X-SageTV-Party-Admission: <handle>` on the media requests. This header is
+redacted by the HTTP logger; never put the handle in a URL/query. Binding requires
+the cached HLS producer's exact VideoFrame context, MediaFile and a unique
+producer. A nonempty media segment must have been produced and the encoder must
+be running/completed successfully; a playlist or initialization segment alone is
+not evidence of admission. Normal requests without the header are unchanged.
+
+**Future PWA/bridge work, not implemented in the PWA repository:** the PWA must
+forward MEDIA_ADMISSION's handle as `X-SageTV-Party-Admission` on its existing
+per-client bridge media request. The bridge must use its already-associated
+renderer/control session and per-playback-generation coordinator, then relay
+PARTY_BIND after successful upstream OPEN on **that exact coordinator producer**,
+before reporting preparation/readiness success. For HLS it forwards the header
+to the existing server HTTP path. This is a new optional input contract for the
+future bridge, not a claim that today's bridge accepts/relays it.
+The future bridge must redact this header and the PARTY_BIND command from raw
+request/debug/error logs; never log the handle or use it as a human/device label.
+Coordinator ownership must include the actual client/control session and playback
+generation/media/mode; never reuse a producer across Party viewers based on a
+matching file, IP or global URL. A handle cannot authorize a second producer or
+allow one producer to confirm two viewers. If upstream OPEN or PARTY_BIND fails,
+close that failed producer, discard the handle, report the error to that client,
+and do not send READY. Do not retry on a shared fallback producer.
+
+Load/fast-load/free (even of the same media), renderer replacement/disconnect,
+local Stop, explicit rejoin/leave/end and failed/closed producer revoke admission.
+A bound live producer may outlive the unused-handle TTL. Failed proof cannot revive;
+obtain a fresh handle for the current generation. READY before confirmation fails
+MEDIA_ADMISSION_UNCONFIRMED and changes no other member or timeline. Maintenance
+detects loss after readiness within its one-second tick, cancels only that viewer's
+pending server work and marks it RECOVERING with the same error.
+Server-owned push checks its actual loaded source/produced transcode output directly,
+so no PARTY_BIND is needed. Remote-pusher paths without local admission evidence
+remain fail-closed; they are not proven by a selected `push` label.
 
 Apply CORRECTION at the deadline, report actual landing with CORRECTION_RESULT,
 then send POSITION every 1 s while playing/buffering and 5 s paused, plus immediate
 seek/state/underrun reports. Samples are compared to the canonical timeline at
 their **translated sample time**, not receipt time. Samples older than 3000 ms or
 in the future beyond clock uncertainty fail; out-of-order position samples fail.
-ACK a COMMAND's receipt with current version/seq and report the observed result.
+ACK a COMMAND with `stage:"RECEIVED"` and that command's version/sequence. After
+actual execution/landing, ACK again with `stage:"EXECUTED"` and its observed
+success, position, state and monotonic sample time; do not treat receipt as execution.
 
 Deadband is max(adapter precision,125 ms), or max(precision,250 ms) when measured
 p95 RTT >40 ms. Beyond it and <=750 ms, SOFT uses 0.98/1.02 rate for <=5000 ms
@@ -368,7 +491,16 @@ that participant DEGRADED. No result within 8000 ms counts as failure. Rejoin is
 required after degradation. Reports/clock timeout mark RECOVERING, not synchronized.
 
 Default buffering policy leaves others moving. STATUS BUFFERING with host-enabled
-pauseOnBuffer issues an explicit scheduled shared PAUSE. Buffer restoration uses
+pauseOnBuffer issues an explicit scheduled shared PAUSE, including superseding a
+pending PLAY; this is a canonical command with a new version/sequence. Under
+KEEP_MOVING, a strict majority of connected admitted active members buffering
+emits BUFFER_RECOMMENDATION immediately (or within 3000 ms under flapping), with
+counts and a recommendation to pause/reduce quality. It is advisory, never a
+hidden pause/Stop; timeline versions do not change. The denominator includes
+READY/PLAYING/PAUSED/BUFFERING members, not stopped/preparing/disconnected/degraded
+members. At most one notice per majority episode, no more than one per 2000 ms;
+the one-second maintenance tick handles a rate-limited renewed episode.
+Policy changes are applied to existing buffering too. Buffer restoration uses
 READY and targeted catch-up; it never rewinds the whole party or generates Stop.
 
 **Stop interception**: call adapter.localStop only, cancel local pending deadlines,
@@ -387,10 +519,11 @@ Every ERROR has schemaVersion/type/code and requestId when parseable. Codes:
 ```
 NOT_AVAILABLE SESSION_EXPIRED SESSION_DENIED INVALID_REQUEST UNKNOWN_TYPE RATE_LIMITED REQUEST_ID_REUSED
 STALE_REQUEST SERVER_EPOCH_CHANGED ALREADY_JOINED SERVER_CAPACITY MEDIA_UNAVAILABLE
-MEDIA_MISMATCH MEDIA_PATH_NOT_READY PARTY_GONE JOIN_DENIED PARTY_FULL REJOIN_DENIED
+MEDIA_MISMATCH MEDIA_PATH_NOT_READY MEDIA_ADMISSION_UNCONFIRMED PARTY_GONE JOIN_DENIED PARTY_FULL REJOIN_DENIED
 NOT_MEMBER HOST_REQUIRED CLIENT_UNAVAILABLE CLOCK_SAMPLE_INVALID NOT_READY
 REJOIN_REQUIRED RESOURCE_DENIED STALE_STATE INVALID_ACTION TRANSITION_PENDING
 CLOCK_UNCERTAIN STALE_SAMPLE STALE_CORRECTION CORRECTION_PENDING PREPARATION_EXPIRED
+COMMAND_GONE NOT_COMMAND_RECIPIENT OUTCOME_CLOSED OUTCOME_ALREADY_REPORTED EXECUTION_PENDING
 ```
 
 Surface the specific error, not success-shaped fallback. STALE_STATE:
@@ -400,6 +533,8 @@ slot; REJOIN_REQUIRED: explicit barrier; PARTY_GONE/SERVER_EPOCH_CHANGED:
 discard old authority/tokens/deadlines and fall back to independent playback.
 SESSION_EXPIRED: HELLO on the same admitted connection, then send a new request
 with the refreshed token; SESSION_DENIED: discard mismatched credentials and HELLO.
+MEDIA_ADMISSION_UNCONFIRMED: wait for actual output or fix/rebind only your
+current-generation producer; do not override it with client readiness claims.
 NOT_AVAILABLE: hide Party UI; ordinary playback continues. Never execute rejected
 actions speculatively. Snapshots can supersede an in-flight correction; discard
 old-version corrections, fetch new state and rejoin rather than executing stale work.
@@ -426,19 +561,22 @@ Known limitations, not claims of completed PRD acceptance:
 * PWA/Android adapters/UI are not implemented here. Physical mixed-client,
   activation, AVPlay/HTML5/Android lifecycle behavior and 30-minute p95 skew/action
   convergence targets remain unproven. Synthetic tests are not a physical matrix.
-* Generic Party budgets reserve Party concurrency/estimated egress only. There is
+* Generic Party budgets bound Party concurrency/estimated egress only. There is
   no existing machine-wide software-transcode CPU reservation or generic egress
   governor to reuse. Normal GPU resource admission still happens in the existing
   stream pipeline; provisional surface ranking may be revised there. Do not
   promise five transcoded streams based on a five-slot roster or these unit tests.
-* Actual byte-path startup/failure, decoder seek precision, encoder pressure and
+* Decoder seek precision, physical encoder pressure and
   normal media cleanup need end-to-end hardware validation. READY requires an
   actual loaded server player and client observations but does not independently
   measure browser activation or rendered frames.
 * Selected-client invite handles have no server-synthesized friendly-device labels.
-  Majority-buffer automatic recommendations, measured execution-spread aggregation
-  and rendered-frame skew metrics are not implemented; explicit host pause-on-buffer
-  and per-client corrections are implemented.
+  Majority-buffer recommendations and bounded execution-spread aggregation are
+  implemented; rendered-frame skew metrics are not independently measured.
+* Today's PWA/Android clients and PWA bridge do not yet implement the new media
+  admission echo/command or execution-report protocol. They cannot pass Party
+  readiness by sending flags alone. This is required future client/relay integration,
+  not an unimplemented server resource grant.
 * Transparent socket-only reconnect does not reauthorize Party Mode; a fresh
   server-admitted NG session plus recovery token is required. LAN needs no login
   under existing LAN admission policy. Single-segment known-duration media only.
@@ -450,7 +588,7 @@ Known limitations, not claims of completed PRD acceptance:
 Run from the repository root on Windows:
 
 ```powershell
-.\gradlew.bat test --tests sage.party.PartyServiceTest --tests sage.NgPartyTransportIntegrationTest --tests sage.VideoFrameTest --tests sage.MiniPlayerTest --tests sage.MiniPlayerSocketReconnectTest --tests sage.client.PlaybackDecisionEngineTest --tests sage.client.PlaybackSurfaceSetTest
+.\gradlew.bat test --tests sage.party.PartyServiceTest --tests sage.NgPartyTransportIntegrationTest --tests sage.NgPartyMediaAdmissionTest --tests sage.VideoFrameTest --tests sage.MiniPlayerTest --tests sage.MiniPlayerSocketReconnectTest --tests sage.client.PlaybackDecisionEngineTest --tests sage.client.PlaybackSurfaceSetTest --tests sage.MediaServerXcodeEnhanceTest --tests sage.HTTPLSServerTest
 node --test .\docs\party\v1\examples.cjs
 ```
 
@@ -465,3 +603,7 @@ including cross-renderer token/auth/capability rejection, server-owned push
 scheduling/cancellation, renderer authorization invalidation, and unconsumed legacy
 property regression. Its media/environment boundaries are mocked, not a physical
 stream startup test.
+`NgPartyMediaAdmissionTest` exercises the actual MediaServer binding and HLS
+producer-confirmation callback with deterministic producer boundaries, including
+expiry/replacement/generation/close/failure and per-viewer isolation. These are not
+physical encoder/HTTP soak acceptance results.

@@ -36,6 +36,12 @@ public final class PartyService
     Delivery plan(int mediaFileId);
     /** Returns actual server-selected playback metadata, or throws until prepared. */
     Delivery delivery(int mediaFileId);
+    /** Issues a media-path binding credential for the current loaded playback generation. */
+    default JsonObject mediaAdmission(int mediaFileId) { throw new Fault("MEDIA_ADMISSION_UNCONFIRMED"); }
+    /** Checks existing media producer admission; client readiness flags are not evidence. */
+    default boolean mediaAdmitted(int mediaFileId) { return false; }
+    /** Revokes pending or confirmed media correlation without touching another viewer. */
+    default void releaseMediaAdmission() {}
     /** Resolves initiating-client skip settings, using existing Sage semantics. */
     long skip(String action);
     /** Suppresses ordinary per-viewer progress logging while party playback owns it. */
@@ -102,12 +108,29 @@ public final class PartyService
     final int media;
     final long duration, created;
     final LinkedHashMap<String, Member> members = new LinkedHashMap<>();
+    final LinkedHashMap<Long, CommandOutcome> outcomes = new LinkedHashMap<>();
     String host, token, state = "PAUSED";
     long tokenExpires, version, seq, anchor, anchorAt;
     boolean hostOnly, pauseOnBuffer;
+    boolean majorityNotified;
+    long lastBufferNotice = -1;
     JsonObject pending;
     Party(String id, int media, long duration, long now)
     { this.id = id; this.media = media; this.duration = duration; created = anchorAt = now; }
+  }
+  private static final class Execution
+  {
+    long receivedAt = -1, executedAt = -1, position, skew;
+    double uncertainty;
+    boolean success;
+    String state;
+  }
+  private static final class CommandOutcome
+  {
+    final JsonObject command;
+    final LinkedHashMap<String, Execution> participants = new LinkedHashMap<>();
+    boolean complete, timedOut, superseded;
+    CommandOutcome(JsonObject command) { this.command = copy(command); }
   }
 
   /** Creates an isolated service; capacity limits are staged-rollout policy. */
@@ -321,6 +344,8 @@ public final class PartyService
         boolean pauseOnBuffer = flag(r, "pauseOnBuffer");
         p.hostOnly = hostOnly;
         p.pauseOnBuffer = pauseOnBuffer;
+        p.majorityNotified = false;
+        bufferPolicy(p, now);
         broadcast(p, snapshot(p, now));
         return envelope("ACK");
       case "CLOCK":
@@ -345,6 +370,10 @@ public final class PartyService
         out.addProperty("confident", m.clock.confident(now));
         return out;
       }
+      case "MEDIA_ADMISSION":
+        if (!Set.of("PREPARING", "RECOVERING", "BUFFERING").contains(m.status))
+          throw new Fault("REJOIN_REQUIRED");
+        return peer.mediaAdmission(p.media);
       case "READY":
       {
         current(p, r);
@@ -356,6 +385,7 @@ public final class PartyService
           throw new Fault("NOT_READY");
         long precision = number(r, "precisionMs", 0, 1000);
         boolean rate = flag(r, "rateAdjust");
+        if (!peer.mediaAdmitted(p.media)) throw new Fault("MEDIA_ADMISSION_UNCONFIRMED");
         Delivery delivery = peer.delivery(p.media);
         if (m.reservation != null)
           delivery = new Delivery(delivery.surface, delivery.mode, delivery.videoCodec, delivery.audioCodec,
@@ -379,11 +409,7 @@ public final class PartyService
         current(p, r);
         return action(p, m, text(r, "action"), now);
       case "ACK":
-        current(p, r);
-        m.ackSeq = number(r, "commandSeq", p.seq, p.seq);
-        JsonObject ack = envelope("ACK");
-        ack.addProperty("commandSeq", m.ackSeq);
-        return ack;
+        return commandAck(p, m, r, now);
       case "POSITION": return position(p, m, r, now);
       case "STATUS":
       {
@@ -395,12 +421,11 @@ public final class PartyService
         m.status = status;
         m.peer.cancelScheduled();
         if (!"BUFFERING".equals(status)) { m.clock.reset(); m.delivery = null; }
+        if (!"BUFFERING".equals(status)) m.peer.releaseMediaAdmission();
         if ("LOCALLY_STOPPED".equals(status)) m.reservation = null;
         if ("LOCALLY_STOPPED".equals(status)) m.correctionId = null;
         roster(p, m);
-        if ("BUFFERING".equals(status) && p.pauseOnBuffer && p.pending == null
-            && "PLAYING".equals(p.state))
-          transition(p, m, "PAUSE", now, position(p, now + lead(p, now)), "PAUSED");
+        bufferPolicy(p, now);
         return envelope("ACK");
       }
       case "CORRECTION_RESULT":
@@ -471,7 +496,7 @@ public final class PartyService
   }
   private void reset(Member m)
   {
-    if (m.peer != null) m.peer.cancelScheduled();
+    if (m.peer != null) { m.peer.cancelScheduled(); m.peer.releaseMediaAdmission(); }
     m.status = "PREPARING"; m.clock.reset(); m.probes.clear(); m.delivery = null;
     m.lastReport = m.lastSample = m.correctionAt = -1; m.correctionId = null; m.failures.clear();
   }
@@ -518,6 +543,15 @@ public final class PartyService
   }
   private JsonObject transition(Party p, Member m, String cause, long now, long target, String state)
   {
+    if (p.pending != null)
+    {
+      CommandOutcome previous = p.outcomes.get(p.pending.get("commandSeq").getAsLong());
+      if (previous != null && !previous.complete)
+      {
+        previous.complete = previous.superseded = true;
+        broadcast(p, outcomeJson(p, previous, now, "SUPERSEDED"));
+      }
+    }
     JsonObject out = envelope("COMMAND");
     out.addProperty("partyId", p.id);
     out.addProperty("stateVersion", ++p.version);
@@ -529,6 +563,19 @@ public final class PartyService
     out.addProperty("executeAtServerMonoMs", now + lead(p, now));
     out.addProperty("originParticipantId", m.id);
     p.pending = copy(out);
+    CommandOutcome outcome = new CommandOutcome(out);
+    for (Member member : p.members.values())
+      if (commandRecipient(member, now)) outcome.participants.put(member.id, new Execution());
+    if (p.outcomes.size() >= 16)
+    {
+      CommandOutcome oldest = p.outcomes.remove(p.outcomes.keySet().iterator().next());
+      if (!oldest.complete)
+      {
+        oldest.complete = oldest.timedOut = true;
+        broadcast(p, outcomeJson(p, oldest, now, "EVICTED"));
+      }
+    }
+    p.outcomes.put(p.seq, outcome);
     for (Member member : p.members.values())
     {
       member.correctionId = null;
@@ -536,12 +583,134 @@ public final class PartyService
     }
     diagnostic(p, m, "COMMAND_" + cause + "_DEADLINE_" + out.get("executeAtServerMonoMs").getAsLong(), now);
     for (Member member : p.members.values())
-      if (healthy(member, now))
+      if (commandRecipient(member, now))
       {
         member.peer.schedule(copy(out));
         member.peer.send(copy(out));
       }
     return out;
+  }
+  private boolean commandRecipient(Member m, long now)
+  { return healthy(m, now) || m.peer != null && m.admitted && "BUFFERING".equals(m.status) && m.clock.confident(now); }
+  private JsonObject commandAck(Party p, Member m, JsonObject r, long now)
+  {
+    long seq = number(r, "commandSeq", 1, p.seq);
+    CommandOutcome outcome = p.outcomes.get(seq);
+    if (outcome == null) throw new Fault("COMMAND_GONE");
+    if (number(r, "stateVersion", 0, MAX_TIME) != outcome.command.get("stateVersion").getAsLong())
+      throw new Fault("STALE_STATE");
+    Execution result = outcome.participants.get(m.id);
+    if (result == null) throw new Fault("NOT_COMMAND_RECIPIENT");
+    if (outcome.complete) throw new Fault("OUTCOME_CLOSED");
+    String stage = text(r, "stage");
+    if (!Set.of("RECEIVED", "EXECUTED").contains(stage)) throw new Fault("INVALID_REQUEST");
+    if ("EXECUTED".equals(stage))
+    {
+      if (result.executedAt >= 0) throw new Fault("OUTCOME_ALREADY_REPORTED");
+      boolean success = flag(r, "success");
+      long landed = number(r, "positionMs", 0, p.duration);
+      String state = text(r, "state");
+      if (!Set.of("PLAYING", "PAUSED", "BUFFERING", "SEEKING").contains(state))
+        throw new Fault("INVALID_REQUEST");
+      long sample = sampleTime(m, r, now);
+      long deadline = outcome.command.get("executeAtServerMonoMs").getAsLong();
+      if (now < deadline || sample + m.clock.uncertainty(now) < deadline)
+        throw new Fault("EXECUTION_PENDING");
+      long target = outcome.command.get("targetPositionMs").getAsLong();
+      String targetState = outcome.command.get("targetState").getAsString();
+      if ("PLAYING".equals(targetState)) target += Math.max(0, sample - deadline);
+      result.position = landed;
+      result.skew = landed - Math.min(p.duration, target);
+      result.state = state;
+      result.success = success && targetState.equals(state) && Math.abs(result.skew) <= deadband(m, now);
+      result.uncertainty = m.clock.uncertainty(now);
+      result.executedAt = sample;
+    }
+    if (result.receivedAt < 0) result.receivedAt = now;
+    m.ackSeq = Math.max(m.ackSeq, seq);
+    outcome.complete = outcome.participants.values().stream().allMatch(e -> e.executedAt >= 0);
+    JsonObject report = outcomeJson(p, outcome, now, outcome.complete ? "COMPLETE" : "PENDING");
+    broadcast(p, report);
+    JsonObject ack = envelope("ACK");
+    ack.addProperty("commandSeq", seq);
+    ack.addProperty("stage", stage);
+    return ack;
+  }
+  private JsonObject outcomeJson(Party p, CommandOutcome outcome, long now, String status)
+  {
+    JsonObject out = envelope("COMMAND_OUTCOME");
+    out.addProperty("partyId", p.id);
+    out.add("commandSeq", outcome.command.get("commandSeq"));
+    out.add("stateVersion", outcome.command.get("stateVersion"));
+    out.add("executeAtServerMonoMs", outcome.command.get("executeAtServerMonoMs"));
+    out.addProperty("reportDeadlineServerMonoMs", outcome.command.get("executeAtServerMonoMs").getAsLong() + 10000);
+    out.addProperty("outcome", status);
+    int received = 0, executed = 0, succeeded = 0;
+    long min = Long.MAX_VALUE, max = Long.MIN_VALUE;
+    double uncertainty = 0;
+    JsonArray participants = new JsonArray();
+    for (Map.Entry<String, Execution> entry : outcome.participants.entrySet())
+    {
+      Execution e = entry.getValue();
+      JsonObject item = new JsonObject();
+      item.addProperty("participantId", entry.getKey());
+      if (e.receivedAt >= 0) { received++; item.addProperty("receivedAtServerMonoMs", e.receivedAt); }
+      if (e.executedAt >= 0)
+      {
+        executed++; if (e.success) succeeded++;
+        min = Math.min(min, e.executedAt); max = Math.max(max, e.executedAt);
+        uncertainty = Math.max(uncertainty, e.uncertainty);
+        item.addProperty("executedAtServerMonoMs", e.executedAt);
+        item.addProperty("positionMs", e.position); item.addProperty("state", e.state);
+        item.addProperty("success", e.success); item.addProperty("skewMs", e.skew);
+        item.addProperty("uncertaintyMs", e.uncertainty);
+      }
+      participants.add(item);
+    }
+    out.addProperty("expectedCount", outcome.participants.size());
+    out.addProperty("receivedCount", received); out.addProperty("executedCount", executed);
+    out.addProperty("successCount", succeeded); out.addProperty("failedCount", executed - succeeded);
+    out.addProperty("missingCount", outcome.participants.size() - executed);
+    if (executed >= 2)
+    {
+      out.addProperty("executionSpreadMs", max - min);
+      out.addProperty("spreadUncertaintyMs", 2 * uncertainty);
+    }
+    out.add("participants", participants);
+    out.addProperty("serverMonoMs", now);
+    return out;
+  }
+  private void bufferPolicy(Party p, long now)
+  {
+    int active = 0, buffering = 0;
+    Member origin = null;
+    for (Member member : p.members.values())
+      if (member.peer != null && member.admitted && Set.of("READY", "PLAYING", "PAUSED", "BUFFERING").contains(member.status))
+      {
+        active++;
+        if ("BUFFERING".equals(member.status)) { buffering++; origin = member; }
+      }
+    boolean majority = active > 0 && buffering * 2 > active;
+    if (!majority) p.majorityNotified = false;
+    if (buffering == 0) return;
+    boolean pendingPlay = p.pending != null && "PLAYING".equals(p.pending.get("targetState").getAsString());
+    if (p.pauseOnBuffer && ("PLAYING".equals(p.state) || pendingPlay))
+    {
+      if (p.pending != null && "PAUSED".equals(p.pending.get("targetState").getAsString())) return;
+      transition(p, origin, "PAUSE", now, position(p, now + lead(p, now)), "PAUSED");
+    }
+    else if (!p.pauseOnBuffer && majority && !p.majorityNotified
+        && (p.lastBufferNotice < 0 || now - p.lastBufferNotice >= 2000))
+    {
+      p.majorityNotified = true; p.lastBufferNotice = now;
+      JsonObject notice = envelope("BUFFER_RECOMMENDATION");
+      notice.addProperty("partyId", p.id);
+      notice.addProperty("stateVersion", p.version); notice.addProperty("commandSeq", p.seq);
+      notice.addProperty("policy", "KEEP_MOVING"); notice.addProperty("recommendation", "PAUSE_OR_REDUCE_QUALITY");
+      notice.addProperty("bufferingCount", buffering); notice.addProperty("activeCount", active);
+      notice.addProperty("hostParticipantId", p.host); notice.addProperty("serverMonoMs", now);
+      broadcast(p, notice);
+    }
   }
   private long deadband(Member m, long now)
   { return Math.max(m.precision, m.clock.p95(now) > 40 ? 250 : 125); }
@@ -626,7 +795,7 @@ public final class PartyService
     JsonObject o = new JsonObject();
     o.addProperty("surface", d.surface); o.addProperty("mode", d.mode);
     o.addProperty("videoCodec", d.videoCodec); o.addProperty("audioCodec", d.audioCodec);
-    o.addProperty("reservedKbps", d.bitrateKbps); o.addProperty("transcode", d.transcode);
+    o.addProperty("budgetKbps", d.bitrateKbps); o.addProperty("transcode", d.transcode);
     return o;
   }
   private JsonObject joined(Party p, Member m, String type, long now, boolean token)
@@ -655,6 +824,13 @@ public final class PartyService
     o.addProperty("serverMonoMs", now); o.addProperty("hostParticipantId", p.host);
     o.addProperty("hostOnly", p.hostOnly); o.addProperty("pauseOnBuffer", p.pauseOnBuffer);
     if (p.pending != null) o.add("pendingCommand", copy(p.pending));
+    if (!p.outcomes.isEmpty())
+    {
+      CommandOutcome latest = null;
+      for (CommandOutcome outcome : p.outcomes.values()) latest = outcome;
+      o.add("latestCommandOutcome", outcomeJson(p, latest, now,
+          latest.superseded ? "SUPERSEDED" : latest.timedOut ? "TIMED_OUT" : latest.complete ? "COMPLETE" : "PENDING"));
+    }
     JsonArray roster = new JsonArray();
     for (Member m : p.members.values())
     {
@@ -680,7 +856,17 @@ public final class PartyService
     broadcast(p, o);
   }
   private void broadcast(Party p, JsonObject out)
-  { for (Member m : p.members.values()) if (m.peer != null) m.peer.send(copy(out)); }
+  {
+    if ("COMMAND_OUTCOME".equals(out.get("type").getAsString()))
+      System.out.println("PartyMode party=" + p.id + " seq=" + out.get("commandSeq").getAsLong()
+          + " outcome=" + out.get("outcome").getAsString()
+          + " expectedCount=" + out.get("expectedCount").getAsInt()
+          + " receivedCount=" + out.get("receivedCount").getAsInt()
+          + " executedCount=" + out.get("executedCount").getAsInt()
+          + " failedCount=" + out.get("failedCount").getAsInt()
+          + " executionSpreadMs=" + (out.has("executionSpreadMs") ? out.get("executionSpreadMs").getAsLong() : -1));
+    for (Member m : p.members.values()) if (m.peer != null) m.peer.send(copy(out));
+  }
 
   /** Routes existing server-side controls without rebroadcasting raw input or Stop. */
   public synchronized boolean nativeAction(Peer peer, String action)
@@ -762,8 +948,25 @@ public final class PartyService
         p.state = p.pending.get("targetState").getAsString();
         p.pending = null;
       }
+      bufferPolicy(p, now);
+      for (CommandOutcome outcome : p.outcomes.values())
+        if (!outcome.complete && now >= outcome.command.get("executeAtServerMonoMs").getAsLong() + 10000)
+        {
+          outcome.complete = outcome.timedOut = true;
+          broadcast(p, outcomeJson(p, outcome, now, "TIMED_OUT"));
+        }
       for (Member m : new ArrayList<>(p.members.values()))
       {
+        if (m.peer != null && m.admitted && Set.of("READY", "PLAYING", "PAUSED", "BUFFERING").contains(m.status)
+            && !m.peer.mediaAdmitted(p.media))
+        {
+          m.peer.cancelScheduled();
+          m.status = "RECOVERING"; m.delivery = null; m.correctionId = null;
+          JsonObject error = envelope("ERROR");
+          error.addProperty("code", "MEDIA_ADMISSION_UNCONFIRMED");
+          m.peer.send(error);
+          roster(p, m);
+        }
         if (m.peer == null && now - m.disconnectedAt > GRACE_MS) { remove(p, m, false, now); continue; }
         if ("PREPARING".equals(m.status) && now - m.preparingSince > 60000)
         {

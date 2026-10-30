@@ -55,7 +55,24 @@ function predictedPosition(snapshot, serverMonoMs) {
     position + (state === 'PLAYING' ? Math.max(0, serverMonoMs - at) : 0)));
 }
 
-module.exports = { clientFrame, decodeServerFrame, localDeadline, predictedPosition };
+function mediaBindingCommand(handleReply) {
+  assert.equal(handleReply.type, 'MEDIA_ADMISSION_HANDLE');
+  assert.match(handleReply.handle, /^[A-Za-z0-9_-]{32}$/);
+  return Buffer.from(`PARTY_BIND ${handleReply.handle}\r\n`, 'ascii');
+}
+
+function executionAck(command, commonRequest, observation) {
+  return {
+    ...commonRequest, schemaVersion: 1, type: 'ACK',
+    partyId: command.partyId, stateVersion: command.stateVersion,
+    commandSeq: command.commandSeq, stage: 'EXECUTED',
+    success: observation.success, sampleMonoMs: observation.sampleMonoMs,
+    positionMs: observation.positionMs, state: observation.state
+  };
+}
+
+module.exports = { clientFrame, decodeServerFrame, localDeadline, predictedPosition,
+  mediaBindingCommand, executionAck };
 
 test('golden client framing preserves the existing 16-byte UI envelope', () => {
   const frame = clientFrame(golden.hello);
@@ -92,4 +109,44 @@ test('Stop is a local status, never a shared command', () => {
   assert.equal(golden.localStop.status, 'LOCALLY_STOPPED');
   assert.equal(golden.invalidStopReply.code, 'INVALID_ACTION');
   assert.notEqual(golden.command.cause, 'STOP');
+});
+
+test('future thin bridge echoes the opaque handle on only its post-OPEN producer', () => {
+  assert.equal(mediaBindingCommand(golden.mediaAdmissionHandle).toString('ascii'),
+    `PARTY_BIND ${golden.mediaAdmissionHandle.handle}\r\n`);
+  assert.throws(() => mediaBindingCommand({ ...golden.mediaAdmissionHandle, handle: 'bad\r\nQUIT' }));
+  assert.equal(golden.mediaAdmissionHandle.expiresInMs, 60000);
+  // Future HLS/bridge request header; never put the credential into a logged media URL.
+  const headers = { 'X-SageTV-Party-Admission': golden.mediaAdmissionHandle.handle };
+  assert.equal(headers['X-SageTV-Party-Admission'].length, 32);
+});
+
+test('execution is a separate observed result, not a received command', () => {
+  const expected = golden.ackExecuted;
+  assert.deepEqual(executionAck(golden.command, {
+    requestId: expected.requestId, requestSeq: expected.requestSeq,
+    serverEpoch: expected.serverEpoch, sessionToken: expected.sessionToken
+  }, expected), expected);
+  assert.equal(golden.ackReceived.stage, 'RECEIVED');
+  assert.equal(expected.sampleMonoMs + golden.clockModel.serverMinusClientMs, 100780);
+});
+
+test('outcome spread includes uncertainty and failed landing rather than fabricating sync proof', () => {
+  const outcome = golden.commandOutcome;
+  const observed = outcome.participants.map(p => p.executedAtServerMonoMs);
+  assert.equal(Math.max(...observed) - Math.min(...observed), outcome.executionSpreadMs);
+  assert.equal(outcome.spreadUncertaintyMs,
+    2 * Math.max(...outcome.participants.map(p => p.uncertaintyMs)));
+  assert.equal(outcome.failedCount, 1);
+  assert.equal(outcome.expectedCount - outcome.executedCount, outcome.missingCount);
+  assert.equal(outcome.reportDeadlineServerMonoMs - outcome.executeAtServerMonoMs, 10000);
+});
+
+test('majority buffering recommendation is advisory under keep-moving policy', () => {
+  const recommendation = golden.bufferRecommendation;
+  assert.ok(recommendation.bufferingCount * 2 > recommendation.activeCount);
+  assert.equal(recommendation.policy, 'KEEP_MOVING');
+  assert.equal(recommendation.type, 'BUFFER_RECOMMENDATION');
+  assert.equal(recommendation.stateVersion, golden.command.stateVersion);
+  assert.equal(recommendation.commandSeq, golden.command.commandSeq);
 });

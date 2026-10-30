@@ -18,7 +18,7 @@ final class NgPartyConnection implements PartyService.Peer
   private static final long ORIGIN = System.nanoTime();
   private static final PartyService SERVICE = new PartyService(
       () -> (System.nanoTime() - ORIGIN) / 1000000,
-      Sage.getBoolean("party/enabled", false), Sage.getInt("party/max_reserved_kbps", 100000),
+      Sage.getBoolean("party/enabled", false), Sage.getInt("party/max_budget_kbps", 100000),
       Sage.getInt("party/max_transcodes", 1));
   private static final ScheduledThreadPoolExecutor TIMER = new ScheduledThreadPoolExecutor(1, r -> {
     Thread t = new Thread(r, "PartyMaintenance"); t.setDaemon(true); return t;
@@ -32,6 +32,8 @@ final class NgPartyConnection implements PartyService.Peer
   private final ThreadPoolExecutor input = executor("PartyInput");
   private final ThreadPoolExecutor output = executor("PartyOutput");
   private volatile boolean closed;
+  private volatile MiniPlayer admittedPushPlayer;
+  private volatile long admittedPushGeneration = -1;
   private java.util.concurrent.ScheduledFuture<?> scheduled;
   private long scheduleGeneration;
 
@@ -83,6 +85,7 @@ final class NgPartyConnection implements PartyService.Peer
   {
     if (closed) return;
     closed = true;
+    releaseMediaAdmission();
     cancelScheduled();
     service.disconnected(this);
     if (ui.getVideoFrame() != null) ui.getVideoFrame().setPartyProgressOwned(false);
@@ -141,7 +144,49 @@ final class NgPartyConnection implements PartyService.Peer
     if (mf == null || mf.getID() != media || duration(media) <= 0
         || (vf.getPlayerState() != MediaPlayer.PAUSE_STATE && vf.getPlayerState() != MediaPlayer.PLAY_STATE))
       throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
-    return vf.getPartyDelivery(renderer);
+    if (!mediaAdmitted(media)) throw new PartyProtocol.Fault("MEDIA_ADMISSION_UNCONFIRMED");
+    MiniPlayer push = "push".equals(renderer.getCurrentSurfaceDeliveryMode()) ? vf.getPartyPlayer() : null;
+    long generation = push == null ? -1 : push.getPartyPlaybackGeneration();
+    PartyService.Delivery result = vf.getPartyDelivery(renderer);
+    if (push != null)
+    {
+      if (vf.getPartyPlayer() != push || push.getPartyPlaybackGeneration() != generation)
+        throw new PartyProtocol.Fault("MEDIA_ADMISSION_UNCONFIRMED");
+      admittedPushPlayer = push; admittedPushGeneration = generation;
+    }
+    return result;
+  }
+
+  @Override public JsonObject mediaAdmission(int media)
+  {
+    MediaFile mf = ui.getVideoFrame().getCurrFile();
+    if (mf == null || mf.getID() != media) throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
+    JsonObject result = PartyProtocol.envelope("MEDIA_ADMISSION_HANDLE");
+    result.addProperty("handle", ui.getVideoFrame().issuePartyMediaAdmission(renderer, this));
+    result.addProperty("expiresInMs", 60000);
+    result.addProperty("mediaFileId", media);
+    result.addProperty("mode", renderer.getCurrentSurfaceDeliveryMode());
+    return result;
+  }
+
+  @Override public boolean mediaAdmitted(int media)
+  {
+    VideoFrame vf = ui.getVideoFrame();
+    MediaFile mf = vf.getCurrFile();
+    MiniPlayer admitted = admittedPushPlayer;
+    long generation = admittedPushGeneration;
+    return !closed && principal() != null && mf != null && mf.getID() == media
+        && (vf.getPlayerState() == MediaPlayer.PAUSE_STATE || vf.getPlayerState() == MediaPlayer.PLAY_STATE)
+        && ("push".equals(renderer.getCurrentSurfaceDeliveryMode())
+            ? vf.hasPartyPushAdmission() && (admitted == null
+                || vf.getPartyPlayer() == admitted && admitted.getPartyPlaybackGeneration() == generation)
+            : NgPartyMediaAdmission.INSTANCE.confirmed(this));
+  }
+
+  @Override public void releaseMediaAdmission()
+  {
+    admittedPushPlayer = null; admittedPushGeneration = -1;
+    NgPartyMediaAdmission.INSTANCE.revoke(this);
   }
 
   @Override public PartyService.Delivery plan(int media)
@@ -170,7 +215,11 @@ final class NgPartyConnection implements PartyService.Peer
   }
 
   @Override public long skip(String action) { return ui.getVideoFrame().partySkipDelta(action); }
-  @Override public void progressOwner(boolean owned) { ui.getVideoFrame().setPartyProgressOwned(owned); }
+  @Override public void progressOwner(boolean owned)
+  {
+    if (!owned) releaseMediaAdmission();
+    ui.getVideoFrame().setPartyProgressOwned(owned);
+  }
   @Override public void commit(int media, long position)
   { ui.getVideoFrame().commitPartyProgress(media, position); }
 
