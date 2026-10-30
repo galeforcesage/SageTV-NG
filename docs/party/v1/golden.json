@@ -1,0 +1,155 @@
+{
+  "schemaVersion": 1,
+  "property": "PARTY_V1",
+  "hello": {
+    "schemaVersion": 1,
+    "type": "HELLO",
+    "requestId": "h1",
+    "requestSeq": 1
+  },
+  "create": {
+    "schemaVersion": 1,
+    "type": "CREATE",
+    "requestId": "c1",
+    "requestSeq": 2,
+    "serverEpoch": "example-epoch",
+    "sessionToken": "EXAMPLE_NOT_A_REAL_SESSION_TOKEN",
+    "mediaFileId": 42
+  },
+  "join": {
+    "schemaVersion": 1,
+    "type": "JOIN",
+    "requestId": "j1",
+    "requestSeq": 2,
+    "serverEpoch": "example-epoch",
+    "sessionToken": "EXAMPLE_NOT_A_REAL_SESSION_TOKEN",
+    "partyId": "example-party",
+    "mediaFileId": 42,
+    "joinToken": "EXAMPLE_NOT_A_REAL_JOIN_TOKEN"
+  },
+  "ready": {
+    "schemaVersion": 1,
+    "type": "READY",
+    "requestId": "ready1",
+    "requestSeq": 13,
+    "serverEpoch": "example-epoch",
+    "sessionToken": "EXAMPLE_NOT_A_REAL_SESSION_TOKEN",
+    "partyId": "example-party",
+    "stateVersion": 0,
+    "prepared": true,
+    "activated": true,
+    "bufferAheadMs": 2000,
+    "precisionMs": 50,
+    "rateAdjust": false
+  },
+  "action": {
+    "schemaVersion": 1,
+    "type": "ACTION",
+    "requestId": "ff1",
+    "requestSeq": 14,
+    "serverEpoch": "example-epoch",
+    "sessionToken": "EXAMPLE_NOT_A_REAL_SESSION_TOKEN",
+    "partyId": "example-party",
+    "stateVersion": 0,
+    "action": "FF"
+  },
+  "command": {
+    "schemaVersion": 1,
+    "type": "COMMAND",
+    "partyId": "example-party",
+    "commandSeq": 1,
+    "stateVersion": 1,
+    "cause": "FF",
+    "targetPositionMs": 10000,
+    "targetState": "PAUSED",
+    "targetRate": 1,
+    "executeAtServerMonoMs": 100750,
+    "originParticipantId": "example-host"
+  },
+  "snapshot": {
+    "schemaVersion": 1,
+    "type": "SNAPSHOT",
+    "partyId": "example-party",
+    "serverEpoch": "example-epoch",
+    "mediaFileId": 42,
+    "durationMs": 3600000,
+    "stateVersion": 1,
+    "commandSeq": 1,
+    "anchorPositionMs": 0,
+    "anchorServerMonoMs": 99000,
+    "state": "PAUSED",
+    "rate": 1,
+    "serverMonoMs": 100000,
+    "hostParticipantId": "example-host",
+    "hostOnly": false,
+    "pauseOnBuffer": false,
+    "pendingCommand": {
+      "schemaVersion": 1,
+      "type": "COMMAND",
+      "partyId": "example-party",
+      "commandSeq": 1,
+      "stateVersion": 1,
+      "cause": "FF",
+      "targetPositionMs": 10000,
+      "targetState": "PAUSED",
+      "targetRate": 1,
+      "executeAtServerMonoMs": 100750,
+      "originParticipantId": "example-host"
+    },
+    "roster": [
+      {
+        "participantId": "example-host",
+        "status": "PAUSED",
+        "clockConfident": true,
+        "p95RttMs": 10,
+        "uncertaintyMs": 5,
+        "ackCommandSeq": 0,
+        "delivery": {
+          "surface": "android",
+          "mode": "push",
+          "videoCodec": "H264",
+          "audioCodec": "AAC",
+          "reservedKbps": 8000,
+          "transcode": false
+        }
+      }
+    ]
+  },
+  "clockModel": {
+    "schemaVersion": 1,
+    "type": "CLOCK_MODEL",
+    "serverMinusClientMs": 100,
+    "uncertaintyMs": 5,
+    "p95RttMs": 10,
+    "confident": true,
+    "requestId": "clock5",
+    "serverMonoMs": 100000
+  },
+  "localStop": {
+    "schemaVersion": 1,
+    "type": "STATUS",
+    "requestId": "stop1",
+    "requestSeq": 15,
+    "serverEpoch": "example-epoch",
+    "sessionToken": "EXAMPLE_NOT_A_REAL_SESSION_TOKEN",
+    "partyId": "example-party",
+    "status": "LOCALLY_STOPPED"
+  },
+  "invalidStop": {
+    "schemaVersion": 1,
+    "type": "ACTION",
+    "requestId": "bad1",
+    "requestSeq": 16,
+    "serverEpoch": "example-epoch",
+    "sessionToken": "EXAMPLE_NOT_A_REAL_SESSION_TOKEN",
+    "partyId": "example-party",
+    "stateVersion": 1,
+    "action": "STOP"
+  },
+  "invalidStopReply": {
+    "schemaVersion": 1,
+    "type": "ERROR",
+    "code": "INVALID_ACTION",
+    "requestId": "bad1"
+  }
+}

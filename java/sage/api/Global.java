@@ -3180,6 +3180,19 @@ public class Global {
         }
         return Boolean.FALSE;
       }});
+    rft.put(new PredefinedJEPFunction("Global", "VerifyPartyPlaceshifterLogin",
+        new String[] { "Username", "PasswordDigest" })
+    {
+      /** Verifies existing Placeshifter credentials for the current renderer's Party Mode binding. */
+      public Object runSafely(Catbert.FastStack stack) throws Exception {
+        String digest = getString(stack);
+        String username = getString(stack);
+        if (stack.getUIMgr() != null
+            && stack.getUIMgr().getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
+          return ((MiniClientSageRenderer)stack.getUIMgr().getRootPanel().getRenderEngine())
+              .verifyPartyLogin(username, digest);
+        return Boolean.FALSE;
+      }});
     rft.put(new PredefinedJEPFunction("Global", "CachePlaceshifterLogin")
     {
       /**

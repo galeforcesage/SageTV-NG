@@ -1719,7 +1719,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         {
           // This doesn't need to be done on the UI thread for any reason
           if (Sage.DBG) System.out.println("VF Watch Complete Check currFile=" + currFile + " loggedWatch=" + loggedWatch);
-          if (currFile != null && !loggedWatch && !currFile.isAnyLiveStream() && Permissions.hasPermission(Permissions.PERMISSION_WATCHEDTRACKING, uiMgr))
+          if (!partyProgressOwned && currFile != null && !loggedWatch && !currFile.isAnyLiveStream() && Permissions.hasPermission(Permissions.PERMISSION_WATCHEDTRACKING, uiMgr))
           {
             Airing doneAir = currFile.getContentAiring();
             if (doneAir != null && currFile.isTV())
@@ -4226,6 +4226,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
 
   private void logFileWatch()
   {
+    if (partyProgressOwned) return;
     if (currFile != null && !loggedWatch && Permissions.hasPermission(Permissions.PERMISSION_WATCHEDTRACKING, uiMgr))
     {
       if (currFile.isDVD() || currFile.isBluRay())
@@ -4546,14 +4547,85 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     return blurayTargetTitle;
   }
 
-  public void play() { submitJob(new VFJob(PLAY)); }
-  public void pause() { submitJob(new VFJob(PAUSE)); }
-  public void playPause() { submitJob(new VFJob(PLAY_PAUSE)); }
-  public void ff() { submitJob(new VFJob(TIME_ADJUST, uiMgr.getLong(prefs + FF_TIME, 10000L))); }
-  public void rew() { submitJob(new VFJob(TIME_ADJUST, uiMgr.getLong(prefs + REW_TIME, -10000L))); }
-  public void ff2() { submitJob(new VFJob(TIME_ADJUST, uiMgr.getLong(prefs + FF_TIME2, 150000L))); }
-  public void rew2() { submitJob(new VFJob(TIME_ADJUST, uiMgr.getLong(prefs + REW_TIME2, -150000L))); }
-  public void timeJump(long timeMillis) { submitJob(new VFJob(TIME_SET, timeMillis)); }
+  private boolean partyAction(String action)
+  {
+    return partyProgressOwned && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer
+        && ((MiniClientSageRenderer)uiMgr.getRootPanel().getRenderEngine()).routePartyAction(action);
+  }
+
+  /** Resolves the same initiating-client skip preference used by normal Sage skips. */
+  public long partySkipDelta(String action)
+  {
+    switch (action)
+    {
+      case "FF": return uiMgr.getLong(prefs + FF_TIME, 10000L);
+      case "REW": return uiMgr.getLong(prefs + REW_TIME, -10000L);
+      case "FF2": return uiMgr.getLong(prefs + FF_TIME2, 150000L);
+      case "REW2": return uiMgr.getLong(prefs + REW_TIME2, -150000L);
+      default: throw new sage.party.PartyProtocol.Fault("INVALID_ACTION");
+    }
+  }
+
+  private volatile boolean partyProgressOwned;
+
+  /** Prevents per-viewer writes while party progress owns the shared account's history. */
+  public void setPartyProgressOwned(boolean owned)
+  {
+    if (partyProgressOwned && !owned) loggedWatch = true;
+    partyProgressOwned = owned;
+  }
+
+  /** Returns whether normal watched/resume writes are currently suppressed. */
+  public boolean isPartyProgressOwned() { return partyProgressOwned; }
+
+  /** Applies a canonical scheduled push transition without feeding it back into party routing. */
+  void applyPartyTimeline(int mediaFileId, long positionMs, boolean playing)
+  {
+    MediaFile mf = currFile;
+    if (!partyProgressOwned || mf == null || mf.getID() != mediaFileId) return;
+    submitJob(new VFJob(TIME_SET, mf.getRecordTime() + positionMs));
+    submitJob(new VFJob(playing ? PLAY : PAUSE));
+  }
+
+  /** Uses existing permission/account watched policy on explicit leave/end, never on a report. */
+  public void commitPartyProgress(int media, long position)
+  {
+    MediaFile mf = Wizard.getInstance().getFileForID(media);
+    if (mf != null && Permissions.hasPermission(Permissions.PERMISSION_WATCHEDTRACKING, uiMgr))
+    {
+      Airing airing = mf.getContentAiring();
+      if (airing != null)
+        BigBrother.setWatched(airing, mf.getRecordTime(), mf.getRecordTime() + position,
+            realWatchStart, Sage.time(), false);
+    }
+  }
+
+  /** Returns server-selected metadata only for an actually loaded NG MiniPlayer. */
+  public sage.party.PartyService.Delivery getPartyDelivery(MiniClientSageRenderer renderer)
+  {
+    if (!(player instanceof MiniPlayer) || currFile == null || currFile.getFileFormat() == null)
+      throw new sage.party.PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
+    int kbps = currFile.getFileFormat().getBitrate() / 1000;
+    if (kbps <= 0 || renderer.getCurrentSurfaceId().isEmpty()
+        || renderer.getCurrentSurfaceDeliveryMode().isEmpty())
+      throw new sage.party.PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
+    // Reserve conservatively against source plus overhead, not a client-provided bitrate.
+    return new sage.party.PartyService.Delivery(renderer.getCurrentSurfaceId(),
+        renderer.getCurrentSurfaceDeliveryMode(), renderer.getCurrentSurfaceTargetVideoCodec(),
+        renderer.getCurrentSurfaceTargetAudioCodec(), (int)Math.min(Integer.MAX_VALUE, kbps * 2L),
+        ((MiniPlayer)player).isTranscoding()
+            || "pull-xcode".equals(renderer.getCurrentSurfaceDeliveryMode())
+            || "hls".equals(renderer.getCurrentSurfaceDeliveryMode()));
+  }
+
+  public void play() { if (!partyAction("PLAY")) submitJob(new VFJob(PLAY)); }
+  public void pause() { if (!partyAction("PAUSE")) submitJob(new VFJob(PAUSE)); }
+  public void playPause() { if (!partyAction("TOGGLE")) submitJob(new VFJob(PLAY_PAUSE)); }
+  public void ff() { if (!partyAction("FF")) submitJob(new VFJob(TIME_ADJUST, partySkipDelta("FF"))); }
+  public void rew() { if (!partyAction("REW")) submitJob(new VFJob(TIME_ADJUST, partySkipDelta("REW"))); }
+  public void ff2() { if (!partyAction("FF2")) submitJob(new VFJob(TIME_ADJUST, partySkipDelta("FF2"))); }
+  public void rew2() { if (!partyAction("REW2")) submitJob(new VFJob(TIME_ADJUST, partySkipDelta("REW2"))); }
+  public void timeJump(long timeMillis) { if (!partyAction("SEEK")) submitJob(new VFJob(TIME_SET, timeMillis)); }
   public void playbackControl(int code) { playbackControl(code, 0, 0); }
   public void playbackControl(int code, long param1, long param2)
   {
@@ -4601,14 +4673,17 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   {
     setRate(getRate() / 2);
   }
-  public void setRate(float d) { submitJob(new VFJob(RATE_SET, d)); }
+  public void setRate(float d)
+  {
+    if (!partyAction(d == 1 ? "PLAY" : d < 0 ? "REW" : "FF")) submitJob(new VFJob(RATE_SET, d));
+  }
   public float getRate()
   {
     MediaPlayer currPlayer = player;
     return (currPlayer == null) ? 1.0f : currPlayer.getPlaybackRate();
   }
-  public void smoothFF() { submitJob(new VFJob(SMOOTH_FORWARD)); }
-  public void smoothRew() { submitJob(new VFJob(SMOOTH_REVERSE)); }
+  public void smoothFF() { if (!partyAction("FF")) submitJob(new VFJob(SMOOTH_FORWARD)); }
+  public void smoothRew() { if (!partyAction("REW")) submitJob(new VFJob(SMOOTH_REVERSE)); }
 
   public java.awt.Dimension getVideoSize()
   {

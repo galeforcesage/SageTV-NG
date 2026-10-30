@@ -2984,6 +2984,7 @@ public class MiniClientSageRenderer extends SageRenderer
 
   public void cleanupRenderer()
   {
+    invalidatePartyAuthorization();
     super.cleanupRenderer();
     deinitMini();
     if (loopbackConnection)
@@ -3839,6 +3840,7 @@ public class MiniClientSageRenderer extends SageRenderer
 
   protected synchronized boolean initMini()
   {
+    boolean admittedByExistingLanPolicy = false;
     if (Sage.DBG && DEBUG_NATIVE2D) System.out.println("initMini()");
     // I think this is an artifact from before the multi-UI system was done, but we implemented the
     // mini-renderer to test it out
@@ -5247,6 +5249,7 @@ public class MiniClientSageRenderer extends SageRenderer
         if (localConnection && !Sage.getBoolean("miniclient/authenticate_local_connections", false))
         {
           // No authentication needed for this connection
+          admittedByExistingLanPolicy = true;
           cryptoSupport = false;
         }
         else
@@ -5443,6 +5446,8 @@ public class MiniClientSageRenderer extends SageRenderer
                 if (Sage.DBG) System.out.println("Client sent an auth block back to the server...check it...");
                 if (SageTV.oneWayEncrypt(clientAuth).equals(myAuth))
                 {
+                  partyPrincipal = sage.party.PartyAuthentication.cachedPrincipal(
+                      key -> Sage.get(key, null), clientName);
                   if (Sage.DBG) System.out.println("Cached authentication was verified!");
                   // Now we disable encryption on this channel and indicate we don't need authentication so that
                   // we load the regular STV instead of SecureLogin.xml
@@ -5496,6 +5501,10 @@ public class MiniClientSageRenderer extends SageRenderer
         }
       }
       recvr.resetThreadChecker();
+      partySessionInitialized = rv;
+      partyLanAuthorized = rv && admittedByExistingLanPolicy;
+      if (getPartyPrincipal() != null && ngCapabilities.containsAll(sage.party.PartyProtocol.REQUIRED))
+        partyConnection().authenticated();
       if (rv)
       {
         sage.plugin.PluginEventManager.getInstance().postEvent(sage.plugin.PluginEventManager.CLIENT_CONNECTED,
@@ -7171,6 +7180,7 @@ public class MiniClientSageRenderer extends SageRenderer
 
   public boolean connectionError() // returns true if we should just die
   {
+    invalidatePartyAuthorization();
     // Close the active transport immediately so FIN'd peers don't linger in CLOSE_WAIT
     // while we wait for a reconnect attempt.
     closeMiniUITransportForReconnect();
@@ -7217,6 +7227,7 @@ public class MiniClientSageRenderer extends SageRenderer
 
   private void useReconnectSocket(java.nio.channels.SocketChannel newChan)
   {
+    invalidatePartyAuthorization();
     // Make sure we know about this because it's possible the client is doing it before we're aware of the situation
     synchronized (reconnectLock)
     {
@@ -9125,6 +9136,8 @@ public class MiniClientSageRenderer extends SageRenderer
 
   private boolean handleInboundClientSetProperty(byte[] payload)
   {
+    if (sage.party.PartyWire.accept(payload, json -> partyConnection().receive(json)))
+      return true;
     if (payload == null || payload.length < 4)
       return false;
 
@@ -9183,6 +9196,57 @@ public class MiniClientSageRenderer extends SageRenderer
     }
 
     return false;
+  }
+
+  private volatile String partyPrincipal;
+  private volatile boolean partyLanAuthorized;
+  private volatile boolean partySessionInitialized;
+  private NgPartyConnection partyConnection;
+
+  private synchronized NgPartyConnection partyConnection()
+  {
+    if (partyConnection == null) partyConnection = new NgPartyConnection(this, uiMgr);
+    return partyConnection;
+  }
+
+  /** Returns existing verified account or server-admitted LAN policy realm, never advertised identity. */
+  String getPartyPrincipal()
+  {
+    if (!partySessionInitialized) return null;
+    if (partyPrincipal != null) return "user:" + partyPrincipal;
+    return partyLanAuthorized ? "server-admitted-lan" : null;
+  }
+
+  private void invalidatePartyAuthorization()
+  {
+    if (partyConnection != null) partyConnection.disconnect();
+    partyConnection = null;
+    partyPrincipal = null;
+    partyLanAuthorized = false;
+    partySessionInitialized = false;
+  }
+
+  /**
+   * Binds the existing secure-login credential check to this exact renderer.
+   * Ordinary login outcome is unchanged when Party Mode is disabled or unsupported.
+   */
+  public boolean verifyPartyLogin(String username, String passwordDigest)
+  {
+    if (recvr == null || !recvr.isEncryptionOn()
+        || !sage.party.PartyAuthentication.verify(key -> Sage.get(key, null), username, passwordDigest))
+    {
+      System.out.println("PartyMode authentication outcome=UNVERIFIED");
+      return false;
+    }
+    partyPrincipal = username;
+    partyConnection().authenticated();
+    return true;
+  }
+
+  /** Intercepts existing server play/pause/skip controls only while joined to a party. */
+  boolean routePartyAction(String action)
+  {
+    return partyConnection != null && partyConnection.route(action);
   }
 
   /** Parses and stores an inbound {@code AUDIO_PROCESSING_CAPABILITIES} payload. */

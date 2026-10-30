@@ -13,6 +13,13 @@ properties in this spec, it ignores all six legacy toggles for that client.
 
 ## Versioning
 
+Party Mode is a separately negotiated, session-authorized, opt-in extension, not implied
+by the NG version. Its exact capability tokens, `PARTY_V1` transport, server
+enablement/admission prerequisites, schemas and executable integration examples are
+canonical in [PartyModeV1.md](PartyModeV1.md). Existing no-login LAN admission is
+supported with transport-bound session tokens; no admin pairing is needed.
+Legacy/unnegotiated clients are ineligible; normal playback defaults are unchanged.
+
 Bump `SAGETV_NG_VERSION` to `2.0.0` when this spec is implemented.
 The server uses this as a single gate — if it sees `2.0.0+` it expects
 every property below to be answerable.
