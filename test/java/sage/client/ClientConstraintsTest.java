@@ -134,6 +134,26 @@ public class ClientConstraintsTest
     assertSame(c.getVideo("H265"), c.getVideo("HEVC"));
   }
 
+  @Test
+  public void videoConstraint_sourceLimitsEnforceOnlyDeclaredAxes()
+  {
+    ClientConstraints c = ClientConstraints.parse("exoplayer",
+        "HEVC;decoder=hw;maxW=4096;maxH=4096;maxFps=60;maxBitrate=100000000",
+        null, null);
+    ClientConstraints.VideoConstraint hevc = c.getVideo("HEVC");
+
+    assertTrue(hevc.supportsSource(3840, 2160, 50d, 78000000L));
+    assertFalse(hevc.supportsSource(3384, 6016, 50d, 78000000L),
+        "Coded height must be checked before any display-matrix rotation");
+    assertFalse(hevc.supportsSource(3840, 2160, 120d, 78000000L));
+    assertFalse(hevc.supportsSource(3840, 2160, 50d, 122000000L));
+
+    ClientConstraints.VideoConstraint legacy =
+        ClientConstraints.parse("ijkplayer", "HEVC;decoder=sw_or_hw", null, null).getVideo("HEVC");
+    assertTrue(legacy.supportsSource(7680, 4320, 120d, 500000000L),
+        "Undeclared limits must remain fail-open for legacy clients");
+  }
+
   // -------------------- Engine-integration tests --------------------
   // Critical interlaced gate: ExoPlayer + interlaced MPEG-2 = black video.
 
@@ -454,4 +474,3 @@ public class ClientConstraintsTest
     }
   }
 }
-

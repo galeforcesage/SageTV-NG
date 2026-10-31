@@ -68,6 +68,9 @@ public final class PlayerTimeoutPolicy
   public static final String BASE_CONN_TIMEOUT  = "ui/remote_player_connection_timeout";
   /** Unified soonest-wins playback-attempt budget (NG opt-in; inactive for legacy). */
   public static final String BASE_PLAYBACK_DEADLINE = "miniplayer/player_socket_playback_deadline_ms";
+  /** Absolute playback-attempt cap; progress may extend idle waits but never this cap. */
+  public static final String BASE_PLAYBACK_ABSOLUTE_DEADLINE =
+      "miniplayer/player_socket_playback_absolute_deadline_ms";
 
   // --- Per-profile suffixes (last path segment of each base key) ---------
   public static final String SUF_INITIAL_WAIT = "player_socket_reconnect_initial_wait_ms";
@@ -76,6 +79,8 @@ public final class PlayerTimeoutPolicy
   public static final String SUF_BACKOFF       = "player_socket_reconnect_backoff_ms";
   public static final String SUF_CONN_TIMEOUT  = "remote_player_connection_timeout";
   public static final String SUF_PLAYBACK_DEADLINE = "player_socket_playback_deadline_ms";
+  public static final String SUF_PLAYBACK_ABSOLUTE_DEADLINE =
+      "player_socket_playback_absolute_deadline_ms";
 
   // --- Historical (legacy) defaults: preserve current behavior exactly ---
   public static final long LEGACY_INITIAL_WAIT_MS = 5000L;
@@ -102,6 +107,7 @@ public final class PlayerTimeoutPolicy
    * then a fresh reply wait.
    */
   public static final long NG_PLAYBACK_DEADLINE_MS = 15000L;
+  public static final long NG_PLAYBACK_ABSOLUTE_DEADLINE_MS = 120000L;
 
   /**
    * The minimal facts about a session needed to resolve a profiled timeout:
@@ -262,6 +268,19 @@ public final class PlayerTimeoutPolicy
   }
 
   /**
+   * Absolute cap for one playback attempt. NG sessions get a bounded two-minute
+   * cap by default; legacy remains uncapped unless an operator explicitly sets
+   * the base property.
+   */
+  public static long playbackAbsoluteDeadlineMs(ProfileContext ctx)
+  {
+    if (ctx == null || !ctx.isNg())
+      return Math.max(0L, Sage.getLong(BASE_PLAYBACK_ABSOLUTE_DEADLINE, 0L));
+    return Math.max(0L, resolveLong(ctx, SUF_PLAYBACK_ABSOLUTE_DEADLINE,
+        BASE_PLAYBACK_ABSOLUTE_DEADLINE, NG_PLAYBACK_ABSOLUTE_DEADLINE_MS));
+  }
+
+  /**
    * Compute the worst-case player-socket acquisition wall time (ms) for a
    * reconnect-capable client, given the resolved knobs. This mirrors the real
    * {@code getSocketChannelInfo}/{@code acquirePlayerSocketChannel} loops:
@@ -304,6 +323,8 @@ public final class PlayerTimeoutPolicy
     written += seedIfAbsent(SUF_BACKOFF,      Long.toString(NG_BACKOFF_MS));
     written += seedIfAbsent(SUF_CONN_TIMEOUT, Long.toString(NG_CONN_TIMEOUT_MS));
     written += seedIfAbsent(SUF_PLAYBACK_DEADLINE, Long.toString(NG_PLAYBACK_DEADLINE_MS));
+    written += seedIfAbsent(SUF_PLAYBACK_ABSOLUTE_DEADLINE,
+        Long.toString(NG_PLAYBACK_ABSOLUTE_DEADLINE_MS));
     return written;
   }
 
@@ -327,18 +348,25 @@ public final class PlayerTimeoutPolicy
   public static final class PlaybackDeadline
   {
     private final boolean active;
-    private final long deadlineAtMs;
+    private final long startedAtMs;
+    private final long idleBudgetMs;
+    private final long absoluteBudgetMs;
+    private final ConnectionProgress progress;
 
-    private PlaybackDeadline(boolean active, long deadlineAtMs)
+    private PlaybackDeadline(boolean active, long startedAtMs, long idleBudgetMs,
+        long absoluteBudgetMs)
     {
       this.active = active;
-      this.deadlineAtMs = deadlineAtMs;
+      this.startedAtMs = startedAtMs;
+      this.idleBudgetMs = idleBudgetMs;
+      this.absoluteBudgetMs = absoluteBudgetMs;
+      this.progress = new ConnectionProgress(startedAtMs);
     }
 
     /** An inactive deadline: never caps anything (legacy behavior). */
     public static PlaybackDeadline none()
     {
-      return new PlaybackDeadline(false, 0L);
+      return new PlaybackDeadline(false, 0L, 0L, 0L);
     }
 
     /**
@@ -349,28 +377,54 @@ public final class PlayerTimeoutPolicy
     {
       if (budgetMs <= 0L)
         return none();
-      return new PlaybackDeadline(true, nowMs + budgetMs);
+      return new PlaybackDeadline(true, nowMs, budgetMs, budgetMs);
+    }
+
+    /**
+     * Start a progress-aware deadline with independent idle and absolute
+     * budgets. Either budget may be disabled with zero, but not both.
+     */
+    public static PlaybackDeadline startingAt(long nowMs, long idleBudgetMs,
+        long absoluteBudgetMs)
+    {
+      if (idleBudgetMs <= 0L && absoluteBudgetMs <= 0L)
+        return none();
+      return new PlaybackDeadline(true, nowMs, Math.max(0L, idleBudgetMs),
+          Math.max(0L, absoluteBudgetMs));
     }
 
     /** Convenience: build from a context's unified budget. */
     public static PlaybackDeadline forContext(ProfileContext ctx, long nowMs)
     {
-      return startingAt(nowMs, playbackDeadlineMs(ctx));
+      return startingAt(nowMs, playbackDeadlineMs(ctx),
+          playbackAbsoluteDeadlineMs(ctx));
     }
 
     public boolean isActive() { return active; }
 
-    public long deadlineAtMs() { return deadlineAtMs; }
+    public long deadlineAtMs()
+    {
+      long budget = absoluteBudgetMs > 0L ? absoluteBudgetMs : idleBudgetMs;
+      return startedAtMs + budget;
+    }
+
+    public void markProgress(long nowMs)
+    {
+      if (active)
+        progress.markMessage(nowMs);
+    }
 
     /** Remaining budget in ms; {@link Long#MAX_VALUE} when inactive. */
     public long remaining(long nowMs)
     {
-      return active ? (deadlineAtMs - nowMs) : Long.MAX_VALUE;
+      return active ? progress.remainingWait(startedAtMs, nowMs,
+          idleBudgetMs, absoluteBudgetMs) : Long.MAX_VALUE;
     }
 
     public boolean expired(long nowMs)
     {
-      return active && nowMs >= deadlineAtMs;
+      return active && progress.expired(startedAtMs, nowMs,
+          idleBudgetMs, absoluteBudgetMs);
     }
 
     /**
@@ -383,8 +437,7 @@ public final class PlayerTimeoutPolicy
     {
       if (!active)
         return ownTimeoutMs;
-      long rem = deadlineAtMs - nowMs;
-      if (rem < 0L) rem = 0L;
+      long rem = remaining(nowMs);
       return Math.min(ownTimeoutMs, rem);
     }
   }

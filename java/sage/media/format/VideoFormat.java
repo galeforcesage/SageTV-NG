@@ -26,6 +26,7 @@ public class VideoFormat extends BitstreamFormat
     return "Video[" + formatName + " " + (fps > 0 ? (fps + " fps ") : "") + ((width > 0 && height > 0) ? (width + "x" + height + " ") : "") +
         ((arNum > 0 && arDen > 0) ? (arNum + ":" + arDen + " ") : "") +
         (bitrate > 0 ? (bitrate/1000 + " kbps ") : "") + (interlaced ? "interlaced" : "progressive") +
+        (rotation != 0 ? (" rotate=" + rotation) : "") +
         (id != null ? (" id=" + id) : "") + (framePack3D != null ? (" 3D-" + framePack3D) : "") + "]";
   }
 
@@ -67,6 +68,26 @@ public class VideoFormat extends BitstreamFormat
   public int getHeight()
   {
     return height;
+  }
+
+  /**
+   * Display-matrix rotation in degrees. The coded frame remains
+   * {@link #getWidth()} by {@link #getHeight()}; quarter-turn rotations only
+   * swap presentation geometry.
+   */
+  public int getRotation()
+  {
+    return rotation;
+  }
+
+  public int getDisplayWidth()
+  {
+    return swapsDisplayAxes() ? height : width;
+  }
+
+  public int getDisplayHeight()
+  {
+    return swapsDisplayAxes() ? width : height;
   }
 
   public String getColorspace()
@@ -117,6 +138,19 @@ public class VideoFormat extends BitstreamFormat
   public void setHeight(int height)
   {
     this.height = height;
+  }
+
+  public void setRotation(int rotation)
+  {
+    rotation %= 360;
+    if (rotation > 180) rotation -= 360;
+    else if (rotation < -180) rotation += 360;
+    this.rotation = rotation;
+  }
+
+  private boolean swapsDisplayAxes()
+  {
+    return Math.abs(rotation) == 90;
   }
 
   public void setColorspace(String colorspace)
@@ -180,6 +214,12 @@ public class VideoFormat extends BitstreamFormat
     {
       sb.append("h=");
       sb.append(height);
+      sb.append(';');
+    }
+    if (rotation != 0)
+    {
+      sb.append("rot=");
+      sb.append(rotation);
       sb.append(';');
     }
     if (interlaced)
@@ -249,6 +289,8 @@ public class VideoFormat extends BitstreamFormat
               rv.width = Integer.parseInt(value);
             else if ("h".equals(name))
               rv.height = Integer.parseInt(value);
+            else if ("rot".equals(name))
+              rv.setRotation(Integer.parseInt(value));
             else if ("lace".equals(name) && "1".equals(value))
               rv.interlaced = true;
             else if ("cs".equals(name))
@@ -405,6 +447,7 @@ public class VideoFormat extends BitstreamFormat
   protected int arDen;
   protected int width;
   protected int height;
+  protected int rotation;
   protected String colorspace;
   protected boolean interlaced;
   protected String framePack3D;

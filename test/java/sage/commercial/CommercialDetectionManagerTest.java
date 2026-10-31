@@ -16,6 +16,7 @@
 package sage.commercial;
 
 import org.testng.annotations.Test;
+import sage.Sage;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -80,6 +81,27 @@ public class CommercialDetectionManagerTest
     assertEquals(CommercialDetectionManager.resolveComskipPath(
         "", new File("missing-bundled"), new File("missing-system")),
         CommercialDetectionManager.BUNDLED_COMSKIP_PATH);
+  }
+
+  @Test
+  public void testAutoSkipSettingUsesPersistentPlaybackProperty()
+  {
+    CommercialDetectionManager manager = CommercialDetectionManager.getInstance();
+    boolean original = Sage.getBoolean("commercial_detection/auto_skip", false);
+    try
+    {
+      manager.setAutoSkipEnabled(false);
+      assertFalse(manager.isAutoSkipEnabled());
+      assertFalse(Sage.getBoolean("commercial_detection/auto_skip", true));
+
+      manager.setAutoSkipEnabled(true);
+      assertTrue(manager.isAutoSkipEnabled());
+      assertTrue(Sage.getBoolean("commercial_detection/auto_skip", false));
+    }
+    finally
+    {
+      Sage.putBoolean("commercial_detection/auto_skip", original);
+    }
   }
 
   @Test

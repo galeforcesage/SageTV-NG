@@ -56,6 +56,18 @@ public class ActivePullPacingPolicyTest
   }
 
   @Test
+  public void eligibleNonPullSessionUsesSharedPacingValues()
+  {
+    ActivePullPacingPolicy policy = ActivePullPacingPolicy.resolveEligible(
+        true, true, "1", "2", "1.5");
+
+    assertTrue(policy.isEnabled());
+    assertEquals(policy.getReadRate(), 1.0);
+    assertEquals(policy.getInitialBurstSeconds(), 2.0);
+    assertEquals(policy.getCatchupRate(), 1.5);
+  }
+
+  @Test
   public void startupAndRecoveryLeadAreBounded()
   {
     ActivePullPacingPolicy policy = resolve(true, true, true, true, false,

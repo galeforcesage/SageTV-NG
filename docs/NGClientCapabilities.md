@@ -13,6 +13,47 @@ properties in this spec, it ignores all six legacy toggles for that client.
 
 ## Versioning
 
+Prospective ordinary native media ownership is separately optional via
+`NATIVE_PLAYBACK_OWNERSHIP_V1`. Its exact actual-Socket Java API, pre-OPENURL
+publication, immutable server-selected resource, Stop/generation fences,
+same-resource retirement/reissue and conditional secure native-cookie boundary
+are canonical in [NativePlaybackOwnershipV1.md](NativePlaybackOwnershipV1.md).
+It changes neither normal playback selection nor legacy defaults and is not a
+Party capability or an HTTP credential by itself.
+
+Party Mode is a separately negotiated, session-authorized, opt-in extension, not implied
+by the NG version. Its exact capability tokens, `PARTY_V1` transport, server
+enablement/admission prerequisites, schemas and executable integration examples are
+canonical in [PartyModeV1.md](PartyModeV1.md). Existing no-login LAN admission is
+supported with transport-bound session tokens; no admin pairing is needed.
+Legacy/unnegotiated clients are ineligible; normal playback defaults are unchanged.
+Party v1 additionally requires separate receipt/execution reports and server-confirmed
+media admission. Future pull bridges must relay the canonical per-playback admission
+handle on their own producer; client readiness flags are not resource admission.
+`PARTY_JOIN_CODE_V1` is now a required guarantee: even selected connected invitees
+must enter the host's three-digit code on their existing admitted session. No
+join-token bypass or deep link is offered. Optional `PARTY_START_POSITION_V1`
+allows server-sampled Beginning/Current Position creation; `PARTY_PREPARE_V1`
+allows explicit confirmed Join & Prepare through the exact renderer's normal
+Watch/parental/resource checks with a paused-load and readiness barrier. See the
+canonical contract for code expiry/global cooldowns, asynchronous result schemas
+and required bridge admission routing. Optional `PARTY_SURFACE_V1` (with
+`PARTY_PREPARE_V1`) adds exact-renderer SELECT_SURFACE/RESTORE_SURFACE before
+paused preparation. The server queries actual existing per-surface properties,
+retains ordinary defaults, and generation-fences the selected override. A truthful
+MP4-only/MSE/pull-xcode-only Party surface can use existing fragmented-MP4 remux
+for direct-compatible media, without changing ordinary raw/direct evaluation.
+Optional `PARTY_GROWING_MEDIA_V1` is required for active Sage recording/timeshift
+parties. It means the adapter consumes the dynamic `availableEndMs` /
+`playableEndMs` window, preserves the configured delayed live edge, and remains
+correct through recording segment rollover and completion. It does not authorize
+raw live/network streams or permit treating the current available end as final.
+The canonical contract specifies selection/preparation/generation correlation,
+actual `route/container/xcodeMode` metadata, admission revocation, and the public
+same-JVM `sage.PartyMediaAdmissionBridge` actual-Socket claim/current/release API.
+Transparent bridges must not parse encrypted/compressed relay bytes for approvals
+or infer ownership from IP/clientName/path/global context.
+
 Bump `SAGETV_NG_VERSION` to `2.0.0` when this spec is implemented.
 The server uses this as a single gate — if it sees `2.0.0+` it expects
 every property below to be answerable.

@@ -949,16 +949,19 @@ Implemented and merged (behavior-neutral until both switches are cleared):
   `browserhd_remux` for fMP4/browser surfaces, `mpeg2tsremux` for MPEG-TS/AVPlay
   surfaces (`miniplayer/enhance_pull_upgrade`). A third case covers Android-class
   NG clients (ExoPlayer/IJK, e.g. `android_media3` / `android_ijk`) that would
-  DIRECT_PLAY: they advertise `push` + HEVC + MATROSKA but **no `pull-xcode`**, so
-  neither branch above can reach them. `MiniPlayer` instead promotes the bare
-  `pull` DIRECT_PLAY into a video-copy **MATROSKA push** — the same "generic push
-  container" transcode these clients already accept — flipping the effective
-  delivery to `push:enhance;tier=<t>` and giving the enhancement pass a
-  `container=matroska;videocodec=COPY;audiocodec=COPY` argv to rewrite the video
-  copy into NVENC HEVC (`miniplayer/enhance_push_mkv_upgrade`). Audio is always
-  copied untouched, all three promotions require the winning surface to advertise
-  HEVC decode, and none fires for a recording/active-file source or when the tier
-  is `NONE`
+  DIRECT_PLAY: they advertise native `push` but **no `pull-xcode`**, so neither
+  branch above can reach them. `MiniPlayer` instead promotes the bare direct route
+  into a managed push transcode. It prefers **MPEG-TS** when the selected surface
+  advertises it because FF/autoskip reprimes can continue safely after a decoder
+  flush; starting another Matroska generation on the same push connection would
+  append a fresh EBML header to an existing extractor. Matroska remains the
+  compatibility fallback for surfaces that advertise no MPEG-TS push support.
+  Effective delivery remains `push:enhance;tier=<t>`, video is rewritten to NVENC
+  H.264/HEVC as appropriate, and audio is copied untouched
+  (`miniplayer/enhance_push_mkv_upgrade`, retained as the historical kill switch).
+  The promotion requires the winning surface to advertise the output codec and
+  selected push container, and it is eligible for both completed and active
+  recording sources when the tier is active. When the tier is `NONE`
   (dry-run) — so delivery is byte-identical until enhancement actually engages.
 
 Live activation: because the pipeline is wired, the phase interlock is cleared

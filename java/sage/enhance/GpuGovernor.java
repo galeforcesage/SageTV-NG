@@ -37,7 +37,8 @@ import sage.Sage;
  *       ffmpeg invocation at stream time.</li>
  *   <li><b>Free VRAM</b> — measured, not nameplate, so other tenants on the shared
  *       GPU shrink our budget automatically (Invariant 1).</li>
- *   <li><b>Video-engine pressure</b> — soft cap admits, hard cap denies.</li>
+ *   <li><b>GPU/video-engine pressure</b> — CUDA scaling, NVENC and NVDEC all
+ *       count; soft cap admits, hard cap denies.</li>
  *   <li><b>Disk write budget</b> — a 2160p session writes roughly 5-6x what
  *       today's live transcode does, onto the same arrays recordings are writing
  *       to continuously. This is the least obvious contention vector and is
@@ -462,8 +463,8 @@ public final class GpuGovernor
         return "free VRAM " + freeMB + "MB - reserve " + reserve + "MB < " + needMB + "MB";
     }
 
-    // Video-engine pressure. Hard cap denies outright; soft cap denies only new
-    // admissions, which is what this call is.
+    // Combined GPU/video-engine pressure. CUDA scale/deinterlace load must count
+    // even when NVENC/NVDEC counters read zero during process teardown.
     int pressure = snap.getVideoEnginePressurePct();
     if (pressure >= 0)
     {

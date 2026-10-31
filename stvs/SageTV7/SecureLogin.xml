@@ -536,6 +536,7 @@
                 </Action>
                </Branch>
                <Branch Name="else" Sym="OPUS4B-383767">
+                <Action Name="VerifyPartyPlaceshifterLogin(Username, EncryptedPassword)" Sym="NGPARTY-1"/>
                 <Action Name="&quot;REM If AutoLogin has been set, then cache the login before disabling encryption.&quot;" Sym="OPUS4B-384129">
                  <Conditional Name="AutoLogin" Sym="OPUS4B-384130">
                   <Action Name="CachePlaceshifterLogin()" Sym="OPUS4B-384131"/>

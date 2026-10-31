@@ -1504,6 +1504,67 @@ public class PlaybackDecisionEngine
       String clientLang,
       ClientConstraints constraints)
   {
+    return evaluateSurfaces(surfaces, mediaContainer, mediaVideoCodec, mediaAudioCodec,
+        mediaWidth, mediaHeight, sourceBitrateKbps, availableBandwidthKbps, sourceInterlaced,
+        cf, clientLang, constraints, null, null, false);
+  }
+
+  /**
+   * Evaluates normal policy with optional conditioning for an explicitly selected Party MSE path.
+   */
+  public static java.util.List<SurfaceDecision> evaluateSurfaces(
+      PlaybackSurfaceSet surfaces,
+      String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
+      int mediaWidth, int mediaHeight,
+      int sourceBitrateKbps, int availableBandwidthKbps,
+      boolean sourceInterlaced,
+      sage.media.format.ContainerFormat cf,
+      String clientLang,
+      ClientConstraints constraints,
+      boolean partyConditioned)
+  {
+    return evaluateSurfaces(surfaces, mediaContainer, mediaVideoCodec, mediaAudioCodec,
+        mediaWidth, mediaHeight, sourceBitrateKbps, availableBandwidthKbps, sourceInterlaced,
+        cf, clientLang, constraints, null, null, partyConditioned);
+  }
+
+  /**
+   * Per-surface player-constraint overload. Android exposes separate Media3 and
+   * IJK decoder ceilings; applying the connect-time default player's rows to
+   * every advertised surface can reject a capable alternate decoder or admit
+   * an incapable one. Non-Android and legacy surfaces retain the fallback
+   * constraints supplied in {@code constraints}.
+   */
+  public static java.util.List<SurfaceDecision> evaluateSurfaces(
+      PlaybackSurfaceSet surfaces,
+      String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
+      int mediaWidth, int mediaHeight,
+      int sourceBitrateKbps, int availableBandwidthKbps,
+      boolean sourceInterlaced,
+      sage.media.format.ContainerFormat cf,
+      String clientLang,
+      ClientConstraints constraints,
+      ClientConstraints exoConstraints,
+      ClientConstraints ijkConstraints)
+  {
+    return evaluateSurfaces(surfaces, mediaContainer, mediaVideoCodec, mediaAudioCodec,
+        mediaWidth, mediaHeight, sourceBitrateKbps, availableBandwidthKbps, sourceInterlaced,
+        cf, clientLang, constraints, exoConstraints, ijkConstraints, false);
+  }
+
+  public static java.util.List<SurfaceDecision> evaluateSurfaces(
+      PlaybackSurfaceSet surfaces,
+      String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
+      int mediaWidth, int mediaHeight,
+      int sourceBitrateKbps, int availableBandwidthKbps,
+      boolean sourceInterlaced,
+      sage.media.format.ContainerFormat cf,
+      String clientLang,
+      ClientConstraints constraints,
+      ClientConstraints exoConstraints,
+      ClientConstraints ijkConstraints,
+      boolean partyConditioned)
+  {
     if (surfaces == null || surfaces.isEmpty())
       return java.util.Collections.<SurfaceDecision>emptyList();
 
@@ -1513,6 +1574,8 @@ public class PlaybackDecisionEngine
     java.util.List<SurfaceDecision> results = new java.util.ArrayList<SurfaceDecision>();
     for (PlaybackSurface s : surfaces.asMap().values())
     {
+      ClientConstraints surfaceConstraints = constraintsForSurface(
+          s, constraints, exoConstraints, ijkConstraints);
       if (!surfaceHasAnyServableMode(s))
       {
         if (sage.Sage.DBG) System.out.println("PlaybackDecisionEngine.evaluateSurfaces: "
@@ -1553,8 +1616,21 @@ public class PlaybackDecisionEngine
       // a surface that hardware-decodes interlaced and doesn't declare the field is
       // untouched. Mirrors the legacy decide() gate; constraints==null (legacy) is
       // inert. The row is keyed by the SOURCE codec, matching the legacy path.
-      d = escalateForInterlacedIfDeclaredUndecodable(d, s, constraints,
+      d = escalateForInterlacedIfDeclaredUndecodable(d, s, surfaceConstraints,
           mediaVideoCodec, sourceInterlaced);
+      sage.media.format.VideoFormat sourceVideo =
+          cf == null ? null : cf.getVideoFormat();
+      double sourceFps = sourceVideo == null ? 0d : sourceVideo.getFps();
+      long sourceVideoBitrate = sourceVideo == null ? 0L : sourceVideo.getBitrate();
+      d = escalateForSourceLimitsIfDeclared(d, s, surfaceConstraints,
+          mediaVideoCodec, mediaWidth, mediaHeight, sourceFps, sourceVideoBitrate);
+
+      if (partyConditioned && d.decision == Decision.DIRECT_PLAY
+          && "mse".equalsIgnoreCase(s.getRoute()) && s.supportsContainer("MP4")
+          && s.getDeliveryModes().size() == 1 && s.getDeliveryModes().contains("pull-xcode"))
+        d = new PlaybackDecision(Decision.REMUX,
+            "Selected Party MSE path requires fragmented MP4", "MP4",
+            d.targetVideoCodec, d.targetAudioCodec, d.targetBitrateKbps);
 
       String mode = pickDeliveryModeForDecision(s, d.decision, mediaContainer);
       if (mode == null)
@@ -1571,6 +1647,20 @@ public class PlaybackDecisionEngine
     }
     java.util.Collections.sort(results, SURFACE_DECISION_COMPARATOR);
     return results;
+  }
+
+  static ClientConstraints constraintsForSurface(PlaybackSurface surface,
+      ClientConstraints fallback, ClientConstraints exoConstraints,
+      ClientConstraints ijkConstraints)
+  {
+    if (surface == null || surface.getId() == null) return fallback;
+    String id = surface.getId().toLowerCase(java.util.Locale.ROOT);
+    if ((id.indexOf("media3") >= 0 || id.indexOf("exo") >= 0)
+        && exoConstraints != null)
+      return exoConstraints;
+    if (id.indexOf("ijk") >= 0 && ijkConstraints != null)
+      return ijkConstraints;
+    return fallback;
   }
 
   /**
@@ -1637,6 +1727,58 @@ public class PlaybackDecisionEngine
     if (sage.Sage.DBG) System.out.println("PlaybackDecisionEngine.evaluateSurfaces: " + reason);
     return new PlaybackDecision(Decision.TRANSCODE, reason,
         tgtContainer, tgtVideo, tgtAudio, d.targetBitrateKbps);
+  }
+
+  /**
+   * Escalates any video-copy decision when the source exceeds an explicitly
+   * declared decoder ceiling. The source dimensions are the coded frame size:
+   * rotation metadata changes presentation geometry, not what the decoder must
+   * allocate and process.
+   *
+   * <p>Every dimension is fail-open when undeclared. This preserves legacy
+   * clients while allowing 6K/8K-capable clients to opt in honestly with larger
+   * limits and preventing smaller decoders from receiving oversized sources.
+   */
+  static PlaybackDecision escalateForSourceLimitsIfDeclared(
+      PlaybackDecision d, PlaybackSurface surface, ClientConstraints constraints,
+      String sourceVideoCodec, int codedWidth, int codedHeight,
+      double sourceFps, long sourceVideoBitrate)
+  {
+    if (d == null || d.decision == Decision.TRANSCODE) return d;
+
+    String rejectReason = null;
+    if (surface != null && surface.hasDeclaredOutputLimits()
+        && !surface.canOutput(codedWidth, codedHeight, (int) Math.ceil(sourceFps)))
+    {
+      rejectReason = "coded source " + codedWidth + "x" + codedHeight
+          + (sourceFps > 0d ? ("@" + sourceFps) : "")
+          + " exceeds surface " + surface.getId() + " decoder limit "
+          + surface.getMaxOutputWidth() + "x" + surface.getMaxOutputHeight()
+          + (surface.getMaxFps() > 0 ? ("@" + surface.getMaxFps()) : "");
+    }
+
+    if (constraints != null)
+    {
+      ClientConstraints.VideoConstraint row = constraints.getVideo(sourceVideoCodec);
+      if (row != null && !row.supportsSource(
+          codedWidth, codedHeight, sourceFps, sourceVideoBitrate))
+      {
+        rejectReason = "coded source " + codedWidth + "x" + codedHeight
+            + (sourceFps > 0d ? ("@" + sourceFps) : "")
+            + (sourceVideoBitrate > 0L ? (" " + sourceVideoBitrate + " bps") : "")
+            + " exceeds " + constraints.getPlayer() + " " + sourceVideoCodec
+            + " decoder limits " + row;
+      }
+    }
+    if (rejectReason == null) return d;
+
+    String tgtContainer = selectBestContainerForSurface(surface);
+    String tgtVideo = selectBestVideoCodecForSurface(surface, sourceVideoCodec);
+    String reason = rejectReason + " -> full transcode (was " + d.decision + ")";
+    if (sage.Sage.DBG)
+      System.out.println("PlaybackDecisionEngine.evaluateSurfaces: " + reason);
+    return new PlaybackDecision(Decision.TRANSCODE, reason,
+        tgtContainer, tgtVideo, d.targetAudioCodec, d.targetBitrateKbps);
   }
 
 

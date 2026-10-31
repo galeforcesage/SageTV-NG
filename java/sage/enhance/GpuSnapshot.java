@@ -70,16 +70,17 @@ public final class GpuSnapshot
   }
 
   /**
-   * Combined video-engine pressure: the worst of the encoder and decoder
-   * utilization figures, which is what actually gates another live session.
-   * Falls back to overall GPU utilization when the per-engine counters are
-   * unavailable (some driver/card combinations do not report them).
+   * Combined enhancement pressure: the worst known value across overall GPU,
+   * encoder and decoder utilization.
+   *
+   * <p>Overall utilization is load-bearing because CUDA scaling/deinterlacing can
+   * saturate the GPU while NVENC/NVDEC both report zero. Ignoring it admits a new
+   * encoder during teardown of the prior CUDA pipeline and can fail the first
+   * NVENC bitstream-buffer allocation even though the encoder counter looks idle.
    */
   public int getVideoEnginePressurePct()
   {
-    int worst = Math.max(encoderUtilPct, decoderUtilPct);
-    if (worst < 0) return gpuUtilPct;
-    return Math.max(worst, 0);
+    return Math.max(gpuUtilPct, Math.max(encoderUtilPct, decoderUtilPct));
   }
 
   @Override

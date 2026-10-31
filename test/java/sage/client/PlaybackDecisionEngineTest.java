@@ -20,6 +20,34 @@ import static org.testng.Assert.*;
  */
 public class PlaybackDecisionEngineTest
 {
+  @Test
+  public void partyOnlyMseConditioningRemuxesCompatibleMp4WithoutChangingOrdinaryPolicy()
+  {
+    PlaybackSurfaceSet surfaces = PlaybackSurfaceSet.build("pwa_party_mse",
+        id -> new String[] {"mse", "1", "pull-xcode", "H264", "AAC", "MP4"});
+    assertTrue(PlaybackDecisionEngine.evaluateSurfaces(surfaces, "MP4", "H264", "AAC",
+        1920, 1080, 8000, 20000, false, null, null, null).isEmpty(),
+        "Ordinary direct-compatible pull-xcode-only surfaces remain unservable");
+    PlaybackDecisionEngine.SurfaceDecision selected = PlaybackDecisionEngine.evaluateSurfaces(surfaces,
+        "MP4", "H264", "AAC", 1920, 1080, 8000, 20000, false, null, null, null, true).get(0);
+    assertEquals(selected.decision.decision, PlaybackDecisionEngine.Decision.REMUX);
+    assertEquals(selected.chosenDeliveryMode, "pull-xcode");
+    assertEquals(selected.chosenXcodeMode, "browserhd_remux");
+    assertEquals(selected.decision.targetContainer, "MP4");
+    selected = PlaybackDecisionEngine.evaluateSurfaces(surfaces,
+        "MP4", "MPEG2-Video", "AC3", 1920, 1080, 8000, 20000, false, null, null, null, true).get(0);
+    assertEquals(selected.decision.decision, PlaybackDecisionEngine.Decision.TRANSCODE);
+    assertEquals(selected.chosenXcodeMode, "browserhd");
+    selected = PlaybackDecisionEngine.evaluateSurfaces(surfaces,
+        "MP4", "H264", "AC3", 1920, 1080, 8000, 20000, false, null, null, null, true).get(0);
+    assertEquals(selected.decision.decision, PlaybackDecisionEngine.Decision.AUDIO_TRANSCODE);
+    assertEquals(selected.chosenXcodeMode, "browserhd_copyv");
+    selected = PlaybackDecisionEngine.evaluateSurfaces(surfaces,
+        "MP4", "H264", "AAC", 1920, 1080, 8000, 1000, false, null, null, null, true).get(0);
+    assertEquals(selected.decision.decision, PlaybackDecisionEngine.Decision.TRANSCODE);
+    assertEquals(selected.chosenXcodeMode, "browserhd");
+  }
+
   private static PlaybackSurface surface(String id, int priority)
   {
     return new PlaybackSurface(id, "route", priority,
@@ -667,6 +695,124 @@ public class PlaybackDecisionEngineTest
             in, surfaceProgressiveOnly(), null, "HEVC", true);
     assertEquals(out.decision, PlaybackDecisionEngine.Decision.DIRECT_PLAY,
         "The interlaced gate is per-codec: a codec the surface did not flag must be left unchanged");
+  }
+
+  private static sage.media.format.ContainerFormat hevcSource(
+      int width, int height, float fps, int bitrate)
+  {
+    sage.media.format.VideoFormat video = new sage.media.format.VideoFormat();
+    video.setFormatName(sage.media.format.MediaFormat.HEVC);
+    video.setWidth(width);
+    video.setHeight(height);
+    video.setFps(fps);
+    video.setBitrate(bitrate);
+    sage.media.format.ContainerFormat container = new sage.media.format.ContainerFormat();
+    container.setFormatName("MP4");
+    container.setStreamFormats(new sage.media.format.BitstreamFormat[] { video });
+    return container;
+  }
+
+  private static PlaybackDecisionEngine.Decision constrainedHevcDecision(
+      int width, int height, float fps, int bitrate, String constraintRow)
+  {
+    PlaybackSurfaceSet set = buildSurfaceSet(
+        "android_media3", "pull,pull-xcode", "HEVC,H264", "AAC", "MP4,MATROSKA");
+    ClientConstraints constraints =
+        ClientConstraints.parse("exoplayer", constraintRow, null, null);
+    sage.media.format.ContainerFormat source =
+        hevcSource(width, height, fps, bitrate);
+    java.util.List<PlaybackDecisionEngine.SurfaceDecision> ranked =
+        PlaybackDecisionEngine.evaluateSurfaces(set, "MP4", "HEVC", "",
+            width, height, bitrate / 1000, 0, false, source, null, constraints);
+    assertFalse(ranked.isEmpty());
+    return ranked.get(0).decision.decision;
+  }
+
+  @Test
+  public void sourceLimits_rotated6kCodedFrame_isNotDirectPlayed()
+  {
+    assertEquals(constrainedHevcDecision(3384, 6016, 50f, 122752198,
+            "HEVC;decoder=hw;maxW=4096;maxH=4096;maxFps=60"),
+        PlaybackDecisionEngine.Decision.TRANSCODE,
+        "A display matrix cannot make a 6016-pixel coded height decodable");
+  }
+
+  @Test
+  public void sourceLimits_valid4k50_remainsDirectPlay()
+  {
+    assertEquals(constrainedHevcDecision(3840, 2160, 50f, 78000000,
+            "HEVC;decoder=hw;maxW=4096;maxH=4096;maxFps=60"),
+        PlaybackDecisionEngine.Decision.DIRECT_PLAY);
+  }
+
+  @Test
+  public void sourceLimits_future8kDeclaration_allows8kSource()
+  {
+    assertEquals(constrainedHevcDecision(7680, 4320, 60f, 180000000,
+            "HEVC;decoder=hw;maxW=7680;maxH=4320;maxFps=60;maxBitrate=200000000"),
+        PlaybackDecisionEngine.Decision.DIRECT_PLAY,
+        "8K remains capability-driven rather than blocked by a hard-coded 4K ceiling");
+  }
+
+  @Test
+  public void sourceLimits_declaredBitrateCeiling_forcesTranscode()
+  {
+    assertEquals(constrainedHevcDecision(3840, 2160, 50f, 122000000,
+            "HEVC;decoder=hw;maxW=4096;maxH=4096;maxFps=60;maxBitrate=100000000"),
+        PlaybackDecisionEngine.Decision.TRANSCODE);
+  }
+
+  @Test
+  public void sourceLimits_useConstraintsForEachAndroidSurface()
+  {
+    final java.util.Map<String, String[]> props =
+        new java.util.HashMap<String, String[]>();
+    props.put("android_ijk", new String[] {
+        "native", "60", "push,pull", "HEVC", "AC3", "MATROSKA",
+        "all", "server", "", "0", "0", "0", "6", "none"
+    });
+    props.put("android_media3", new String[] {
+        "native", "100", "push,pull", "HEVC", "AC3", "MATROSKA",
+        "all", "server", "", "0", "0", "0", "6", "none"
+    });
+    PlaybackSurfaceSet surfaces = PlaybackSurfaceSet.build(
+        "android_ijk,android_media3",
+        new java.util.function.Function<String, String[]>()
+        {
+          public String[] apply(String id) { return props.get(id); }
+        });
+    ClientConstraints defaultIjk = ClientConstraints.parse(
+        "ijkplayer",
+        "HEVC;decoder=hw;maxW=1920;maxH=1080;maxFps=60",
+        "AC3", "MATROSKA");
+    ClientConstraints exo = ClientConstraints.parse(
+        "exoplayer",
+        "HEVC;decoder=hw;maxW=7680;maxH=4320;maxFps=60",
+        "AC3", "MATROSKA");
+    ClientConstraints ijk = ClientConstraints.parse(
+        "ijkplayer",
+        "HEVC;decoder=hw;maxW=1920;maxH=1080;maxFps=60",
+        "AC3", "MATROSKA");
+    sage.media.format.VideoFormat video = new sage.media.format.VideoFormat();
+    video.setFormatName(sage.media.format.MediaFormat.HEVC);
+    video.setWidth(7680);
+    video.setHeight(4320);
+    video.setFps(60f);
+    sage.media.format.ContainerFormat container = new sage.media.format.ContainerFormat();
+    container.setFormatName("MATROSKA");
+    container.setStreamFormats(new sage.media.format.BitstreamFormat[] { video });
+
+    java.util.List<PlaybackDecisionEngine.SurfaceDecision> ranked =
+        PlaybackDecisionEngine.evaluateSurfaces(surfaces,
+            "MATROSKA", "HEVC", "AC3", 7680, 4320,
+            0, 0, false, container, "eng", defaultIjk, exo, ijk);
+
+    assertEquals(ranked.get(0).surface.getId(), "android_media3");
+    assertEquals(ranked.get(0).decision.decision,
+        PlaybackDecisionEngine.Decision.DIRECT_PLAY);
+    assertEquals(ranked.get(1).surface.getId(), "android_ijk");
+    assertEquals(ranked.get(1).decision.decision,
+        PlaybackDecisionEngine.Decision.TRANSCODE);
   }
 
   // -----------------------------------------------------------------------

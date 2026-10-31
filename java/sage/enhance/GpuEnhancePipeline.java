@@ -612,6 +612,13 @@ public final class GpuEnhancePipeline
       argv.add(ins, "-vf");
     }
 
+    // The base re-encode may carry its source-sized "-s WxH". Leaving it beside
+    // a CUDA filter that produces the enhanced dimensions makes ffmpeg append a
+    // software auto-scale after scale_cuda. CUDA frames cannot cross that link,
+    // so the filter graph fails and NVENC reports the misleading terminal -22.
+    iIdx = argv.indexOf("-i");
+    removeFlagPair(argv, iIdx, "-s");
+
     // (3) VBR rate control after the codec token. An active enhancement OWNS the
     // bitrate, so strip any rate-control the base browserhd profile already set
     // (its default cap) before installing the tier/genre estimate below --

@@ -22,6 +22,219 @@ import static org.testng.Assert.*;
 public class FFMPEGTranscoderTest
 {
   @Test
+  public void completedVodDirectPushUsesInputPacing() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder transcoder = new FFMPEGTranscoder();
+    transcoder.setEnableOutputBuffering(true);
+    transcoder.setDirectPushSession(true);
+    transcoder.setActiveFile(false);
+
+    java.util.ArrayList<String> args = new java.util.ArrayList<String>();
+    sage.ng.ActivePullPacingPolicy policy = transcoder.appendInputPacingArguments(args);
+
+    assertTrue(policy.isEnabled(),
+        "Completed-recording push transcodes must not flood the native decoder");
+    assertEquals(policy.getReadRate(), 1.0);
+    assertEquals(policy.getInitialBurstSeconds(), 2.0);
+    assertEquals(policy.getCatchupRate(), 1.5);
+    assertEquals(args, java.util.Arrays.asList("-readrate", "1",
+        "-readrate_initial_burst", "2", "-readrate_catchup", "1.5"));
+  }
+
+  @Test
+  public void activeAndPullSessionsDoNotUseVodDirectPushPacing() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder transcoder = new FFMPEGTranscoder();
+    transcoder.setEnableOutputBuffering(true);
+    transcoder.setDirectPushSession(true);
+    transcoder.setActiveFile(true);
+    assertFalse(transcoder.resolveDirectPushPacingPolicy().isEnabled(),
+        "Growing recordings already pace at their capture frontier");
+
+    transcoder.setActiveFile(false);
+    transcoder.setProtocol21PullSession(true);
+    assertFalse(transcoder.resolveDirectPushPacingPolicy().isEnabled(),
+        "Protocol 2.1 pull uses its own pacing policy");
+  }
+
+  @Test
+  public void frameZeroNvencCapacityFailureIsDetectedBeforeFirstFrame()
+  {
+    assertTrue(FFMPEGTranscoder.isNvencInitFailureLine(
+        "[hevc_nvenc @ 0x1] Failed locking bitstream buffer: out of memory"));
+    assertTrue(FFMPEGTranscoder.isNvencCapacityFailureLine(
+        "[hevc_nvenc @ 0x1] Failed locking bitstream buffer: out of memory"));
+    assertTrue(FFMPEGTranscoder.isFrameZeroEnhanceNvencFailure(
+        "enhance-1", false, false, 200L, 5000L));
+    assertFalse(FFMPEGTranscoder.isFrameZeroEnhanceNvencFailure(
+        "enhance-1", false, true, 200L, 5000L),
+        "A failure after the first encoded frame must not be classified as frame-zero");
+    assertFalse(FFMPEGTranscoder.isFrameZeroEnhanceNvencFailure(
+        "enhance-1", false, false, 5001L, 5000L));
+  }
+
+  @Test
+  public void nvencFallbackCanResetAZeroOutputUndeliveredGeneration()
+  {
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.bufferOutput = true;
+    t.protocol21PullSession = true;
+    t.xcodeBuffer = new byte[2][8];
+    t.xcodeOutputGenerationOrigin = 0L;
+    t.xcodeBufferVirtualOffset = 0L;
+    t.xcodeBufferVirtualReadPos = 0L;
+    t.xcodeBufferVirtualSize = 0L;
+    t.numFilledXcodeBuffers = 0;
+
+    assertTrue(t.prepareCleanNvencFallbackRelaunch());
+    assertEquals(t.xcodeBufferVirtualSize, 0L);
+    assertEquals(t.numFilledXcodeBuffers, 0);
+  }
+
+  @Test
+  public void nvencFallbackCanResetAZeroOutputDirectPushGeneration()
+  {
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.bufferOutput = false;
+    t.xcodeOutputGenerationOrigin = 1024L;
+    t.xcodeBufferVirtualReadPos = 1024L;
+
+    assertTrue(t.prepareCleanNvencFallbackRelaunch(),
+        "A direct push child that emitted nothing can be replaced on the same stream");
+  }
+
+  @Test
+  public void nvencFallbackRejectsDirectPushBytes()
+  {
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.bufferOutput = false;
+    t.xcodeOutputGenerationBytesProduced = 188L;
+
+    assertFalse(t.prepareCleanNvencFallbackRelaunch(),
+        "Direct push must not append a source remux after emitting enhanced-stream bytes");
+  }
+
+  @Test
+  public void directPushReadTracksProducedGenerationBytes() throws Exception
+  {
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.bufferOutput = false;
+    t.xcodeStdout = new ByteArrayInputStream(new byte[] { 1, 2, 3, 4 });
+
+    byte[] output = new byte[4];
+    t.readFullyTranscodedData(output, 0, output.length);
+
+    assertEquals(t.xcodeOutputGenerationBytesProduced, 4L);
+    assertEquals(output, new byte[] { 1, 2, 3, 4 });
+  }
+
+  @Test
+  public void directChannelReadTracksProducedGenerationBytes() throws Exception
+  {
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.bufferOutput = false;
+    t.xcodeStdout = new ByteArrayInputStream(new byte[] { 5, 6, 7, 8 });
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+    t.sendTranscodeOutputToChannel(0L, 4L, java.nio.channels.Channels.newChannel(output));
+
+    assertEquals(t.xcodeOutputGenerationBytesProduced, 4L);
+  }
+
+  @Test
+  public void nvencFallbackDiscardsUnservedAudioOnlyBufferedGeneration()
+  {
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.bufferOutput = true;
+    t.protocol21PullSession = true;
+    t.xcodeBuffer = new byte[2][65536];
+    t.xcodeOutputGenerationOrigin = 0L;
+    t.xcodeOutputGenerationBytesProduced = 31020L;
+    t.xcodeBufferVirtualOffset = 0L;
+    t.xcodeBufferVirtualReadPos = 0L;
+    t.xcodeBufferVirtualSize = 0L;
+    t.numFilledXcodeBuffers = 0;
+
+    assertTrue(t.prepareCleanNvencFallbackRelaunch(),
+        "An unpublished frame-zero audio fragment can be discarded before plain remux relaunch");
+    assertEquals(t.xcodeBufferVirtualSize, 0L);
+    assertEquals(t.numFilledXcodeBuffers, 0);
+  }
+
+  @Test
+  public void nvencFallbackRejectsDirectGenerationBytes()
+  {
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.bufferOutput = false;
+    t.xcodeOutputGenerationBytesProduced = 31020L;
+
+    assertFalse(t.prepareCleanNvencFallbackRelaunch(),
+        "Direct output cannot replace a generation after reading any bytes from it");
+  }
+
+  @Test
+  public void nvencFallbackRejectsExternallyVisibleGeneration()
+  {
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.bufferOutput = true;
+    t.protocol21PullSession = true;
+    t.xcodeBuffer = new byte[2][8];
+    t.xcodeOutputGenerationOrigin = 0L;
+    t.xcodeBufferVirtualOffset = 0L;
+    t.xcodeBufferVirtualSize = 16L;
+    t.xcodeBufferVirtualReadPos = 8L;
+    t.numFilledXcodeBuffers = 1;
+    assertFalse(t.prepareCleanNvencFallbackRelaunch(),
+        "Once failed-generation bytes were served, replacement bytes require a new stream");
+    assertEquals(t.xcodeBufferVirtualSize, 16L,
+        "The failed stream frontier must not be rewritten into a mixed-codec stream");
+    assertEquals(t.numFilledXcodeBuffers, 1);
+
+    t.xcodeBufferVirtualReadPos = 0L;
+    t.xcodeOutputGenerationBytesProduced = 0L;
+    t.xcodeOutputGenerationDeliveryStarted = true;
+    assertFalse(t.prepareCleanNvencFallbackRelaunch(),
+        "An in-flight socket write counts as externally visible before the cursor advances");
+  }
+
+  @Test
+  public void repeatedFrameZeroCapacityFailuresLatchUntilRestartSignal() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder.clearEnhanceNvencFailureStateForTests();
+    Sage.put("playback/gpu_enhance/nvenc_failure_latch_threshold", "2");
+    Sage.put("playback/gpu_enhance/nvenc_failure_latch_window_ms", "60000");
+    Sage.put("playback/gpu_enhance/nvenc_failure_source_cooldown_seconds", "60");
+    try
+    {
+      File source = new File("frame-zero-source.ts");
+      FFMPEGTranscoder.noteEnhanceNvencFrameZeroCapacityFailure(source);
+      assertTrue(FFMPEGTranscoder.enhanceNvencFailureCoolingDown(source));
+      assertFalse(FFMPEGTranscoder.enhanceNvencCapacityLatched());
+
+      FFMPEGTranscoder.noteEnhanceNvencFrameSuccess();
+      FFMPEGTranscoder.noteEnhanceNvencFrameZeroCapacityFailure(source);
+      assertFalse(FFMPEGTranscoder.enhanceNvencCapacityLatched(),
+          "A proven successful enhanced frame must clear the pre-latch failure history");
+
+      FFMPEGTranscoder.noteEnhanceNvencFrameZeroCapacityFailure(new File("second-source.ts"));
+      assertTrue(FFMPEGTranscoder.enhanceNvencCapacityLatched());
+      FFMPEGTranscoder.noteEnhanceNvencFrameSuccess();
+      assertTrue(FFMPEGTranscoder.enhanceNvencCapacityLatched(),
+          "Once repeated frame-zero failures latch enhancement off, only restart/operator reset recovers it");
+    }
+    finally
+    {
+      Sage.remove("playback/gpu_enhance/nvenc_failure_latch_threshold");
+      Sage.remove("playback/gpu_enhance/nvenc_failure_latch_window_ms");
+      Sage.remove("playback/gpu_enhance/nvenc_failure_source_cooldown_seconds");
+      FFMPEGTranscoder.clearEnhanceNvencFailureStateForTests();
+    }
+  }
+
+  @Test
   public void framePumpPreservesFragmentedFrameBoundaries() throws Exception
   {
     byte[] input = new byte[37];
@@ -743,6 +956,174 @@ public class FFMPEGTranscoderTest
     assertFalse(t.shouldApplyVodProbeTuning());
   }
 
+  @Test
+  public void testIsEnhanceableReencodeModeIncludesMpeg2H264FallbackBases()
+  {
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.xcodeModeName = "dynamich264";
+    assertTrue(t.isEnhanceableReencodeMode());
+    t.xcodeModeName = "container=matroska;videocodec=h264_nvenc;audiocodec=COPY";
+    assertTrue(t.isEnhanceableReencodeMode());
+    t.xcodeModeName = "container=matroska;videocodec=libx264;audiocodec=COPY";
+    assertFalse(t.isEnhanceableReencodeMode(),
+        "Software fallback is the denied-admission result, not a GPU enhancement base");
+  }
+
+  @Test
+  public void testMpeg2TsNvencBaseFallsBackToInterlacedLibx264()
+  {
+    java.util.ArrayList<String> args = new java.util.ArrayList<String>(
+        java.util.Arrays.asList("ffmpeg", "-i", "recording.mpg",
+            "-f", "mpegts", "-c:v", "h264_nvenc", "-preset", "p4",
+            "-forced-idr", "1", "-rc", "vbr", "-cq", "23",
+            "-c:a", "copy", "-fps_mode", "passthrough", "-"));
+
+    assertTrue(FFMPEGTranscoder.rewriteNvencH264ForSoftwareFallback(args, true));
+    assertTrue(hasPair(args, "-c:v", "libx264"));
+    assertTrue(hasPair(args, "-preset", "veryfast"));
+    assertTrue(hasPair(args, "-vf", "yadif=0:-1:1,format=yuv420p"));
+    assertTrue(hasPair(args, "-fps_mode", "cfr"));
+    assertTrue(hasPair(args, "-c:a", "copy"));
+    assertFalse(args.contains("h264_nvenc"));
+    assertFalse(args.contains("-forced-idr"));
+    assertFalse(args.contains("-rc"));
+    assertFalse(args.contains("-cq"));
+  }
+
+  @Test
+  public void testMatroskaNvencBaseFallsBackWithoutChangingContainerOrAudio()
+  {
+    java.util.ArrayList<String> args = new java.util.ArrayList<String>(
+        java.util.Arrays.asList("ffmpeg", "-i", "recording.mpg",
+            "-f", "matroska", "-vcodec", "h264_nvenc", "-b:v", "8000k",
+            "-acodec", "copy", "-"));
+
+    assertTrue(FFMPEGTranscoder.rewriteNvencH264ForSoftwareFallback(args, false));
+    assertTrue(hasPair(args, "-vcodec", "libx264"));
+    assertTrue(hasPair(args, "-vf", "format=yuv420p"));
+    assertTrue(hasPair(args, "-f", "matroska"));
+    assertTrue(hasPair(args, "-acodec", "copy"));
+    assertTrue(hasPair(args, "-b:v", "8000k"));
+  }
+
+  @Test
+  public void testAndroidMpeg2EnhanceModeParsesToH264MpegTsCommand() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    VideoFormat video = new VideoFormat();
+    video.setFormatName(sage.media.format.MediaFormat.MPEG2_VIDEO);
+    video.setWidth(1920);
+    video.setHeight(1080);
+    video.setFps(29.97f);
+    AudioFormat audio = new AudioFormat();
+    audio.setFormatName(sage.media.format.MediaFormat.AC3);
+    ContainerFormat source = new ContainerFormat();
+    source.setStreamFormats(new BitstreamFormat[] { video, audio });
+
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.setTranscodeFormat(
+        "container=mpegts;videocodec=h264_nvenc;audiocodec=COPY;"
+            + "videobitrate=8000000;resolution=SOURCE;fps=SOURCE",
+        source);
+
+    assertTrue(t.xcodeParams.contains("-f mpegts"));
+    assertTrue(t.xcodeParams.contains("-vcodec h264_nvenc"));
+    assertTrue(t.xcodeParams.contains("-acodec copy"));
+    assertTrue(t.xcodeParams.contains("-s 1920x1080"));
+    assertTrue(t.xcodeParams.contains("-r 29.97"));
+  }
+
+  @Test
+  public void testSoftwareCompatibilityFallbackIsScopedToMpeg2Sources()
+  {
+    VideoFormat h264 = new VideoFormat();
+    h264.setFormatName(sage.media.format.MediaFormat.H264);
+    ContainerFormat source = new ContainerFormat();
+    source.setStreamFormats(new BitstreamFormat[] { h264 });
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.sourceFormat = source;
+    java.util.ArrayList<String> args = new java.util.ArrayList<String>(
+        java.util.Arrays.asList("ffmpeg", "-i", "recording.mkv",
+            "-c:v", "h264_nvenc", "-c:a", "copy", "-"));
+
+    assertFalse(t.applyMpeg2SoftwareCompatibilityFallback(args, "test"));
+    assertTrue(args.contains("h264_nvenc"));
+  }
+
+  @Test
+  public void testNvencFailureDisablesEnhancementAcrossLaterSeeksInSession() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    VideoFormat video = new VideoFormat();
+    video.setFormatName(sage.media.format.MediaFormat.MPEG2_VIDEO);
+    video.setInterlaced(true);
+    ContainerFormat source = new ContainerFormat();
+    source.setStreamFormats(new BitstreamFormat[] { video });
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.sourceFormat = source;
+    t.disableGpuEnhancementForSessionAfterNvencFailure();
+
+    for (int attempt = 0; attempt < 2; attempt++)
+    {
+      java.util.ArrayList<String> args = new java.util.ArrayList<String>(
+          java.util.Arrays.asList("ffmpeg", "-i", "recording.mpg",
+              "-f", "matroska", "-c:v", "h264_nvenc", "-s", "1920x1080",
+              "-c:a", "copy", "-"));
+      t.maybeApplyGpuEnhancement(args);
+      assertTrue(hasPair(args, "-c:v", "libx264"));
+      assertFalse(args.contains("h264_nvenc"),
+          "seek relaunch must remain on software after session NVENC failure");
+    }
+  }
+
+  @Test
+  public void testSoftwareFallbackRepairsUnknownGrowingRecordingGeometry() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    VideoFormat video = new VideoFormat();
+    video.setFormatName(sage.media.format.MediaFormat.MPEG2_VIDEO);
+    video.setWidth(1920);
+    video.setHeight(1080);
+    video.setFps(29.97f);
+    video.setInterlaced(true);
+    ContainerFormat source = new ContainerFormat();
+    source.setStreamFormats(new BitstreamFormat[] { video });
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.sourceFormat = source;
+    java.util.ArrayList<String> args = new java.util.ArrayList<String>(
+        java.util.Arrays.asList("ffmpeg", "-i", "recording.mpg",
+            "-f", "matroska", "-c:v", "h264_nvenc", "-r", "0",
+            "-s", "0x0", "-g", "0", "-c:a", "copy", "-"));
+
+    assertTrue(t.applyMpeg2SoftwareCompatibilityFallback(args, "not_admitted_test"));
+    assertTrue(hasPair(args, "-c:v", "libx264"));
+    assertTrue(hasPair(args, "-r", "29.97"));
+    assertTrue(hasPair(args, "-s", "1920x1080"));
+    assertTrue(hasPair(args, "-g", "300"));
+    assertTrue(hasPair(args, "-vf", "yadif=0:-1:1,format=yuv420p"));
+  }
+
+  @Test
+  public void testCompletedCmafRequestPastParsedEndDoesNotRelaunch()
+  {
+    assertTrue(FFMPEGTranscoder.isFmp4SegmentPastSourceEnd(
+        3539, 1000, 3538410L, false));
+    assertFalse(FFMPEGTranscoder.isFmp4SegmentPastSourceEnd(
+        3538, 1000, 3538410L, false));
+    assertFalse(FFMPEGTranscoder.isFmp4SegmentPastSourceEnd(
+        3539, 1000, 3538410L, true),
+        "Growing recordings may legitimately produce that part later");
+  }
+
+  private static boolean hasPair(java.util.List<String> args, String key, String value)
+  {
+    for (int i = 0; i < args.size() - 1; i++)
+    {
+      if (key.equals(args.get(i)) && value.equals(args.get(i + 1))) return true;
+    }
+    return false;
+  }
+
   // --- EQ copy-flip must still fire correctly after yadif suppression. ---
   // The audio-side EQ stage (isServerAudioEqActive / maybeDisqualifyAudioCopyForServerEq)
   // is entirely independent of the video-side yadif guard -- confirms Fix A
@@ -1371,13 +1752,14 @@ public class FFMPEGTranscoderTest
         browserhd.setHwaccelDecode("cuda");
         assertTrue(browserhd.nativeHevcHwDecodeArgs().isEmpty());
 
-        // PWA/HLS and H.264-push paths are excluded.
+        // PWA/HLS is excluded. Native H.264 push needs NVDEC because it
+        // re-encodes the HEVC source rather than copying it.
         FFMPEGTranscoder hls = hevcTsTranscoder();
         hls.httplsMode = true;
         assertTrue(hls.nativeHevcHwDecodeArgs().isEmpty());
         FFMPEGTranscoder push = hevcTsTranscoder();
         push.pushH264 = true;
-        assertTrue(push.nativeHevcHwDecodeArgs().isEmpty());
+        assertFalse(push.nativeHevcHwDecodeArgs().isEmpty());
       }
       finally
       {

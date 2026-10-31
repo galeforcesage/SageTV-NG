@@ -34,6 +34,8 @@ public class MiniClientSageRenderer extends SageRenderer
   private static java.util.Map clientPlayerSocketMap = new java.util.HashMap();
   private static java.util.Map clientPlayerSocketMapTimes = new java.util.HashMap();
   private static Object mapLock = new Object();
+  private static final java.util.concurrent.atomic.AtomicLong nextTransportConnectionId =
+      new java.util.concurrent.atomic.AtomicLong();
 
   private static java.util.Map externalFSXferAuths = new java.util.HashMap();
 
@@ -307,6 +309,24 @@ public class MiniClientSageRenderer extends SageRenderer
     }
   }
 
+  static Object replaceMappedSocket(java.util.Map socketMap, java.util.Map socketMapTimes,
+      Object clientName, Object newSocket, long nowMs)
+  {
+    Object oldSocket = socketMap.put(clientName, newSocket);
+    socketMapTimes.put(clientName, new Long(nowMs));
+    return oldSocket;
+  }
+
+  static boolean removeMappedSocketIfSame(java.util.Map socketMap,
+      java.util.Map socketMapTimes, Object clientName, Object expectedSocket)
+  {
+    if (socketMap.get(clientName) != expectedSocket)
+      return false;
+    socketMap.remove(clientName);
+    socketMapTimes.remove(clientName);
+    return true;
+  }
+
   public static void startUIServer(final boolean allowNonlocalhostConnection)
   {
     if (ss != null) return;
@@ -489,9 +509,17 @@ public class MiniClientSageRenderer extends SageRenderer
 
   private static boolean handleNewConnection(java.nio.channels.SocketChannel sake)
   {
+    long connectionId = nextTransportConnectionId.incrementAndGet();
+    String transportClientName = "unknown";
+    String transportRole = "unknown";
+    ConnectionProgress introductionProgress = new ConnectionProgress(Sage.eventTime());
+    if (Sage.DBG) System.out.println("MINICLIENT_CONNECTION id=" + connectionId +
+        " phase=ACCEPTED role=" + transportRole);
     try
     {
       long timeout = Sage.getInt("ui/remote_ui_connection_timeout", 15000);
+      long absoluteTimeout = Sage.getLong("ui/remote_ui_connection_absolute_timeout_ms",
+          Math.max(60000L, timeout * 4L));
       sake.socket().setKeepAlive(true);
       sake.socket().setTcpNoDelay(true);
       // Keep long-lived UI/player connections warm so an idle client (e.g. sitting on a
@@ -505,6 +533,16 @@ public class MiniClientSageRenderer extends SageRenderer
         int x = sake.read(bb);
         if (x < 0)
           throw new java.io.EOFException();
+        if (x > 0)
+        {
+          long now = Sage.eventTime();
+          introductionProgress.markBytes(now, x);
+          if (introductionProgress.expired(introductionProgress.getStartedAtMs(), now,
+              timeout, absoluteTimeout))
+            throw new java.net.SocketTimeoutException("MiniClient introduction exceeded absolute timeout");
+          TimeoutHandler.clearTimeout(sake);
+          TimeoutHandler.registerTimeout(timeout, sake);
+        }
       } while (bb.remaining() > 0);
       bb.flip();
       // Version
@@ -521,8 +559,19 @@ public class MiniClientSageRenderer extends SageRenderer
           if (val < 0x10) clientName += "0";
           clientName += Integer.toHexString(val);
         }
+        transportClientName = clientName;
         // next byte is 0 for UI and 1 for player; anything else is for ping
         int nextByte = bb.get();
+        transportRole = nextByte == 0 ? "ui" :
+            (nextByte == 1 ? "player" :
+            (nextByte == 2 ? "filesystem" :
+            (nextByte == 3 ? "external_filesystem" :
+            (nextByte == 4 ? "locator" :
+            (nextByte == 5 ? "reconnect" : "unknown")))));
+        if (Sage.DBG) System.out.println("MINICLIENT_CONNECTION id=" + connectionId +
+            " phase=INTRO_COMPLETE client=" + transportClientName +
+            " role=" + transportRole + " bytes=" + introductionProgress.getBytes() +
+            " elapsedMs=" + (Sage.eventTime() - introductionProgress.getStartedAtMs()));
         boolean uiChannel = nextByte == 0;
         // If this is a reconnect then the reply is important and we can't send the wrong value
         int replyVal = 2;
@@ -542,17 +591,21 @@ public class MiniClientSageRenderer extends SageRenderer
         if (uiChannel)
         {
           if (Sage.DBG) System.out.println("MiniUI is adding to its map:" + clientName);
-          // If this UI already exists, then kill it because it's probably stale
           UIManager oldUI = UIManager.getLocalUIByName(clientName);
-          if (oldUI != null)
-            oldUI.goodbye();
           synchronized (mapLock)
           {
-            clientSocketMap.put(clientName, sake);
-            clientSocketMapTimes.put(clientName, new Long(Sage.eventTime()));
+            replaceMappedSocket(clientSocketMap, clientSocketMapTimes,
+                clientName, sake, Sage.eventTime());
             mapLock.notifyAll();
           }
+          // Register the replacement first. The old UI tears down
+          // asynchronously, and compare-and-remove ownership checks prevent its
+          // cleanup from erasing this newer transport.
+          if (oldUI != null)
+            oldUI.goodbye();
           UIManager.createAltUI(clientName);
+          if (Sage.DBG) System.out.println("MINICLIENT_CONNECTION id=" + connectionId +
+              " phase=CHANNEL_REGISTERED client=" + transportClientName + " role=ui");
         }
         else if (nextByte == 1)
         {
@@ -560,14 +613,16 @@ public class MiniClientSageRenderer extends SageRenderer
           if (Sage.DBG) System.out.println("MiniPlayer is adding to its map:" + clientName);
           synchronized (mapLock)
           {
-            if (clientPlayerSocketMap.containsKey(clientName))
-            {
-              try{((java.nio.channels.SocketChannel)clientPlayerSocketMap.remove(clientName)).close();}catch(Exception e){};
-            }
-            clientPlayerSocketMap.put(clientName, sake);
-            clientPlayerSocketMapTimes.put(clientName, new Long(Sage.eventTime()));
+            java.nio.channels.SocketChannel oldSocket =
+                (java.nio.channels.SocketChannel) replaceMappedSocket(
+                    clientPlayerSocketMap, clientPlayerSocketMapTimes,
+                    clientName, sake, Sage.eventTime());
+            if (oldSocket != null && oldSocket != sake)
+              try { oldSocket.close(); } catch (Exception e) {}
             mapLock.notifyAll();
           }
+          if (Sage.DBG) System.out.println("MINICLIENT_CONNECTION id=" + connectionId +
+              " phase=CHANNEL_REGISTERED client=" + transportClientName + " role=player");
         }
         else if (nextByte == 2)
         {
@@ -704,7 +759,13 @@ public class MiniClientSageRenderer extends SageRenderer
     }
     catch (Exception e)
     {
-      if (Sage.DBG) System.out.println("Error with new MiniUI connection:" + e);
+      if (Sage.DBG) System.out.println("MINICLIENT_CONNECTION id=" + connectionId +
+          " phase=CLOSED client=" + transportClientName + " role=" + transportRole +
+          " reason=" + e.getClass().getSimpleName() +
+          " bytes=" + introductionProgress.getBytes() +
+          " progressAgeMs=" + Math.max(0L,
+              Sage.eventTime() - introductionProgress.getLastProgressAtMs()) +
+          " error=" + e);
       if (Sage.DBG) Sage.printStackTrace(e);
     }
     finally
@@ -797,8 +858,19 @@ public class MiniClientSageRenderer extends SageRenderer
     synchronized(mapLock)
     {
       if (Sage.DBG)System.out.println("MCSR client socket returned from " + info.clientName);
-      info.socketMap.put(info.clientName, info.getSocketChannel());
-      info.socketMapTimes.put(info.clientName, new Long(Sage.eventTime()));
+      Object current = info.socketMap.get(info.clientName);
+      if (current == null || current == info.getSocketChannel())
+      {
+        replaceMappedSocket(info.socketMap, info.socketMapTimes, info.clientName,
+            info.getSocketChannel(), Sage.eventTime());
+        mapLock.notifyAll();
+      }
+      else
+      {
+        // A newer connection arrived while this channel was checked out. Do not
+        // let a delayed release replace it.
+        try { info.getSocketChannel().close(); } catch (Exception e) {}
+      }
     }
   }
 
@@ -884,9 +956,9 @@ public class MiniClientSageRenderer extends SageRenderer
         }
         if (sake != null)
         {
+          deadline.markProgress(Sage.eventTime());
           if (Sage.DBG)System.out.println("Issuing MCSR client socket to " + clientName);
-          socketMap.remove(clientName);
-          socketMapTimes.remove(clientName);
+          removeMappedSocketIfSame(socketMap, socketMapTimes, clientName, sake);
         }
         else if (reconnectLeft && mcsr != null)
         {
@@ -2984,6 +3056,7 @@ public class MiniClientSageRenderer extends SageRenderer
 
   public void cleanupRenderer()
   {
+    invalidatePartyAuthorization();
     super.cleanupRenderer();
     deinitMini();
     if (loopbackConnection)
@@ -3839,6 +3912,7 @@ public class MiniClientSageRenderer extends SageRenderer
 
   protected synchronized boolean initMini()
   {
+    boolean admittedByExistingLanPolicy = false;
     if (Sage.DBG && DEBUG_NATIVE2D) System.out.println("initMini()");
     // I think this is an artifact from before the multi-UI system was done, but we implemented the
     // mini-renderer to test it out
@@ -3860,8 +3934,8 @@ public class MiniClientSageRenderer extends SageRenderer
       }
       if (clientSocket != null)
       {
-        clientSocketMap.remove(clientName);
-        clientSocketMapTimes.remove(clientName);
+        removeMappedSocketIfSame(clientSocketMap, clientSocketMapTimes,
+            clientName, clientSocket);
       }
     }
     if (clientSocket == null) return false;
@@ -5247,6 +5321,7 @@ public class MiniClientSageRenderer extends SageRenderer
         if (localConnection && !Sage.getBoolean("miniclient/authenticate_local_connections", false))
         {
           // No authentication needed for this connection
+          admittedByExistingLanPolicy = true;
           cryptoSupport = false;
         }
         else
@@ -5443,6 +5518,8 @@ public class MiniClientSageRenderer extends SageRenderer
                 if (Sage.DBG) System.out.println("Client sent an auth block back to the server...check it...");
                 if (SageTV.oneWayEncrypt(clientAuth).equals(myAuth))
                 {
+                  partyPrincipal = sage.party.PartyAuthentication.cachedPrincipal(
+                      key -> Sage.get(key, null), clientName);
                   if (Sage.DBG) System.out.println("Cached authentication was verified!");
                   // Now we disable encryption on this channel and indicate we don't need authentication so that
                   // we load the regular STV instead of SecureLogin.xml
@@ -5496,6 +5573,10 @@ public class MiniClientSageRenderer extends SageRenderer
         }
       }
       recvr.resetThreadChecker();
+      partySessionInitialized = rv;
+      partyLanAuthorized = rv && admittedByExistingLanPolicy;
+      if (getPartyPrincipal() != null && ngCapabilities.containsAll(sage.party.PartyProtocol.REQUIRED))
+        partyConnection().authenticated();
       if (rv)
       {
         sage.plugin.PluginEventManager.getInstance().postEvent(sage.plugin.PluginEventManager.CLIENT_CONNECTED,
@@ -7116,7 +7197,7 @@ public class MiniClientSageRenderer extends SageRenderer
     }, "KillUIMgr");
   }
 
-  private volatile boolean forcedUnresponsiveKill = false;
+  private volatile boolean unresponsiveTransportCloseRequested = false;
   // Called when the client has stopped answering UI replies entirely (frozen MiniClient
   // that never closed its socket). Close the transport so the receiver's blocking read
   // unblocks, then tear the UI session down. This releases the render lock that the
@@ -7127,17 +7208,16 @@ public class MiniClientSageRenderer extends SageRenderer
   // thread that holds this renderer and is waiting on replyQueue.
   private void handleUnresponsiveClient()
   {
-    if (forcedUnresponsiveKill) return;
-    forcedUnresponsiveKill = true;
-    if (Sage.DBG) System.out.println("MCSR: client unresponsive to UI replies; forcing session teardown to release the render lock");
+    if (unresponsiveTransportCloseRequested) return;
+    unresponsiveTransportCloseRequested = true;
+    if (Sage.DBG) System.out.println("MCSR: client unresponsive to UI replies; closing the timed-out transport and allowing bounded reconnect");
     Pooler.execute(new Runnable()
     {
       public void run()
       {
         try { closeMiniUITransportForReconnect(); } catch (Throwable t) {}
-        killUIMgrAsync();
       }
-    }, "KillUnresponsiveMiniClient");
+    }, "CloseUnresponsiveMiniClientTransport");
   }
 
   private boolean startedReconnectDaemon = false;
@@ -7171,6 +7251,7 @@ public class MiniClientSageRenderer extends SageRenderer
 
   public boolean connectionError() // returns true if we should just die
   {
+    invalidatePartyAuthorization();
     // Close the active transport immediately so FIN'd peers don't linger in CLOSE_WAIT
     // while we wait for a reconnect attempt.
     closeMiniUITransportForReconnect();
@@ -7217,6 +7298,7 @@ public class MiniClientSageRenderer extends SageRenderer
 
   private void useReconnectSocket(java.nio.channels.SocketChannel newChan)
   {
+    invalidatePartyAuthorization();
     // Make sure we know about this because it's possible the client is doing it before we're aware of the situation
     synchronized (reconnectLock)
     {
@@ -8167,6 +8249,32 @@ public class MiniClientSageRenderer extends SageRenderer
     return p.equals("browser") || p.equals("tizen");
   }
 
+  static boolean isAndroidNativeSurfaceId(String id)
+  {
+    return "android_media3".equalsIgnoreCase(id) || "android_ijk".equalsIgnoreCase(id);
+  }
+
+  private boolean isAndroidNativeMiniClient()
+  {
+    sage.client.PlaybackSurfaceSet surfaces = getPlaybackSurfaces();
+    if (surfaces == null || surfaces.isEmpty())
+      return false;
+    for (String id : surfaces.asMap().keySet())
+      if (isAndroidNativeSurfaceId(id))
+        return true;
+    return false;
+  }
+
+  static long resolveMiniClientReplyTimeoutMs(boolean uiServerThread,
+      boolean androidNativeClient, long standardTimeoutMs, long androidTimeoutMs)
+  {
+    // Client type and calling thread are not evidence of link quality. Keep the
+    // legacy standard budget as the idle allowance for every MiniClient; the
+    // receiver also applies a separate absolute cap while extending this idle
+    // window only when bytes continue to arrive.
+    return Math.max(1000L, standardTimeoutMs);
+  }
+
   /** CLIENT_PLATFORM capability ("browser"/"tizen" for PWA; empty otherwise). */
   public String getClientPlatform()
   {
@@ -8201,7 +8309,97 @@ public class MiniClientSageRenderer extends SageRenderer
    */
   public sage.client.PlaybackSurfaceSet getPlaybackSurfaces()
   {
+    sage.client.PlaybackSurfaceSet selected = partyPlaybackSurfaces;
+    if (selected != null) return selected;
     return playbackSurfaces == null ? sage.client.PlaybackSurfaceSet.empty() : playbackSurfaces;
+  }
+
+  private volatile sage.client.PlaybackSurfaceSet partyPlaybackSurfaces;
+  private volatile long partyPathGeneration;
+  private final Object partySurfaceLock = new Object();
+  private long partySurfaceQueryDeadline;
+
+  /** Queries one actually advertised surface on this renderer without altering ordinary discovery. */
+  synchronized sage.client.PlaybackSurfaceSet queryPartySurface(String surfaceId) throws java.io.IOException
+  {
+    if (surfaceId == null || !surfaceId.matches("[A-Za-z0-9_]{1,64}"))
+      throw new sage.party.PartyProtocol.Fault("SURFACE_UNAVAILABLE");
+    partySurfaceQueryDeadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+    sendGetPropertyAsync("PLAYBACK_SURFACES");
+    sendBufferNow();
+    String advertised = partySurfaceReply();
+    if (advertised == null || advertised.length() > 4096)
+      throw new sage.party.PartyProtocol.Fault("SURFACE_QUERY_FAILED");
+    java.util.List<String> ids = sage.client.PlaybackSurfaceSet.split(advertised);
+    if (ids.size() > 32 || !ids.contains(surfaceId))
+      throw new sage.party.PartyProtocol.Fault("SURFACE_UNAVAILABLE");
+    String[] suffixes = {"ROUTE", "PRIORITY", "DELIVERY_MODES", "VIDEO_CODECS", "AUDIO_CODECS",
+        "CONTAINERS", "AUDIO_TRACK_ACCESS", "AUDIO_TRACK_SELECTION_MODE", "AUDIO_CONTAINER_RULES",
+        "MAX_OUTPUT_WIDTH", "MAX_OUTPUT_HEIGHT", "MAX_FPS", "AUDIO_MAX_CHANNELS", "BANDWIDTH_FEEDBACK"};
+    for (String suffix : suffixes) sendGetPropertyAsync("PLAYBACK_SURFACE_" + surfaceId + "_" + suffix);
+    sendBufferNow();
+    String[] props = new String[suffixes.length];
+    boolean invalid = false;
+    for (int i = 0; i < props.length; i++)
+    {
+      props[i] = partySurfaceReply();
+      if (props[i] == null || props[i].length() > 4096) invalid = true;
+    }
+    if (invalid) throw new sage.party.PartyProtocol.Fault("SURFACE_QUERY_FAILED");
+    sage.client.PlaybackSurfaceSet result = sage.client.PlaybackSurfaceSet.build(surfaceId, id -> props);
+    sage.client.PlaybackSurface surface = result.get(surfaceId);
+    if (surface == null || surface.getRoute().isEmpty() || surface.getDeliveryModes().isEmpty()
+        || surface.getVideoCodecs().isEmpty() || surface.getAudioCodecs().isEmpty()
+        || surface.getContainers().isEmpty())
+      throw new sage.party.PartyProtocol.Fault("SURFACE_UNAVAILABLE");
+    return result;
+  }
+
+  String partySurfaceReply()
+  {
+    long remaining = Math.max(1, java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(partySurfaceQueryDeadline - System.nanoTime()));
+    ReplyPacket reply = recvr.getReply(remaining, true);
+    return reply == null ? null : reply.getDataAsString();
+  }
+
+  long getPartyPathGeneration() { return partyPathGeneration; }
+
+  long selectPartySurface(sage.client.PlaybackSurfaceSet selected, long expectedGeneration)
+  {
+    synchronized (partySurfaceLock)
+    {
+      if (partyPathGeneration != expectedGeneration || partyPlaybackSurfaces != null || selected == null || selected.size() != 1)
+        throw new sage.party.PartyProtocol.Fault("SURFACE_CHANGED");
+      NativePlaybackOwnershipBridge.REGISTRY.revokeRenderer(this);
+      partyPlaybackSurfaces = selected;
+      return ++partyPathGeneration;
+    }
+  }
+
+  long restorePartySurface()
+  {
+    synchronized (partySurfaceLock)
+    {
+      if (partyPlaybackSurfaces != null)
+      { NativePlaybackOwnershipBridge.REGISTRY.revokeRenderer(this); partyPlaybackSurfaces = null; ++partyPathGeneration; }
+      return partyPathGeneration;
+    }
+  }
+
+  boolean hasPartySurface() { return partyPlaybackSurfaces != null; }
+
+  java.nio.channels.SocketChannel partyControlChannel() { return clientSocket; }
+
+  boolean ownsPartyControlSocket(java.nio.channels.SocketChannel expected, java.net.Socket bridge)
+  {
+    java.nio.channels.SocketChannel current = clientSocket;
+    if (expected == null || current != expected || !current.isOpen() || !current.isConnected()
+        || bridge == null || !bridge.isConnected() || bridge.isClosed() || bridge.isInputShutdown() || bridge.isOutputShutdown())
+      return false;
+    java.net.Socket accepted = current.socket();
+    return accepted != null && !accepted.isClosed() && !accepted.isInputShutdown() && !accepted.isOutputShutdown()
+        && accepted.getLocalSocketAddress().equals(bridge.getRemoteSocketAddress())
+        && accepted.getRemoteSocketAddress().equals(bridge.getLocalSocketAddress());
   }
 
   /**
@@ -8224,6 +8422,7 @@ public class MiniClientSageRenderer extends SageRenderer
    */
   public synchronized boolean refreshPlaybackSurfaces()
   {
+    if (partyPlaybackSurfaces != null) return !partyPlaybackSurfaces.isEmpty();
     try
     {
       sendGetPropertyAsync("PLAYBACK_SURFACES");
@@ -9125,6 +9324,8 @@ public class MiniClientSageRenderer extends SageRenderer
 
   private boolean handleInboundClientSetProperty(byte[] payload)
   {
+    if (sage.party.PartyWire.accept(payload, json -> partyConnection().receive(json)))
+      return true;
     if (payload == null || payload.length < 4)
       return false;
 
@@ -9183,6 +9384,69 @@ public class MiniClientSageRenderer extends SageRenderer
     }
 
     return false;
+  }
+
+  private volatile String partyPrincipal;
+  private volatile boolean partyLanAuthorized;
+  private volatile boolean partySessionInitialized;
+  private final Object partyConnectionLock = new Object();
+  private volatile NgPartyConnection partyConnection;
+
+  private NgPartyConnection partyConnection()
+  {
+    NgPartyConnection current = partyConnection;
+    if (current != null) return current;
+    synchronized (partyConnectionLock)
+    {
+      if (partyConnection == null) partyConnection = new NgPartyConnection(this, uiMgr);
+      return partyConnection;
+    }
+  }
+
+  /** Returns existing verified account or server-admitted LAN policy realm, never advertised identity. */
+  String getPartyPrincipal()
+  {
+    if (!partySessionInitialized) return null;
+    if (partyPrincipal != null) return "user:" + partyPrincipal;
+    return partyLanAuthorized ? "server-admitted-lan" : null;
+  }
+
+  private void invalidatePartyAuthorization()
+  {
+    NativePlaybackOwnershipBridge.REGISTRY.revokeRenderer(this);
+    NgPartyConnection current;
+    synchronized (partyConnectionLock)
+    {
+      current = partyConnection;
+      partyConnection = null;
+    }
+    if (current != null) current.disconnect();
+    partyPrincipal = null;
+    partyLanAuthorized = false;
+    partySessionInitialized = false;
+  }
+
+  /**
+   * Binds the existing secure-login credential check to this exact renderer.
+   * Ordinary login outcome is unchanged when Party Mode is disabled or unsupported.
+   */
+  public boolean verifyPartyLogin(String username, String passwordDigest)
+  {
+    if (recvr == null || !recvr.isEncryptionOn()
+        || !sage.party.PartyAuthentication.verify(key -> Sage.get(key, null), username, passwordDigest))
+    {
+      System.out.println("PartyMode authentication outcome=UNVERIFIED");
+      return false;
+    }
+    partyPrincipal = username;
+    partyConnection().authenticated();
+    return true;
+  }
+
+  /** Intercepts existing server play/pause/skip controls only while joined to a party. */
+  boolean routePartyAction(String action)
+  {
+    return partyConnection != null && partyConnection.route(action);
   }
 
   /** Parses and stores an inbound {@code AUDIO_PROCESSING_CAPABILITIES} payload. */
@@ -10795,8 +11059,20 @@ public class MiniClientSageRenderer extends SageRenderer
       dis = inDis;
       replyQueue = new java.util.Vector();
       alive = true;
+      connectionProgress = new ConnectionProgress(Sage.eventTime());
       setDaemon(true);
       start();
+    }
+    private void readFully(java.nio.ByteBuffer target) throws java.io.IOException
+    {
+      while (target.remaining() > 0)
+      {
+        int x = dis.read(target);
+        if (x < 0)
+          throw new java.io.EOFException();
+        if (x > 0)
+          connectionProgress.markBytes(Sage.eventTime(), x);
+      }
     }
     private int read3ByteInt() throws java.io.IOException
     {
@@ -10818,6 +11094,16 @@ public class MiniClientSageRenderer extends SageRenderer
         }
       }
       dis = inDis;
+      synchronized (replyQueue)
+      {
+        // A timed-out FIFO cannot be resynchronized. A reconnect is a new
+        // transport, so discard every old-transport reply/discard marker before
+        // allowing commands to continue.
+        replyQueue.clear();
+        intRepliesToDiscard = 0;
+        unresponsiveTransportCloseRequested = false;
+        replyQueue.notifyAll();
+      }
     }
     public void run()
     {
@@ -10827,12 +11113,7 @@ public class MiniClientSageRenderer extends SageRenderer
         try
         {
           recvBuf.clear().limit(16); // the header
-          do
-          {
-            int x = dis.read(recvBuf);
-            if (x == -1)
-              throw new java.io.EOFException();
-          }while (recvBuf.remaining() > 0);
+          readFully(recvBuf);
           recvBuf.flip();
           int replyType = recvBuf.get() & 0xFF;
           if (replyType == -1)
@@ -10853,11 +11134,7 @@ public class MiniClientSageRenderer extends SageRenderer
               decryptBuff = new byte[512];
             // Blowfish & DES uses 64-bit block sizes so align on that. They also require a pad (which is why we add 8 instead of 7)
             recvBuf.clear().limit((dataLen + 8) & 0xFFFF8);
-            do{
-              int x = dis.read(recvBuf);
-              if (x < 0)
-                throw new java.io.EOFException();
-            }while(recvBuf.remaining() > 0);
+            readFully(recvBuf);
             recvBuf.flip();
             recvBuf.get(decryptBuff, 0, recvBuf.limit());
             byte[] theData = evtDecryptCipher.doFinal(decryptBuff, 0, (dataLen + 8) & 0xFFFF8);
@@ -10876,11 +11153,7 @@ public class MiniClientSageRenderer extends SageRenderer
             {
               replyData = new byte[dataLen];
               recvBuf.clear().limit(dataLen);
-              do{
-                int x = dis.read(recvBuf);
-                if (x < 0)
-                  throw new java.io.EOFException();
-              }while(recvBuf.remaining() > 0);
+              readFully(recvBuf);
               recvBuf.flip();
               recvBuf.get(replyData);
             }
@@ -10895,11 +11168,7 @@ public class MiniClientSageRenderer extends SageRenderer
               // for the # of bytes, and then a UTF-8 byte string. Then repeat until the 2 byte length is zero. Put the
               // resulting list of strings in the reply packet as the 'stringList'
               recvBuf.clear().limit(2);
-              do{
-                int x = dis.read(recvBuf);
-                if (x < 0)
-                  throw new java.io.EOFException();
-              }while(recvBuf.remaining() > 0);
+              readFully(recvBuf);
               recvBuf.flip();
               int currSize = recvBuf.getShort() & 0xFFFF;
               java.util.ArrayList stringListVec = new java.util.ArrayList();
@@ -10909,11 +11178,7 @@ public class MiniClientSageRenderer extends SageRenderer
               while (currSize != 0)
               {
                 strBB.clear().limit(currSize + 2);
-                do{
-                  int x = dis.read(strBB);
-                  if (x < 0)
-                    throw new java.io.EOFException();
-                }while(strBB.remaining() > 0);
+                readFully(strBB);
                 strBB.flip();
                 try
                 {
@@ -10932,6 +11197,7 @@ public class MiniClientSageRenderer extends SageRenderer
             {
               if (DEBUG_NATIVE2D) System.out.println("Adding item to replyQueue");
               replyQueue.add(newReply);
+              connectionProgress.markMessage(Sage.eventTime());
               replyQueue.notifyAll();
             }
             if (nextReplyCryptoToggle != null)
@@ -10953,11 +11219,7 @@ public class MiniClientSageRenderer extends SageRenderer
             if (replyData == null)
             {
               recvBuf.clear().limit(dataLen);
-              do{
-                int x = dis.read(recvBuf);
-                if (x < 0)
-                  throw new java.io.EOFException();
-              }while(recvBuf.remaining() > 0);
+              readFully(recvBuf);
               recvBuf.flip();
             }
             // Event packet
@@ -11234,6 +11496,9 @@ public class MiniClientSageRenderer extends SageRenderer
     void resetThreadChecker() { singleThread = null; }
     // NOTE: Enforce that only a single thread ever calls the getReply method
     public ReplyPacket getReply()
+    { return getReply((Thread.currentThread() == ssThread) ? 10000 : 60000, false); }
+
+    private ReplyPacket getReply(long waitMax, boolean closeOnTimeout)
     {
       // NOTE: I don't believe this is necessary because the transactional nature of the reply is always
       // preserved since all operations are contained within sync blocks (i.e. all requests are made with the sync lock
@@ -11253,21 +11518,32 @@ public class MiniClientSageRenderer extends SageRenderer
         }
         if (!replyQueue.isEmpty())
         {
-          consecutiveReplyTimeouts = 0;
           return (ReplyPacket)replyQueue.remove(0);
         }
         long startWait = Sage.eventTime();
-        // Don't wait forever; and make it quicker if we're the main UI Server thread so we don't appear dead if the connection
-        // is dropped
-        long waitMax = (Thread.currentThread() == ssThread) ? 10000 : 60000;
-        while (replyQueue.size() <= intRepliesToDiscard && alive && isAlive() && master.isAlive() && Sage.eventTime() - startWait < waitMax)
+        // Client type and address topology are not link-quality signals. Use a
+        // shared idle budget, extended only by observed bytes/replies, plus an
+        // absolute cap.
+        long idleWaitMax = resolveMiniClientReplyTimeoutMs(
+            Thread.currentThread() == ssThread,
+            MiniClientSageRenderer.this.isAndroidNativeMiniClient(),
+            Sage.getLong("ui/miniclient_reply_timeout_ms", 60000L),
+            Sage.getLong("ui/android_miniclient_reply_timeout_ms", 10000L));
+        long absoluteWaitMax = Math.max(idleWaitMax,
+            Sage.getLong("ui/miniclient_reply_absolute_timeout_ms", 120000L));
+        long waitRemaining = connectionProgress.remainingWait(startWait, Sage.eventTime(),
+            idleWaitMax, absoluteWaitMax);
+        while (replyQueue.size() <= intRepliesToDiscard && alive && isAlive() &&
+            master.isAlive() && waitRemaining > 0L)
         {
           try
           {
-            replyQueue.wait(5000);
+            replyQueue.wait(Math.min(5000L, waitRemaining));
           }
           catch (InterruptedException e)
           {
+            Thread.currentThread().interrupt();
+            break;
           }
           while (intRepliesToDiscard > 0 && !replyQueue.isEmpty())
           {
@@ -11275,29 +11551,31 @@ public class MiniClientSageRenderer extends SageRenderer
             intRepliesToDiscard--;
             if (DEBUG_NATIVE2D) System.out.println("Discarded reply in getReply-2 left=" + intRepliesToDiscard + " queueSize=" + replyQueue.size());
           }
+          waitRemaining = connectionProgress.remainingWait(startWait, Sage.eventTime(),
+              idleWaitMax, absoluteWaitMax);
         }
         if (alive && replyQueue.isEmpty())
         {
-          // The client did not answer within waitMax. A frozen MiniClient that never
-          // FIN/RST's its socket would otherwise leave us re-issuing the same request
-          // forever (holding the render lock and wedging the UI EventThread). After a
-          // few consecutive full timeouts, treat the client as dead and tear the session
-          // down so the render lock is released instead of relooping a corpse.
-          consecutiveReplyTimeouts++;
-          if (Sage.DBG) System.out.println("ERROR: MiniUIClient receiver timed out waiting for response from the MiniClient! (consecutive=" + consecutiveReplyTimeouts + ")");
-          int maxTimeouts = Sage.getInt("ui/miniclient_unresponsive_reply_timeouts", 2);
-          if (maxTimeouts > 0 && consecutiveReplyTimeouts >= maxTimeouts)
-          {
-            alive = false;
-            MiniClientSageRenderer.this.handleUnresponsiveClient();
-          }
+          // Replies are an untagged FIFO. Once one request times out, a late reply
+          // can be consumed as the next command's result (observed as a nonsensical
+          // image handle, corrupt font textures, then a wedged menu). There is no
+          // safe way to resynchronize this connection, so the first full timeout is
+          // terminal for this transport. Close it and let the existing bounded
+          // reconnect path attach a fresh stream/reply queue when supported.
+          if (Sage.DBG) System.out.println("ERROR: MiniUIClient receiver timed out waiting for response from the MiniClient; closing transport for a clean reconnect" +
+              " bytes=" + connectionProgress.getBytes() +
+              " replies=" + connectionProgress.getMessages() +
+              " progressAgeMs=" + Math.max(0L,
+                  Sage.eventTime() - connectionProgress.getLastProgressAtMs()) +
+              " idleTimeoutMs=" + idleWaitMax +
+              " absoluteTimeoutMs=" + absoluteWaitMax);
+          MiniClientSageRenderer.this.handleUnresponsiveClient();
         }
         if (DEBUG_NATIVE2D) System.out.println("Returned reply from queue, size before=" + replyQueue.size());
         // If the queue is still empty after timeout/discard handling, return null
         // instead of throwing an ArrayIndexOutOfBoundsException on remove(0).
         if (alive && !replyQueue.isEmpty())
         {
-          consecutiveReplyTimeouts = 0;
           return (ReplyPacket) replyQueue.remove(0);
         }
         return null;
@@ -11378,6 +11656,7 @@ public class MiniClientSageRenderer extends SageRenderer
     private Thread singleThread;
     private java.util.Vector replyQueue;
     private java.nio.channels.ReadableByteChannel dis;
+    private final ConnectionProgress connectionProgress;
     private boolean alive;
     private java.nio.ByteBuffer recvBuf = java.nio.ByteBuffer.allocate(131072); // subpicture data sent back can be large sometimes
 
@@ -11386,7 +11665,6 @@ public class MiniClientSageRenderer extends SageRenderer
     private boolean encryptionOn;
     private byte[] decryptBuff;
     private int intRepliesToDiscard;
-    private int consecutiveReplyTimeouts;
   }
   private static class ReplyPacket
   {

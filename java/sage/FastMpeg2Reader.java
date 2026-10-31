@@ -406,6 +406,8 @@ public final class FastMpeg2Reader
       inxs.setSourceFile(hostname, mpegFile);
       inxs.setTranscodeFormat(streamTranscodeMode, sourceFormat);
       inxs.setEnableOutputBuffering(true);
+      if (inxs instanceof FFMPEGTranscoder)
+        ((FFMPEGTranscoder) inxs).setDirectPushSession(true);
       if (ac4SourceAudioCodec != null && inxs instanceof FFMPEGTranscoder)
         ((FFMPEGTranscoder) inxs).setAc4SourceAudioCodec(ac4SourceAudioCodec);
       if (inxs instanceof FFMPEGTranscoder)

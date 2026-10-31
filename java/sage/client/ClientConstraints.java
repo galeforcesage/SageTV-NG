@@ -158,6 +158,25 @@ public final class ClientConstraints
       return true;
     }
 
+    /**
+     * Whether a source stream fits every decoder limit the client explicitly
+     * declared for this codec. Undeclared axes remain fail-open so older
+     * clients keep their existing behavior; declared limits are hard ceilings.
+     *
+     * <p>This differs from {@link #canDecode}: direct playback may legitimately
+     * use a software decoder, and an omitted geometry declaration must not turn
+     * into an implicit rejection. This method only answers whether the source
+     * violates something the client actually reported.
+     */
+    public boolean supportsSource(int width, int height, double fps, long bitrate)
+    {
+      if (width > 0 && maxWidth > 0 && width > maxWidth) return false;
+      if (height > 0 && maxHeight > 0 && height > maxHeight) return false;
+      if (fps > 0d && maxFps > 0d && fps > maxFps + 0.5d) return false;
+      if (bitrate > 0L && maxBitrate > 0L && bitrate > maxBitrate) return false;
+      return true;
+    }
+
     @Override public String toString()
     {
       return codec + "[scan=" + scan + ",interlaced=" + interlaced + ",decoder=" + decoder

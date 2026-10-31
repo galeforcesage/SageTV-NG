@@ -602,6 +602,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
         else
           numRead = xcodeStdout.read(buf, inOffset, leftToRead);
         if (XCODE_DEBUG_IO) System.out.println("Xcoder readFully " + numRead + " bytes directly from transcoder and is pushing it out");
+        noteXcodeOutputBytesProduced(numRead);
         if (numRead == -1)
         {
           // EOF, use the overage buffer for the rest but also push what we have in ours
@@ -863,6 +864,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
       long ringReadEnd = offset + ringServed;
       synchronized (xcodeSyncLock)
       {
+        // Commit the generation before copying anything toward the socket. The
+        // read-position cursor advances only after the socket write completes,
+        // so it cannot by itself detect a concurrent in-flight delivery.
+        xcodeOutputGenerationDeliveryStarted = true;
         int snapPos = 0;
         long copyLeft = ringServed;
         while (copyLeft > 0)
@@ -914,6 +919,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
         int currRead = Math.min((int)leftToRead, hackBuf.remaining());
         int numRead = xcodeStdout.read(dataBuf, myOffset, currRead);
         if (XCODE_DEBUG_IO) System.out.println("Xcoder read " + numRead + " bytes directly from transcoder and is pushing it out");
+        noteXcodeOutputBytesProduced(numRead);
         if (numRead == -1)
         {
           // EOF, use the overage buffer for the rest but also push what we have in ours
@@ -2069,7 +2075,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
    * the generic "Error initializing output stream" ffmpeg prints on an NVENC
    * open failure.
    */
-  private static boolean isNvencInitFailureLine(CharSequence line)
+  static boolean isNvencInitFailureLine(CharSequence line)
   {
     if (line == null) return false;
     String l = line.toString().toLowerCase(java.util.Locale.ROOT);
@@ -2103,7 +2109,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
    * GPU enhance for the whole cooldown window. The offending session still
    * degrades to a no-upscale remux via the caller's per-session rung logic.
    */
-  private static boolean isNvencCapacityFailureLine(CharSequence line)
+  static boolean isNvencCapacityFailureLine(CharSequence line)
   {
     if (line == null) return false;
     String l = line.toString().toLowerCase(java.util.Locale.ROOT);
@@ -2113,6 +2119,13 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (l.indexOf("cuda error: out of memory") >= 0) return true;
     if (l.indexOf("outofmemory") >= 0) return true;
     return false;
+  }
+
+  static boolean isFrameZeroEnhanceNvencFailure(String enhanceSessionId,
+      boolean alreadyHandled, boolean sawVideoFrame, long launchAgeMs, long earlyWindowMs)
+  {
+    return enhanceSessionId != null && !alreadyHandled && !sawVideoFrame
+        && launchAgeMs >= 0L && launchAgeMs <= earlyWindowMs;
   }
 
   /**
@@ -2164,8 +2177,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
    * This is the PUSH analogue of the named copy-family modes above: the video is
    * stream-copied (so {@link sage.enhance.GpuEnhancePipeline#rewriteArgv} can
    * swap the {@code -vcodec copy} for the NVENC HEVC upscale), and enhancement
-   * is delivered over the client's native MATROSKA push rather than pull-xcode
-   * (which these clients do not advertise). Deliberately kept SEPARATE from
+   * is delivered over the client's native managed push container rather than
+   * pull-xcode (which these clients do not advertise). Deliberately kept SEPARATE from
    * {@link #isModernCopyFamilyXcodeMode} so it gates <b>only</b> the enhancement
    * rewrite (below), never the VOD probesize/analyzeduration tuning, whose
    * name-scoped set must stay unchanged. Matches only an explicit
@@ -2181,18 +2194,21 @@ public class FFMPEGTranscoder implements TranscodeEngine
   }
 
   /**
-   * True for a non-copy re-encode PLAYBACK mode that can still be enhanced in
-   * place because it already decodes and re-encodes on the GPU. Currently only
-   * {@code browserhd} — the H.264 fMP4 re-encode the browser/PWA negotiates for
-   * sources that cannot be stream-copied (e.g. MPEG-2 DVR content). Unlike the
-   * copy-family modes, enhancement here keeps the H.264 codec (browser MSE
-   * generally cannot decode the HEVC the copy path emits) and only adds the CUDA
-   * scale/deinterlace chain plus a higher bitrate. Still gated on {@code
-   * !activeFile} exactly like the copy-family modes, so a recording is untouched.
+   * True for a non-copy H.264 playback mode that can still be enhanced in place.
+   * These modes start with NVENC when available, keep H.264 as the negotiated wire
+   * codec, and add the CUDA scale/deinterlace chain plus the enhanced bitrate when
+   * admitted. MPEG-2 sources use these bases so a denied GPU request can switch to
+   * software {@code libx264} without exposing copied MPEG-2 to the client.
    */
   boolean isEnhanceableReencodeMode()
   {
-    return "browserhd".equalsIgnoreCase(xcodeModeName);
+    if (xcodeModeName == null) return false;
+    if ("browserhd".equalsIgnoreCase(xcodeModeName)
+        || "dynamich264".equalsIgnoreCase(xcodeModeName))
+      return true;
+    String mode = xcodeModeName.toLowerCase(java.util.Locale.ROOT);
+    return mode.indexOf("container=") >= 0
+        && mode.indexOf("videocodec=h264_nvenc") >= 0;
   }
 
   /**
@@ -2944,6 +2960,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
    */
   private static final java.util.concurrent.ConcurrentHashMap<String,Long>
       ENHANCE_STALL_COOLDOWN = new java.util.concurrent.ConcurrentHashMap<String,Long>();
+  private static final java.util.concurrent.ConcurrentHashMap<String,Long>
+      ENHANCE_NVENC_FAILURE_COOLDOWN = new java.util.concurrent.ConcurrentHashMap<String,Long>();
+  private static final java.util.ArrayDeque<Long> ENHANCE_NVENC_FRAME_ZERO_FAILURES =
+      new java.util.ArrayDeque<Long>();
+  private static volatile boolean enhanceNvencCapacityLatched;
 
   /** Arm the stall cooldown for a source so its next open serves plain remux. */
   static void markEnhanceStallCooldown(java.io.File src)
@@ -2970,10 +2991,229 @@ public class FFMPEGTranscoder implements TranscodeEngine
     return true;
   }
 
+  /**
+   * Record an enhanced NVENC capacity failure before the encoder produced a
+   * video frame. The source is suppressed immediately so a clean client reopen
+   * receives a plain remux. Repeated failures within a short window latch GPU
+   * enhancement off for the JVM lifetime; a server restart is the recovery
+   * signal, while unrelated NVENC and non-enhanced playback remain available.
+   */
+  static synchronized void noteEnhanceNvencFrameZeroCapacityFailure(java.io.File src)
+  {
+    long now = Sage.time();
+    long sourceSecs = Sage.getLong(
+        "playback/gpu_enhance/nvenc_failure_source_cooldown_seconds", 120L);
+    if (src != null && sourceSecs > 0L)
+      ENHANCE_NVENC_FAILURE_COOLDOWN.put(
+          src.toString(), now + sourceSecs * 1000L);
+
+    long windowMs = Math.max(1L, Sage.getLong(
+        "playback/gpu_enhance/nvenc_failure_latch_window_ms", 300000L));
+    while (!ENHANCE_NVENC_FRAME_ZERO_FAILURES.isEmpty()
+        && now - ENHANCE_NVENC_FRAME_ZERO_FAILURES.peekFirst().longValue() > windowMs)
+      ENHANCE_NVENC_FRAME_ZERO_FAILURES.removeFirst();
+    ENHANCE_NVENC_FRAME_ZERO_FAILURES.addLast(Long.valueOf(now));
+
+    int threshold = Math.max(1, Sage.getInt(
+        "playback/gpu_enhance/nvenc_failure_latch_threshold", 2));
+    if (!enhanceNvencCapacityLatched
+        && ENHANCE_NVENC_FRAME_ZERO_FAILURES.size() >= threshold)
+    {
+      enhanceNvencCapacityLatched = true;
+      System.out.println("GPU_ENHANCE NVENC capacity latch armed after "
+          + ENHANCE_NVENC_FRAME_ZERO_FAILURES.size()
+          + " frame-zero failures; enhancement disabled until server restart");
+    }
+  }
+
+  /** A completed enhanced video frame proves that an unlatched capacity blip recovered. */
+  static synchronized void noteEnhanceNvencFrameSuccess()
+  {
+    if (!enhanceNvencCapacityLatched)
+      ENHANCE_NVENC_FRAME_ZERO_FAILURES.clear();
+  }
+
+  static boolean enhanceNvencCapacityLatched()
+  {
+    return enhanceNvencCapacityLatched;
+  }
+
+  static boolean enhanceNvencFailureCoolingDown(java.io.File src)
+  {
+    if (src == null) return false;
+    Long until = ENHANCE_NVENC_FAILURE_COOLDOWN.get(src.toString());
+    if (until == null) return false;
+    if (Sage.time() >= until.longValue())
+    {
+      ENHANCE_NVENC_FAILURE_COOLDOWN.remove(src.toString());
+      return false;
+    }
+    return true;
+  }
+
+  static synchronized void clearEnhanceNvencFailureStateForTests()
+  {
+    ENHANCE_NVENC_FAILURE_COOLDOWN.clear();
+    ENHANCE_NVENC_FRAME_ZERO_FAILURES.clear();
+    enhanceNvencCapacityLatched = false;
+  }
+
+  boolean applyMpeg2SoftwareCompatibilityFallback(
+      java.util.ArrayList xcodeParamsVec, String reason)
+  {
+    sage.media.format.VideoFormat video =
+        (sourceFormat == null) ? null : sourceFormat.getVideoFormat();
+    String codec = (video == null) ? null : video.getFormatName();
+    boolean mpeg2 = sage.media.format.MediaFormat.MPEG2_VIDEO.equalsIgnoreCase(codec)
+        || "MPEG-2".equalsIgnoreCase(codec) || "MPEG2".equalsIgnoreCase(codec);
+    if (!mpeg2) return false;
+    if (currFile != null && (activeFile || video.getWidth() <= 0
+        || video.getHeight() <= 0 || video.getFps() <= 0.0f))
+    {
+      sage.media.format.VideoFormat probed = probeSourceVideoFormatBounded(currFile,
+          Sage.getInt("playback/gpu_enhance/live_source_probe_ms", 750));
+      if (probed != null && probed.getWidth() > 0 && probed.getHeight() > 0)
+        video = probed;
+    }
+    repairInvalidSoftwareFallbackVideoArgs(xcodeParamsVec, video);
+    boolean rewritten = rewriteNvencH264ForSoftwareFallback(
+        xcodeParamsVec, video.isInterlaced());
+    if (rewritten)
+    {
+      System.out.println("ENHANCE_LADDER rung=GPU->H264_SOFTWARE reason=" + reason
+          + " source=MPEG2-Video encoder=libx264"
+          + " (preserving negotiated container/audio instead of copied MPEG-2)");
+    }
+    return rewritten;
+  }
+
+  static void repairInvalidSoftwareFallbackVideoArgs(
+      java.util.List<String> argv, sage.media.format.VideoFormat video)
+  {
+    if (argv == null || video == null || video.getWidth() <= 0
+        || video.getHeight() <= 0 || video.getFps() <= 0.0f)
+      return;
+    int input = argv.indexOf("-i");
+    if (input < 0) return;
+    for (int i = input + 1; i < argv.size() - 1; i++)
+    {
+      String flag = argv.get(i);
+      String value = argv.get(i + 1);
+      if ("-s".equals(flag) && isInvalidVideoSize(value))
+        argv.set(i + 1, video.getWidth() + "x" + video.getHeight());
+      else if ("-r".equals(flag) && parsePositiveDouble(value) <= 0.0)
+        argv.set(i + 1, Float.toString(video.getFps()));
+      else if ("-g".equals(flag) && parsePositiveDouble(value) <= 0.0)
+        argv.set(i + 1, Integer.toString(Math.max(1, Math.round(video.getFps() * 10.0f))));
+    }
+  }
+
+  private static boolean isInvalidVideoSize(String value)
+  {
+    if (value == null) return true;
+    int x = value.toLowerCase(java.util.Locale.ROOT).indexOf('x');
+    if (x <= 0 || x >= value.length() - 1) return true;
+    try
+    {
+      return Integer.parseInt(value.substring(0, x)) <= 0
+          || Integer.parseInt(value.substring(x + 1)) <= 0;
+    }
+    catch (NumberFormatException e)
+    {
+      return true;
+    }
+  }
+
+  private static double parsePositiveDouble(String value)
+  {
+    try { return Double.parseDouble(value); }
+    catch (Exception e) { return -1.0; }
+  }
+
+  static boolean rewriteNvencH264ForSoftwareFallback(
+      java.util.ArrayList argv, boolean interlaced)
+  {
+    if (argv == null) return false;
+    int input = argv.indexOf("-i");
+    if (input < 0) return false;
+
+    int codecIndex = -1;
+    for (int i = input + 1; i < argv.size() - 1; i++)
+    {
+      String token = String.valueOf(argv.get(i));
+      if ("-c:v".equals(token) || "-vcodec".equals(token))
+      {
+        codecIndex = i;
+        break;
+      }
+    }
+    if (codecIndex < 0 || codecIndex + 1 >= argv.size()
+        || !"h264_nvenc".equalsIgnoreCase(String.valueOf(argv.get(codecIndex + 1))))
+      return false;
+    argv.set(codecIndex + 1, "libx264");
+
+    String[] nvencOnly = { "-rc", "-cq", "-spatial-aq", "-temporal-aq",
+        "-multipass", "-forced-idr", "-surfaces", "-rc-lookahead" };
+    for (int n = 0; n < nvencOnly.length; n++)
+    {
+      for (int i = argv.size() - 2; i > input; i--)
+      {
+        if (nvencOnly[n].equals(String.valueOf(argv.get(i))))
+        {
+          argv.remove(i + 1);
+          argv.remove(i);
+        }
+      }
+    }
+
+    int preset = argv.indexOf("-preset");
+    if (preset > input && preset + 1 < argv.size())
+      argv.set(preset + 1, "veryfast");
+    else
+    {
+      argv.add(codecIndex + 2, "veryfast");
+      argv.add(codecIndex + 2, "-preset");
+    }
+
+    int firstFilter = -1;
+    for (int i = argv.size() - 2; i > input; i--)
+    {
+      if ("-vf".equals(String.valueOf(argv.get(i))))
+      {
+        firstFilter = i;
+        argv.remove(i + 1);
+        argv.remove(i);
+      }
+    }
+    String filter = interlaced
+        ? "yadif=0:-1:1,format=yuv420p" : "format=yuv420p";
+    int filterInsert = (firstFilter >= 0) ? Math.min(firstFilter, argv.size())
+        : Math.min(input + 2, argv.size());
+    argv.add(filterInsert, "-vf");
+    argv.add(filterInsert + 1, filter);
+
+    for (int i = input + 1; i < argv.size() - 1; i++)
+    {
+      if ("-fps_mode".equals(String.valueOf(argv.get(i)))
+          && "passthrough".equalsIgnoreCase(String.valueOf(argv.get(i + 1))))
+        argv.set(i + 1, "cfr");
+    }
+    return true;
+  }
+
   void maybeApplyGpuEnhancement(java.util.ArrayList xcodeParamsVec)
   {
     try
     {
+      if (nvencEnhancementDisabledForSession)
+      {
+        suppressEnhanceThisLaunch = false;
+        if (!applyMpeg2SoftwareCompatibilityFallback(
+            xcodeParamsVec, "nvenc_session_disabled"))
+          System.out.println("ENHANCE_LADDER rung=GPU->SOURCE reason=nvenc_session_disabled"
+              + " (NVENC already failed in this playback session)");
+        return;
+      }
       // Server-driven degrade-relaunch just fired for this session after a runtime
       // NVENC encoder failure: deliver a plain (NVENC-free) remux this launch
       // instead of re-injecting the scale+hevc_nvenc that just died at frame 0.
@@ -2981,12 +3221,25 @@ public class FFMPEGTranscoder implements TranscodeEngine
       if (suppressEnhanceThisLaunch)
       {
         suppressEnhanceThisLaunch = false;
-        System.out.println("ENHANCE_LADDER rung=GPU->SOURCE reason=nvenc_encode_failure"
-            + " (degrade-relaunch: enhancement suppressed this launch, serving plain remux)");
+        if (!applyMpeg2SoftwareCompatibilityFallback(
+            xcodeParamsVec, "nvenc_encode_failure"))
+          System.out.println("ENHANCE_LADDER rung=GPU->SOURCE reason=nvenc_encode_failure"
+              + " (degrade-relaunch: enhancement suppressed this launch, serving plain remux)");
         return;
       }
       if (enhanceRequest == null || !enhanceRequest.isActive()) return;
-      if (!sage.enhance.EnhancementDryRun.isLive()) return;
+      if (!sage.enhance.EnhancementDryRun.isLive())
+      {
+        applyMpeg2SoftwareCompatibilityFallback(xcodeParamsVec, "enhancement_not_live");
+        return;
+      }
+      if (enhanceNvencCapacityLatched())
+      {
+        System.out.println("GPU_ENHANCE apply: skipped -- frame-zero NVENC capacity"
+            + " failure latch is armed; using compatibility fallback until server restart");
+        applyMpeg2SoftwareCompatibilityFallback(xcodeParamsVec, "nvenc_capacity_latched");
+        return;
+      }
       // Enhancement applies to the confirmed modern copy-family playback modes
       // (remux/copy) and to the browserhd re-encode path (H.264 for browser MSE,
       // chosen when the source can't be stream-copied to fMP4, e.g. MPEG-2).
@@ -3014,6 +3267,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
         if (Sage.DBG) System.out.println("GPU_ENHANCE apply: skipped -- active-file"
             + " (live/in-progress recording) enhancement disabled via"
             + " playback/gpu_enhance/allow_active_file=false");
+        applyMpeg2SoftwareCompatibilityFallback(xcodeParamsVec, "active_file_disabled");
         return;
       }
       if (!copyFamily && !reencodeEnhanceable)
@@ -3032,7 +3286,16 @@ public class FFMPEGTranscoder implements TranscodeEngine
       {
         if (Sage.DBG) System.out.println("GPU_ENHANCE apply: skipped -- source in"
             + " post-stall cooldown (playback/gpu_enhance/stall_cooldown_seconds);"
-            + " serving plain remux for " + currFile);
+            + " serving compatibility fallback for " + currFile);
+        applyMpeg2SoftwareCompatibilityFallback(xcodeParamsVec, "post_stall_cooldown");
+        return;
+      }
+      if (currFile != null && enhanceNvencFailureCoolingDown(currFile))
+      {
+        if (Sage.DBG) System.out.println("GPU_ENHANCE apply: skipped -- source in"
+            + " post-NVENC-failure cooldown; serving a clean compatibility fallback for "
+            + currFile);
+        applyMpeg2SoftwareCompatibilityFallback(xcodeParamsVec, "post_nvenc_cooldown");
         return;
       }
 
@@ -3203,6 +3466,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
           if (Sage.DBG) System.out.println("GPU_ENHANCE apply: live sink "
               + liveSinkWidth + "x" + liveSinkHeight
               + " yields no enhancement, leaving stream untouched");
+          applyMpeg2SoftwareCompatibilityFallback(xcodeParamsVec, "sink_no_enhancement");
           return;
         }
       }
@@ -3231,6 +3495,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
       {
         if (Sage.DBG) System.out.println("GPU_ENHANCE apply: not admitted ("
             + (adm == null ? "null" : adm.getReason()) + ")");
+        applyMpeg2SoftwareCompatibilityFallback(xcodeParamsVec,
+            "not_admitted_" + (adm == null ? "null" : adm.getReason()));
         return;
       }
 
@@ -3247,6 +3513,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
         if (plan != null) plan.releaseScaleLease();
         if (Sage.DBG) System.out.println("GPU_ENHANCE apply: no buildable plan for "
             + granted.token() + " (" + (plan == null ? "null" : plan.getReason()) + ")");
+        applyMpeg2SoftwareCompatibilityFallback(xcodeParamsVec, "no_buildable_plan");
         return;
       }
       if (Sage.DBG && deterministicOnly)
@@ -3850,12 +4117,40 @@ public class FFMPEGTranscoder implements TranscodeEngine
    * consumer, because {@link #stopTranscode()} joins that thread. It is written to
    * be safe against the client's own pull-driven relaunch racing it: it never
    * blindly stops a child, so it cannot kill a healthy relaunch a still-connected
-   * client already performed. It only steps in when the failed child is gone and
-   * nothing has relaunched, delivering the plain remux the client would otherwise
-   * have to navigate away and re-request to get. {@link #suppressEnhanceThisLaunch}
-   * (armed by the caller, re-armed here) guarantees the relaunch cannot re-inject
-   * the encoder that just died.
+   * client already performed. Buffered output may relaunch in-place when no byte
+   * from the failed generation was externally served; any unpublished partial
+   * chunk is discarded while resetting the ring. Direct output may relaunch only
+   * when the failed generation produced zero bytes because a direct read is
+   * already part of delivery. Once any failed-generation byte is externally
+   * visible, appending a plain remux risks exposing one stream with two
+   * codec/config generations, so the method ends this stream and requires a
+   * clean reopen.
+   * {@link #suppressEnhanceThisLaunch} (armed by the caller, re-armed here)
+   * guarantees a safe in-place relaunch cannot re-inject the encoder that died.
    */
+  boolean prepareCleanNvencFallbackRelaunch()
+  {
+    synchronized (xcodeSyncLock)
+    {
+      if (bufferOutput)
+      {
+        if (xcodeBufferVirtualReadPos != xcodeOutputGenerationOrigin)
+          return false;
+        if (xcodeOutputGenerationDeliveryStarted)
+          return false;
+        xcodeBufferBaseNum = 0;
+        numFilledXcodeBuffers = 0;
+        xcodeBufferVirtualReadPos = xcodeOutputGenerationOrigin;
+        xcodeBufferVirtualOffset = xcodeOutputGenerationOrigin;
+        xcodeBufferVirtualSize = xcodeOutputGenerationOrigin;
+        xcodeSyncLock.notifyAll();
+      }
+      else if (xcodeOutputGenerationBytesProduced != 0)
+        return false;
+      return true;
+    }
+  }
+
   private void degradeRelaunchAfterNvencFailure()
   {
     try
@@ -3873,9 +4168,17 @@ public class FFMPEGTranscoder implements TranscodeEngine
       if (forciblyStopped) return;   // session torn down (client left / stop): nothing to do
       Process cur = xcodeProcess;
       if (cur != null && cur.isAlive()) return;  // a relaunch already produced a (plain) child
+      if (!prepareCleanNvencFallbackRelaunch())
+      {
+        System.out.println("ENHANCE_LADDER degrade-relaunch suppressed: failed NVENC"
+            + " generation produced or served output; ending this stream so the client reopens"
+            + " a clean plain remux");
+        return;
+      }
       // Re-arm defensively: a racing relaunch may have consumed the flag before
       // exiting. This launch MUST be a plain remux, not another NVENC attempt.
       suppressEnhanceThisLaunch = true;
+      requireCleanClientReconnect = false;
       System.out.println("ENHANCE_LADDER degrade-relaunch: failed NVENC child gone,"
           + " launching plain no-upscale remux (server-driven)");
       startTranscode();   // lock-serialized; reaps a dead child, no-ops on a live one
@@ -3898,10 +4201,25 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // encoder to die with "-22 Invalid argument" and black-screen the client.
     synchronized (xcodeLaunchLock)
     {
+      if (requireCleanClientReconnect)
+        throw new java.io.IOException(
+            "Enhanced NVENC stream failed after output was served; clean reconnect required");
       if (xcodeProcess != null && xcodeProcess.isAlive())
         return;
       startTranscodeImpl();
     }
+  }
+
+  boolean requiresCleanClientReconnect()
+  {
+    return requireCleanClientReconnect;
+  }
+
+  void disableGpuEnhancementForSessionAfterNvencFailure()
+  {
+    nvencEnhancementDisabledForSession = true;
+    nvencDegradeRelaunched = true;
+    suppressEnhanceThisLaunch = true;
   }
 
   private void startTranscodeImpl() throws java.io.IOException
@@ -4161,9 +4479,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
         xcodeParamsVec.add("-activefile");
     }
 
-    sage.ng.ActivePullPacingPolicy pacingPolicy = appendActivePullPacingArguments(xcodeParamsVec);
+    sage.ng.ActivePullPacingPolicy pacingPolicy = appendInputPacingArguments(xcodeParamsVec);
     if (pacingPolicy.isEnabled() && Sage.DBG)
-      System.out.println("FFMPEGTranscoder: active pull pacing " + pacingPolicy);
+      System.out.println("FFMPEGTranscoder: input pacing " + pacingPolicy
+          + " path=" + (directPushSession ? "direct-push" : "active-pull"));
 
     // -stdinctrl is a SageTV custom flag re-implemented in the unified
     // FFmpeg build (see docs/FFMPEG_UNIFICATION_PLAN.md). Always pass it;
@@ -5819,6 +6138,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // client-driven relaunch to software libx264 instead of re-failing on the GPU.
     xcodeLaunchTime = Sage.time();
     xcodeSawNvencInitFailure = false;
+    xcodeSawVideoFrame = false;
     // Detect NVENC from the FINAL argv, not the pre-enhancement videoCodec local.
     // GPU enhancement (maybeApplyGpuEnhancement, above) injects scale_cuda +
     // hevc_nvenc into the command AFTER videoCodec was settled to the base mode
@@ -5972,13 +6292,21 @@ public class FFMPEGTranscoder implements TranscodeEngine
                 // nothing (deterministic, independent of the cooldown clock), and
                 // proactively kick a server-driven relaunch so the client is not left
                 // on the dead stream waiting to pull again.
-                if (FFMPEGTranscoder.this.enhanceSessionId != null
-                    && !FFMPEGTranscoder.this.nvencDegradeRelaunched
-                    && (Sage.time() - FFMPEGTranscoder.this.xcodeLaunchTime)
-                        <= Sage.getLong("playback/gpu_enhance/nvenc_early_fail_ms", 5000L))
+                if (isFrameZeroEnhanceNvencFailure(
+                    FFMPEGTranscoder.this.enhanceSessionId,
+                    FFMPEGTranscoder.this.nvencDegradeRelaunched,
+                    FFMPEGTranscoder.this.xcodeSawVideoFrame,
+                    Sage.time() - FFMPEGTranscoder.this.xcodeLaunchTime,
+                    Sage.getLong("playback/gpu_enhance/nvenc_early_fail_ms", 5000L)))
                 {
-                  FFMPEGTranscoder.this.nvencDegradeRelaunched = true;
-                  FFMPEGTranscoder.this.suppressEnhanceThisLaunch = true;
+                  if (nvencCapacityOnly)
+                    noteEnhanceNvencFrameZeroCapacityFailure(FFMPEGTranscoder.this.currFile);
+                  FFMPEGTranscoder.this.disableGpuEnhancementForSessionAfterNvencFailure();
+                  // Block every ordinary restart immediately.
+                  // The degrade thread may clear this only after proving that no
+                  // failed-generation byte reached the client. Otherwise the
+                  // socket must end and reopen.
+                  FFMPEGTranscoder.this.requireCleanClientReconnect = true;
                   System.out.println("ENHANCE_LADDER rung=GPU->SOURCE reason=nvenc_encode_failure"
                       + " session=" + FFMPEGTranscoder.this.enhanceSessionId
                       + " (arming no-upscale remux relaunch)");
@@ -6008,6 +6336,23 @@ public class FFMPEGTranscoder implements TranscodeEngine
               int sizeIdx = sb.indexOf("size=");
               int timeIdx = sb.indexOf("time=");
               int bitrateIdx = sb.indexOf("bitrate=");
+              if (!FFMPEGTranscoder.this.xcodeSawVideoFrame
+                  && frameIdx != -1 && fpsIdx > frameIdx)
+              {
+                try
+                {
+                  int frames = Integer.parseInt(
+                      sb.substring(frameIdx + 6, fpsIdx).trim());
+                  if (frames > 0)
+                  {
+                    FFMPEGTranscoder.this.xcodeSawVideoFrame = true;
+                    if (FFMPEGTranscoder.this.enhanceSessionId != null
+                        && FFMPEGTranscoder.this.xcodeUsedNvenc)
+                      noteEnhanceNvencFrameSuccess();
+                  }
+                }
+                catch (NumberFormatException ignore) {}
+              }
 
               // Locate the end of the "size=" numeric field by its unit token.
               // Modern FFmpeg (6.1+, e.g. N-124561 / Lavc62) reports the byte
@@ -6197,6 +6542,15 @@ public class FFMPEGTranscoder implements TranscodeEngine
               {
                 numRead = xcodeStdout.read(xcodeBuffer[currBuffNum], xcodeBuffer[currBuffNum].length - leftToRead, leftToRead);
                 if (XCODE_DEBUG_IO) System.out.println("Read " + numRead + " bytes from transcoder");
+                if (numRead > 0)
+                {
+                  synchronized (xcodeSyncLock)
+                  {
+                    if (xcodeStdoutGeneration != myXcodeGen)
+                      return;
+                    noteXcodeOutputBytesProducedLocked(numRead);
+                  }
+                }
                 leftToRead -= numRead;
               } while (numRead != -1 && leftToRead > 0);
               if (numRead == -1)
@@ -6782,11 +7136,29 @@ public class FFMPEGTranscoder implements TranscodeEngine
       numFilledXcodeBuffers = 0;
       if (bufferOutput)
         xcodeBufferVirtualOffset = xcodeBufferVirtualSize = xcodeBufferVirtualReadPos;
+      xcodeOutputGenerationOrigin = xcodeBufferVirtualReadPos;
+      xcodeOutputGenerationBytesProduced = 0;
+      xcodeOutputGenerationDeliveryStarted = false;
       xcodeStdoutGeneration++;
       // Wake any prior-generation writer parked in wait() so it re-checks the
       // generation and retires immediately instead of after its wait timeout.
       xcodeSyncLock.notifyAll();
     }
+  }
+
+  private void noteXcodeOutputBytesProduced(int numRead)
+  {
+    if (numRead <= 0)
+      return;
+    synchronized (xcodeSyncLock)
+    {
+      noteXcodeOutputBytesProducedLocked(numRead);
+    }
+  }
+
+  private void noteXcodeOutputBytesProducedLocked(int numRead)
+  {
+    xcodeOutputGenerationBytesProduced += numRead;
   }
 
   public void stopTranscode()
@@ -7186,6 +7558,11 @@ public class FFMPEGTranscoder implements TranscodeEngine
     this.protocol21PullSession = protocol21PullSession;
   }
 
+  public void setDirectPushSession(boolean directPushSession)
+  {
+    this.directPushSession = directPushSession;
+  }
+
   sage.ng.ActivePullPacingPolicy resolveActivePullPacingPolicy()
   {
     return sage.ng.ActivePullPacingPolicy.resolve(
@@ -7194,6 +7571,27 @@ public class FFMPEGTranscoder implements TranscodeEngine
         Sage.get("media_server/pull_xcode_active_readrate", "1.0"),
         Sage.get("media_server/pull_xcode_active_initial_burst_seconds", "6"),
         Sage.get("media_server/pull_xcode_active_catchup_rate", "1.5"));
+  }
+
+  sage.ng.ActivePullPacingPolicy resolveDirectPushPacingPolicy()
+  {
+    return sage.ng.ActivePullPacingPolicy.resolveEligible(
+        Sage.getBoolean("miniplayer/push_xcode_vod_readrate_enabled", true),
+        directPushSession && !activeFile && bufferOutput
+            && !protocol21PullSession && !httplsMode,
+        Sage.get("miniplayer/push_xcode_vod_readrate", "1.0"),
+        Sage.get("miniplayer/push_xcode_vod_initial_burst_seconds", "2"),
+        Sage.get("miniplayer/push_xcode_vod_catchup_rate", "1.5"));
+  }
+
+  sage.ng.ActivePullPacingPolicy appendInputPacingArguments(
+      java.util.List<String> arguments)
+  {
+    sage.ng.ActivePullPacingPolicy policy = resolveActivePullPacingPolicy();
+    if (!policy.isEnabled())
+      policy = resolveDirectPushPacingPolicy();
+    policy.appendInputArguments(arguments);
+    return policy;
   }
 
   sage.ng.ActivePullPacingPolicy appendActivePullPacingArguments(
@@ -7910,6 +8308,14 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (fmp4OutputDir == null) return null;
     java.io.File seg = new java.io.File(fmp4OutputDir, "seg" + segNum + ".m4s");
     if (seg.isFile()) return seg; // already produced (encoder may have since exited)
+    long sourceDurationMs = sourceFormat == null ? 0L : sourceFormat.getDuration();
+    if (isFmp4SegmentPastSourceEnd(segNum, segmentDur, sourceDurationMs, activeFile))
+    {
+      if (XCODE_DEBUG) System.out.println("fMP4 part #" + segNum
+          + " begins at/past parsed source end " + sourceDurationMs
+          + "ms; returning EOS without relaunch");
+      return null;
+    }
 
     boolean procAlive = (xcodeProcess != null && xcodeProcess.isAlive());
     // A far-FORWARD seek (e.g. a resume 7 minutes into a show) asks for a segment
@@ -8081,6 +8487,14 @@ public class FFMPEGTranscoder implements TranscodeEngine
       return getFmp4SegmentFile(segNum, relaunchBudget - 1);
     }
     return seg.isFile() ? seg : null;
+  }
+
+  static boolean isFmp4SegmentPastSourceEnd(int segNum, int segmentDurationMs,
+      long sourceDurationMs, boolean activeFile)
+  {
+    return !activeFile && segNum >= 0 && segmentDurationMs > 0
+        && sourceDurationMs > 0
+        && (long)segNum * segmentDurationMs >= sourceDurationMs;
   }
 
   /**
@@ -8298,6 +8712,8 @@ public class FFMPEGTranscoder implements TranscodeEngine
   private volatile boolean xcodeUsedNvenc;
   /** Set by the stderr consumer when it observes an NVENC encoder-init failure. */
   private volatile boolean xcodeSawNvencInitFailure;
+  /** True after ffmpeg reports at least one encoded video frame for this child. */
+  private volatile boolean xcodeSawVideoFrame;
   /**
    * True when this enhance session's GPU admission came from an explicit external
    * arbiter grant. It is the SOLE condition under which a cold specialized
@@ -8332,8 +8748,21 @@ public class FFMPEGTranscoder implements TranscodeEngine
   /** Set just before a degrade-relaunch so the next {@link #maybeApplyGpuEnhancement}
    *  skips enhancement entirely and delivers a plain (NVENC-free) remux. */
   private volatile boolean suppressEnhanceThisLaunch;
+  /** Once NVENC fails, every seek in this playback session stays on the proven
+   *  software/plain rung instead of retrying the same encoder command. */
+  private volatile boolean nvencEnhancementDisabledForSession;
+  /** Byte origin of the current child generation, used to detect external delivery. */
+  volatile long xcodeOutputGenerationOrigin;
+  /** Raw stdout bytes emitted by the current child, including an unpublished partial ring chunk. */
+  volatile long xcodeOutputGenerationBytesProduced;
+  /** True once a READ began exposing bytes from the current child generation. */
+  volatile boolean xcodeOutputGenerationDeliveryStarted;
+  /** Terminal guard: a replacement must arrive on a new MediaServer byte stream. */
+  private volatile boolean requireCleanClientReconnect;
 
   protected boolean bufferOutput;
+  /** True for the MiniPlayer pusher path; prevents completed VOD remux/encode floods. */
+  protected boolean directPushSession;
 
   // ---- Option B: bounded seekable spill history (see openSpillIfEnabled) ----
   // When enabled, the XcodeDataConsumer mirrors every committed chunk into a

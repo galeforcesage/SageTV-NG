@@ -544,6 +544,23 @@ public class GpuEnhancePipelineTest
     assertFalse(argv.contains("format=yuv420p"), "CPU format filter must be replaced: " + argv);
   }
 
+  @Test
+  public void testReencodeRemovesBaseSizeThatConflictsWithCudaScale()
+  {
+    java.util.List<String> argv = new java.util.ArrayList<String>(java.util.Arrays.asList(
+        "ffmpeg", "-hwaccel", "cuda", "-i", "/media/rec.mpg",
+        "-f", "matroska", "-c:v", "h264_nvenc", "-s", "1920x1080",
+        "-r", "29.97", "-acodec", "copy", "-"));
+
+    assertTrue(GpuEnhancePipeline.rewriteReencodeArgv(
+        argv, plan(EnhancementTier.ENHANCE_2160P, true, "scale_cuda"), 30));
+    assertFalse(argv.contains("-s"),
+        "source-sized output scaler must not survive the CUDA enhancement rewrite: " + argv);
+    int vf = argv.indexOf("-vf");
+    assertEquals(argv.get(vf + 1),
+        "yadif_cuda=0:-1:1,scale_cuda=3840:2160", argv.toString());
+  }
+
   /** Decode is made GPU-resident: -hwaccel_output_format cuda before -i, no dup -hwaccel. */
   @Test
   public void testReencodeInsertsHwaccelOutputFormat()

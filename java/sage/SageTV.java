@@ -1063,6 +1063,7 @@ public class SageTV implements Runnable
 
   private static void killServer()
   {
+    NgPartyConnection.shutdown();
     if (serverSocket != null)
     {
       try

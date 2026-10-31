@@ -58,8 +58,20 @@ public final class ActivePullPacingPolicy
       boolean segmentedOutput, String readRateValue, String initialBurstValue,
       String catchupRateValue)
   {
-    if (!propertyEnabled || !activeSource || !bufferedPull || !protocol21Setup
-        || segmentedOutput)
+    return resolveEligible(propertyEnabled,
+        activeSource && bufferedPull && protocol21Setup && !segmentedOutput,
+        readRateValue, initialBurstValue, catchupRateValue);
+  }
+
+  /**
+   * Resolves the shared FFmpeg input pacing values for a caller that has already
+   * determined whether its delivery path is eligible.
+   */
+  public static ActivePullPacingPolicy resolveEligible(boolean propertyEnabled,
+      boolean eligible, String readRateValue, String initialBurstValue,
+      String catchupRateValue)
+  {
+    if (!propertyEnabled || !eligible)
       return DISABLED;
 
     double readRate = clamp(parse(readRateValue, DEFAULT_READ_RATE),

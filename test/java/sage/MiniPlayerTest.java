@@ -83,6 +83,74 @@ public class MiniPlayerTest
   }
 
   @Test
+  public void testValidatedClientPositionAdvancesFrozenPushFrontier() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    MiniPlayer player = new MiniPlayer()
+    {
+      @Override
+      protected boolean isNgTrickplaySession() { return true; }
+    };
+    long now = Sage.eventTime();
+    setPlayerField(player, "currState", MediaPlayer.PLAY_STATE);
+    setPlayerField(player, "pushMode", true);
+    setPlayerField(player, "serverSideTranscoding", true);
+    setPlayerField(player, "detailedPushBufferStats", true);
+    setPlayerField(player, "timestampOffset", 90000L);
+    setPlayerField(player, "timestampOffsetWallTime", now - 403778L);
+    setPlayerField(player, "pushDisplayEstimate", 90000L);
+    setPlayerField(player, "pushDisplayEstimateUpdateTime", now - 403778L);
+    setPlayerField(player, "directPushSentThrough", 89500L);
+    setPlayerField(player, "clientReportedMediaTime", 402290);
+    setPlayerField(player, "clientReportedPlayState", MediaPlayer.PLAY_STATE);
+
+    invokePlayerMethod(player, "noteNgClientDisplayPosition", new Class<?>[] {long.class}, now);
+
+    assertTrue((Boolean)getPlayerField(player, "clientPositionEpochTrusted"));
+    assertEquals(getPlayerField(player, "directPushSentThrough"), 492290L);
+    assertEquals(player.getSeekBaseMediaTimeMillis(), 492290L,
+        "A current-epoch renderer position proves those bytes were delivered even when parser DTS is frozen");
+  }
+
+  @Test
+  public void testStalePreSeekClientPositionCannotAdvancePushFrontier() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    MiniPlayer player = new MiniPlayer()
+    {
+      @Override
+      protected boolean isNgTrickplaySession() { return true; }
+    };
+    long now = Sage.eventTime();
+    setPlayerField(player, "currState", MediaPlayer.PLAY_STATE);
+    setPlayerField(player, "pushMode", true);
+    setPlayerField(player, "serverSideTranscoding", true);
+    setPlayerField(player, "detailedPushBufferStats", true);
+    setPlayerField(player, "timestampOffset", 120000L);
+    setPlayerField(player, "timestampOffsetWallTime", now - 3000L);
+    setPlayerField(player, "pushDisplayEstimate", 120000L);
+    setPlayerField(player, "pushDisplayEstimateUpdateTime", now - 3000L);
+    setPlayerField(player, "directPushSentThrough", -1L);
+    setPlayerField(player, "clientReportedMediaTime", 405296);
+    setPlayerField(player, "clientReportedPlayState", MediaPlayer.PLAY_STATE);
+
+    invokePlayerMethod(player, "noteNgClientDisplayPosition", new Class<?>[] {long.class}, now);
+
+    assertFalse((Boolean)getPlayerField(player, "clientPositionEpochTrusted"));
+    assertEquals(getPlayerField(player, "directPushSentThrough"), -1L);
+    assertEquals(player.getSeekBaseMediaTimeMillis(), 120000L);
+  }
+
+  @Test
+  public void testMedia3EnhanceSurfaceModeOverridesEarlierGenericRemux()
+  {
+    String matroskaCopy = "container=matroska;videocodec=COPY;audiocodec=COPY";
+    assertEquals(MiniPlayer.resolvePushEnhanceMode("mpeg2tsremux", matroskaCopy), matroskaCopy,
+        "The selected surface contract must win even when a generic REMUX decision already set transcoded=true");
+    assertEquals(MiniPlayer.resolvePushEnhanceMode("mpeg2tsremux", null), "mpeg2tsremux");
+  }
+
+  @Test
   public void testEnhancedPushClockFreezesWhilePaused() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();
@@ -278,6 +346,22 @@ public class MiniPlayerTest
     java.lang.reflect.Field field = MiniPlayer.class.getDeclaredField(name);
     field.setAccessible(true);
     field.set(player, value);
+  }
+
+  private static Object getPlayerField(MiniPlayer player, String name)
+      throws ReflectiveOperationException
+  {
+    java.lang.reflect.Field field = MiniPlayer.class.getDeclaredField(name);
+    field.setAccessible(true);
+    return field.get(player);
+  }
+
+  private static Object invokePlayerMethod(MiniPlayer player, String name,
+      Class<?>[] parameterTypes, Object... args) throws ReflectiveOperationException
+  {
+    java.lang.reflect.Method method = MiniPlayer.class.getDeclaredMethod(name, parameterTypes);
+    method.setAccessible(true);
+    return method.invoke(player, args);
   }
 
   @Test
@@ -678,12 +762,31 @@ public class MiniPlayerTest
     assertNull(MiniPlayer.resolveNgOutputContainerName(""));
   }
 
+  @Test
+  public void testResolveContainerInlineManagedPushModes()
+  {
+    assertEquals(MiniPlayer.resolveNgOutputContainerName(
+        "container=mpegts;videocodec=h264_nvenc;audiocodec=COPY"),
+        sage.media.format.MediaFormat.MPEG2_TS);
+    assertEquals(MiniPlayer.resolveNgOutputContainerName(
+        "container=matroska;videocodec=COPY;audiocodec=COPY"),
+        sage.media.format.MediaFormat.MATROSKA);
+  }
+
   // =======================================================================
   // Item 2: audioRelativeIndexOf -- 0-based position of the chosen audio
   // stream among the source's audio streams (for -map 0:a:<rel>).
   // =======================================================================
   private static sage.media.format.AudioFormat audio(int orderIndex)
   {
+    try
+    {
+      TestUtils.initializeSageTVForTesting();
+    }
+    catch (Throwable t)
+    {
+      throw new AssertionError("Unable to initialize Sage test state", t);
+    }
     sage.media.format.AudioFormat af = new sage.media.format.AudioFormat();
     af.setOrderIndex(orderIndex);
     return af;
@@ -729,6 +832,302 @@ public class MiniPlayerTest
     cf.setStreamFormats(new sage.media.format.BitstreamFormat[] { audio(1) });
     assertEquals(MiniPlayer.audioRelativeIndexOf(cf, audio(9)), -1,
         "An audio stream not present in the container must return -1 (caller keeps all audio)");
+  }
+
+  @Test
+  public void testAudioFormatByOrderIndexUsesServerSelectedLegacyTrack()
+  {
+    sage.media.format.AudioFormat main = audio(1);
+    sage.media.format.AudioFormat descriptions = audio(2);
+    sage.media.format.ContainerFormat cf = new sage.media.format.ContainerFormat();
+    cf.setStreamFormats(new sage.media.format.BitstreamFormat[] { main, descriptions });
+
+    assertEquals(MiniPlayer.audioFormatByOrderIndex(cf, 1), main,
+        "The legacy player setup must use the stream selected by the server");
+    assertEquals(MiniPlayer.audioFormatByOrderIndex(cf, 99), cf.getAudioFormat(),
+        "An unavailable selected stream must retain the historical primary-audio fallback");
+  }
+
+  @Test
+  public void testInitialAudioSelectionTargetsOnlyLegacyPullPlayback()
+  {
+    sage.media.format.AudioFormat[] tracks = { audio(1), audio(2) };
+
+    assertTrue(MiniPlayer.shouldSetInitialLegacyPullAudioStream(
+        false, true, false, false, tracks));
+    assertFalse(MiniPlayer.shouldSetInitialLegacyPullAudioStream(
+        true, true, false, false, tracks), "NG clients have their own audio-selection contract");
+    assertFalse(MiniPlayer.shouldSetInitialLegacyPullAudioStream(
+        false, true, true, false, tracks), "Push playback already selects by stream ID");
+    assertFalse(MiniPlayer.shouldSetInitialLegacyPullAudioStream(
+        false, true, false, false, new sage.media.format.AudioFormat[] { audio(1) }),
+        "Single-track files do not need a selection command");
+  }
+
+  @Test
+  public void testAndroidPullXcodeFallbackTargetsOnlyKnownNativeSurfaces()
+  {
+    sage.client.PlaybackSurface media3 = new sage.client.PlaybackSurface(
+        "android_media3", "native", 100,
+        java.util.Arrays.asList("push", "pull", "pull-xcode"),
+        java.util.Collections.singletonList("H264"),
+        java.util.Collections.singletonList("AC3"),
+        java.util.Collections.singletonList("MATROSKA"));
+    sage.client.PlaybackSurface ijk = new sage.client.PlaybackSurface(
+        "android_ijk", "native", 90,
+        java.util.Arrays.asList("push", "pull-xcode"),
+        java.util.Collections.singletonList("H264"),
+        java.util.Collections.singletonList("AC3"),
+        java.util.Collections.singletonList("MATROSKA"));
+    sage.client.PlaybackSurface pwa = new sage.client.PlaybackSurface(
+        "pwa_mse", "bridge", 100,
+        java.util.Arrays.asList("pull-xcode", "push"),
+        java.util.Collections.singletonList("H264"),
+        java.util.Collections.singletonList("AAC"),
+        java.util.Collections.singletonList("MP4"));
+    sage.client.PlaybackSurface pullOnlyAndroid = new sage.client.PlaybackSurface(
+        "android_media3", "native", 100,
+        java.util.Collections.singletonList("pull-xcode"),
+        java.util.Collections.singletonList("H264"),
+        java.util.Collections.singletonList("AC3"),
+        java.util.Collections.singletonList("MATROSKA"));
+
+    assertTrue(MiniPlayer.shouldFallbackAndroidPullXcode(media3, "pull-xcode"));
+    assertTrue(MiniPlayer.shouldFallbackAndroidPullXcode(ijk, "pull-xcode"));
+    assertFalse(MiniPlayer.shouldFallbackAndroidPullXcode(media3, "push"),
+        "An already-correct Android push decision must remain unchanged");
+    assertFalse(MiniPlayer.shouldFallbackAndroidPullXcode(pwa, "pull-xcode"),
+        "Browser bridges implement XCODE_SETUP and must retain pull-xcode");
+    assertFalse(MiniPlayer.shouldFallbackAndroidPullXcode(pullOnlyAndroid, "pull-xcode"),
+        "The server must not fabricate push when the surface did not advertise it");
+  }
+
+  @Test
+  public void testAndroidEnhancePushHandlesPullAndAlreadyPushWinners()
+  {
+    sage.client.PlaybackSurface ijk = new sage.client.PlaybackSurface(
+        "android_ijk", "software", 60,
+        java.util.Arrays.asList("push", "pull"),
+        java.util.Arrays.asList("MPEG2-VIDEO", "HEVC"),
+        java.util.Collections.singletonList("AC3"),
+        java.util.Arrays.asList("MPEG2-PS", "MATROSKA"));
+
+    assertTrue(MiniPlayer.shouldUseAndroidEnhancePush(
+        ijk, "pull", null, true, true),
+        "An Android direct-pull winner must be promoted to a supported managed push transcode");
+    assertTrue(MiniPlayer.shouldUseAndroidEnhancePush(
+        ijk, "push", null, true, true),
+        "An MPEG2-PS push-only winner must also use the managed enhancement transcode");
+  }
+
+  @Test
+  public void testAndroidEnhancePushRejectsUnadvertisedOrNonAndroidRoutes()
+  {
+    sage.client.PlaybackSurface pwa = new sage.client.PlaybackSurface(
+        "pwa_mse", "bridge", 100,
+        java.util.Arrays.asList("push", "pull-xcode"),
+        java.util.Collections.singletonList("HEVC"),
+        java.util.Collections.singletonList("AAC"),
+        java.util.Collections.singletonList("MATROSKA"));
+    sage.client.PlaybackSurface androidWithoutMkv = new sage.client.PlaybackSurface(
+        "android_media3", "native", 100,
+        java.util.Arrays.asList("push", "pull"),
+        java.util.Collections.singletonList("HEVC"),
+        java.util.Collections.singletonList("AC3"),
+        java.util.Collections.singletonList("MP4"));
+
+    assertFalse(MiniPlayer.shouldUseAndroidEnhancePush(
+        pwa, "push", null, true, true),
+        "Browser surfaces must retain their own negotiated delivery path");
+    assertFalse(MiniPlayer.shouldUseAndroidEnhancePush(
+        androidWithoutMkv, "push", null, true, true),
+        "The server must not fabricate a supported push container");
+    assertFalse(MiniPlayer.shouldUseAndroidEnhancePush(
+        androidWithoutMkv, "push", null, true, false),
+        "Plain playback must remain byte-identical when enhancement is inactive");
+  }
+
+  private static sage.media.format.ContainerFormat videoFormat(String codec)
+  {
+    sage.media.format.VideoFormat video = new sage.media.format.VideoFormat();
+    video.setFormatName(codec);
+    video.setWidth(1920);
+    video.setHeight(1080);
+    video.setFps(29.97f);
+    sage.media.format.ContainerFormat format = new sage.media.format.ContainerFormat();
+    format.setStreamFormats(new sage.media.format.BitstreamFormat[] { video });
+    return format;
+  }
+
+  @Test
+  public void testMpeg2EnhanceUsesStableH264BaseModes()
+  {
+    sage.media.format.ContainerFormat mpeg2 =
+        videoFormat(sage.media.format.MediaFormat.MPEG2_VIDEO);
+
+    assertEquals(MiniPlayer.getEnhanceOutputVideoCodec(mpeg2),
+        sage.media.format.MediaFormat.H264);
+    assertEquals(MiniPlayer.getEnhanceTranscodeBaseMode("mpeg2tsremux", mpeg2),
+        "dynamich264");
+    assertEquals(MiniPlayer.getEnhanceTranscodeBaseMode("browserhd_remux", mpeg2),
+        "browserhd");
+    assertEquals(MiniPlayer.getAndroidEnhancePushMode(
+        mpeg2, sage.media.format.MediaFormat.MPEG2_TS),
+        "container=mpegts;videocodec=h264_nvenc;audiocodec=COPY;"
+            + "videobitrate=8000000;resolution=SOURCE;fps=SOURCE");
+    assertEquals(MiniPlayer.getAndroidEnhancePushMode(
+        mpeg2, sage.media.format.MediaFormat.MATROSKA),
+        "container=matroska;videocodec=h264_nvenc;audiocodec=COPY;"
+            + "videobitrate=8000000;resolution=SOURCE;fps=SOURCE");
+  }
+
+  @Test
+  public void testNonMpeg2EnhanceRetainsCopyToHevcPath()
+  {
+    sage.media.format.ContainerFormat h264 =
+        videoFormat(sage.media.format.MediaFormat.H264);
+
+    assertEquals(MiniPlayer.getEnhanceOutputVideoCodec(h264),
+        sage.media.format.MediaFormat.HEVC);
+    assertEquals(MiniPlayer.getEnhanceTranscodeBaseMode("mpeg2tsremux", h264),
+        "mpeg2tsremux");
+    assertEquals(MiniPlayer.getAndroidEnhancePushMode(
+        h264, sage.media.format.MediaFormat.MPEG2_TS),
+        "container=mpegts;videocodec=COPY;audiocodec=COPY");
+  }
+
+  @Test
+  public void testAndroidMpeg2EnhanceRequiresAdvertisedH264MkvPush()
+  {
+    sage.client.PlaybackSurface h264 = new sage.client.PlaybackSurface(
+        "android_media3", "native", 100,
+        java.util.Arrays.asList("push", "pull"),
+        java.util.Collections.singletonList("H264"),
+        java.util.Collections.singletonList("AC3"),
+        java.util.Collections.singletonList("MATROSKA"));
+
+    assertTrue(MiniPlayer.shouldUseAndroidEnhancePush(
+        h264, "pull", null, true, true, sage.media.format.MediaFormat.H264));
+    assertFalse(MiniPlayer.shouldUseAndroidEnhancePush(
+        h264, "pull", null, true, true, sage.media.format.MediaFormat.HEVC));
+  }
+
+  @Test
+  public void testAndroidEnhancePrefersSeekSafeMpegTsPush()
+  {
+    sage.client.PlaybackSurface both = new sage.client.PlaybackSurface(
+        "android_media3", "native", 100,
+        java.util.Arrays.asList("push", "pull"),
+        java.util.Arrays.asList("H264", "HEVC"),
+        java.util.Collections.singletonList("AC3"),
+        java.util.Arrays.asList("MATROSKA", "MPEG2-TS"));
+    sage.client.PlaybackSurface mkvOnly = new sage.client.PlaybackSurface(
+        "android_ijk", "native", 60,
+        java.util.Collections.singletonList("push"),
+        java.util.Collections.singletonList("H264"),
+        java.util.Collections.singletonList("AC3"),
+        java.util.Collections.singletonList("MATROSKA"));
+
+    assertEquals(MiniPlayer.preferredAndroidEnhancePushContainer(both),
+        sage.media.format.MediaFormat.MPEG2_TS,
+        "MPEG-TS avoids appending a new EBML generation after an FF/autoskip reprime");
+    assertEquals(MiniPlayer.preferredAndroidEnhancePushContainer(mkvOnly),
+        sage.media.format.MediaFormat.MATROSKA,
+        "Matroska remains available for clients that advertise no TS push support");
+  }
+
+  @Test
+  public void testAndroidEnhanceReranksForEffectiveHevcMatroskaStream()
+  {
+    java.util.Map<String, sage.client.PlaybackSurface> advertised =
+        new java.util.LinkedHashMap<String, sage.client.PlaybackSurface>();
+    sage.client.PlaybackSurface ijk = new sage.client.PlaybackSurface(
+        "android_ijk", "native", 60,
+        java.util.Arrays.asList("push", "pull"),
+        java.util.Arrays.asList("MPEG2-VIDEO", "HEVC"),
+        java.util.Collections.singletonList("AC3"),
+        java.util.Arrays.asList("MPEG2-PS", "MATROSKA"));
+    sage.client.PlaybackSurface media3 = new sage.client.PlaybackSurface(
+        "android_media3", "native", 100,
+        java.util.Arrays.asList("push", "pull"),
+        java.util.Arrays.asList("H264", "HEVC"),
+        java.util.Collections.singletonList("AC3"),
+        java.util.Arrays.asList("MP4", "MATROSKA"));
+    advertised.put(ijk.getId(), ijk);
+    advertised.put(media3.getId(), media3);
+    sage.client.ClientConstraints exo = sage.client.ClientConstraints.parse(
+        "exoplayer",
+        "HEVC;decoder=hw;maxW=4096;maxH=4096;maxFps=60",
+        "AC3", "MATROSKA");
+    sage.client.ClientConstraints ijkConstraints = sage.client.ClientConstraints.parse(
+        "ijkplayer",
+        "MPEG2-VIDEO;decoder=sw_or_hw;maxW=1920;maxH=1088,"
+            + "HEVC;decoder=sw_or_hw;maxW=4096;maxH=4096;maxFps=60",
+        "AC3", "MPEG2-PS,MATROSKA");
+
+    assertEquals(MiniPlayer.chooseAndroidEnhanceSurface(
+        advertised.values(), ijk, "AC3", 3840, 2160, 60, exo, ijkConstraints), media3,
+        "Enhanced HEVC/Matroska must use the highest-priority proven hardware surface");
+  }
+
+  @Test
+  public void testAndroidEnhanceSurfaceSwitchRequiresProvenHardwareDecode()
+  {
+    java.util.Map<String, sage.client.PlaybackSurface> advertised =
+        new java.util.LinkedHashMap<String, sage.client.PlaybackSurface>();
+    sage.client.PlaybackSurface ijk = new sage.client.PlaybackSurface(
+        "android_ijk", "native", 60,
+        java.util.Arrays.asList("push", "pull"),
+        java.util.Arrays.asList("MPEG2-VIDEO", "HEVC"),
+        java.util.Collections.singletonList("AC3"),
+        java.util.Arrays.asList("MPEG2-PS", "MATROSKA"));
+    sage.client.PlaybackSurface media3 = new sage.client.PlaybackSurface(
+        "android_media3", "native", 100,
+        java.util.Arrays.asList("push", "pull"),
+        java.util.Collections.singletonList("HEVC"),
+        java.util.Collections.singletonList("AC3"),
+        java.util.Collections.singletonList("MATROSKA"));
+    advertised.put(ijk.getId(), ijk);
+    advertised.put(media3.getId(), media3);
+    sage.client.ClientConstraints ambiguousExo = sage.client.ClientConstraints.parse(
+        "exoplayer",
+        "HEVC;decoder=sw_or_hw;maxW=4096;maxH=4096;maxFps=60",
+        "AC3", "MATROSKA");
+
+    assertEquals(MiniPlayer.chooseAndroidEnhanceSurface(
+        advertised.values(), ijk, "AC3", 3840, 2160, 60, ambiguousExo, null), ijk,
+        "The server must not switch players from an ambiguous or software decoder claim");
+  }
+
+  @Test
+  public void testAndroidSurfaceSetIsRecognizedForBufferedPushEos()
+  {
+    assertTrue(MiniPlayer.hasAndroidNativePlaybackSurfaceIds(
+        java.util.Arrays.asList("android_media3", "android_ijk")));
+    assertTrue(MiniPlayer.hasAndroidNativePlaybackSurfaceIds(
+        java.util.Collections.singletonList("ANDROID_MEDIA3")));
+    assertFalse(MiniPlayer.hasAndroidNativePlaybackSurfaceIds(
+        java.util.Collections.singletonList("pwa_mse")));
+    assertFalse(MiniPlayer.hasAndroidNativePlaybackSurfaceIds(null));
+  }
+
+  @Test
+  public void testTerminalTranscodeFailureBypassesBufferedPushEosDeferral()
+  {
+    assertTrue(MiniPlayer.shouldDeferPushEosUntilPlaybackClock(
+        true, true, true, false));
+    assertFalse(MiniPlayer.shouldDeferPushEosUntilPlaybackClock(
+        true, true, true, true));
+    assertFalse(MiniPlayer.shouldDeferPushEosUntilPlaybackClock(
+        false, true, true, false));
+  }
+
+  @Test
+  public void testCleanReconnectFailureIsNeverRestartedOnSameStream()
+  {
+    assertTrue(MiniPlayer.shouldRestartFailedServerTranscode(false, false));
+    assertFalse(MiniPlayer.shouldRestartFailedServerTranscode(false, true));
+    assertFalse(MiniPlayer.shouldRestartFailedServerTranscode(true, false));
   }
 
   // ---- chooseRemuxPushMode: REMUX target must not be hardcoded to PS ----------

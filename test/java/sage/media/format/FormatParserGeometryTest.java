@@ -262,6 +262,43 @@ public class FormatParserGeometryTest
   }
 
   @Test
+  public void testParsesDisplayMatrixRotationAndKeepsCodedGeometry()
+  {
+    String info =
+        "Input #0, mov, from 'rotated.mp4':\n" +
+        "  Stream #0:0(und): Video: hevc (Main 10), yuv420p10le, 3384x6016, 50 fps, 50 tbr\n" +
+        "    Side data:\n" +
+        "      displaymatrix: rotation of -90.00 degrees\n" +
+        "  Stream #0:1: Data: none (djmd)\n";
+
+    BitstreamFormat[] streams = FormatParser.extractStreamFormatsFromFFMPEGInfo(info);
+    VideoFormat vid = (VideoFormat) streams[0];
+    assertEquals(vid.getWidth(), 3384, "Decoder checks use coded width");
+    assertEquals(vid.getHeight(), 6016, "Decoder checks use coded height");
+    assertEquals(vid.getRotation(), -90);
+    assertEquals(vid.getDisplayWidth(), 6016, "Presentation geometry swaps on a quarter turn");
+    assertEquals(vid.getDisplayHeight(), 3384);
+  }
+
+  @Test
+  public void testRotationPersistsInVideoFormatProperties()
+  {
+    VideoFormat original = new VideoFormat();
+    original.setFormatName(MediaFormat.HEVC);
+    original.setWidth(3384);
+    original.setHeight(6016);
+    original.setRotation(-90);
+
+    VideoFormat restored = VideoFormat.buildVideoFormatFromProperty(
+        original.getFullPropertyString().substring("bf=vid;".length()));
+    assertEquals(restored.getWidth(), 3384);
+    assertEquals(restored.getHeight(), 6016);
+    assertEquals(restored.getRotation(), -90);
+    assertEquals(restored.getDisplayWidth(), 6016);
+    assertEquals(restored.getDisplayHeight(), 3384);
+  }
+
+  @Test
   public void testSplitInlineAspect()
   {
     String[] r = FormatParser.splitInlineAspect("1920x1080 [SAR 1:1 DAR 16:9]");

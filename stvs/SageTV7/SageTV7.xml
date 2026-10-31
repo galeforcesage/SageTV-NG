@@ -18471,6 +18471,17 @@
     </ns0:Action>
    </ns0:Action>
   </ns0:Listener>
+  <ns0:Listener Name="Back - close playback before returning to the previous menu." Sym="NGLIVE-EXIT-1">
+   <ns0:ListenerEvent>Back</ns0:ListenerEvent>
+   <ns0:Action Name="MediaFile = GetCurrentMediaFile()" Sym="NGLIVE-EXIT-2">
+    <ns0:Action Name="ShowVideoBGWidget = false" Sym="NGLIVE-EXIT-3">
+     <ns0:Action Name="CloseAndWaitUntilClosed()" Sym="NGLIVE-EXIT-4">
+      <ns0:Action Ref="5949" Name="&quot;REM If Stopping a dow..." />
+      <ns0:Action Name="PassiveListen()" Sym="NGLIVE-EXIT-5" />
+     </ns0:Action>
+    </ns0:Action>
+   </ns0:Action>
+  </ns0:Listener>
   <ns0:Listener Name="" Sym="BASE-53743">
    <ns0:ListenerEvent>Watched</ns0:ListenerEvent>
    <ns0:Action Name="Airing = GetCurrentMediaFile()" Sym="BASE-53744">

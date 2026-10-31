@@ -119,4 +119,25 @@ public class VideoFrameTest
     // Neither condition holds: no bridge.
     assertEquals(VideoFrame.liveSeamPermitted(false, false), false);
   }
+
+  @Test
+  public void testAndroidTranscodeEosWaitsForBufferedPlaybackClock()
+  {
+    assertEquals(VideoFrame.shouldDeferPrematurePushEos(true, true, 38721L, 3000L), true,
+        "Producer EOF must not dismiss the player while Android still has buffered media");
+    assertEquals(VideoFrame.shouldDeferPrematurePushEos(true, true, 1500L, 3000L), false,
+        "Near-end timestamp differences retain normal EOS handling");
+    assertEquals(VideoFrame.shouldDeferPrematurePushEos(true, false, 38721L, 3000L), false,
+        "Legacy and non-transcoded playback retain historical EOS behavior");
+    assertEquals(VideoFrame.shouldDeferPrematurePushEos(false, true, 38721L, 3000L), false);
+  }
+
+  @Test
+  public void testFinalCommercialSkipIsLatchedNearRecordingEnd()
+  {
+    assertEquals(VideoFrame.isTerminalCommercialSkip(3537330L, 3540000L, 5000L), true,
+        "A final skip landing in the last partial CMAF part must not repeat forever");
+    assertEquals(VideoFrame.isTerminalCommercialSkip(3500000L, 3540000L, 5000L), false);
+    assertEquals(VideoFrame.isTerminalCommercialSkip(3537330L, 0L, 5000L), false);
+  }
 }

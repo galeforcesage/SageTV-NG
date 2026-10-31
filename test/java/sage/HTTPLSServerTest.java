@@ -38,6 +38,32 @@ public class HTTPLSServerTest
   }
 
   @Test
+  public void testPartialFinalSecondDoesNotAdvertisePhantomCmafPart()
+  {
+    assertEquals(HTTPLSServer.fmp4PartCount(3538410L, 1), 3539);
+    StringBuffer playlist = new StringBuffer();
+    HTTPLSServer.appendFmp4Parts(playlist, "ghosts", 3538410L, 3535, 1, false);
+    String result = playlist.toString();
+    assertTrue(result.contains("ghosts_3537.m4s"));
+    assertTrue(result.contains("ghosts_3538.m4s"));
+    assertTrue(result.contains("#EXTINF:0.41,"));
+    assertFalse(result.contains("ghosts_3539.m4s"));
+  }
+
+  @Test
+  public void testCompletedSingleSegmentCmafDurationUsesParsedSourceEnd()
+  {
+    assertEquals(HTTPLSServer.effectiveFmp4PlaylistDurationMs(
+        3540000L, 3538410L, false, true), 3538410L);
+    assertEquals(HTTPLSServer.effectiveFmp4PlaylistDurationMs(
+        3540000L, 3538410L, true, true), 3540000L,
+        "A growing recording must not be capped by a stale parsed duration");
+    assertEquals(HTTPLSServer.effectiveFmp4PlaylistDurationMs(
+        3540000L, 3538410L, false, false), 3540000L,
+        "A whole-file parsed duration must not cap an individual multi-segment playlist");
+  }
+
+  @Test
   public void testLiveWindowStillAdvertisesLowLatencyParts() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();

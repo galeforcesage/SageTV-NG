@@ -52,9 +52,7 @@ public class CommercialDetectionManager
   private final ConcurrentLinkedDeque<Integer> pendingQueue = new ConcurrentLinkedDeque<>();
   private volatile boolean restrictedTimeRetryScheduled;
 
-  // ── Auto-skip in-memory state (mirrors JREkiwi ComskipPlayback STV vars — NOT persisted) ──
-  // Toggled at runtime via OSD menu / API; defaults to ON when commercial data is available.
-  private volatile boolean autoSkipEnabled = true;
+  // ── Auto-skip playback settings ──
   private volatile int autoSkipDelayMs = 0;
   private volatile int autoSkipStopDelayMs = 0;
   private volatile int minCommercialDurationMs = 0;
@@ -861,17 +859,15 @@ public class CommercialDetectionManager
   }
 
   // ── Auto Skip During Playback (ported from JREkiwi ComskipPlayback) ──
-  // These are in-memory only — they mirror the STV variables used by the original
-  // plugin (comautoskip, etc.) and are NOT persisted in Sage.properties.
 
   public boolean isAutoSkipEnabled()
   {
-    return autoSkipEnabled;
+    return Sage.getBoolean("commercial_detection/auto_skip", false);
   }
 
   public void setAutoSkipEnabled(boolean enabled)
   {
-    autoSkipEnabled = enabled;
+    Sage.putBoolean("commercial_detection/auto_skip", enabled);
   }
 
   public int getAutoSkipDelayMs()

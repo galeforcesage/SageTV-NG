@@ -473,6 +473,7 @@ public class FormatParser
       if (dst == null || src == null) continue;
       if (dst.getWidth() <= 0 && src.getWidth() > 0) { dst.setWidth(src.getWidth()); changed = true; }
       if (dst.getHeight() <= 0 && src.getHeight() > 0) { dst.setHeight(src.getHeight()); changed = true; }
+      if (dst.getRotation() == 0 && src.getRotation() != 0) { dst.setRotation(src.getRotation()); changed = true; }
       if (dst.getFps() <= 0 && src.getFps() > 0) { dst.setFps(src.getFps()); changed = true; }
       if (dst.getArNum() <= 0 && src.getArNum() > 0) { dst.setArNum(src.getArNum()); changed = true; }
       if (dst.getArDen() <= 0 && src.getArDen() > 0) { dst.setArDen(src.getArDen()); changed = true; }
@@ -1269,9 +1270,11 @@ public class FormatParser
         String streamID = extractStreamPESIDFromFFMPEGStreamInfo(currStreamInfo);
         if (streamID != null)
           newFormat.setId(streamID);
+        newFormat.setRotation(extractRotationFromFFMPEGInfo(info, currStreamNum));
 
         rv.add(newFormat);
       }
+
       else if (currStreamInfo.indexOf("Audio: ") != -1)
       {
         // Audio stream info
@@ -1397,6 +1400,30 @@ public class FormatParser
       }
     }
     return (BitstreamFormat[]) rv.toArray(new BitstreamFormat[0]);
+  }
+
+  static int extractRotationFromFFMPEGInfo(String info, int streamNum)
+  {
+    if (info == null || info.length() == 0 || streamNum < 0) return 0;
+    java.util.regex.Pattern streamStart = java.util.regex.Pattern.compile(
+        "(?m)^\\s*Stream #0[\\.:]" + streamNum + "(?:\\[[^\\]]+\\])?.*$");
+    java.util.regex.Matcher start = streamStart.matcher(info);
+    if (!start.find()) return 0;
+
+    int end = info.length();
+    java.util.regex.Matcher next = java.util.regex.Pattern.compile(
+        "(?m)^\\s*Stream #0[\\.:]\\d+").matcher(info);
+    if (next.find(start.end())) end = next.start();
+    String section = info.substring(start.start(), end);
+
+    java.util.regex.Matcher display = java.util.regex.Pattern.compile(
+        "(?i)rotation of\\s+(-?\\d+(?:\\.\\d+)?)\\s+degrees").matcher(section);
+    if (display.find())
+      return Math.round(Float.parseFloat(display.group(1)));
+
+    java.util.regex.Matcher tag = java.util.regex.Pattern.compile(
+        "(?im)^\\s*rotate\\s*:\\s*(-?\\d+(?:\\.\\d+)?)\\s*$").matcher(section);
+    return tag.find() ? Math.round(Float.parseFloat(tag.group(1))) : 0;
   }
 
   public static float extractFpsFromFFMPEGStreamInfo(String streamInfo, int mode)

@@ -69,6 +69,14 @@ public class GpuSnapshotTest
     assertEquals(s.getVideoEnginePressurePct(), 90);
   }
 
+  @Test
+  public void testCudaGpuPressureCountsWhenVideoEnginesLookIdle()
+  {
+    GpuSnapshot s = new GpuSnapshot(0, 99, 0, 0, 4743, 16303, 1000L);
+    assertEquals(s.getVideoEnginePressurePct(), 99,
+        "A retiring CUDA scaler must block the next NVENC admission");
+  }
+
   /**
    * Some consumer cards/drivers report "[N/A]" for the per-engine counters.
    * That must fall back to overall GPU utilization rather than reading as 0%,

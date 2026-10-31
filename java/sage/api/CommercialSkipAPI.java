@@ -1042,37 +1042,6 @@ public class CommercialSkipAPI {
         return EdlWriter.readEdl(recFile).size();
       }});
 
-    // ── Auto-Skip Settings ──
-
-    rft.put(new PredefinedJEPFunction("CommercialSkip", "IsAutoSkipEnabled")
-    {
-      /**
-       * Returns whether automatic commercial skipping during playback is enabled.
-       * When enabled, playback will automatically seek past commercial segments.
-       * When disabled, a "Skip Commercial" popup will appear instead.
-       * @return true if auto-skip is enabled
-       * @since 9.3
-       *
-       * @declaration public boolean IsAutoSkipEnabled();
-       */
-      public Object runSafely(Catbert.FastStack stack) throws Exception{
-        return Sage.getBoolean("commercial_detection/auto_skip", false);
-      }});
-
-    rft.put(new PredefinedJEPFunction("CommercialSkip", "SetAutoSkipEnabled", new String[] { "Enabled" }, true)
-    {
-      /**
-       * Enables or disables automatic commercial skipping during playback.
-       * @param Enabled true to enable auto-skip, false for popup mode
-       * @since 9.3
-       *
-       * @declaration public void SetAutoSkipEnabled(boolean Enabled);
-       */
-      public Object runSafely(Catbert.FastStack stack) throws Exception{
-        boolean enabled = evalBool(stack.pop());
-        Sage.putBoolean("commercial_detection/auto_skip", enabled);
-        return null;
-      }});
   }
 
   // ── Helpers ──

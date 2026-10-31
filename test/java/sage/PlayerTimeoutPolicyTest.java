@@ -47,6 +47,7 @@ public class PlayerTimeoutPolicyTest
       PlayerTimeoutPolicy.SUF_BACKOFF,
       PlayerTimeoutPolicy.SUF_CONN_TIMEOUT,
       PlayerTimeoutPolicy.SUF_PLAYBACK_DEADLINE,
+      PlayerTimeoutPolicy.SUF_PLAYBACK_ABSOLUTE_DEADLINE,
   };
   private static final String[] BASE_KEYS = new String[] {
       PlayerTimeoutPolicy.BASE_INITIAL_WAIT,
@@ -55,6 +56,7 @@ public class PlayerTimeoutPolicyTest
       PlayerTimeoutPolicy.BASE_BACKOFF,
       PlayerTimeoutPolicy.BASE_CONN_TIMEOUT,
       PlayerTimeoutPolicy.BASE_PLAYBACK_DEADLINE,
+      PlayerTimeoutPolicy.BASE_PLAYBACK_ABSOLUTE_DEADLINE,
   };
 
   private void clearAll()
@@ -113,6 +115,7 @@ public class PlayerTimeoutPolicyTest
     assertEquals(PlayerTimeoutPolicy.connectionTimeoutMs(legacy), 30000L);
     // No unified deadline for legacy -- keep independent (stacking) behavior.
     assertEquals(PlayerTimeoutPolicy.playbackDeadlineMs(legacy), 0L);
+    assertEquals(PlayerTimeoutPolicy.playbackAbsoluteDeadlineMs(legacy), 0L);
   }
 
   @Test
@@ -122,6 +125,7 @@ public class PlayerTimeoutPolicyTest
     assertEquals(PlayerTimeoutPolicy.expireWaitMs(null), 30000L);
     assertEquals(PlayerTimeoutPolicy.connectionTimeoutMs(null), 30000L);
     assertEquals(PlayerTimeoutPolicy.playbackDeadlineMs(null), 0L);
+    assertEquals(PlayerTimeoutPolicy.playbackAbsoluteDeadlineMs(null), 0L);
   }
 
   @Test
@@ -170,6 +174,8 @@ public class PlayerTimeoutPolicyTest
     // NG session therefore gets it by default; legacy still returns 0.
     assertEquals(PlayerTimeoutPolicy.playbackDeadlineMs(ng),
         PlayerTimeoutPolicy.NG_PLAYBACK_DEADLINE_MS);
+    assertEquals(PlayerTimeoutPolicy.playbackAbsoluteDeadlineMs(ng),
+        PlayerTimeoutPolicy.NG_PLAYBACK_ABSOLUTE_DEADLINE_MS);
     assertEquals(PlayerTimeoutPolicy.playbackDeadlineMs(PlayerTimeoutPolicy.LEGACY), 0L);
   }
 
@@ -184,6 +190,7 @@ public class PlayerTimeoutPolicyTest
     putNgDefault(PlayerTimeoutPolicy.SUF_BACKOFF, "250");
     putNgDefault(PlayerTimeoutPolicy.SUF_CONN_TIMEOUT, "15000");
     putNgDefault(PlayerTimeoutPolicy.SUF_PLAYBACK_DEADLINE, "15000");
+    putNgDefault(PlayerTimeoutPolicy.SUF_PLAYBACK_ABSOLUTE_DEADLINE, "90000");
     ProfileContext ng = PlayerTimeoutPolicy.of(true, null);
     assertEquals(PlayerTimeoutPolicy.initialWaitMs(ng), 3000L);
     assertEquals(PlayerTimeoutPolicy.expireWaitMs(ng), 15000L);
@@ -191,6 +198,7 @@ public class PlayerTimeoutPolicyTest
     assertEquals(PlayerTimeoutPolicy.backoffMs(ng), 250L);
     assertEquals(PlayerTimeoutPolicy.connectionTimeoutMs(ng), 15000L);
     assertEquals(PlayerTimeoutPolicy.playbackDeadlineMs(ng), 15000L);
+    assertEquals(PlayerTimeoutPolicy.playbackAbsoluteDeadlineMs(ng), 90000L);
     // ... while a legacy session in the same server is unaffected.
     assertEquals(PlayerTimeoutPolicy.expireWaitMs(PlayerTimeoutPolicy.LEGACY), 30000L);
     assertEquals(PlayerTimeoutPolicy.attempts(PlayerTimeoutPolicy.LEGACY), 2);
@@ -200,7 +208,7 @@ public class PlayerTimeoutPolicyTest
   public void testSeedRecommendedNgDefaultsIsIdempotentAndNonClobbering()
   {
     // Fresh seed writes all six knobs into the ng_default tier.
-    assertEquals(PlayerTimeoutPolicy.seedRecommendedNgDefaults(), 6);
+    assertEquals(PlayerTimeoutPolicy.seedRecommendedNgDefaults(), 7);
     ProfileContext ng = PlayerTimeoutPolicy.of(true, null);
     assertEquals(PlayerTimeoutPolicy.expireWaitMs(ng), 15000L);
     assertEquals(PlayerTimeoutPolicy.attempts(ng), 3);
@@ -325,23 +333,38 @@ public class PlayerTimeoutPolicyTest
   }
 
   @Test
+  public void testProgressExtendsIdleBudgetButNotAbsoluteCap()
+  {
+    PlaybackDeadline d = PlaybackDeadline.startingAt(0L, 10000L, 30000L);
+    d.markProgress(9000L);
+    assertFalse(d.expired(15000L));
+    assertEquals(d.remaining(15000L), 4000L);
+    d.markProgress(19000L);
+    assertFalse(d.expired(25000L));
+    assertTrue(d.expired(30000L));
+  }
+
+  @Test
   public void testForContextBuildsActiveOnlyForNg()
   {
     assertFalse(PlaybackDeadline.forContext(PlayerTimeoutPolicy.LEGACY, 0L).isActive());
     // An NG session can size the unified deadline via the ng_default tier.
     putNgDefault(PlayerTimeoutPolicy.SUF_PLAYBACK_DEADLINE, "15000");
+    putNgDefault(PlayerTimeoutPolicy.SUF_PLAYBACK_ABSOLUTE_DEADLINE, "120000");
     PlaybackDeadline ngD = PlaybackDeadline.forContext(PlayerTimeoutPolicy.of(true, null), 1000L);
     assertTrue(ngD.isActive());
-    assertEquals(ngD.deadlineAtMs(), 1000L + 15000L);
+    assertEquals(ngD.deadlineAtMs(), 1000L + 120000L);
     // With the tier removed an NG session still has a cap -- the built-in NG
     // default -- because an uncapped acquisition is what froze the UI.
     Sage.remove(PlayerTimeoutPolicy.PROFILE_PREFIX + PlayerTimeoutPolicy.NG_DEFAULT_ID
         + "/" + PlayerTimeoutPolicy.SUF_PLAYBACK_DEADLINE);
     PlaybackDeadline dflt = PlaybackDeadline.forContext(PlayerTimeoutPolicy.of(true, null), 1000L);
     assertTrue(dflt.isActive());
-    assertEquals(dflt.deadlineAtMs(), 1000L + PlayerTimeoutPolicy.NG_PLAYBACK_DEADLINE_MS);
+    assertEquals(dflt.deadlineAtMs(),
+        1000L + PlayerTimeoutPolicy.NG_PLAYBACK_ABSOLUTE_DEADLINE_MS);
     // Explicitly zeroing it is still an escape hatch back to legacy stacking.
     putNgDefault(PlayerTimeoutPolicy.SUF_PLAYBACK_DEADLINE, "0");
+    putNgDefault(PlayerTimeoutPolicy.SUF_PLAYBACK_ABSOLUTE_DEADLINE, "0");
     assertFalse(PlaybackDeadline.forContext(PlayerTimeoutPolicy.of(true, null), 1000L).isActive());
   }
 }
