@@ -951,18 +951,19 @@ Implemented and merged (behavior-neutral until both switches are cleared):
   NG clients (ExoPlayer/IJK, e.g. `android_media3` / `android_ijk`) that would
   DIRECT_PLAY: they advertise native `push` but **no `pull-xcode`**, so neither
   branch above can reach them. `MiniPlayer` instead promotes the bare direct route
-  into a managed push transcode. It prefers **MPEG-TS** when the selected surface
-  advertises it because FF/autoskip reprimes can continue safely after a decoder
+  into a managed push transcode. It requires **MPEG-TS push** on the selected
+  surface because FF/autoskip reprimes can continue safely after a decoder
   flush; starting another Matroska generation on the same push connection would
-  append a fresh EBML header to an existing extractor. Matroska remains the
-  compatibility fallback for surfaces that advertise no MPEG-TS push support.
+  append a fresh EBML header to an existing extractor. A Matroska-only surface
+  fails closed rather than receiving an unsafe replacement generation.
   Effective delivery remains `push:enhance;tier=<t>`, video is rewritten to NVENC
   H.264/HEVC as appropriate, and audio is copied untouched
   (`miniplayer/enhance_push_mkv_upgrade`, retained as the historical kill switch).
   The promotion requires the winning surface to advertise the output codec and
-  selected push container, and it is eligible for both completed and active
-  recording sources when the tier is active. When the tier is `NONE`
-  (dry-run) — so delivery is byte-identical until enhancement actually engages.
+  MPEG-TS with push transport allowed, and it is eligible for both completed and
+  active recording sources when the tier is active. It does not fire when the
+  tier is `NONE` (dry-run), so delivery is byte-identical until enhancement
+  actually engages.
 
 Live activation: because the pipeline is wired, the phase interlock is cleared
 (`EnhancementDryRun.PIPELINE_WIRED` is true), so `playback/gpu_enhance/dry_run`

@@ -186,11 +186,14 @@ public class MiniPlayer implements DVDMediaPlayer
     if (surface == null) return null;
     // MPEG-TS is generation-safe across managed push reprimes. A Matroska
     // reprime emits a fresh EBML header; appending that generation after a
-    // decoder flush can wedge Media3's existing extractor.
-    if (surface.supportsContainer(sage.media.format.MediaFormat.MPEG2_TS))
+    // decoder flush can wedge Media3's existing extractor. Require the
+    // container's push transport too; a flat container declaration alone does
+    // not override an explicit push=false transport attribute.
+    if (surface.supportsContainer(sage.media.format.MediaFormat.MPEG2_TS)
+        && surface.containerAllowsTransport(sage.media.format.MediaFormat.MPEG2_TS, true))
       return sage.media.format.MediaFormat.MPEG2_TS;
-    if (surface.supportsContainer(sage.media.format.MediaFormat.MATROSKA))
-      return sage.media.format.MediaFormat.MATROSKA;
+    // Fail closed rather than reintroducing the unsafe concatenated-Matroska
+    // generation path for a surface that cannot receive MPEG-TS push.
     return null;
   }
 
@@ -234,7 +237,7 @@ public class MiniPlayer implements DVDMediaPlayer
    * Re-rank Android surfaces for the effective GPU-enhanced stream.
    *
    * <p>Source-format ranking may select IJK for an MPEG2-PS source even though
-   * enhancement replaces that source video with H.264 or HEVC in Matroska. In that case
+   * enhancement replaces that source video with H.264 or HEVC in MPEG-TS. In that case
    * the delivered format, not the source format, determines which decoder
    * should run. Only switch to a surface that explicitly advertises the full
    * push contract and whose matching player constraints prove hardware decode
@@ -3210,9 +3213,9 @@ public class MiniPlayer implements DVDMediaPlayer
           // MATROSKA/MP4 but NO pull-xcode. The winning source-format plan may be
           // either pull OR push (MPEG2-PS is push-only on android_ijk), but neither
           // raw route has a transcoder. Its native transcode
-          // transport prefers MPEG-TS PUSH, which remains a valid stream across a
-          // flush/reprime. Matroska remains a fallback for clients that do not
-          // advertise MPEG-TS. Promote the tune to that push so a copy-family
+          // transport requires MPEG-TS PUSH, which remains a valid stream across a
+          // flush/reprime. A Matroska-only surface fails closed because it cannot
+          // safely accept a second EBML generation. Promote the tune to that push so a copy-family
           // transcoder exists; the enhancement pass
           // then rewrites the video copy into the NVENC HEVC upscale (audio is
           // copied untouched — the client was already direct-playing it, so it is

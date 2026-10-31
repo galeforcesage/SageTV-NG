@@ -910,7 +910,7 @@ public class MiniPlayerTest
         java.util.Arrays.asList("push", "pull"),
         java.util.Arrays.asList("MPEG2-VIDEO", "HEVC"),
         java.util.Collections.singletonList("AC3"),
-        java.util.Arrays.asList("MPEG2-PS", "MATROSKA"));
+        java.util.Arrays.asList("MPEG2-PS", "MATROSKA", "MPEG2-TS"));
 
     assertTrue(MiniPlayer.shouldUseAndroidEnhancePush(
         ijk, "pull", null, true, true),
@@ -997,14 +997,14 @@ public class MiniPlayerTest
   }
 
   @Test
-  public void testAndroidMpeg2EnhanceRequiresAdvertisedH264MkvPush()
+  public void testAndroidMpeg2EnhanceRequiresAdvertisedH264MpegTsPush()
   {
     sage.client.PlaybackSurface h264 = new sage.client.PlaybackSurface(
         "android_media3", "native", 100,
         java.util.Arrays.asList("push", "pull"),
         java.util.Collections.singletonList("H264"),
         java.util.Collections.singletonList("AC3"),
-        java.util.Collections.singletonList("MATROSKA"));
+        java.util.Collections.singletonList("MPEG2-TS"));
 
     assertTrue(MiniPlayer.shouldUseAndroidEnhancePush(
         h264, "pull", null, true, true, sage.media.format.MediaFormat.H264));
@@ -1027,17 +1027,28 @@ public class MiniPlayerTest
         java.util.Collections.singletonList("H264"),
         java.util.Collections.singletonList("AC3"),
         java.util.Collections.singletonList("MATROSKA"));
+    java.util.Map<String, boolean[]> pullOnlyTransport =
+        new java.util.HashMap<String, boolean[]>();
+    pullOnlyTransport.put("MPEG2-TS", new boolean[] { false, true });
+    sage.client.PlaybackSurface pullOnlyTs = new sage.client.PlaybackSurface(
+        "android_media3", "native", 100,
+        java.util.Arrays.asList("push", "pull"),
+        java.util.Collections.singletonList("H264"),
+        java.util.Collections.singletonList("AC3"),
+        java.util.Collections.singletonList("MPEG2-TS"),
+        null, null, null, 0, 0, 0, null, pullOnlyTransport);
 
     assertEquals(MiniPlayer.preferredAndroidEnhancePushContainer(both),
         sage.media.format.MediaFormat.MPEG2_TS,
         "MPEG-TS avoids appending a new EBML generation after an FF/autoskip reprime");
-    assertEquals(MiniPlayer.preferredAndroidEnhancePushContainer(mkvOnly),
-        sage.media.format.MediaFormat.MATROSKA,
-        "Matroska remains available for clients that advertise no TS push support");
+    assertNull(MiniPlayer.preferredAndroidEnhancePushContainer(mkvOnly),
+        "Matroska-only surfaces must fail closed instead of accepting concatenated EBML generations");
+    assertNull(MiniPlayer.preferredAndroidEnhancePushContainer(pullOnlyTs),
+        "An explicit MPEG-TS push=false declaration must be honored");
   }
 
   @Test
-  public void testAndroidEnhanceReranksForEffectiveHevcMatroskaStream()
+  public void testAndroidEnhanceReranksForEffectiveHevcMpegTsStream()
   {
     java.util.Map<String, sage.client.PlaybackSurface> advertised =
         new java.util.LinkedHashMap<String, sage.client.PlaybackSurface>();
@@ -1046,28 +1057,28 @@ public class MiniPlayerTest
         java.util.Arrays.asList("push", "pull"),
         java.util.Arrays.asList("MPEG2-VIDEO", "HEVC"),
         java.util.Collections.singletonList("AC3"),
-        java.util.Arrays.asList("MPEG2-PS", "MATROSKA"));
+        java.util.Arrays.asList("MPEG2-PS", "MATROSKA", "MPEG2-TS"));
     sage.client.PlaybackSurface media3 = new sage.client.PlaybackSurface(
         "android_media3", "native", 100,
         java.util.Arrays.asList("push", "pull"),
         java.util.Arrays.asList("H264", "HEVC"),
         java.util.Collections.singletonList("AC3"),
-        java.util.Arrays.asList("MP4", "MATROSKA"));
+        java.util.Arrays.asList("MP4", "MATROSKA", "MPEG2-TS"));
     advertised.put(ijk.getId(), ijk);
     advertised.put(media3.getId(), media3);
     sage.client.ClientConstraints exo = sage.client.ClientConstraints.parse(
         "exoplayer",
         "HEVC;decoder=hw;maxW=4096;maxH=4096;maxFps=60",
-        "AC3", "MATROSKA");
+        "AC3", "MPEG2-TS");
     sage.client.ClientConstraints ijkConstraints = sage.client.ClientConstraints.parse(
         "ijkplayer",
         "MPEG2-VIDEO;decoder=sw_or_hw;maxW=1920;maxH=1088,"
             + "HEVC;decoder=sw_or_hw;maxW=4096;maxH=4096;maxFps=60",
-        "AC3", "MPEG2-PS,MATROSKA");
+        "AC3", "MPEG2-PS,MPEG2-TS");
 
     assertEquals(MiniPlayer.chooseAndroidEnhanceSurface(
         advertised.values(), ijk, "AC3", 3840, 2160, 60, exo, ijkConstraints), media3,
-        "Enhanced HEVC/Matroska must use the highest-priority proven hardware surface");
+        "Enhanced HEVC/MPEG-TS must use the highest-priority proven hardware surface");
   }
 
   @Test
@@ -1080,19 +1091,19 @@ public class MiniPlayerTest
         java.util.Arrays.asList("push", "pull"),
         java.util.Arrays.asList("MPEG2-VIDEO", "HEVC"),
         java.util.Collections.singletonList("AC3"),
-        java.util.Arrays.asList("MPEG2-PS", "MATROSKA"));
+        java.util.Arrays.asList("MPEG2-PS", "MATROSKA", "MPEG2-TS"));
     sage.client.PlaybackSurface media3 = new sage.client.PlaybackSurface(
         "android_media3", "native", 100,
         java.util.Arrays.asList("push", "pull"),
         java.util.Collections.singletonList("HEVC"),
         java.util.Collections.singletonList("AC3"),
-        java.util.Collections.singletonList("MATROSKA"));
+        java.util.Collections.singletonList("MPEG2-TS"));
     advertised.put(ijk.getId(), ijk);
     advertised.put(media3.getId(), media3);
     sage.client.ClientConstraints ambiguousExo = sage.client.ClientConstraints.parse(
         "exoplayer",
         "HEVC;decoder=sw_or_hw;maxW=4096;maxH=4096;maxFps=60",
-        "AC3", "MATROSKA");
+        "AC3", "MPEG2-TS");
 
     assertEquals(MiniPlayer.chooseAndroidEnhanceSurface(
         advertised.values(), ijk, "AC3", 3840, 2160, 60, ambiguousExo, null), ijk,
