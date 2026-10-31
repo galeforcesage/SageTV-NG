@@ -1,8 +1,11 @@
 # Native viewer recovery: server boundary proposal
 
-Status: **design only, pending approval**. This document records the server
-assessment for the bridge-owned consolidated recovery proposal. It adds no
-implemented endpoint, Java API, credential, storage or identity behavior.
+Status: **bounded design approved for bridge source implementation**. The user
+accepted JS-readable same-origin per-viewer proofs, restart viewer selection,
+copied-tab conflicts, lost/omitted-proof ambiguity and affected-only post-crash
+UNKNOWN unavailability. Bridge implementation is owned by the PWA repository;
+this server assessment adds no implemented endpoint, Java API, credential,
+storage or identity behavior and does not attest to bridge completion.
 The implemented ordinary ownership contract remains
 [NativePlaybackOwnershipV1.md](NativePlaybackOwnershipV1.md).
 
@@ -55,18 +58,20 @@ The recovery proof itself cannot establish those facts.
 
 ## Persistence scope and independent viewers
 
-The bounded first option is per-tab `sessionStorage`, with unavailable storage
-treated explicitly. It supports cooperative same-tab reload, not a guarantee of
-browser shutdown, standalone application restart or device restart recovery.
-Storage survival in Tizen and Safari standalone applications requires device
-validation. An installed-viewer persistence alternative is a separate design
-decision, not an implied implementation task.
+The approved consolidated design uses same-origin `localStorage` for private
+per-viewer recovery records and a per-tab `sessionStorage` locator. Restart
+viewer selection is explicit when the tab locator is absent. A locator routes
+to a record; it is not authority without the bridge-provisioned proof.
+Unavailable storage must be reported explicitly. Storage survival in Tizen and
+Safari standalone applications still requires device validation.
 
-Do not use shared `localStorage`, an ambient browser cookie or an arbitrary
-stable client ID as per-viewer identity. Duplicated tabs may copy session storage;
-a copied proof denotes the same lineage and can produce an explicit recovery
-conflict, not a proven independent viewer. The proposal must define conflict
-handling without closing another owner's producer.
+These proofs are JS-readable and accessible to same-origin code; the user
+accepts that trust boundary, not cryptographic per-tab isolation. Shared storage
+does not identify the physical viewer or authorize a caller-selected stable ID.
+Duplicated tabs may copy the locator/proof; a copied proof denotes the same
+lineage and can produce an explicit recovery conflict, not a proven independent
+viewer. Conflict handling must not close another owner's producer. Ambient
+cookies are not recovery identity.
 
 Existing same-SessionManager recreation can retain its in-memory obligation
 object independently of this proposed persistent recovery. A global denial
@@ -137,7 +142,9 @@ no media/retirement rights, and require a separately bounded admission registry.
 That check is **not implemented or approved**, and is unnecessary for transferring
 only a denial obligation.
 
-Implementation approval must follow review of the consolidated storage,
-rotation, conflict, retention, restart and UX proposal. This design does not
-authorize recovery code, server configuration, deployment, restart, TLS bypass,
-new login/admin requirements or hardware changes.
+The user approved the bounded consolidated bridge recovery implementation, not
+new Sage identity or resource-verifier APIs. Durable bridge hash journaling and
+terminal facts remain bridge responsibilities. This approval does not authorize
+server configuration, deployment, restart, main-checkout changes, TLS bypass,
+new login/admin requirements or hardware changes. No universal no-overlap claim
+against cleared or omitted identity is permitted.
