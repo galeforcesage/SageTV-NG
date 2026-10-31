@@ -3298,6 +3298,12 @@ public class FFMPEGTranscoder implements TranscodeEngine
         applyMpeg2SoftwareCompatibilityFallback(xcodeParamsVec, "post_nvenc_cooldown");
         return;
       }
+      if (currFile != null && enhanceNvencFailureCoolingDown(currFile))
+      {
+        if (Sage.DBG) System.out.println("GPU_ENHANCE apply: skipped -- source in"
+            + " post-NVENC-failure cooldown; serving a clean plain remux for " + currFile);
+        return;
+      }
 
       // Optional operator override: force a specific tier regardless of the tier
       // the client negotiated from its display sink (a 1080p browser sink caps the
@@ -4117,36 +4123,33 @@ public class FFMPEGTranscoder implements TranscodeEngine
    * consumer, because {@link #stopTranscode()} joins that thread. It is written to
    * be safe against the client's own pull-driven relaunch racing it: it never
    * blindly stops a child, so it cannot kill a healthy relaunch a still-connected
-   * client already performed. Buffered output may relaunch in-place when no byte
-   * from the failed generation was externally served; any unpublished partial
-   * chunk is discarded while resetting the ring. Direct output may relaunch only
-   * when the failed generation produced zero bytes because a direct read is
-   * already part of delivery. Once any failed-generation byte is externally
-   * visible, appending a plain remux risks exposing one stream with two
-   * codec/config generations, so the method ends this stream and requires a
-   * clean reopen.
+   * client already performed. It only relaunches in-place when the failed
+   * generation produced zero bytes and no byte was externally served. Output
+   * production is stricter than the published ring frontier because a short
+   * failed stream can leave an unpublished partial chunk in the stdout consumer.
+   * Once any output exists, appending a plain remux risks exposing one stream
+   * with two codec/config generations, so the method ends this stream and
+   * requires a clean reopen.
    * {@link #suppressEnhanceThisLaunch} (armed by the caller, re-armed here)
    * guarantees a safe in-place relaunch cannot re-inject the encoder that died.
    */
   boolean prepareCleanNvencFallbackRelaunch()
   {
+    if (!bufferOutput) return false;
     synchronized (xcodeSyncLock)
     {
-      if (bufferOutput)
-      {
-        if (xcodeBufferVirtualReadPos != xcodeOutputGenerationOrigin)
-          return false;
-        if (xcodeOutputGenerationDeliveryStarted)
-          return false;
-        xcodeBufferBaseNum = 0;
-        numFilledXcodeBuffers = 0;
-        xcodeBufferVirtualReadPos = xcodeOutputGenerationOrigin;
-        xcodeBufferVirtualOffset = xcodeOutputGenerationOrigin;
-        xcodeBufferVirtualSize = xcodeOutputGenerationOrigin;
-        xcodeSyncLock.notifyAll();
-      }
-      else if (xcodeOutputGenerationBytesProduced != 0)
+      if (xcodeOutputGenerationBytesProduced != 0)
         return false;
+      if (xcodeBufferVirtualReadPos != xcodeOutputGenerationOrigin)
+        return false;
+      if (xcodeOutputGenerationDeliveryStarted)
+        return false;
+      xcodeBufferBaseNum = 0;
+      numFilledXcodeBuffers = 0;
+      xcodeBufferVirtualReadPos = xcodeOutputGenerationOrigin;
+      xcodeBufferVirtualOffset = xcodeOutputGenerationOrigin;
+      xcodeBufferVirtualSize = xcodeOutputGenerationOrigin;
+      xcodeSyncLock.notifyAll();
       return true;
     }
   }
@@ -4233,6 +4236,10 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (xcodeProcess != null)
       stopTranscode();
 
+    xcodeBufferBaseNum = 0;
+    xcodeOutputGenerationOrigin = xcodeBufferVirtualReadPos;
+    xcodeOutputGenerationBytesProduced = 0;
+    xcodeOutputGenerationDeliveryStarted = false;
     lastXcodeStreamTime = 0;
     lastXcodeStreamPosition = 0;
     lastExitCode = -1;

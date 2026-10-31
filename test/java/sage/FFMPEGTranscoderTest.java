@@ -94,15 +94,15 @@ public class FFMPEGTranscoderTest
   }
 
   @Test
-  public void nvencFallbackCanResetAZeroOutputDirectPushGeneration()
+  public void nvencFallbackRequiresCleanReconnectForDirectPush()
   {
     FFMPEGTranscoder t = new FFMPEGTranscoder();
     t.bufferOutput = false;
     t.xcodeOutputGenerationOrigin = 1024L;
     t.xcodeBufferVirtualReadPos = 1024L;
 
-    assertTrue(t.prepareCleanNvencFallbackRelaunch(),
-        "A direct push child that emitted nothing can be replaced on the same stream");
+    assertFalse(t.prepareCleanNvencFallbackRelaunch(),
+        "Direct push must reopen because a socket read can race generation replacement");
   }
 
   @Test
@@ -144,7 +144,7 @@ public class FFMPEGTranscoderTest
   }
 
   @Test
-  public void nvencFallbackDiscardsUnservedAudioOnlyBufferedGeneration()
+  public void nvencFallbackRejectsAudioOnlyBytesBeforeAnyVideoFrameOrRead()
   {
     FFMPEGTranscoder t = new FFMPEGTranscoder();
     t.bufferOutput = true;
@@ -157,8 +157,9 @@ public class FFMPEGTranscoderTest
     t.xcodeBufferVirtualSize = 0L;
     t.numFilledXcodeBuffers = 0;
 
-    assertTrue(t.prepareCleanNvencFallbackRelaunch(),
-        "An unpublished frame-zero audio fragment can be discarded before plain remux relaunch");
+    assertFalse(t.prepareCleanNvencFallbackRelaunch(),
+        "Muxed/audio bytes from a frame-zero failure must force a clean reconnect"
+            + " even when the partial ring chunk was never advertised or read");
     assertEquals(t.xcodeBufferVirtualSize, 0L);
     assertEquals(t.numFilledXcodeBuffers, 0);
   }
