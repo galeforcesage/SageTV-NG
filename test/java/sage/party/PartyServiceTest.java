@@ -1199,6 +1199,21 @@ public class PartyServiceTest
         && "PREPARATION_EXPIRED".equals(text(m, "code"))));
   }
 
+  @Test public void partyLifetimeIncludesPlaybackAndExpiresAfterSixHours()
+  {
+    Rig r = new Rig(); Client host = r.client(); long createdAt = r.now.get();
+    host.create(); host.ready();
+    r.now.set(createdAt + PartyService.PARTY_LIFETIME_MS - 1);
+    r.service.tick();
+    assertFalse(host.messages.stream().anyMatch(m -> "ENDED".equals(text(m, "type"))));
+    r.now.addAndGet(2);
+    r.service.tick();
+    assertTrue(host.messages.stream().anyMatch(m -> "ENDED".equals(text(m, "type"))
+        && "EXPIRED".equals(text(m, "reason"))));
+    host.hello();
+    error(host.snapshot(), "PARTY_GONE");
+  }
+
   @Test public void correctionReportWindowExceedsClientLandingTimeout()
   {
     Rig r = new Rig(); Client client = r.client(); client.create();

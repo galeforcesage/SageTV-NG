@@ -16,9 +16,10 @@ Defaults: `party/max_budget_kbps=100000`, `party/max_transcodes=1`,
 aggregate **Party** preparation/playback budgets, not a machine-wide CPU/encoder
 governor. Configure measured headroom before enabling. At most 16 parties exist;
 each has five slots, including preparing, locally stopped and grace-retained slots.
-Parties expire after 24 hours. Each unresolved member join/preparation attempt
-expires after 15 seconds; successful PREPARATION_RESULT completion cancels that
-member deadline and does not affect the Party or existing ready members.
+Parties expire six hours after CREATE, including all playing, paused, buffering
+and recovery time. Each unresolved member join/preparation attempt expires after
+15 seconds; successful PREPARATION_RESULT completion cancels that member deadline
+and does not affect the Party or existing ready members.
 
 In the existing `SAGETV_NG_CAPABILITIES` reply, advertise **all** these exact tokens:
 

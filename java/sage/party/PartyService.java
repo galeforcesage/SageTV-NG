@@ -23,6 +23,7 @@ public final class PartyService
 {
   public static final long PREPARATION_TIMEOUT_MS = 15000;
   static final long CORRECTION_REPORT_TIMEOUT_MS = 12000;
+  static final long PARTY_LIFETIME_MS = 6 * 3600000L;
 
   /** A server-authorized renderer, not a physical socket or advertised device identity. */
   public interface Peer
@@ -1271,7 +1272,7 @@ public final class PartyService
             && (!m.clock.confident(now) || m.lastReport >= 0 && now - m.lastReport > 10000))
         { m.status = "RECOVERING"; m.clock.reset(); roster(p, m); }
       }
-      if (now - p.created > 24 * 3600000L) end(p, false, "EXPIRED", now);
+      if (now - p.created > PARTY_LIFETIME_MS) end(p, false, "EXPIRED", now);
     }
   }
 
