@@ -56,6 +56,7 @@ public class NgPartyTransportIntegrationTest
         return null;
       }).when(renderer).sendSetPropertyAsync(anyString(), anyString());
       connection = spy(new NgPartyConnection(renderer, ui, service, time));
+      doReturn(42).when(connection).currentMediaFileId();
       doReturn(3600000L).when(connection).duration(42);
       doReturn(new PartyService.MediaWindow(3600000L, false)).when(connection).mediaWindow(42);
       PartyService.Delivery path = new PartyService.Delivery(mode, mode, "H264", "AAC", 8000, false);
@@ -101,9 +102,11 @@ public class NgPartyTransportIntegrationTest
     PartyService service = new PartyService(() -> 100000, true, 100000, 2);
     try (Transport host = new Transport(service, "push"); Transport guest = new Transport(service, "pull-xcode"))
     {
-      JsonObject create = new JsonObject(); create.addProperty("mediaFileId", 42);
+      JsonObject create = new JsonObject();
       JsonObject created = host.exchange("CREATE", create);
       assertEquals(created.get("type").getAsString(), "CREATED");
+      assertEquals(created.getAsJsonObject("snapshot").get("mediaFileId").getAsInt(), 42);
+      verify(host.connection).currentMediaFileId();
       verify(host.video).setPartyProgressOwned(true);
       JsonObject join = new JsonObject();
       join.add("partyId", created.get("partyId")); join.addProperty("mediaFileId", 42);
@@ -490,17 +493,26 @@ public class NgPartyTransportIntegrationTest
       java.util.Set<String> caps = new java.util.HashSet<>(PartyProtocol.REQUIRED);
       caps.add("PARTY_START_POSITION_V1");
       doReturn(caps).when(client.renderer).getClientCapabilities();
+      MediaFile media = mock(MediaFile.class); doReturn(42).when(media).getID();
+      MiniPlayer player = mock(MiniPlayer.class);
+      doReturn(7L).when(player).getPartyPlaybackGeneration();
+      doReturn(MediaPlayer.PLAY_STATE).when(player).getState();
+      doReturn(media).when(client.video).getCurrFile();
+      doReturn(player).when(client.video).getPartyPlayer();
+      doReturn(true).when(client.video).isMediaPlayerLoaded();
+      doCallRealMethod().when(client.connection).currentMediaFileId();
       doReturn(456789L).when(client.video).partyCurrentPosition(42);
-      JsonObject create = new JsonObject(); create.addProperty("mediaFileId", 42);
+      JsonObject create = new JsonObject();
       create.addProperty("startMode", "CURRENT_POSITION");
       JsonObject created = client.exchange("CREATE", create);
+      assertEquals(created.getAsJsonObject("snapshot").get("mediaFileId").getAsInt(), 42);
       assertEquals(created.get("startPositionMs").getAsLong(), 456789);
       assertEquals(created.getAsJsonObject("snapshot").get("state").getAsString(), "PAUSED");
       verify(client.video).partyCurrentPosition(42);
       JsonObject leave = new JsonObject(); leave.add("partyId", created.get("partyId"));
       client.exchange("LEAVE", leave);
       clearInvocations(client.video);
-      create = new JsonObject(); create.addProperty("mediaFileId", 42);
+      create = new JsonObject();
       assertEquals(client.exchange("CREATE", create).get("startPositionMs").getAsLong(), 0);
       verify(client.video, never()).partyCurrentPosition(anyInt());
     }

@@ -244,7 +244,7 @@ positions are relative to the beginning of the common media, not epoch PTS.
 |---|---|---|
 | HELLO | no party/epoch needed | AVAILABLE |
 | LIST_CLIENTS | no party needed | CLIENTS |
-| CREATE | `mediaFileId` positive int32; optional `startMode:"BEGINNING"\|"CURRENT_POSITION"` | CREATED |
+| CREATE | optional `mediaFileId` positive int32; optional `startMode:"BEGINNING"\|"CURRENT_POSITION"` | CREATED |
 | JOIN | `joinCode:string`; optional `partyId, mediaFileId` | JOINED |
 | RESUME | `partyId, participantId, recoveryToken` | JOINED |
 | SNAPSHOT | `partyId` | SNAPSHOT |
@@ -269,6 +269,14 @@ positions are relative to the beginning of the common media, not epoch PTS.
 | END | `partyId` | ENDED; roster gets ENDED |
 
 ### Beginning/Current Position and explicit Join & Prepare
+
+CREATE may omit `mediaFileId` when starting from the renderer's current ordinary
+playback. The server then derives the exact loaded MediaFile from that admitted
+renderer and requires its player to remain PLAYING or PAUSED on the same playback
+generation. This is the native push path: clients must not require the optional
+same-JVM `NATIVE_PLAYBACK_OWNERSHIP_V1` context or infer an ID from a path. An
+explicit `mediaFileId` remains supported for existing clients and server-authorized
+selection flows.
 
 CREATE omitting `startMode` preserves **BEGINNING**, anchor 0. CURRENT_POSITION
 requires negotiated `PARTY_START_POSITION_V1` and AVAILABLE containing that mode

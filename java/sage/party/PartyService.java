@@ -30,6 +30,8 @@ public final class PartyService
     Set<String> capabilities();
     /** Queues one bounded message to this viewer only, never blocking other viewers. */
     void send(JsonObject message);
+    /** Returns the exact media currently loaded on this renderer for context-free CREATE. */
+    default int currentMediaFileId() { throw new Fault("MEDIA_PATH_NOT_READY"); }
     /** Validates eligible accessible media and returns its currently available duration. */
     long duration(int mediaFileId);
     /** Returns the current server-owned media window; completed media is fixed. */
@@ -334,7 +336,9 @@ public final class PartyService
     {
       if (find(peer) != null) throw new Fault("ALREADY_JOINED");
       if (parties.size() >= 16) throw new Fault("SERVER_CAPACITY");
-      int media = (int)number(r, "mediaFileId", 1, Integer.MAX_VALUE);
+      int media = r.has("mediaFileId")
+          ? (int)number(r, "mediaFileId", 1, Integer.MAX_VALUE)
+          : peer.currentMediaFileId();
       String startMode = r.has("startMode") ? text(r, "startMode") : "BEGINNING";
       if (!Set.of("BEGINNING", "CURRENT_POSITION").contains(startMode)
           || r.has("startPositionMs") || r.has("positionMs"))

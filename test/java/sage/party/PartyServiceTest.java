@@ -167,6 +167,7 @@ public class PartyServiceTest
     @Override public String principal() { return principal; }
     @Override public Set<String> capabilities() { return caps; }
     @Override public void send(JsonObject message) { messages.add(copy(message)); }
+    @Override public int currentMediaFileId() { return 42; }
     @Override public long duration(int id)
     { if (id != 42) throw new Fault("MEDIA_UNAVAILABLE"); return availableEnd; }
     @Override public PartyService.MediaWindow mediaWindow(int id)
@@ -925,7 +926,11 @@ public class PartyServiceTest
 
   @Test public void omittedBeginningRemainsCompatibleAndCurrentModeRequiresExplicitGuarantee()
   {
-    Rig r = new Rig(); Client h = r.client(); JsonObject created = h.create();
+    Rig r = new Rig(); Client h = r.client(); h.hello();
+    JsonObject createWithoutMedia = h.request("CREATE");
+    JsonObject created = h.sendRequest(createWithoutMedia); h.remember(created);
+    h.token = created.get("joinCode").getAsString();
+    assertEquals(created.getAsJsonObject("snapshot").get("mediaFileId").getAsInt(), 42);
     assertEquals(created.get("startPositionMs").getAsLong(), 0);
     assertEquals(text(created, "startMode"), "BEGINNING");
     assertEquals(h.currentPositionReads, 0);

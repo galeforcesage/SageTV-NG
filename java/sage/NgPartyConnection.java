@@ -208,6 +208,26 @@ final class NgPartyConnection implements PartyService.Peer
   @Override public String principal() { return renderer.getPartyPrincipal(); }
   @Override public Set<String> capabilities() { return renderer.getClientCapabilities(); }
 
+  @Override public int currentMediaFileId()
+  {
+    VideoFrame vf = ui.getVideoFrame();
+    String principal = principal();
+    if (closed || principal == null || vf == null) throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
+    MediaFile media = vf.getCurrFile();
+    MiniPlayer player = vf.getPartyPlayer();
+    if (media == null || player == null || media.getID() <= 0
+        || !vf.isMediaPlayerLoaded()
+        || (player.getState() != MediaPlayer.PLAY_STATE && player.getState() != MediaPlayer.PAUSE_STATE))
+      throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
+    int mediaFileId = media.getID();
+    long playbackGeneration = player.getPartyPlaybackGeneration();
+    if (closed || !principal.equals(principal()) || vf.getCurrFile() != media || vf.getPartyPlayer() != player
+        || player.getPartyPlaybackGeneration() != playbackGeneration || !vf.isMediaPlayerLoaded()
+        || (player.getState() != MediaPlayer.PLAY_STATE && player.getState() != MediaPlayer.PAUSE_STATE))
+      throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
+    return mediaFileId;
+  }
+
   @Override public void send(JsonObject message)
   {
     if (closed) return;
