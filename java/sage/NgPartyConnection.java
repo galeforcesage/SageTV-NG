@@ -423,7 +423,7 @@ final class NgPartyConnection implements PartyService.Peer
         VideoFrame.PartyPreparation stage = renderer.hasPartySurface()
             ? ui.getVideoFrame().preparePartyMedia(target, id, pathAuthorized, true)
             : ui.getVideoFrame().preparePartyMedia(target, id, pathAuthorized);
-        pollPreparation(stage, monotonicMs.getAsLong() + 60000, generation);
+        awaitPreparation(stage, monotonicMs.getAsLong() + PartyService.PREPARATION_TIMEOUT_MS, generation);
       });
     }
     catch (java.util.concurrent.RejectedExecutionException e)
@@ -432,8 +432,11 @@ final class NgPartyConnection implements PartyService.Peer
 
   MediaFile preparationMedia(int media) { return Wizard.getInstance().getFileForID(media); }
 
-  private void pollPreparation(VideoFrame.PartyPreparation stage, long deadline, long generation)
+  private void awaitPreparation(VideoFrame.PartyPreparation stage, long deadline, long generation)
   {
+    long remaining = Math.max(0, deadline - monotonicMs.getAsLong());
+    try { stage.awaitCompletion(remaining); }
+    catch (InterruptedException e) { Thread.currentThread().interrupt(); }
     if (closed || preparationGeneration != generation) return;
     if (stage.watchCode != VideoFrame.WATCH_OK)
       service.preparationResult(this, stage.id, stage.watchCode, -1);
@@ -441,9 +444,8 @@ final class NgPartyConnection implements PartyService.Peer
       service.preparationResult(this, stage.id, VideoFrame.WATCH_FAILED_USER_REJECTED_CONFLICT, -1);
     else if (ui.getVideoFrame().isPartyPreparationLoaded(stage))
       service.preparationResult(this, stage.id, VideoFrame.WATCH_OK, stage.generation);
-    else if (stage.loaded || monotonicMs.getAsLong() >= deadline)
+    else
       service.preparationResult(this, stage.id, VideoFrame.WATCH_FAILED_UNKNOWN, -1);
-    else TIMER.schedule(() -> pollPreparation(stage, deadline, generation), 100, TimeUnit.MILLISECONDS);
   }
 
   @Override public void cancelPreparation()

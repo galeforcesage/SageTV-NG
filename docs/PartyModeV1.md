@@ -16,7 +16,9 @@ Defaults: `party/max_budget_kbps=100000`, `party/max_transcodes=1`,
 aggregate **Party** preparation/playback budgets, not a machine-wide CPU/encoder
 governor. Configure measured headroom before enabling. At most 16 parties exist;
 each has five slots, including preparing, locally stopped and grace-retained slots.
-Parties expire after 24 hours; unprepared Party budget leases expire after 60 seconds.
+Parties expire after 24 hours. Each unresolved member join/preparation attempt
+expires after 15 seconds; successful PREPARATION_RESULT completion cancels that
+member deadline and does not affect the Party or existing ready members.
 
 In the existing `SAGETV_NG_CAPABILITIES` reply, advertise **all** these exact tokens:
 
@@ -337,9 +339,11 @@ are in `VideoFrame.java`; no error is converted into successful preparation.
 Ordinary protected-media metadata/Party eligibility is not parental approval:
 the actual Watch still performs the normal check before loading.
 
-There is a 60000 ms preparation lease (including the parental dialog); expiration
-removes the member with PREPARATION_EXPIRED. Async completion is polled every
-100 ms, bounded to 60000 ms after Watch returns as well. Stop, leave/end,
+There is a 15000 ms unresolved join/preparation lease (including the parental
+dialog); expiration removes only that member with PREPARATION_EXPIRED. The
+ordinary Watch load completion directly resolves PREPARATION_RESULT and cancels
+the deadline; waiting for READY afterward does not retain the preparation timer.
+Stop, leave/end,
 disconnect/replacement, rejoin or normal Watch revoke outstanding jobs/results.
 Already-running native media I/O may finish, but remains paused and cannot
 produce a valid stale completion or Party admission for a removed member.
@@ -847,8 +851,9 @@ restore rate=1 at duration expiry. Otherwise HARD seeks to the projected positio
 at the deadline and applies target play/pause state. Neither correction changes
 party version/seq. Verify real landing; soft partial improvement is progress, not
 immediate failure. Three failed/time-out corrections within 30000 ms mark only
-that participant DEGRADED. No result within 8000 ms counts as failure. Rejoin is
-required after degradation. Reports/clock timeout mark RECOVERING, not synchronized.
+that participant DEGRADED. No result within 12000 ms counts as failure, leaving
+transport and processing allowance beyond the client's 8000 ms landing timeout.
+Rejoin is required after degradation. Reports/clock timeout mark RECOVERING, not synchronized.
 
 Default buffering policy leaves others moving. STATUS BUFFERING with host-enabled
 pauseOnBuffer issues an explicit scheduled shared PAUSE, including superseding a

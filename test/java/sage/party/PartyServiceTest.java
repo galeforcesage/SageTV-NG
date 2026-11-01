@@ -126,6 +126,11 @@ public class PartyServiceTest
 
     JsonObject ready()
     {
+      return ready(true);
+    }
+
+    JsonObject ready(boolean reportCorrection)
+    {
       calibrate();
       JsonObject r = request("READY");
       r.addProperty("stateVersion", snapshot().get("stateVersion").getAsLong());
@@ -135,7 +140,7 @@ public class PartyServiceTest
       // snapshot above consumes a higher requestSeq, so allocate the request after that read.
       r.addProperty("requestId", "r" + ++sequence); r.addProperty("requestSeq", sequence);
       JsonObject out = sendRequest(r);
-      if ("CORRECTION".equals(out.get("type").getAsString())) landed(out, true);
+      if (reportCorrection && "CORRECTION".equals(out.get("type").getAsString())) landed(out, true);
       return out;
     }
 
@@ -1163,7 +1168,7 @@ public class PartyServiceTest
     JsonObject prepare = guest.request("PREPARE");
     prepare.addProperty("intent", "JOIN_AND_PREPARE"); prepare.addProperty("confirmReplace", true);
     guest.sendRequest(prepare); String old = guest.preparationId;
-    guest.status("BUFFERING"); r.now.addAndGet(60001); r.service.tick();
+    guest.status("BUFFERING"); r.now.addAndGet(PartyService.PREPARATION_TIMEOUT_MS + 1); r.service.tick();
     assertTrue(guest.messages.stream().anyMatch(m -> m.has("code") && "PREPARATION_EXPIRED".equals(text(m, "code"))));
     int before = guest.messages.size(); r.service.preparationResult(guest, old, 0, 7);
     assertEquals(guest.messages.size(), before);
@@ -1171,12 +1176,41 @@ public class PartyServiceTest
     prepare = reconnecting.request("PREPARE");
     prepare.addProperty("intent", "JOIN_AND_PREPARE"); prepare.addProperty("confirmReplace", true);
     reconnecting.sendRequest(prepare);
-    r.now.addAndGet(59000); r.service.disconnected(reconnecting);
+    r.now.addAndGet(14000); r.service.disconnected(reconnecting);
     r.now.addAndGet(2000); r.service.tick();
     Client replacement = r.client(); replacement.hello(); replacement.party = reconnecting.party;
     JsonObject resume = replacement.request("RESUME");
     resume.addProperty("participantId", reconnecting.participant); resume.addProperty("recoveryToken", reconnecting.recovery);
     assertEquals(text(replacement.sendRequest(resume), "type"), "JOINED");
+  }
+
+  @Test public void loadedPreparationCancelsMemberDeadlineWithoutAffectingPartyLifetime()
+  {
+    Rig r = new Rig(); Client host = r.client(); host.create(); host.ready();
+    Client guest = r.client(); capabilities(guest, "PARTY_PREPARE_V1"); guest.join(host);
+    JsonObject prepare = guest.request("PREPARE");
+    prepare.addProperty("intent", "JOIN_AND_PREPARE"); prepare.addProperty("confirmReplace", true);
+    guest.sendRequest(prepare);
+    r.service.preparationResult(guest, guest.preparationId, 0, 7);
+    r.now.addAndGet(PartyService.PREPARATION_TIMEOUT_MS + 1);
+    r.service.tick();
+    assertEquals(host.snapshot().getAsJsonArray("roster").size(), 2);
+    assertFalse(guest.messages.stream().anyMatch(m -> m.has("code")
+        && "PREPARATION_EXPIRED".equals(text(m, "code"))));
+  }
+
+  @Test public void correctionReportWindowExceedsClientLandingTimeout()
+  {
+    Rig r = new Rig(); Client client = r.client(); client.create();
+    JsonObject correction = client.ready(false);
+    r.now.addAndGet(8001); r.service.tick();
+    assertEquals(text(client.landed(correction, false), "type"), "ACK");
+
+    Rig expired = new Rig(); Client late = expired.client(); late.create();
+    JsonObject stale = late.ready(false);
+    expired.now.addAndGet(PartyService.CORRECTION_REPORT_TIMEOUT_MS + 1);
+    expired.service.tick();
+    error(late.landed(stale, false), "STALE_CORRECTION");
   }
 
   @Test public void negotiatedSurfaceSelectionRequiresPreparationEchoAndDoesNotAffectOtherViewers() throws Exception

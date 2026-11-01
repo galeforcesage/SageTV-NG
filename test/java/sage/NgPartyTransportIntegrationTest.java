@@ -648,6 +648,7 @@ public class NgPartyTransportIntegrationTest
           while (pending.get() == null && System.nanoTime() < until) Thread.sleep(10);
           assertNotNull(pending.get());
           pending.get().watchCode = VideoFrame.WATCH_FAILED_UNKNOWN;
+          pending.get().complete();
         }
         long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (client.observed.stream().noneMatch(m -> "PREPARATION_RESULT".equals(m.get("type").getAsString()))

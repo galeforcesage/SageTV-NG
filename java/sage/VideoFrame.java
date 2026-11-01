@@ -4687,6 +4687,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     final MediaFile media;
     final String id;
     final java.util.function.BooleanSupplier authorized;
+    private final java.util.concurrent.CountDownLatch completion = new java.util.concurrent.CountDownLatch(1);
     volatile boolean cancelled, held = true, loaded;
     volatile int watchCode = WATCH_OK;
     volatile long generation = -1;
@@ -4694,6 +4695,9 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     PartyPreparation(MediaFile media, String id, java.util.function.BooleanSupplier authorized)
     { this.media = media; this.id = id; this.authorized = authorized; }
     boolean active() { return !cancelled && authorized.getAsBoolean(); }
+    void complete() { completion.countDown(); }
+    boolean awaitCompletion(long timeoutMs) throws InterruptedException
+    { return completion.await(Math.max(0, timeoutMs), java.util.concurrent.TimeUnit.MILLISECONDS); }
   }
 
   /** Uses ordinary Watch checks but tags the asynchronous jobs and suppresses automatic play. */
@@ -4708,6 +4712,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     partyPreparation = preparation;
     if (!partyProgressOwned || !preparation.active()) preparation.watchCode = WATCH_FAILED_INSUFFICIENT_PERMISSIONS;
     else preparation.watchCode = watchPartyMedia(preparation);
+    if (preparation.watchCode != WATCH_OK) preparation.complete();
     return preparation;
   }
 
@@ -4718,24 +4723,35 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
 
   private void holdPartyPreparation(PartyPreparation preparation)
   {
-    if (!preparation.active())
-    { preparation.watchCode = WATCH_FAILED_USER_REJECTED_CONFLICT; return; }
-    MiniPlayer mp = getPartyPlayer();
-    if (mp == null || currFile != preparation.media)
-    { preparation.watchCode = WATCH_FAILED_NO_MEDIA_PLAYER_FOR_FILE; return; }
-    long generation = mp.getPartyPlaybackGeneration();
-    if (!mp.pause() || player != mp || currFile != preparation.media
-        || mp.getPartyPlaybackGeneration() != generation || mp.getState() != MediaPlayer.PAUSE_STATE)
-    { preparation.watchCode = WATCH_FAILED_UNKNOWN; return; }
-    preparation.generation = generation;
-    preparation.loaded = true;
+    try
+    {
+      if (!preparation.active())
+      { preparation.watchCode = WATCH_FAILED_USER_REJECTED_CONFLICT; return; }
+      MiniPlayer mp = getPartyPlayer();
+      if (mp == null || currFile != preparation.media)
+      { preparation.watchCode = WATCH_FAILED_NO_MEDIA_PLAYER_FOR_FILE; return; }
+      long generation = mp.getPartyPlaybackGeneration();
+      if (!mp.pause() || player != mp || currFile != preparation.media
+          || mp.getPartyPlaybackGeneration() != generation || mp.getState() != MediaPlayer.PAUSE_STATE)
+      { preparation.watchCode = WATCH_FAILED_UNKNOWN; return; }
+      preparation.generation = generation;
+      preparation.loaded = true;
+    }
+    finally
+    {
+      preparation.complete();
+    }
   }
 
   /** Cancels stale queued preparation without sending playback Stop. */
   void cancelPartyPreparation()
   {
     PartyPreparation preparation = partyPreparation;
-    if (preparation != null) preparation.cancelled = true;
+    if (preparation != null)
+    {
+      preparation.cancelled = true;
+      preparation.complete();
+    }
     // Keep an already-loaded stage held until an explicit canonical transition or normal Watch.
   }
 

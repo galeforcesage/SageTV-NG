@@ -21,6 +21,9 @@ import static sage.party.PartyProtocol.*;
  */
 public final class PartyService
 {
+  public static final long PREPARATION_TIMEOUT_MS = 15000;
+  static final long CORRECTION_REPORT_TIMEOUT_MS = 12000;
+
   /** A server-authorized renderer, not a physical socket or advertised device identity. */
   public interface Peer
   {
@@ -722,6 +725,7 @@ public final class PartyService
   {
     if (m.peer != null) { m.peer.cancelScheduled(); m.peer.releaseMediaAdmission(); m.peer.cancelPreparation(); }
     m.preparationId = null; m.preparationPending = false;
+    m.surfacePrepared = false;
     m.status = "PREPARING"; m.clock.reset(); m.probes.clear(); m.delivery = null;
     m.lastReport = m.lastSample = m.correctionAt = -1; m.correctionId = null; m.failures.clear();
   }
@@ -1251,7 +1255,9 @@ public final class PartyService
           roster(p, m);
         }
         if (m.peer == null && now - m.disconnectedAt > GRACE_MS) { remove(p, m, false, now); continue; }
-        if (("PREPARING".equals(m.status) || m.preparationPending || m.selectionPending) && now - m.preparingSince > 60000)
+        boolean unresolvedPreparation = m.preparationPending || m.selectionPending
+            || "PREPARING".equals(m.status) && !m.surfacePrepared;
+        if (unresolvedPreparation && now - m.preparingSince > PREPARATION_TIMEOUT_MS)
         {
           JsonObject error = envelope("ERROR");
           error.addProperty("code", "PREPARATION_EXPIRED");
@@ -1259,7 +1265,7 @@ public final class PartyService
           remove(p, m, false, now);
           continue;
         }
-        if (m.correctionId != null && now - m.correctionAt > 8000)
+        if (m.correctionId != null && now - m.correctionAt > CORRECTION_REPORT_TIMEOUT_MS)
         { m.correctionId = null; failed(m, now); roster(p, m); }
         if (Set.of("READY", "PLAYING", "PAUSED").contains(m.status)
             && (!m.clock.confident(now) || m.lastReport >= 0 && now - m.lastReport > 10000))
