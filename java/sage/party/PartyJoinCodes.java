@@ -9,17 +9,18 @@ import static sage.party.PartyProtocol.*;
 /** Server-local short confirmation codes; never independent authentication credentials. */
 final class PartyJoinCodes
 {
-  static final long LIFETIME_MS = 120000, ROTATE_COOLDOWN_MS = 10000;
-  record Grant(String code, long expiresAt) {}
+  static final long LIFETIME_MS = PartyService.PARTY_LIFETIME_MS;
+  static final long ROTATE_COOLDOWN_MS = 10000, REUSE_QUARANTINE_MS = 120000;
+  record Grant(String code, long issuedAt, long expiresAt) {}
   private final SecureRandom random = new SecureRandom();
   private final Map<String, Grant> active = new HashMap<>();
   private final Map<String, Long> retired = new HashMap<>();
 
-  Grant issue(String party, long now)
+  Grant issue(String party, long now, long expiresAt)
   {
     expire(now);
     Grant old = active.get(party);
-    if (old != null && now < old.expiresAt - LIFETIME_MS + ROTATE_COOLDOWN_MS)
+    if (old != null && now < old.issuedAt + ROTATE_COOLDOWN_MS)
       throw new Fault("CODE_ROTATION_COOLDOWN");
     ArrayList<String> free = new ArrayList<>();
     java.util.Set<String> used = new java.util.HashSet<>(retired.keySet());
@@ -30,7 +31,7 @@ final class PartyJoinCodes
       if (!used.contains(candidate)) free.add(candidate);
     }
     if (free.isEmpty()) throw new Fault("JOIN_CODE_UNAVAILABLE");
-    Grant grant = new Grant(free.get(random.nextInt(free.size())), now + LIFETIME_MS);
+    Grant grant = new Grant(free.get(random.nextInt(free.size())), now, expiresAt);
     remove(party, now);
     active.put(party, grant);
     return grant;
@@ -56,7 +57,7 @@ final class PartyJoinCodes
   void remove(String party, long now)
   {
     Grant grant = active.remove(party);
-    if (grant != null) retired.put(grant.code, now + LIFETIME_MS);
+    if (grant != null) retired.put(grant.code, now + REUSE_QUARANTINE_MS);
   }
 
   private void expire(long now)
@@ -64,7 +65,7 @@ final class PartyJoinCodes
     retired.entrySet().removeIf(entry -> entry.getValue() <= now);
     active.entrySet().removeIf(entry -> {
       if (entry.getValue().expiresAt > now) return false;
-      long until = entry.getValue().expiresAt + LIFETIME_MS;
+      long until = entry.getValue().expiresAt + REUSE_QUARANTINE_MS;
       if (until > now) retired.put(entry.getValue().code, until);
       return true;
     });
@@ -73,7 +74,7 @@ final class PartyJoinCodes
   long rotationRetryAfter(String party, long now)
   {
     Grant grant = active.get(party);
-    return grant == null ? 0 : Math.max(0, grant.expiresAt - LIFETIME_MS + ROTATE_COOLDOWN_MS - now);
+    return grant == null ? 0 : Math.max(0, grant.issuedAt + ROTATE_COOLDOWN_MS - now);
   }
 
   void clear() { active.clear(); retired.clear(); }

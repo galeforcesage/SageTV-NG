@@ -66,6 +66,8 @@ public final class GpuGovernor
   private static final String PROP_GPU_INDEX      = "playback/gpu_enhance/gpu_index";
   private static final String PROP_STALE_MS       = "playback/gpu_enhance/session_stale_ms";
   private static final String PROP_REAP_INTERVAL_MS = "playback/gpu_enhance/reap_interval_ms";
+  private static final String PROP_EXTERNAL_YIELD_SETTLE_MS =
+      "playback/gpu_enhance/external_yield_settle_ms";
 
   private static final int  DEFAULT_SOFT_CAP     = 70;
   private static final int  DEFAULT_HARD_CAP     = 85;
@@ -80,6 +82,7 @@ public final class GpuGovernor
   private static final long DEFAULT_VRAM_RESERVE = 512L;
   private static final long DEFAULT_STALE_MS     = 5L * 60L * 1000L;
   private static final long DEFAULT_REAP_INTERVAL_MS = 30L * 1000L;
+  private static final long DEFAULT_EXTERNAL_YIELD_SETTLE_MS = 4000L;
 
   /** Verdict of an admission request. */
   public static final class Admission
@@ -284,11 +287,13 @@ public final class GpuGovernor
           offline, snap, load, whyNot, null);
     }
 
-    // Authority present. The local physical budgets (disk, VRAM, engine pressure)
-    // still bound what the box can sustain, so walk the ladder WITHOUT the local
-    // concurrency ceiling: cross-application concurrency is precisely the decision
-    // we are delegating. The resulting tier is the most the hardware allows.
-    Ladder uncapped = walkLadder(startTier, snap, load, estBitrateKbps, offline, false);
+    // Authority present. Disk and VRAM remain local physical limits, but current
+    // engine pressure may belong to a lower-priority external tenant that the
+    // authority is specifically responsible for yielding. Ignore utilization for
+    // this preflight only, ask the authority, then refresh and enforce every local
+    // budget after an affirmative grant.
+    Ladder uncapped = walkLadder(startTier, withoutUtilization(snap), load,
+        estBitrateKbps, offline, false);
     whyNot.addAll(uncapped.whyNot);
     if (!uncapped.tier.isActive())
       return deny(sessionId, "no tier fits local budgets (" + join(whyNot) + ")");
@@ -327,16 +332,50 @@ public final class GpuGovernor
       return deny(sessionId, "external authority (" + safeName(auth) + ") denied: "
           + decision.getReason());
 
-    // Granted. Never let the arbiter push us above the physical budget: clamp the
-    // granted tier down until it fits the local no-concurrency budgets.
+    // Granted. The authority may have just yielded an external CUDA tenant. Wait
+    // briefly for that release to become visible, then enforce every physical
+    // budget against fresh telemetry before launching ffmpeg.
+    snap = awaitExternalYield(gpuIndex);
     EnhancementTier granted = decision.getTier();
     while (granted.isActive() && checkBudgets(granted, snap, load, estBitrateKbps, offline, false) != null)
       granted = granted.downgrade();
     if (!granted.isActive())
+    {
+      release(sessionId);
       return deny(sessionId, "authority grant " + decision.getTier().token()
-          + " exceeds local budgets");
+          + " did not clear local budgets after yield [" + snap + "]");
+    }
     return registerGrant(sessionId, granted, desired, gpuIndex, estBitrateKbps,
         offline, snap, load, whyNot, "authority: " + safeName(auth), true, true);
+  }
+
+  static GpuSnapshot withoutUtilization(GpuSnapshot snap)
+  {
+    if (snap == null || snap == GpuSnapshot.UNAVAILABLE) return GpuSnapshot.UNAVAILABLE;
+    return new GpuSnapshot(snap.getIndex(), GpuSnapshot.UNKNOWN, GpuSnapshot.UNKNOWN,
+        GpuSnapshot.UNKNOWN, snap.getMemUsedMB(), snap.getMemTotalMB(), snap.getSampledAt());
+  }
+
+  private GpuSnapshot awaitExternalYield(int gpuIndex)
+  {
+    long waitMs = Math.max(0L, Sage.getLong(
+        PROP_EXTERNAL_YIELD_SETTLE_MS, DEFAULT_EXTERNAL_YIELD_SETTLE_MS));
+    long deadline = Sage.time() + waitMs;
+    GpuSnapshot snap;
+    do
+    {
+      GpuMonitor.getInstance().invalidate();
+      snap = GpuMonitor.getInstance().getSnapshot(gpuIndex);
+      if (pressureDenialReason(snap) == null || Sage.time() >= deadline)
+        return snap;
+      try { Thread.sleep(Math.min(250L, Math.max(1L, deadline - Sage.time()))); }
+      catch (InterruptedException e)
+      {
+        Thread.currentThread().interrupt();
+        return snap;
+      }
+    }
+    while (true);
   }
 
   /** Result of a ladder walk: the best admissible tier and why higher tiers failed. */
@@ -465,14 +504,35 @@ public final class GpuGovernor
 
     // Combined GPU/video-engine pressure. CUDA scale/deinterlace load must count
     // even when NVENC/NVDEC counters read zero during process teardown.
+    String pressureDenial = pressureDenialReason(snap);
+    if (pressureDenial != null) return pressureDenial;
+    return null;
+  }
+
+  /**
+   * Current live-pressure reason that should suppress an enhancement offer, or
+   * {@code null} when telemetry is unavailable or below the admission caps.
+   */
+  public String currentOfferPressureDenialReason()
+  {
+    // A machine-wide authority may yield the process causing the pressure. Do
+    // not suppress the offer before that authority has a chance to arbitrate.
+    if (externalAuthority != null) return null;
+    int gpuIndex = Sage.getInt(PROP_GPU_INDEX, 0);
+    return pressureDenialReason(GpuMonitor.getInstance().getSnapshot(gpuIndex));
+  }
+
+  static String pressureDenialReason(GpuSnapshot snap)
+  {
+    if (snap == null) return null;
     int pressure = snap.getVideoEnginePressurePct();
-    if (pressure >= 0)
-    {
-      int hard = Sage.getInt(PROP_HARD_CAP, DEFAULT_HARD_CAP);
-      int soft = Sage.getInt(PROP_SOFT_CAP, DEFAULT_SOFT_CAP);
-      if (pressure >= hard) return "video engine at " + pressure + "% (hard cap " + hard + "%)";
-      if (pressure >= soft) return "video engine at " + pressure + "% (soft cap " + soft + "%)";
-    }
+    if (pressure < 0) return null;
+    int hard = Sage.getInt(PROP_HARD_CAP, DEFAULT_HARD_CAP);
+    int soft = Sage.getInt(PROP_SOFT_CAP, DEFAULT_SOFT_CAP);
+    if (pressure >= hard)
+      return "video engine at " + pressure + "% (hard cap " + hard + "%)";
+    if (pressure >= soft)
+      return "video engine at " + pressure + "% (soft cap " + soft + "%)";
     return null;
   }
 

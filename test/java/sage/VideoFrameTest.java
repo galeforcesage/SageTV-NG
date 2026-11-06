@@ -31,6 +31,19 @@ public class VideoFrameTest
   }
 
   @Test
+  public void testPartyPreparationUsesCanonicalTargetInsteadOfSavedResume()
+  {
+    MediaFile mediaFile = mock(MediaFile.class);
+    when(mediaFile.getRecordTime()).thenReturn(100000L);
+    when(mediaFile.getRecordEnd()).thenReturn(900000L);
+    VideoFrame.PartyPreparation preparation =
+        new VideoFrame.PartyPreparation(mediaFile, "prepare", () -> true, 12345L);
+
+    assertEquals(VideoFrame.selectInitialWatchTarget(mediaFile, false, false, preparation), 112345L,
+        "Party preparation must stage at the canonical relative position");
+  }
+
+  @Test
   public void testNgLoadFailureDoesNotAutoTuneLiveTv()
   {
     assertEquals(VideoFrame.suppressDefaultWatchAfterFailure(true, true), true,
@@ -40,6 +53,34 @@ public class VideoFrameTest
     assertEquals(VideoFrame.suppressDefaultWatchAfterFailure(false, true), false,
         "Legacy default preview behavior remains unchanged");
     assertEquals(VideoFrame.suppressDefaultWatchAfterFailure(false, false), false);
+  }
+
+  @Test
+  public void testPartyBitrateFallsBackToRecordedBytesForGrowingMedia()
+  {
+    MediaFile mediaFile = mock(MediaFile.class);
+    sage.media.format.ContainerFormat format = mock(sage.media.format.ContainerFormat.class);
+    when(mediaFile.getFileFormat()).thenReturn(format);
+    when(format.getBitrate()).thenReturn(0);
+    when(mediaFile.getNumSegments()).thenReturn(2);
+    when(mediaFile.getDuration(0)).thenReturn(1200000L);
+    when(mediaFile.getDuration(1)).thenReturn(1800000L);
+    when(mediaFile.getSize()).thenReturn(3000000000L);
+
+    assertEquals(VideoFrame.partySourceBitrateKbps(mediaFile), 8000,
+        "Growing recordings with incomplete format metadata must still be Party-ready");
+  }
+
+  @Test
+  public void testPartyBitratePrefersParsedFormatMetadata()
+  {
+    MediaFile mediaFile = mock(MediaFile.class);
+    sage.media.format.ContainerFormat format = mock(sage.media.format.ContainerFormat.class);
+    when(mediaFile.getFileFormat()).thenReturn(format);
+    when(format.getBitrate()).thenReturn(17500000);
+
+    assertEquals(VideoFrame.partySourceBitrateKbps(mediaFile), 17500,
+        "Parsed format bitrate remains authoritative when available");
   }
 
   @Test

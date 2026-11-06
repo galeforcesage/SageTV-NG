@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 import sage.Sage;
+import sage.enhance.GpuGovernor;
 
 /**
  * The runtime registry of {@link ScaleProvider}s and the single place where a
@@ -195,6 +196,13 @@ public final class ScaleProviderRegistry
    */
   public boolean selectedProviderCanUpscale(ScaleRequest probe)
   {
+    String pressureDenial = GpuGovernor.getInstance().currentOfferPressureDenialReason();
+    if (pressureDenial != null)
+    {
+      System.out.println("SCALE_PROVIDER offer-gate: current GPU capacity denies upscale ("
+          + pressureDenial + ") -> not offering upscale (delivering source)");
+      return false;
+    }
     List<ScaleProvider> chain = upscaleChain();
     if (chain.isEmpty())
     {

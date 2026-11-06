@@ -11,7 +11,7 @@ package sage.enhance;
 
 /**
  * Optional external arbiter consulted by {@link GpuGovernor} once a session has
- * already cleared every <i>local</i> admission rule.
+ * cleared every non-preemptible <i>local</i> admission rule.
  *
  * <p>This is the seam that lets a deployment hand the "may a second enhanced
  * session run right now, and at what tier?" decision to something with a wider
@@ -26,13 +26,15 @@ package sage.enhance;
  * <h2>Where it sits in the cascade</h2>
  * The authority is only ever asked about a tier that already passed, in order:
  * the {@link RecordingGuard} veto, feature/plumbing availability, the source
- * height floor, and the local physical budgets (disk write, measured VRAM,
- * video-engine pressure). Those remain <b>local and authoritative</b> &mdash; an
- * authority can only ever <i>narrow</i> the local answer, never widen it past
- * what the box can physically sustain, and it can never overrule the recording
- * veto. What it <i>replaces</i> is the local {@link CapacityCalibrator}
- * concurrency ceiling: cross-application concurrency is exactly the decision a
- * machine-wide arbiter is better placed to make than a single calibrated number.
+ * height floor, disk write budget and measured VRAM. Existing video-engine
+ * pressure is intentionally evaluated <i>after</i> an affirmative authority
+ * grant because it may belong to the lower-priority tenant the authority just
+ * yielded. Fresh telemetry must still clear every local physical budget before
+ * ffmpeg launches. The authority can never overrule the recording veto or admit
+ * work that remains physically unsafe after arbitration. What it replaces is the
+ * local {@link CapacityCalibrator} concurrency ceiling: cross-application
+ * concurrency is exactly the decision a machine-wide arbiter is better placed
+ * to make than a single calibrated number.
  *
  * <h2>Fail-open contract</h2>
  * Live TV must keep working when the arbiter is unreachable. Any
@@ -69,14 +71,14 @@ public interface ExternalAdmissionAuthority
   String name();
 
   /**
-   * Arbitrate a locally-admissible session.
+   * Arbitrate a session that cleared all non-preemptible local budgets.
    *
    * @param sessionId      the governor's session id (stable for the session)
    * @param locallyGranted the highest tier the local cascade would grant with the
-   *                       concurrency ceiling removed &mdash; i.e. the ceiling the
-   *                       box can physically sustain. The authority may grant this
-   *                       tier, a lower one, or deny; it must never be asked to
-   *                       reason above this.
+   *                       concurrency ceiling and preemptible engine pressure
+   *                       removed. The authority may grant this tier, a lower one,
+   *                       or deny; after a grant the governor refreshes telemetry
+   *                       and still requires every physical budget to clear.
    * @param sourceHeight   source frame height, for telemetry/policy
    * @param estBitrateKbps estimated output bitrate, for telemetry/policy
    * @param offline        true for batch ({@code Ministry}) sessions

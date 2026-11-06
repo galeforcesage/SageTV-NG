@@ -2,6 +2,11 @@ package sage;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import org.testng.annotations.BeforeClass;
@@ -14,12 +19,35 @@ public class NativePlaybackOwnershipBridgeTest
 {
   @BeforeClass public void initializeServerStatics() throws Throwable { TestUtils.initializeSageTVForTesting(); }
 
+  static final class Pair implements AutoCloseable
+  {
+    final Socket bridge;
+    final SocketChannel accepted;
+
+    Pair() throws Exception
+    {
+      try (ServerSocketChannel listener = ServerSocketChannel.open())
+      {
+        listener.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+        bridge = new Socket();
+        bridge.connect(listener.getLocalAddress());
+        accepted = listener.accept();
+      }
+    }
+
+    @Override public void close() throws Exception
+    {
+      bridge.close();
+      accepted.close();
+    }
+  }
+
   private static void field(Object target, Class<?> type, String name, Object value) throws Exception
   {
     Field field = type.getDeclaredField(name); field.setAccessible(true); field.set(target, value);
   }
 
-  private static MiniClientSageRenderer renderer(PartyMediaAdmissionBridgeTest.Pair pair) throws Exception
+  private static MiniClientSageRenderer renderer(Pair pair) throws Exception
   {
     MiniClientSageRenderer renderer = mock(MiniClientSageRenderer.class, CALLS_REAL_METHODS);
     field(renderer, MiniClientSageRenderer.class, "partySurfaceLock", new Object());
@@ -41,7 +69,7 @@ public class NativePlaybackOwnershipBridgeTest
 
   @Test public void actualOpenBoundaryPublishesBeforeClientReplyAndFailureRevokes() throws Exception
   {
-    try (PartyMediaAdmissionBridgeTest.Pair pair = new PartyMediaAdmissionBridgeTest.Pair())
+    try (Pair pair = new Pair())
     {
       MiniClientSageRenderer renderer = renderer(pair);
       MiniPlayer player = spy(new MiniPlayer());
@@ -92,8 +120,7 @@ public class NativePlaybackOwnershipBridgeTest
   @Test public void realOpenUrlWireWaitDoesNotBlockProspectiveClaim() throws Exception
   {
     java.util.concurrent.ExecutorService worker = java.util.concurrent.Executors.newSingleThreadExecutor();
-    try (PartyMediaAdmissionBridgeTest.Pair gfx = new PartyMediaAdmissionBridgeTest.Pair();
-        PartyMediaAdmissionBridgeTest.Pair mediaSocket = new PartyMediaAdmissionBridgeTest.Pair())
+    try (Pair gfx = new Pair(); Pair mediaSocket = new Pair())
     {
       MiniClientSageRenderer renderer = renderer(gfx);
       MiniPlayer player = new MiniPlayer();
@@ -134,8 +161,7 @@ public class NativePlaybackOwnershipBridgeTest
     AtomicLong now = new AtomicLong(100000);
     NativePlaybackOwnershipBridge.Registry registry = new NativePlaybackOwnershipBridge.Registry(now::get);
     AtomicBoolean current = new AtomicBoolean(true); Object player = new Object();
-    try (PartyMediaAdmissionBridgeTest.Pair pair = new PartyMediaAdmissionBridgeTest.Pair();
-        PartyMediaAdmissionBridgeTest.Pair other = new PartyMediaAdmissionBridgeTest.Pair())
+    try (Pair pair = new Pair(); Pair other = new Pair())
     {
       MiniClientSageRenderer renderer = renderer(pair);
       assertNull(registry.claim(pair.bridge), "An existing unassociated producer has no intent");
@@ -171,8 +197,7 @@ public class NativePlaybackOwnershipBridgeTest
     AtomicLong now = new AtomicLong(100000);
     NativePlaybackOwnershipBridge.Registry registry = new NativePlaybackOwnershipBridge.Registry(now::get);
     AtomicBoolean current = new AtomicBoolean(true); Object player = new Object();
-    try (PartyMediaAdmissionBridgeTest.Pair pair = new PartyMediaAdmissionBridgeTest.Pair();
-        PartyMediaAdmissionBridgeTest.Pair other = new PartyMediaAdmissionBridgeTest.Pair())
+    try (Pair pair = new Pair(); Pair other = new Pair())
     {
       MiniClientSageRenderer renderer = renderer(pair);
       doReturn(false).when(renderer).hasClientCapability(NativePlaybackOwnershipBridge.CAPABILITY);
@@ -215,7 +240,7 @@ public class NativePlaybackOwnershipBridgeTest
 
   @Test public void generationSurfaceAndAdmissionTransitionsCannotReviveOldContexts() throws Exception
   {
-    try (PartyMediaAdmissionBridgeTest.Pair pair = new PartyMediaAdmissionBridgeTest.Pair())
+    try (Pair pair = new Pair())
     {
       MiniClientSageRenderer renderer = renderer(pair);
       MiniPlayer player = spy(new MiniPlayer());
@@ -256,7 +281,7 @@ public class NativePlaybackOwnershipBridgeTest
     NativePlaybackOwnershipBridge.Registry registry = new NativePlaybackOwnershipBridge.Registry(() -> 100000);
     AtomicBoolean current = new AtomicBoolean(true);
     java.util.concurrent.ExecutorService workers = java.util.concurrent.Executors.newFixedThreadPool(2);
-    try (PartyMediaAdmissionBridgeTest.Pair pair = new PartyMediaAdmissionBridgeTest.Pair())
+    try (Pair pair = new Pair())
     {
       MiniClientSageRenderer renderer = renderer(pair);
       Object[] players = new Object[80];

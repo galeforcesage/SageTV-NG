@@ -1868,6 +1868,29 @@ public class FFMPEGTranscoder implements TranscodeEngine
   }
 
   /**
+   * Normalizes large timestamp steps in a growing MPEG-TS source before a native
+   * direct-push client sees them. OTA recordings can reset PTS/DTS at a broadcast
+   * boundary; copied AC-3 timestamps then make the Android decoder jump forward
+   * even when no SageTV seek or flush occurred.
+   */
+  @SuppressWarnings({"rawtypes","unchecked"})
+  void maybeNormalizeActiveTsPushTimestamps(java.util.ArrayList xcodeParamsVec)
+  {
+    if (!activeFile || !directPushSession || outputFile != null || sourceFormat == null
+        || !sage.media.format.MediaFormat.MPEG2_TS.equals(sourceFormat.getFormatName())
+        || xcodeParamsVec.contains("-copyts")
+        || xcodeParamsVec.contains("-dts_delta_threshold"))
+      return;
+    int threshold = Sage.getInt("ffmpeg/live_ts_discontinuity_threshold_seconds", 2);
+    int inputIndex = xcodeParamsVec.indexOf("-i");
+    if (threshold <= 0 || inputIndex < 0) return;
+    xcodeParamsVec.add(inputIndex, "-dts_delta_threshold");
+    xcodeParamsVec.add(inputIndex + 1, Integer.toString(threshold));
+    if (Sage.DBG) System.out.println("FFMPEGTranscoder: active MPEG-TS direct push — added "
+        + "-dts_delta_threshold " + threshold + " to normalize source timestamp resets");
+  }
+
+  /**
    * Protocol 2.1 (option B): when a surface-aware target audio codec/channels
    * were supplied via the XCODE_SETUP ";acodec=;ac=" params, rewrite the audio
    * codec + channel count + bitrate in the assembled command. Realizes the
@@ -3152,7 +3175,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
       return false;
     argv.set(codecIndex + 1, "libx264");
 
-    String[] nvencOnly = { "-rc", "-cq", "-spatial-aq", "-temporal-aq",
+    String[] nvencOnly = { "-rc", "-rc:v", "-cq", "-spatial-aq", "-temporal-aq",
         "-multipass", "-forced-idr", "-surfaces", "-rc-lookahead" };
     for (int n = 0; n < nvencOnly.length; n++)
     {
@@ -3163,6 +3186,18 @@ public class FFMPEGTranscoder implements TranscodeEngine
           argv.remove(i + 1);
           argv.remove(i);
         }
+      }
+    }
+
+    // NVENC accepts "auto" as a level value; libx264's automatic/default
+    // behavior is selected by omitting the option instead.
+    for (int i = argv.size() - 2; i > input; i--)
+    {
+      if ("-level:v".equals(String.valueOf(argv.get(i)))
+          && "auto".equalsIgnoreCase(String.valueOf(argv.get(i + 1))))
+      {
+        argv.remove(i + 1);
+        argv.remove(i);
       }
     }
 
@@ -5205,11 +5240,12 @@ public class FFMPEGTranscoder implements TranscodeEngine
       policyCeilingKbps = pushPlan.maxrateKbps;
       currVideoBitrateKbps = videoKbps;
       currAudioBitrateKbps = audioKbps;
-      currFps = MMC.getInstance().isNTSCVideoFormat() ? 30 : 25;
+      double pushTargetFps = getH264PushFps(srcVideo);
+      currFps = Math.max(1, (int) Math.ceil(pushTargetFps));
       xcodeParamsVec.add("-s");
       xcodeParamsVec.add(targetWidth + "x" + targetHeight);
       xcodeParamsVec.add("-r");
-      xcodeParamsVec.add(MMC.getInstance().isNTSCVideoFormat() ? "29.97" : "25");
+      xcodeParamsVec.add(String.format(java.util.Locale.US, "%.3f", pushTargetFps));
       xcodeParamsVec.add("-b:v");
       xcodeParamsVec.add(Integer.toString(currVideoBitrateKbps * 1000));
       // Audio: AAC-LC stereo -- universally decodable by H.264-capable push
@@ -6065,6 +6101,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // a video-copy output and re-base timestamps so the client media clock can't
     // rewind mid-stream (freeze). Last argv edit, so it sees the final codecs.
     maybeFixNativeCopyPushCommand(xcodeParamsVec);
+    maybeNormalizeActiveTsPushTimestamps(xcodeParamsVec);
     updateVideoBitrateAdjustable(xcodeParamsVec);
     String[] xcodeParamArray = (String[]) xcodeParamsVec.toArray(Pooler.EMPTY_STRING_ARRAY);
     // Always log the FFmpeg command line for diagnosability (disable with xcode_cmdline_debug=FALSE)
@@ -8069,6 +8106,20 @@ public class FFMPEGTranscoder implements TranscodeEngine
     if (srcFps > 0 && srcFps < lanCeiling)
       return (int) Math.ceil(srcFps);
     return lanCeiling;
+  }
+
+  /**
+   * Output cadence for the modern H.264 MPEG-TS path. LAN clients preserve the
+   * source cadence up to the configured LAN ceiling; WAN clients retain the
+   * historical NTSC/PAL ceiling.
+   */
+  double getH264PushFps(sage.media.format.VideoFormat srcVideo)
+  {
+    double ceiling = localClient
+        ? Sage.getInt("ffmpeg/dynamic_max_fps_lan", 60)
+        : (MMC.getInstance().isNTSCVideoFormat() ? 29.97 : 25.0);
+    double sourceFps = (srcVideo == null) ? 0.0 : srcVideo.getFps();
+    return sourceFps > 0.0 ? Math.min(sourceFps, ceiling) : ceiling;
   }
 
   /**

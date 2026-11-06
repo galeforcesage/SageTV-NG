@@ -8,6 +8,7 @@ import java.util.concurrent.TimeUnit;
 import sage.epg.sd.gson.JsonObject;
 import sage.party.PartyProtocol;
 import sage.party.PartyService;
+import sage.party.PartyPlaybackDirective;
 
 /**
  * Party Mode's authenticated NG renderer adapter. No bridge authority or shared media path.
@@ -18,12 +19,25 @@ final class NgPartyConnection implements PartyService.Peer
   private static final long ORIGIN = System.nanoTime();
   private static final PartyService SERVICE = new PartyService(
       () -> (System.nanoTime() - ORIGIN) / 1000000,
-      Sage.getBoolean("party/enabled", false), Sage.getInt("party/max_budget_kbps", 100000),
-      Sage.getInt("party/max_transcodes", 1), Sage.getLong("party/live_edge_delay_ms", 3000));
+      Sage.getBoolean("party/enabled", false), Sage.getLong("party/live_edge_delay_ms", 3000));
   private static final ScheduledThreadPoolExecutor TIMER = new ScheduledThreadPoolExecutor(1, r -> {
     Thread t = new Thread(r, "PartyMaintenance"); t.setDaemon(true); return t;
   });
-  static { TIMER.scheduleAtFixedRate(SERVICE::tick, 1, 1, TimeUnit.SECONDS); }
+  static { TIMER.scheduleAtFixedRate(() -> runMaintenance(SERVICE), 1, 1, TimeUnit.SECONDS); }
+
+  static void runMaintenance(PartyService service)
+  {
+    try
+    {
+      service.tick();
+    }
+    catch (RuntimeException failure)
+    {
+      System.out.println("PartyMode maintenance outcome=TICK_FAILED exception="
+          + failure.getClass().getName() + " message=" + failure.getMessage());
+      failure.printStackTrace(System.err);
+    }
+  }
 
   private final MiniClientSageRenderer renderer;
   private final UIManager ui;
@@ -36,18 +50,7 @@ final class NgPartyConnection implements PartyService.Peer
   private final java.util.concurrent.CountDownLatch admissionReady = new java.util.concurrent.CountDownLatch(1);
   private String pendingHello;
   private volatile long preparationGeneration;
-  private volatile SurfaceCandidate surfaceCandidate;
-  private volatile String selectedSurfaceId;
-  private final java.security.SecureRandom contextRandom = new java.security.SecureRandom();
-  private volatile java.nio.channels.SocketChannel admissionControl;
-  private volatile boolean admissionEventFailure;
-  private final java.util.concurrent.atomic.AtomicLong surfaceGeneration = new java.util.concurrent.atomic.AtomicLong();
-  private final Object surfaceStateLock = new Object();
-  private record SurfaceCandidate(String id, long operation, String principal, long pathGeneration,
-      VideoFrame.PartySurfaceFence fence, sage.client.PlaybackSurfaceSet surfaces) {}
   private volatile boolean closed;
-  private volatile MiniPlayer admittedPushPlayer;
-  private volatile long admittedPushGeneration = -1;
   private java.util.concurrent.ScheduledFuture<?> scheduled;
   private long scheduleGeneration;
 
@@ -185,8 +188,6 @@ final class NgPartyConnection implements PartyService.Peer
     closed = true;
     admissionReady.countDown();
     synchronized (admissionLock) { pendingHello = null; }
-    restoreSurface();
-    releaseMediaAdmission();
     cancelScheduled();
     service.disconnected(this);
     if (ui.getVideoFrame() != null) ui.getVideoFrame().setPartyProgressOwned(false);
@@ -207,6 +208,7 @@ final class NgPartyConnection implements PartyService.Peer
 
   @Override public String principal() { return renderer.getPartyPrincipal(); }
   @Override public Set<String> capabilities() { return renderer.getClientCapabilities(); }
+  @Override public boolean localConnection() { return renderer.isLocalConnection(); }
 
   @Override public int currentMediaFileId()
   {
@@ -277,6 +279,9 @@ final class NgPartyConnection implements PartyService.Peer
     return position;
   }
 
+  @Override public long commercialEnd(int media, long position, boolean automatic)
+  { return ui.getVideoFrame().partyCommercialEnd(media, position, automatic); }
+
   @Override public PartyService.Delivery delivery(int media)
   {
     VideoFrame vf = ui.getVideoFrame();
@@ -284,15 +289,13 @@ final class NgPartyConnection implements PartyService.Peer
     if (mf == null || mf.getID() != media || duration(media) <= 0
         || (vf.getPlayerState() != MediaPlayer.PAUSE_STATE && vf.getPlayerState() != MediaPlayer.PLAY_STATE))
       throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
-    if (!mediaAdmitted(media)) throw new PartyProtocol.Fault("MEDIA_ADMISSION_UNCONFIRMED");
     MiniPlayer push = "push".equals(renderer.getCurrentSurfaceDeliveryMode()) ? vf.getPartyPlayer() : null;
     long generation = push == null ? -1 : push.getPartyPlaybackGeneration();
     PartyService.Delivery result = vf.getPartyDelivery(renderer);
     if (push != null)
     {
       if (vf.getPartyPlayer() != push || push.getPartyPlaybackGeneration() != generation)
-        throw new PartyProtocol.Fault("MEDIA_ADMISSION_UNCONFIRMED");
-      admittedPushPlayer = push; admittedPushGeneration = generation;
+        throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
     }
     return result;
   }
@@ -316,93 +319,7 @@ final class NgPartyConnection implements PartyService.Peer
     return path;
   }
 
-  @Override public JsonObject mediaAdmission(int media)
-  {
-    MediaFile mf = ui.getVideoFrame().getCurrFile();
-    if (mf == null || mf.getID() != media) throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
-    MiniPlayer player = ui.getVideoFrame().getPartyPlayer();
-    if (player == null) throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
-    long playbackGeneration = player.getPartyPlaybackGeneration();
-    long pathGeneration = renderer.getPartyPathGeneration();
-    java.nio.channels.SocketChannel control = renderer.partyControlChannel();
-    byte[] bytes = new byte[24]; contextRandom.nextBytes(bytes);
-    String contextId = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-    JsonObject result = PartyProtocol.envelope("MEDIA_ADMISSION_HANDLE");
-    result.addProperty("handle", ui.getVideoFrame().issuePartyMediaAdmission(renderer, this, reason -> {
-      JsonObject event = PartyProtocol.envelope("MEDIA_ADMISSION_REVOKED");
-      event.addProperty("contextId", contextId); event.addProperty("reason", reason);
-      queueAdmissionRevocation(event);
-    }));
-    if (ui.getVideoFrame().getPartyPlayer() != player || player.getPartyPlaybackGeneration() != playbackGeneration
-        || renderer.getPartyPathGeneration() != pathGeneration)
-    { releaseMediaAdmission(); throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY"); }
-    result.addProperty("contextId", contextId);
-    result.addProperty("playbackGeneration", playbackGeneration);
-    result.addProperty("pathGeneration", pathGeneration);
-    result.addProperty("expiresAtServerMonoMs",
-        NgPartyMediaAdmission.INSTANCE.expiresAt(this, result.get("handle").getAsString()));
-    result.addProperty("expiresInMs", 60000);
-    result.addProperty("mediaFileId", media);
-    result.addProperty("mode", renderer.getCurrentSurfaceDeliveryMode());
-    admissionControl = control;
-    return result;
-  }
-
-  private void queueAdmissionRevocation(JsonObject event)
-  {
-    if (closed) return;
-    try
-    {
-      output.execute(() -> {
-        if (closed) return;
-        try { renderer.sendSetPropertyAsync(PartyProtocol.PROPERTY, event.toString()); }
-        catch (java.io.IOException e) { failTransport("ADMISSION_EVENT_IO"); }
-      });
-    }
-    catch (java.util.concurrent.RejectedExecutionException e)
-    { admissionEventFailure = true; System.out.println("PartyMode transport outcome=ADMISSION_EVENT_BACKPRESSURE"); }
-  }
-
-  @Override public void maintenance()
-  {
-    NgPartyMediaAdmission.INSTANCE.maintenance();
-    if (admissionEventFailure) failTransport("ADMISSION_EVENT_BACKPRESSURE");
-  }
-
-  @Override public void describeMediaAdmission(JsonObject reply)
-  {
-    java.nio.channels.SocketChannel control = admissionControl;
-    PartyMediaAdmissionBridge.Context context = new PartyMediaAdmissionBridge.Context(
-        PartyProtocol.text(reply, "contextId"), PartyProtocol.text(reply, "serverEpoch"),
-        PartyProtocol.text(reply, "sessionHandle"), reply.get("mediaFileId").getAsInt(),
-        PartyProtocol.text(reply, "mode"), reply.get("playbackGeneration").getAsLong(),
-        reply.get("pathGeneration").getAsLong(), reply.get("expiresAtServerMonoMs").getAsLong(),
-        PartyProtocol.text(reply, "requestId"), reply.get("requestSeq").getAsLong());
-    NgPartyMediaAdmission.INSTANCE.describe(this, PartyProtocol.text(reply, "handle"), context,
-        socket -> !closed && principal() != null && renderer.ownsPartyControlSocket(control, socket));
-  }
-
-  @Override public boolean mediaAdmitted(int media)
-  {
-    VideoFrame vf = ui.getVideoFrame();
-    MediaFile mf = vf.getCurrFile();
-    MiniPlayer admitted = admittedPushPlayer;
-    long generation = admittedPushGeneration;
-    return !closed && principal() != null && mf != null && mf.getID() == media
-        && (vf.getPlayerState() == MediaPlayer.PAUSE_STATE || vf.getPlayerState() == MediaPlayer.PLAY_STATE)
-        && ("push".equals(renderer.getCurrentSurfaceDeliveryMode())
-            ? vf.hasPartyPushAdmission() && (admitted == null
-                || vf.getPartyPlayer() == admitted && admitted.getPartyPlaybackGeneration() == generation)
-            : NgPartyMediaAdmission.INSTANCE.confirmed(this));
-  }
-
-  @Override public void releaseMediaAdmission()
-  {
-    admittedPushPlayer = null; admittedPushGeneration = -1;
-    NgPartyMediaAdmission.INSTANCE.revoke(this);
-  }
-
-  @Override public void prepare(int media, String id)
+  @Override public void prepare(int media, String id, long positionMs)
   {
     duration(media);
     String principal = principal();
@@ -412,17 +329,13 @@ final class NgPartyConnection implements PartyService.Peer
       preparation.execute(() -> {
         java.util.function.BooleanSupplier authorized = () -> !closed
             && preparationGeneration == generation && principal != null && principal.equals(principal())
-            && capabilities().containsAll(PartyProtocol.REQUIRED) && capabilities().contains("PARTY_PREPARE_V1");
+            && capabilities().containsAll(PartyProtocol.REQUIRED);
         if (!authorized.getAsBoolean()) return;
         MediaFile target = preparationMedia(media);
         if (target == null)
         { service.preparationResult(this, id, VideoFrame.WATCH_FAILED_FILES_NOT_ON_DISK, -1); return; }
-        long pathGeneration = renderer.getPartyPathGeneration();
-        java.util.function.BooleanSupplier pathAuthorized = () -> authorized.getAsBoolean()
-            && renderer.getPartyPathGeneration() == pathGeneration;
-        VideoFrame.PartyPreparation stage = renderer.hasPartySurface()
-            ? ui.getVideoFrame().preparePartyMedia(target, id, pathAuthorized, true)
-            : ui.getVideoFrame().preparePartyMedia(target, id, pathAuthorized);
+        VideoFrame.PartyPreparation stage =
+            ui.getVideoFrame().preparePartyMedia(target, id, authorized, positionMs);
         awaitPreparation(stage, monotonicMs.getAsLong() + PartyService.PREPARATION_TIMEOUT_MS, generation);
       });
     }
@@ -443,7 +356,10 @@ final class NgPartyConnection implements PartyService.Peer
     else if (!stage.active())
       service.preparationResult(this, stage.id, VideoFrame.WATCH_FAILED_USER_REJECTED_CONFLICT, -1);
     else if (ui.getVideoFrame().isPartyPreparationLoaded(stage))
+    {
+      ui.getVideoFrame().presentPartyPreparation(stage);
       service.preparationResult(this, stage.id, VideoFrame.WATCH_OK, stage.generation);
+    }
     else
       service.preparationResult(this, stage.id, VideoFrame.WATCH_FAILED_UNKNOWN, -1);
   }
@@ -454,8 +370,8 @@ final class NgPartyConnection implements PartyService.Peer
     if (ui.getVideoFrame() != null) ui.getVideoFrame().cancelPartyPreparation();
   }
 
-  @Override public PartyService.Delivery plan(int media)
-  { return plan(media, renderer.getPlaybackSurfaces(), renderer.hasPartySurface()); }
+  PartyService.Delivery plan(int media)
+  { return plan(media, renderer.getPlaybackSurfaces(), false); }
 
   PartyService.Delivery plan(int media, sage.client.PlaybackSurfaceSet surfaces)
   { return plan(media, surfaces, true); }
@@ -479,75 +395,17 @@ final class NgPartyConnection implements PartyService.Peer
             renderer.getCurrentClientAudioLanguage(), renderer.getClientConstraints(), conditioned);
     if (ranked.isEmpty()) throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
     sage.client.PlaybackDecisionEngine.SurfaceDecision winner = ranked.get(0);
+    int selectedKbps = Math.max(bitrate, winner.decision.targetBitrateKbps);
     return new PartyService.Delivery(winner.surface.getId(), winner.chosenDeliveryMode,
         winner.decision.targetVideoCodec, winner.decision.targetAudioCodec,
-        (int)Math.min(Integer.MAX_VALUE, 2L * Math.max(bitrate, winner.decision.targetBitrateKbps)),
+        (int)Math.min(Integer.MAX_VALUE, 2L * selectedKbps), selectedKbps,
         winner.decision.decision != sage.client.PlaybackDecisionEngine.Decision.DIRECT_PLAY,
         winner.surface.getRoute(), winner.chosenXcodeMode, winner.decision.targetContainer);
   }
 
-  @Override public void selectSurface(int media, String surface, String id)
-  {
-    if (closed || principal() == null) throw new PartyProtocol.Fault("NOT_AVAILABLE");
-    VideoFrame.PartySurfaceFence fence = ui.getVideoFrame().partySurfaceFence();
-    String principal = principal();
-    long operation = surfaceGeneration.incrementAndGet();
-    long path = renderer.getPartyPathGeneration();
-    try
-    {
-      preparation.execute(() -> {
-        try
-        {
-          sage.client.PlaybackSurfaceSet surfaces = renderer.queryPartySurface(surface);
-          PartyService.Delivery plan = plan(media, surfaces);
-          if (closed || surfaceGeneration.get() != operation) return;
-          surfaceCandidate = new SurfaceCandidate(id, operation, principal, path, fence, surfaces);
-          service.surfaceSelectionResult(this, id, plan, null);
-        }
-        catch (java.io.IOException e)
-        { service.surfaceSelectionResult(this, id, null, "SURFACE_QUERY_FAILED"); }
-        catch (PartyProtocol.Fault f)
-        { service.surfaceSelectionResult(this, id, null, f.getMessage()); }
-      });
-    }
-    catch (java.util.concurrent.RejectedExecutionException e)
-    { throw new PartyProtocol.Fault("PREPARATION_BUSY"); }
-  }
-
-  @Override public long applySurface(String id)
-  {
-    synchronized (surfaceStateLock)
-    {
-      SurfaceCandidate candidate = surfaceCandidate;
-      if (candidate == null || !candidate.id.equals(id) || closed
-          || surfaceGeneration.get() != candidate.operation || !candidate.principal.equals(principal()))
-        throw new PartyProtocol.Fault("SURFACE_CHANGED");
-      releaseMediaAdmission();
-      long generation = ui.getVideoFrame().commitPartySurface(candidate.fence, renderer, candidate.surfaces, candidate.pathGeneration);
-      selectedSurfaceId = id;
-      surfaceCandidate = null;
-      return generation;
-    }
-  }
-
-  @Override public long restoreSurface()
-  {
-    synchronized (surfaceStateLock)
-    {
-      surfaceGeneration.incrementAndGet(); surfaceCandidate = null;
-      selectedSurfaceId = null;
-      cancelPreparation(); releaseMediaAdmission(); cancelScheduled();
-      return renderer.restorePartySurface();
-    }
-  }
-
-  @Override public boolean surfaceSelected(String id, long generation)
-  { return !closed && id.equals(selectedSurfaceId) && renderer.hasPartySurface() && renderer.getPartyPathGeneration() == generation; }
-
   @Override public long skip(String action) { return ui.getVideoFrame().partySkipDelta(action); }
   @Override public void progressOwner(boolean owned)
   {
-    if (!owned) restoreSurface();
     ui.getVideoFrame().setPartyProgressOwned(owned);
   }
   @Override public void commit(int media, long position)
@@ -560,17 +418,17 @@ final class NgPartyConnection implements PartyService.Peer
     scheduled = null;
   }
 
-  @Override public synchronized void schedule(JsonObject transition)
+  @Override public synchronized void schedule(PartyPlaybackDirective directive)
   {
     cancelScheduled();
     if (closed || !"push".equals(renderer.getCurrentSurfaceDeliveryMode())
-        || "SOFT".equals(transition.has("kind") ? transition.get("kind").getAsString() : ""))
+        || "SOFT".equals(directive.kind()))
       return;
     long generation = scheduleGeneration;
-    long deadline = transition.get("executeAtServerMonoMs").getAsLong();
+    long deadline = directive.executeAtServerMonoMs();
     long delay = Math.max(0, deadline - monotonicMs.getAsLong());
-    long position = transition.get("targetPositionMs").getAsLong();
-    boolean playing = "PLAYING".equals(transition.get("targetState").getAsString());
+    long position = directive.targetPositionMs();
+    boolean playing = "PLAYING".equals(directive.targetState());
     MediaFile media = ui.getVideoFrame().getCurrFile();
     if (media == null) return;
     int mediaId = media.getID();

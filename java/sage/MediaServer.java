@@ -624,7 +624,6 @@ public class MediaServer implements Runnable
        */
     protected void closeFile(boolean closeRemux)
     {
-      NgPartyMediaAdmission.INSTANCE.closed(this);
       if (closeRemux) {
         try {
           if (remuxer != null) {
@@ -1288,7 +1287,7 @@ public class MediaServer implements Runnable
         StringBuffer tempString = readLineBytes();
         while (tempString != null && alive)
         {
-          if (MEDIA_SERVER_DEBUG) System.out.println("MediaServer recvd:" + safePartyCommandForLog(tempString));
+          if (MEDIA_SERVER_DEBUG) System.out.println("MediaServer recvd:" + tempString);
           if (tempString.indexOf("OPEN ") == 0)
           {
             closeFile();
@@ -1464,13 +1463,6 @@ public class MediaServer implements Runnable
             int numWritten = s.write(commBufWrite);
             if (MEDIA_SERVER_DEBUG) System.out.println("MediaServer wrote out " + numWritten + " bytes");
           }
-          else if (tempString.indexOf("PARTY_BIND ") == 0)
-          {
-            boolean accepted = bindPartyAdmission(tempString.substring(11));
-            commBufWrite.clear();
-            commBufWrite.put((accepted ? "OK\r\n" : "PARTY_DENIED\r\n").getBytes(Sage.BYTE_CHARSET)).flip();
-            while (commBufWrite.hasRemaining()) s.write(commBufWrite);
-          }
           else if ("SIZE".contentEquals(tempString))
             sizeFile();
           else if (tempString.indexOf("READ ") == 0)
@@ -1487,7 +1479,6 @@ public class MediaServer implements Runnable
           }
           else if (tempString.indexOf("XCODE_SETUP ") == 0)
           {
-            NgPartyMediaAdmission.INSTANCE.closed(this);
             String xcodeArg = tempString.substring(tempString.indexOf(" ") + 1);
             boolean parameterizedProtocol21 = isParameterizedXcodeSetup(xcodeArg);
             // Protocol 2.1 (option B): "<mode>;k=v;k=v". The base mode is
@@ -1921,7 +1912,7 @@ public class MediaServer implements Runnable
           else
           {
             commBufWrite.clear();
-            commBufWrite.put(("UNKNOWN COMMAND " + safePartyCommandForLog(tempString) + "\r\n").getBytes()).flip();
+            commBufWrite.put(("UNKNOWN COMMAND " + tempString + "\r\n").getBytes()).flip();
             int numWritten = s.write(commBufWrite);
             if (MEDIA_SERVER_DEBUG) System.out.println("MediaServer wrote out " + numWritten + " bytes");
           }
@@ -1936,7 +1927,6 @@ public class MediaServer implements Runnable
       }
       finally
       {
-        NgPartyMediaAdmission.INSTANCE.closed(this);
         clientDisconnected();
         try
         {
@@ -2028,28 +2018,6 @@ public class MediaServer implements Runnable
 
     protected volatile TranscodeEngine xcoder;
 
-    boolean bindPartyAdmission(String handle)
-    {
-      MediaFile media = currMF;
-      TranscodeEngine engine = xcoder;
-      java.nio.channels.FileChannel channel = fileChannel;
-      if (handle.length() != 32 || media == null || engine == null && (channel == null || !channel.isOpen()))
-        return false;
-      String mode = engine == null ? "pull" : "pull-xcode";
-      return NgPartyMediaAdmission.INSTANCE.bind(handle, media.getID(), mode, null, this,
-          () -> currMF == media && (engine == null
-              ? fileChannel == channel && channel.isOpen()
-              : xcoder == engine && NgPartyMediaAdmission.transcodeReady(engine)),
-          () -> currMF != media || (engine == null ? fileChannel != channel || !channel.isOpen()
-              : xcoder != engine || engine.isTranscodeDone() && !(engine instanceof FFMPEGTranscoder
-                  && ((FFMPEGTranscoder)engine).didTranscodeCompleteOK())));
-    }
-  }
-  static String safePartyCommandForLog(CharSequence command)
-  {
-    String line = command.toString();
-    return line.toUpperCase(java.util.Locale.ROOT).contains("PARTY_BIND")
-        ? "PARTY_BIND <redacted>" : line;
   }
 
   private static final java.util.Map largeFileSizeMap = new java.util.HashMap();

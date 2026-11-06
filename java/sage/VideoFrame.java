@@ -2014,7 +2014,17 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
 
   static long selectInitialWatchTarget(MediaFile watchMe,
       boolean playlistFromBeginning, boolean explicitlyFromBeginning)
+  { return selectInitialWatchTarget(watchMe, playlistFromBeginning, explicitlyFromBeginning, null); }
+
+  static long selectInitialWatchTarget(MediaFile watchMe,
+      boolean playlistFromBeginning, boolean explicitlyFromBeginning, PartyPreparation preparation)
   {
+    if (preparation != null)
+    {
+      long start = watchMe.getRecordTime();
+      long duration = Math.max(0, watchMe.getRecordEnd() - start);
+      return start + Math.min(duration, Math.max(0, preparation.positionMs));
+    }
     Airing airing = watchMe.getContentAiring();
     return (playlistFromBeginning || explicitlyFromBeginning)
         ? airing.getStartTime() : BigBrother.getLatestWatch(airing);
@@ -2705,11 +2715,14 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       MediaFile watchMe = daJob.file;
       long targetTime = selectInitialWatchTarget(watchMe,
           !playlistChain.isEmpty() && uiMgr.getBoolean("videoframe/start_playlist_items_from_beginning", true),
-          iWantToStartAtBeginning);
+          iWantToStartAtBeginning, daJob.partyPreparation);
+      if (daJob.partyPreparation == null)
+      {
           targetTime = Math.max(targetTime, watchMe.getRecordTime() +
               (watchMe.isTV() ? uiMgr.getLong(prefs + TIME_TO_START_INTO_TV_FILE_PLAYBACK, 0) : 0));
           if (watchMe.isMusic()) // always start music from the beginning of the song or when we're going through a playlist
             targetTime = watchMe.getStart(0);
+      }
           dvdResumeTarget = null;
           if (watchMe.isDVD() || watchMe.isBluRay())
           {
@@ -2730,7 +2743,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
           // For jumping to live automatically, we want to do this as part of channel surfing
           // which means they've just tuned into this channel. So if the latest segment
           // is really short, then it means it fits the criteria!
-          if (watchMe.isRecording())
+          if (daJob.partyPreparation == null && watchMe.isRecording())
           {
             long newDur = watchMe.getDuration(watchMe.getRecordingSegment());
             if (newDur != 0 && newDur < 7000)
@@ -2745,7 +2758,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
             }
           }
 
-          if (iWantToBeLive || watchMe.isAnyLiveStream())
+          if (daJob.partyPreparation == null && (iWantToBeLive || watchMe.isAnyLiveStream()))
           {
             if (Sage.DBG) System.out.println("VF forcing to live.");
             targetTime = Sage.time();
@@ -4692,8 +4705,14 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     volatile int watchCode = WATCH_OK;
     volatile long generation = -1;
     boolean forceReload;
-    PartyPreparation(MediaFile media, String id, java.util.function.BooleanSupplier authorized)
-    { this.media = media; this.id = id; this.authorized = authorized; }
+    final long positionMs;
+    PartyPreparation(MediaFile media, String id, java.util.function.BooleanSupplier authorized, long positionMs)
+    {
+      this.media = media;
+      this.id = id;
+      this.authorized = authorized;
+      this.positionMs = Math.max(0, positionMs);
+    }
     boolean active() { return !cancelled && authorized.getAsBoolean(); }
     void complete() { completion.countDown(); }
     boolean awaitCompletion(long timeoutMs) throws InterruptedException
@@ -4701,13 +4720,15 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   }
 
   /** Uses ordinary Watch checks but tags the asynchronous jobs and suppresses automatic play. */
-  PartyPreparation preparePartyMedia(MediaFile media, String id, java.util.function.BooleanSupplier authorized)
-  { return preparePartyMedia(media, id, authorized, false); }
+  PartyPreparation preparePartyMedia(MediaFile media, String id, java.util.function.BooleanSupplier authorized,
+      long positionMs)
+  { return preparePartyMedia(media, id, authorized, positionMs, false); }
 
-  PartyPreparation preparePartyMedia(MediaFile media, String id, java.util.function.BooleanSupplier authorized, boolean forceReload)
+  PartyPreparation preparePartyMedia(MediaFile media, String id, java.util.function.BooleanSupplier authorized,
+      long positionMs, boolean forceReload)
   {
     cancelPartyPreparation();
-    PartyPreparation preparation = new PartyPreparation(media, id, authorized);
+    PartyPreparation preparation = new PartyPreparation(media, id, authorized, positionMs);
     preparation.forceReload = forceReload;
     partyPreparation = preparation;
     if (!partyProgressOwned || !preparation.active()) preparation.watchCode = WATCH_FAILED_INSUFFICIENT_PERMISSIONS;
@@ -4763,6 +4784,23 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         && mp.getPartyPlaybackGeneration() == preparation.generation && mp.getState() == MediaPlayer.PAUSE_STATE;
   }
 
+  /** Enters the ordinary playback UI after a staged Party load is verified paused. */
+  void presentPartyPreparation(final PartyPreparation preparation)
+  {
+    if (!isPartyPreparationLoaded(preparation)) return;
+    uiMgr.getRouter().invokeLater(new Runnable()
+    {
+      @Override public void run()
+      {
+        if (!isPartyPreparationLoaded(preparation)) return;
+        PseudoMenu currentMenu = uiMgr.getCurrUI();
+        if (currentMenu != null)
+          uiMgr.getGlobalContext().put("StartPlaybackMenu", currentMenu.getBlueprint());
+        uiMgr.advanceUI("MediaPlayer OSD");
+      }
+    });
+  }
+
   /** Prevents per-viewer writes while party progress owns the shared account's history. */
   public void setPartyProgressOwned(boolean owned)
   {
@@ -4803,7 +4841,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   {
     if (!(player instanceof MiniPlayer) || currFile == null || currFile.getFileFormat() == null)
       throw new sage.party.PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
-    int kbps = currFile.getFileFormat().getBitrate() / 1000;
+    int kbps = partySourceBitrateKbps(currFile);
     if (kbps <= 0 || renderer.getCurrentSurfaceId().isEmpty()
         || renderer.getCurrentSurfaceDeliveryMode().isEmpty())
       throw new sage.party.PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
@@ -4811,7 +4849,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     sage.client.PlaybackSurface surface = renderer.getPlaybackSurfaces().get(renderer.getCurrentSurfaceId());
     return new sage.party.PartyService.Delivery(renderer.getCurrentSurfaceId(),
         renderer.getCurrentSurfaceDeliveryMode(), renderer.getCurrentSurfaceTargetVideoCodec(),
-        renderer.getCurrentSurfaceTargetAudioCodec(), (int)Math.min(Integer.MAX_VALUE, kbps * 2L),
+        renderer.getCurrentSurfaceTargetAudioCodec(), (int)Math.min(Integer.MAX_VALUE, kbps * 2L), kbps,
         ((MiniPlayer)player).isTranscoding()
             || "pull-xcode".equals(renderer.getCurrentSurfaceDeliveryMode())
             || "hls".equals(renderer.getCurrentSurfaceDeliveryMode()),
@@ -4819,33 +4857,30 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         sage.client.PlaybackSurfaceSet.canonicalContainer(((MiniPlayer)player).getPartyOutputContainer()));
   }
 
-  /** Binds a credential to this exact player generation, never a path or network address. */
-  String issuePartyMediaAdmission(MiniClientSageRenderer renderer, NgPartyConnection owner)
-  { return issuePartyMediaAdmission(renderer, owner, reason -> {}); }
-
-  String issuePartyMediaAdmission(MiniClientSageRenderer renderer, NgPartyConnection owner,
-      java.util.function.Consumer<String> revoked)
+  /** Returns the current server-observable Party output bitrate, or zero if unknown. */
+  public int getPartyActualBitrateKbps()
   {
-    if (!(player instanceof MiniPlayer) || currFile == null || !partyProgressOwned)
-      throw new sage.party.PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
-    MiniPlayer expectedPlayer = (MiniPlayer)player;
-    MediaFile expectedMedia = currFile;
-    long generation = expectedPlayer.getPartyPlaybackGeneration();
-    long pathGeneration = renderer.getPartyPathGeneration();
-    String mode = renderer.getCurrentSurfaceDeliveryMode();
-    if (!java.util.Set.of("pull", "pull-xcode", "hls").contains(mode))
-      throw new sage.party.PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
-    return NgPartyMediaAdmission.INSTANCE.issue(owner, expectedMedia.getID(), mode, this,
-        () -> partyProgressOwned && renderer.getPartyPrincipal() != null
-            && player == expectedPlayer && currFile == expectedMedia
-            && generation == expectedPlayer.getPartyPlaybackGeneration()
-            && pathGeneration == renderer.getPartyPathGeneration()
-            && mode.equals(renderer.getCurrentSurfaceDeliveryMode()), revoked);
+    if (player instanceof MiniPlayer)
+    {
+      int output = ((MiniPlayer)player).getPartyOutputBitrateKbps();
+      if (output > 0) return output;
+    }
+    return partySourceBitrateKbps(currFile);
   }
 
-  /** Checks the actual local push source when no downstream pull producer is involved. */
-  boolean hasPartyPushAdmission()
-  { return player instanceof MiniPlayer && ((MiniPlayer)player).hasPartyPushAdmission(); }
+  static int partySourceBitrateKbps(MediaFile media)
+  {
+    if (media == null || media.getFileFormat() == null) return 0;
+    int formatBitrate = media.getFileFormat().getBitrate();
+    if (formatBitrate > 0) return formatBitrate / 1000;
+    long durationMs = 0;
+    for (int i = 0; i < media.getNumSegments(); i++)
+      durationMs += Math.max(0, media.getDuration(i));
+    long size = media.getSize();
+    if (durationMs <= 0 || size <= 0) return 0;
+    double estimated = size * 8.0 / durationMs;
+    return estimated >= Integer.MAX_VALUE ? Integer.MAX_VALUE : Math.max(1, (int)Math.round(estimated));
+  }
 
   MiniPlayer getPartyPlayer() { return player instanceof MiniPlayer ? (MiniPlayer)player : null; }
 
@@ -4868,6 +4903,34 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       throw new sage.party.PartyProtocol.Fault("CURRENT_POSITION_UNAVAILABLE");
     try { return Math.max(0, Math.min(duration, Math.subtractExact(observed, start))); }
     catch (ArithmeticException e) { throw new sage.party.PartyProtocol.Fault("CURRENT_POSITION_UNAVAILABLE"); }
+  }
+
+  long partyCommercialEnd(int mediaFileId, long positionMs, boolean automatic)
+  {
+    MediaFile media = currFile;
+    if (!partyProgressOwned || media == null || media.getID() != mediaFileId)
+      return -1;
+    java.io.File recording = media.getRecordingFile();
+    if (recording == null) return -1;
+    sage.commercial.CommercialDetectionManager manager =
+        sage.commercial.CommercialDetectionManager.getInstance();
+    for (sage.commercial.EdlWriter.Segment segment :
+        sage.commercial.EdlWriter.readEdl(recording))
+    {
+      if (segment.action != 0) continue;
+      long start = Math.round(segment.startSeconds * 1000);
+      long end = Math.round(segment.endSeconds * 1000);
+      if (positionMs < start || positionMs >= end) continue;
+      if (automatic)
+      {
+        if (end - start < manager.getMinCommercialDurationMs()
+            || positionMs < start + manager.getAutoSkipDelayMs())
+          return -1;
+        end = Math.max(start, end - manager.getAutoSkipStopDelayMs());
+      }
+      return end > positionMs ? end : -1;
+    }
+    return -1;
   }
 
   public void play() { if (!partyAction("PLAY")) submitJob(new VFJob(PLAY)); }

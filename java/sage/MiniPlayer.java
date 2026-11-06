@@ -1790,15 +1790,6 @@ public class MiniPlayer implements DVDMediaPlayer
   /** Returns a renderer-local generation invalidated on load, fast load and close. */
   long getPartyPlaybackGeneration() { return partyPlaybackGeneration; }
 
-  /** Confirms the local push producer, not merely a selected delivery mode. */
-  boolean hasPartyPushAdmission()
-  {
-    FastMpeg2Reader source = mpegSrc;
-    return pushMode && rpSrc == null && source != null
-        && (serverSideTranscoding ? NgPartyMediaAdmission.transcodeReady(source.getTranscoder())
-            : finalLength > 0);
-  }
-  
   public void load(byte majorTypeHint, byte minorTypeHint, String encodingHint, java.io.File file, String hostname, boolean timeshifted, long bufferSize) throws PlaybackException
   {
     long nativeIntent = invalidateNativeOwnership();
@@ -9452,6 +9443,12 @@ public class MiniPlayer implements DVDMediaPlayer
 
   String getPartyXcodeMode() { return partyXcodeMode; }
   String getPartyOutputContainer() { return ngOutContainer; }
+  int getPartyOutputBitrateKbps()
+  {
+    if (mpegSrc != null && mpegSrc.getTranscoder() instanceof FFMPEGTranscoder)
+      return Math.max(0, ((FFMPEGTranscoder)mpegSrc.getTranscoder()).getCurrentStreamBitrateKbps());
+    return 0;
+  }
 
   // When an Android-class NG client that would DIRECT_PLAY (bare pull) has an
   // active enhancement tier but advertises NO pull-xcode delivery (only raw

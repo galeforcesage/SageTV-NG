@@ -27,32 +27,23 @@ enablement/admission prerequisites, schemas and executable integration examples 
 canonical in [PartyModeV1.md](PartyModeV1.md). Existing no-login LAN admission is
 supported with transport-bound session tokens; no admin pairing is needed.
 Legacy/unnegotiated clients are ineligible; normal playback defaults are unchanged.
-Party v1 additionally requires separate receipt/execution reports and server-confirmed
-media admission. Future pull bridges must relay the canonical per-playback admission
-handle on their own producer; client readiness flags are not resource admission.
-`PARTY_JOIN_CODE_V1` is now a required guarantee: even selected connected invitees
-must enter the host's three-digit code on their existing admitted session. No
-join-token bypass or deep link is offered. Optional `PARTY_START_POSITION_V1`
-allows server-sampled Beginning/Current Position creation; `PARTY_PREPARE_V1`
-allows explicit confirmed Join & Prepare through the exact renderer's normal
-Watch/parental/resource checks with a paused-load and readiness barrier. See the
-canonical contract for code expiry/global cooldowns, asynchronous result schemas
-and required bridge admission routing. Optional `PARTY_SURFACE_V1` (with
-`PARTY_PREPARE_V1`) adds exact-renderer SELECT_SURFACE/RESTORE_SURFACE before
-paused preparation. The server queries actual existing per-surface properties,
-retains ordinary defaults, and generation-fences the selected override. A truthful
-MP4-only/MSE/pull-xcode-only Party surface can use existing fragmented-MP4 remux
-for direct-compatible media, without changing ordinary raw/direct evaluation.
+Party v1 uses the renderer's ordinary SageTV Watch/source path and requires
+`PARTY_JOIN_CODE_V1`, `PARTY_MONOTONIC_V1`, `PARTY_SCHEDULED_V1`,
+`PARTY_HEARTBEAT_V1`, `PARTY_PLAYER_ADAPTER_V1` and
+`PARTY_LOCAL_STOP_V1`. Even selected connected invitees enter the host's
+three-digit code on their existing admitted session. No join-token bypass or
+deep link is offered. The player adapter prepares the canonical `MediaFile`
+through normal Watch, remains paused until a future command/correction, executes
+generation-fenced monotonic deadlines, and reports observed media time through
+HEARTBEAT. Party Mode does not select a renderer surface, issue media admission
+handles, or expose GPU/transcoder internals.
 Optional `PARTY_GROWING_MEDIA_V1` is required for active Sage recording/timeshift
 parties. It means the adapter consumes the dynamic `availableEndMs` /
 `playableEndMs` window, preserves the configured delayed live edge, and remains
 correct through recording segment rollover and completion. It does not authorize
 raw live/network streams or permit treating the current available end as final.
-The canonical contract specifies selection/preparation/generation correlation,
-actual `route/container/xcodeMode` metadata, admission revocation, and the public
-same-JVM `sage.PartyMediaAdmissionBridge` actual-Socket claim/current/release API.
-Transparent bridges must not parse encrypted/compressed relay bytes for approvals
-or infer ownership from IP/clientName/path/global context.
+Existing NG playback-surface and native ownership capabilities remain separate,
+reusable playback features and are not Party protocol messages.
 
 Bump `SAGETV_NG_VERSION` to `2.0.0` when this spec is implemented.
 The server uses this as a single gate — if it sees `2.0.0+` it expects

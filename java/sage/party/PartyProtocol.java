@@ -14,8 +14,14 @@ public final class PartyProtocol
   /** Maximum UTF-8 envelope length, before parsing. */
   public static final int MAX_BYTES = 8192;
   /** All guarantees are required; the NG version or client ID is not authorization. */
-  public static final Set<String> REQUIRED = Set.of("PARTY_V1", "PARTY_JOIN_CODE_V1", "PARTY_MONOTONIC_V1",
-      "PARTY_POSITION_V1", "PARTY_SCHEDULED_V1", "PARTY_SEEK_V1", "PARTY_LOCAL_STOP_V1");
+  public static final Set<String> REQUIRED = Set.of(
+      "PARTY_V1",
+      "PARTY_JOIN_CODE_V1",
+      "PARTY_MONOTONIC_V1",
+      "PARTY_SCHEDULED_V1",
+      "PARTY_HEARTBEAT_V1",
+      "PARTY_PLAYER_ADAPTER_V1",
+      "PARTY_LOCAL_STOP_V1");
   /** Optional guarantee required before admitting an in-progress recording. */
   public static final String GROWING_MEDIA = "PARTY_GROWING_MEDIA_V1";
 

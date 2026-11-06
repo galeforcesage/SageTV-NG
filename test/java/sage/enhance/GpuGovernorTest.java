@@ -89,6 +89,33 @@ public class GpuGovernorTest
   }
 
   @Test
+  public void testOfferPressureUsesSameSoftAndHardCapsAsAdmission()
+  {
+    long now = Sage.time();
+    assertEquals(GpuGovernor.pressureDenialReason(
+        new GpuSnapshot(0, 69, 0, 0, 0, 16000, now)), null);
+    assertEquals(GpuGovernor.pressureDenialReason(
+        new GpuSnapshot(0, 70, 0, 0, 0, 16000, now)),
+        "video engine at 70% (soft cap 70%)");
+    assertEquals(GpuGovernor.pressureDenialReason(
+        new GpuSnapshot(0, 10, 90, 0, 0, 16000, now)),
+        "video engine at 90% (hard cap 85%)");
+    assertEquals(GpuGovernor.pressureDenialReason(GpuSnapshot.UNAVAILABLE), null);
+  }
+
+  @Test
+  public void testBrokerPreflightPreservesMemoryButDefersUtilization()
+  {
+    GpuSnapshot busy = new GpuSnapshot(0, 99, 80, 70, 4800, 16000, Sage.time());
+    GpuSnapshot preflight = GpuGovernor.withoutUtilization(busy);
+
+    assertEquals(preflight.getVideoEnginePressurePct(), GpuSnapshot.UNKNOWN);
+    assertEquals(preflight.getMemUsedMB(), 4800L);
+    assertEquals(preflight.getMemTotalMB(), 16000L);
+    assertEquals(preflight.getFreeMemMB(), 11200L);
+  }
+
+  @Test
   public void testReapStaleRemovesLeakedSession() throws Exception
   {
     Sage.put(PROP_STALE_MS, "1"); // anything older than 1ms is stale

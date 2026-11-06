@@ -60,6 +60,51 @@ public class FFMPEGTranscoderTest
   }
 
   @Test
+  public void activeMpegTsDirectPushNormalizesTimestampDiscontinuities() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder transcoder = new FFMPEGTranscoder();
+    transcoder.setActiveFile(true);
+    transcoder.setDirectPushSession(true);
+    ContainerFormat source = new ContainerFormat();
+    source.setFormatName(sage.media.format.MediaFormat.MPEG2_TS);
+    transcoder.setSourceFormat(source);
+    java.util.ArrayList<String> args = new java.util.ArrayList<String>(
+        java.util.Arrays.asList("ffmpeg", "-follow", "1", "-i", "recording.mpg",
+            "-f", "mpegts", "-vcodec", "libx264", "-acodec", "copy", "-"));
+
+    transcoder.maybeNormalizeActiveTsPushTimestamps(args);
+
+    int threshold = args.indexOf("-dts_delta_threshold");
+    assertTrue(threshold > 0);
+    assertTrue(threshold < args.indexOf("-i"), "Timestamp correction must be an input option");
+    assertEquals(args.get(threshold + 1), "2");
+  }
+
+  @Test
+  public void timestampNormalizationDoesNotChangeLegacyOrCopyTsPaths() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder transcoder = new FFMPEGTranscoder();
+    ContainerFormat source = new ContainerFormat();
+    source.setFormatName(sage.media.format.MediaFormat.MPEG2_TS);
+    transcoder.setSourceFormat(source);
+    java.util.ArrayList<String> args = new java.util.ArrayList<String>(
+        java.util.Arrays.asList("ffmpeg", "-copyts", "-i", "recording.mpg",
+            "-f", "mpegts", "-"));
+
+    transcoder.setActiveFile(true);
+    transcoder.setDirectPushSession(true);
+    transcoder.maybeNormalizeActiveTsPushTimestamps(args);
+    assertFalse(args.contains("-dts_delta_threshold"));
+
+    args.remove("-copyts");
+    transcoder.setActiveFile(false);
+    transcoder.maybeNormalizeActiveTsPushTimestamps(args);
+    assertFalse(args.contains("-dts_delta_threshold"));
+  }
+
+  @Test
   public void frameZeroNvencCapacityFailureIsDetectedBeforeFirstFrame()
   {
     assertTrue(FFMPEGTranscoder.isNvencInitFailureLine(
@@ -1008,6 +1053,42 @@ public class FFMPEGTranscoderTest
   }
 
   @Test
+  public void testNvencPushFallbackRemovesEncoderSpecificAutomaticOptions()
+  {
+    java.util.ArrayList<String> args = new java.util.ArrayList<String>(
+        java.util.Arrays.asList("ffmpeg", "-i", "recording.mpg",
+            "-vcodec", "h264_nvenc", "-vf", "format=yuv420p",
+            "-s", "1920x1080", "-r", "29.97", "-b:v", "10000000",
+            "-preset", "p4", "-rc:v", "vbr", "-g", "250",
+            "-keyint_min", "25", "-bf", "0", "-profile:v", "high",
+            "-level:v", "auto", "-acodec", "aac", "-f", "matroska", "-"));
+
+    assertTrue(FFMPEGTranscoder.rewriteNvencH264ForSoftwareFallback(args, false));
+    assertTrue(hasPair(args, "-vcodec", "libx264"));
+    assertTrue(hasPair(args, "-preset", "veryfast"));
+    assertTrue(hasPair(args, "-vf", "format=yuv420p"));
+    assertTrue(hasPair(args, "-profile:v", "high"));
+    assertTrue(hasPair(args, "-g", "250"));
+    assertTrue(hasPair(args, "-keyint_min", "25"));
+    assertFalse(args.contains("-rc:v"));
+    assertFalse(args.contains("vbr"));
+    assertFalse(args.contains("-level:v"));
+    assertFalse(args.contains("auto"));
+  }
+
+  @Test
+  public void testNvencFallbackPreservesExplicitH264Level()
+  {
+    java.util.ArrayList<String> args = new java.util.ArrayList<String>(
+        java.util.Arrays.asList("ffmpeg", "-i", "recording.mpg",
+            "-c:v", "h264_nvenc", "-level:v", "4.1", "-c:a", "copy", "-"));
+
+    assertTrue(FFMPEGTranscoder.rewriteNvencH264ForSoftwareFallback(args, false));
+    assertTrue(hasPair(args, "-c:v", "libx264"));
+    assertTrue(hasPair(args, "-level:v", "4.1"));
+  }
+
+  @Test
   public void testAndroidMpeg2EnhanceModeParsesToH264MpegTsCommand() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();
@@ -1531,6 +1612,34 @@ public class FFMPEGTranscoderTest
       Sage.put("ffmpeg/dynamic_max_fps_lan", "50");
       srcVideo.setFps(59.94f);
       assertEquals(transcoder.getDynamicMaxFps(srcVideo), 50);
+    }
+    finally
+    {
+      Sage.remove("ffmpeg/dynamic_max_fps_lan");
+    }
+  }
+
+  @Test
+  public void testH264PushFpsPreservesLanSourceCadence() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    Sage.remove("ffmpeg/dynamic_max_fps_lan");
+    try
+    {
+      FFMPEGTranscoder transcoder = new FFMPEGTranscoder();
+      VideoFormat srcVideo = new VideoFormat();
+      srcVideo.setFps(59.94f);
+
+      transcoder.setLocalClient(true);
+      assertEquals(transcoder.getH264PushFps(srcVideo), 59.94, 0.001);
+
+      transcoder.setLocalClient(false);
+      assertEquals(transcoder.getH264PushFps(srcVideo),
+          MMC.getInstance().isNTSCVideoFormat() ? 29.97 : 25.0, 0.001);
+
+      transcoder.setLocalClient(true);
+      Sage.put("ffmpeg/dynamic_max_fps_lan", "50");
+      assertEquals(transcoder.getH264PushFps(srcVideo), 50.0, 0.001);
     }
     finally
     {
