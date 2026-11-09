@@ -65,6 +65,8 @@ public class NgPartyTransportIntegrationTest
       partyLock.setAccessible(true); partyLock.set(renderer, new Object());
       videoField(video, "partyWatchGeneration", new java.util.concurrent.atomic.AtomicLong());
       doCallRealMethod().when(video).preparePartyMedia(any(), anyString(), any(), anyLong(), anyBoolean());
+      doCallRealMethod().when(video).setPartyPreparationAuthorized(anyBoolean());
+      doCallRealMethod().when(video).setPartyProgressOwned(anyBoolean());
       doCallRealMethod().when(video).getPartyPlayer();
       doCallRealMethod().when(video).commitPartySurface(any(), any(), any(), anyLong());
       doCallRealMethod().when(video).presentPartyPreparation(any());
@@ -128,14 +130,16 @@ public class NgPartyTransportIntegrationTest
       assertEquals(created.get("type").getAsString(), "CREATED");
       assertEquals(created.getAsJsonObject("snapshot").get("mediaFileId").getAsInt(), 42);
       verify(host.connection).currentMediaFileId();
-      verify(host.video).setPartyProgressOwned(true);
+      verify(host.video).setPartyPreparationAuthorized(true);
+      verify(host.video, never()).setPartyProgressOwned(true);
       JsonObject join = new JsonObject();
       join.add("partyId", created.get("partyId")); join.addProperty("mediaFileId", 42);
       join.add("joinCode", created.get("joinCode"));
       JsonObject joined = guest.exchange("JOIN", join);
       assertEquals(joined.get("type").getAsString(), "JOINED");
       assertEquals(joined.getAsJsonObject("snapshot").getAsJsonArray("roster").size(), 2);
-      verify(guest.video).setPartyProgressOwned(true);
+      verify(guest.video).setPartyPreparationAuthorized(true);
+      verify(guest.video, never()).setPartyProgressOwned(true);
       assertNotEquals(created.get("participantId"), joined.get("participantId"));
       JsonObject otherToken = guest.available;
       guest.available = host.available;
@@ -145,6 +149,7 @@ public class NgPartyTransportIntegrationTest
       JsonObject leave = new JsonObject(); leave.add("partyId", created.get("partyId"));
       assertEquals(guest.exchange("LEAVE", leave).get("type").getAsString(), "LEFT");
       verify(guest.video).setPartyProgressOwned(false);
+      verify(guest.video).setPartyPreparationAuthorized(false);
     }
   }
 
@@ -444,7 +449,7 @@ public class NgPartyTransportIntegrationTest
       JsonObject created = client.exchange("CREATE", create);
       MediaFile media = mock(MediaFile.class); doReturn(42).when(media).getID();
       doReturn(media).when(client.connection).preparationMedia(42);
-      videoField(client.video, "partyProgressOwned", true);
+      videoField(client.video, "partyPreparationAuthorized", true);
       doCallRealMethod().when(client.video).cancelPartyPreparation();
       doCallRealMethod().when(client.video).preparePartyMedia(any(), anyString(), any(), anyLong());
       doReturn(VideoFrame.WATCH_FAILED_PARENTAL_CHECK_FAILED).when(client.video).watchPartyMedia(any());
@@ -466,7 +471,7 @@ public class NgPartyTransportIntegrationTest
     }
   }
 
-  @Test public void preparingAlreadyLoadedSameMediaUsesOrdinaryWatchShortcutPausedAndExactGeneration() throws Exception
+  @Test public void repeatedPrepareForLoadedPushingMediaReturnsCurrentGenerationWithoutNewWatch() throws Exception
   {
     PartyService service = new PartyService(() -> 100000, true);
     try (Transport client = new Transport(service, "pull"))
@@ -482,14 +487,19 @@ public class NgPartyTransportIntegrationTest
       doReturn(42).when(media).getID(); doReturn(airing).when(media).getContentAiring();
       doReturn(7L).when(player).getPartyPlaybackGeneration();
       doAnswer(call -> state.get()).when(player).getState();
-      doAnswer(call -> { state.set(MediaPlayer.PAUSE_STATE); return true; }).when(player).pause();
+      doReturn(false).when(client.video).isMediaPlayerLoaded();
+      PartyService.Delivery path =
+          new PartyService.Delivery("pull", "pull", "H264", "AAC", 8000, false);
+      doReturn(path).when(client.video).getPartyDelivery(client.renderer);
+      doReturn(path).when(client.connection).preparedDelivery(42);
       doReturn(router).when(client.ui).getRouter();
       doAnswer(call -> { ((Runnable) call.getArgument(0)).run(); return null; }).when(router).invokeLater(any());
       doReturn(currentMenu).when(client.ui).getCurrUI();
       doReturn(currentMenuWidget).when(currentMenu).getBlueprint();
       doReturn(globalContext).when(client.ui).getGlobalContext();
-      videoField(client.video, "partyProgressOwned", true);
+      videoField(client.video, "partyPreparationAuthorized", true);
       videoField(client.video, "currFile", media); videoField(client.video, "player", player);
+      doReturn(media).when(client.video).getCurrFile();
       videoField(client.video, "queueLock", new Object());
       videoField(client.video, "watchQueue", new java.util.Vector<>());
       doReturn(media).when(client.connection).preparationMedia(42);
@@ -508,13 +518,68 @@ public class NgPartyTransportIntegrationTest
       assertEquals(loaded.get("preparationId"), accepted.get("preparationId"));
       assertEquals(loaded.get("status").getAsString(), "LOADED");
       assertEquals(loaded.get("playbackGeneration").getAsLong(), 7);
-      verify(player).pause(); verify(player, never()).play();
-      assertEquals(state.get(), MediaPlayer.PAUSE_STATE);
-      verify(client.ui).advanceUI("MediaPlayer OSD");
-      assertSame(globalContext.get("StartPlaybackMenu"), currentMenuWidget);
+      verify(client.video, never()).watchPartyMedia(any());
+      verify(player, never()).pause();
+      assertEquals(state.get(), MediaPlayer.PLAY_STATE);
+      verify(client.ui, never()).advanceUI("MediaPlayer OSD");
       VideoFrame.PartyPreparation stage = new VideoFrame.PartyPreparation(media, "old", () -> true, 0);
       stage.loaded = true; stage.generation = 6;
       assertFalse(client.video.isPartyPreparationLoaded(stage), "Same file with another generation is not completion");
+    }
+  }
+
+  @Test public void growingWatchCompletesWhenGenerationAndDeliveryBecomeUsableBeforeWatchLatch() throws Exception
+  {
+    PartyService service = new PartyService(() -> 100000, true);
+    try (Transport client = new Transport(service, "push"))
+    {
+      JsonObject create = new JsonObject(); create.addProperty("mediaFileId", 42);
+      JsonObject created = client.exchange("CREATE", create);
+      MediaFile media = mock(MediaFile.class); doReturn(42).when(media).getID();
+      MiniPlayer player = mock(MiniPlayer.class);
+      doReturn(9L).when(player).getPartyPlaybackGeneration();
+      doReturn(MediaPlayer.PLAY_STATE).when(player).getState();
+      doReturn(media).when(client.connection).preparationMedia(42);
+      videoField(client.video, "partyPreparationAuthorized", true);
+      doCallRealMethod().when(client.video).cancelPartyPreparation();
+      doCallRealMethod().when(client.video).preparePartyMedia(any(), anyString(), any(), anyLong());
+      doCallRealMethod().when(client.video).establishPartyPreparationLoaded(any());
+      java.util.concurrent.atomic.AtomicReference<VideoFrame.PartyPreparation> pending =
+          new java.util.concurrent.atomic.AtomicReference<>();
+      doAnswer(call -> { pending.set(call.getArgument(0)); return VideoFrame.WATCH_OK; })
+          .when(client.video).watchPartyMedia(any());
+
+      JsonObject fields = new JsonObject(); fields.add("partyId", created.get("partyId"));
+      JsonObject accepted = client.exchange("PREPARE", fields);
+      long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      while (pending.get() == null && System.nanoTime() < until) Thread.sleep(10);
+      assertNotNull(pending.get());
+      assertFalse(pending.get().awaitCompletion(0),
+          "ordinary Watch has not signalled completion yet");
+
+      videoField(client.video, "currFile", media);
+      videoField(client.video, "player", player);
+      doReturn(media).when(client.video).getCurrFile();
+      doReturn(false).when(client.video).isMediaPlayerLoaded();
+      PartyService.Delivery path =
+          new PartyService.Delivery("push", "push", "H264", "AAC", 8000, false);
+      doReturn(path).when(client.video).getPartyDelivery(client.renderer);
+      doReturn(path).when(client.connection).preparedDelivery(42);
+
+      while (client.observed.stream().noneMatch(m -> "PREPARATION_RESULT".equals(m.get("type").getAsString()))
+          && System.nanoTime() < until) Thread.sleep(10);
+      JsonObject loaded = client.observed.stream()
+          .filter(m -> "PREPARATION_RESULT".equals(m.get("type").getAsString()))
+          .findFirst().orElseThrow();
+      assertEquals(loaded.get("preparationId"), accepted.get("preparationId"));
+      assertEquals(loaded.get("status").getAsString(), "LOADED");
+      assertEquals(loaded.get("watchCode").getAsInt(), VideoFrame.WATCH_OK);
+      assertEquals(loaded.get("playbackGeneration").getAsLong(), 9);
+      Method hold = VideoFrame.class.getDeclaredMethod(
+          "holdPartyPreparation", VideoFrame.PartyPreparation.class);
+      hold.setAccessible(true);
+      hold.invoke(client.video, pending.get());
+      verify(player, never()).pause();
     }
   }
 
@@ -606,7 +671,8 @@ public class NgPartyTransportIntegrationTest
       doReturn(valid).when(client.video).getPartyDelivery(client.renderer);
       assertSame(client.connection.preparedDelivery(42), valid);
       doReturn(MediaPlayer.PLAY_STATE).when(client.video).getPlayerState();
-      assertThrows(PartyProtocol.Fault.class, () -> client.connection.preparedDelivery(42));
+      assertSame(client.connection.preparedDelivery(42), valid,
+          "A running delivery pipeline is server-loaded even before the client sends READY");
     }
   }
 

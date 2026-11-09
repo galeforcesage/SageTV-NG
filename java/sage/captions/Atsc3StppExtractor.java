@@ -795,7 +795,7 @@ public final class Atsc3StppExtractor
    *   caption_extraction/hold_until_next_max_seconds (float seconds, default 8.0)
    * Set hold_until_next=false for the exact legacy (gap-preserving) behaviour.
    */
-  private static List<CaptionEvent> coalesceWithHold(List<CaptionEvent> flat)
+  static List<CaptionEvent> coalesceWithHold(List<CaptionEvent> flat)
   {
     double maxHold = Sage.getBoolean("caption_extraction/hold_until_next", true)
         ? Sage.getFloat("caption_extraction/hold_until_next_max_seconds", 8.0f)

@@ -11,16 +11,22 @@ package sage.hdhr;
 
 import sage.Sage;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InterfaceAddress;
 import java.net.NetworkInterface;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.zip.CRC32;
 
 /**
@@ -55,6 +61,10 @@ public final class HDHomeRunDiscover
   private static final int  WILDCARD     = (int) 0xFFFFFFFF;
   private static final int  TIMEOUT_MS_DEFAULT = 1500;
   private static final String PROP_TIMEOUT_MS  = "hdhr/discovery_timeout_ms";
+  private static final int HTTP_CONNECT_TIMEOUT_MS = 1000;
+  private static final int HTTP_READ_TIMEOUT_MS = 1000;
+  private static final Map<String, DeviceInfo> LAST_DEVICES =
+      new ConcurrentHashMap<String, DeviceInfo>();
 
   private HDHomeRunDiscover() {}
 
@@ -64,7 +74,37 @@ public final class HDHomeRunDiscover
    */
   public static Map<String, String> discover()
   {
-    Map<String, String> out = new HashMap<String, String>();
+    return discoverHosts();
+  }
+
+  /**
+   * Discovers tuner devices and enriches each result with {@code /sys/features}.
+   *
+   * <p>Feature retrieval is best-effort. Older firmware or an HTTP failure
+   * leaves capabilities empty without suppressing the discovery result.
+   *
+   * @return device ID to immutable device information
+   */
+  public static Map<String, DeviceInfo> discoverDevices()
+  {
+    Map<String, String> hosts = discoverHosts();
+    Map<String, DeviceInfo> devices = new HashMap<String, DeviceInfo>(hosts.size());
+    for (Map.Entry<String, String> entry : hosts.entrySet())
+    {
+      HDHomeRunDeviceCapabilities capabilities = fetchCapabilities(entry.getValue());
+      DeviceInfo info = new DeviceInfo(entry.getKey(), entry.getValue(), capabilities);
+      devices.put(entry.getKey(), info);
+      LAST_DEVICES.put(entry.getKey(), info);
+    }
+
+    if (Sage.DBG && !devices.isEmpty())
+      System.out.println("HDHomeRunDiscover: found " + devices);
+    return devices;
+  }
+
+  private static Map<String, String> discoverHosts()
+  {
+    Map<String, String> hosts = new HashMap<String, String>();
     int timeoutMs = Sage.getInt(PROP_TIMEOUT_MS, TIMEOUT_MS_DEFAULT);
 
     byte[] req = buildRequest(DEVICE_TUNER, WILDCARD);
@@ -105,7 +145,7 @@ public final class HDHomeRunDiscover
           String id = parseDeviceIdFromReply(reply.getData(), reply.getLength());
           if (id != null)
           {
-            out.put(id, reply.getAddress().getHostAddress());
+            hosts.put(id, reply.getAddress().getHostAddress());
           }
         }
         catch (java.net.SocketTimeoutException ste) { break; }
@@ -121,9 +161,9 @@ public final class HDHomeRunDiscover
       if (sock != null) try { sock.close(); } catch (Throwable t) {}
     }
 
-    if (Sage.DBG && !out.isEmpty())
-      System.out.println("HDHomeRunDiscover: found " + out);
-    return out;
+    if (Sage.DBG && !hosts.isEmpty())
+      System.out.println("HDHomeRunDiscover: found " + hosts);
+    return hosts;
   }
 
   /**
@@ -135,11 +175,77 @@ public final class HDHomeRunDiscover
     if (hexDeviceId == null) return null;
     String norm = hexDeviceId.trim().toLowerCase();
     if (norm.length() == 0) return null;
-    Map<String, String> all = discover();
+    return discover().get(norm);
+  }
+
+  /**
+   * Discovers one device and returns its reported capabilities.
+   *
+   * @param hexDeviceId 8-character device ID
+   * @return device information, or {@code null}
+   */
+  public static DeviceInfo findDevice(String hexDeviceId)
+  {
+    if (hexDeviceId == null) return null;
+    String norm = hexDeviceId.trim().toLowerCase();
+    if (norm.length() == 0) return null;
+    Map<String, DeviceInfo> all = discoverDevices();
     return all.get(norm);
   }
 
+  /**
+   * Returns the most recently discovered information without network access.
+   *
+   * @param hexDeviceId 8-character device ID
+   * @return cached information, or {@code null}
+   */
+  public static DeviceInfo getLastDiscoveredDevice(String hexDeviceId)
+  {
+    if (hexDeviceId == null) return null;
+    return LAST_DEVICES.get(hexDeviceId.trim().toLowerCase());
+  }
+
   // ---------------------------------------------------------------------
+
+  private static HDHomeRunDeviceCapabilities fetchCapabilities(String host)
+  {
+    if (host == null || host.length() == 0) return HDHomeRunDeviceCapabilities.EMPTY;
+    HttpURLConnection connection = null;
+    try
+    {
+      connection = (HttpURLConnection) new URL(
+          "http://" + host + "/sys/features").openConnection();
+      connection.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+      connection.setReadTimeout(HTTP_READ_TIMEOUT_MS);
+      connection.setRequestMethod("GET");
+      if (connection.getResponseCode() != 200)
+        return HDHomeRunDeviceCapabilities.EMPTY;
+      BufferedReader reader = new BufferedReader(new InputStreamReader(
+          connection.getInputStream(), StandardCharsets.UTF_8));
+      try
+      {
+        StringBuilder response = new StringBuilder(256);
+        String line;
+        while ((line = reader.readLine()) != null)
+          response.append(line).append('\n');
+        return HDHomeRunDeviceCapabilities.parse(response.toString());
+      }
+      finally
+      {
+        reader.close();
+      }
+    }
+    catch (Exception e)
+    {
+      if (Sage.DBG)
+        System.out.println("HDHomeRunDiscover: feature query failed for " + host + ": " + e);
+      return HDHomeRunDeviceCapabilities.EMPTY;
+    }
+    finally
+    {
+      if (connection != null) connection.disconnect();
+    }
+  }
 
   private static byte[] buildRequest(int devType, int devId)
   {
@@ -244,5 +350,38 @@ public final class HDHomeRunDiscover
     };
     try { return InetAddress.getByAddress(bb); }
     catch (Throwable t) { return null; }
+  }
+
+  /** One discovered tuner device and its firmware-reported capabilities. */
+  public static final class DeviceInfo
+  {
+    private final String deviceId;
+    private final String host;
+    private final HDHomeRunDeviceCapabilities capabilities;
+
+    private DeviceInfo(String deviceId, String host,
+        HDHomeRunDeviceCapabilities capabilities)
+    {
+      this.deviceId = deviceId;
+      this.host = host;
+      this.capabilities = capabilities == null
+          ? HDHomeRunDeviceCapabilities.EMPTY : capabilities;
+    }
+
+    /** @return lowercase 8-character HDHomeRun device ID */
+    public String getDeviceId() { return deviceId; }
+
+    /** @return discovered IP address */
+    public String getHost() { return host; }
+
+    /** @return immutable firmware-reported capabilities */
+    public HDHomeRunDeviceCapabilities getCapabilities() { return capabilities; }
+
+    @Override
+    public String toString()
+    {
+      return "DeviceInfo{" + deviceId + "@" + host
+          + " capabilities=" + capabilities + "}";
+    }
   }
 }

@@ -8655,6 +8655,7 @@ public class MiniClientSageRenderer extends SageRenderer
     displayHdrTypes = "";
     localEnhancementPref = "auto";
     localEnhancementStatus = "none";
+    localUpscalingCapability = "none";
     clientQualityHint = "auto";
 
     if (sinkRes != null)
@@ -8698,18 +8699,11 @@ public class MiniClientSageRenderer extends SageRenderer
         if (eq <= 0) continue;
         String k = part.substring(0, eq).trim().toLowerCase(java.util.Locale.ROOT);
         String v = part.substring(eq + 1).trim().toLowerCase(java.util.Locale.ROOT);
-        // Accept the three positive prefs plus an explicit hard opt-out.
-        // "never"/"off"/"none"/"disabled" all canonicalize to "never" so the
-        // client's "GPU Enhancement: Never" setting actually reaches the
-        // advisor instead of falling through to the "auto" default (which lets
-        // the server decide, i.e. silently re-enables enhancement).
         if ("pref".equals(k))
-        {
-          if ("auto".equals(v) || "local".equals(v) || "server".equals(v))
-            localEnhancementPref = v;
-          else if ("never".equals(v) || "off".equals(v) || "none".equals(v) || "disabled".equals(v))
-            localEnhancementPref = "never";
-        }
+          localEnhancementPref = sage.enhance.UpscalingPolicy.fromToken(v).token();
+        else if ("cap".equals(k))
+          localUpscalingCapability =
+              sage.enhance.UpscalingCapability.fromToken(v).token();
         else if ("status".equals(k)
             && ("active".equals(v) || "available".equals(v) || "none".equals(v)))
           localEnhancementStatus = v;
@@ -8719,6 +8713,7 @@ public class MiniClientSageRenderer extends SageRenderer
       System.out.println("MiniClient enhancement caps: sink=" + sinkWidth + "x" + sinkHeight
           + " refresh=" + displayRefreshRates + " hdr=" + displayHdrTypes
           + " localPref=" + localEnhancementPref + " localStatus=" + localEnhancementStatus
+          + " upscaleCap=" + localUpscalingCapability
           + " qualityHint=" + clientQualityHint);
   }
 
@@ -8730,8 +8725,10 @@ public class MiniClientSageRenderer extends SageRenderer
   public String getDisplayRefreshRates() { return displayRefreshRates; }
   /** CSV of sink HDR types, or empty. */
   public String getDisplayHdrTypes() { return displayHdrTypes; }
-  /** {@code auto} | {@code local} | {@code server}. */
+  /** {@code auto} | {@code always} | {@code ai_only} | {@code never}. */
   public String getLocalEnhancementPref() { return localEnhancementPref; }
+  /** {@code none} | {@code standard} | {@code high_quality} | {@code ai}. */
+  public String getLocalUpscalingCapability() { return localUpscalingCapability; }
   /** {@code active} | {@code available} | {@code none}. */
   public String getLocalEnhancementStatus() { return localEnhancementStatus; }
   /** {@code auto} | {@code quality} | {@code savings}. */
@@ -10664,6 +10661,7 @@ public class MiniClientSageRenderer extends SageRenderer
   private String displayRefreshRates = "";
   private String displayHdrTypes = "";
   private String localEnhancementPref = "auto";
+  private String localUpscalingCapability = "none";
   private String localEnhancementStatus = "none";
   private String clientQualityHint = "auto";
   // Client-reported ACTIVE bandwidth probe (Kbps) and how old the sample was

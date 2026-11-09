@@ -27,12 +27,18 @@ public final class PartyService
 {
   /** Maximum time allowed for the existing Watch path to prepare Party media. */
   public static final long PREPARATION_TIMEOUT_MS = 15000;
+  private static final long ACTIVATION_TIMEOUT_MS = 20000;
   static final long PARTY_LIFETIME_MS = 6 * 3600000L;
   static final long RECONNECT_GRACE_MS = 90000;
   static final long HEARTBEAT_STALE_MS = 15000;
-  private static final long MIN_DRIFT_MS = 100;
-  private static final long SEVERE_DRIFT_MS = 750;
+  static final long CONNECTED_ACTIVITY_STALE_MS = 30000;
+  static final long TERMINAL_TOMBSTONE_MS = 1800000;
+  private static final long FUTURE_SAMPLE_TOLERANCE_MS = 50;
+  private static final long VISIBLE_DRIFT_DEADBAND_MS = 67;
+  private static final long HARD_DRIFT_MS = 750;
+  private static final int SUSTAINED_DRIFT_SAMPLES = 3;
   private static final long CORRECTION_COOLDOWN_MS = 10000;
+  private static final long MIN_REVEAL_LEAD_MS = 300;
   private static final long MAX_TIME = 9007199254740991L;
 
   /** Authenticated Party transport plus one renderer's ordinary playback adapter. */
@@ -89,11 +95,16 @@ public final class PartyService
     long requestWindow;
     long highWater;
     int requests;
+    String invitedPartyId;
+    int invitedMediaFileId;
+    long invitationExpires;
 
     Link(String handle) { this.handle = handle; }
   }
 
   private record Cached(String input, JsonObject result) {}
+  private record AckPending(String directiveId, long stateVersion, long commandSeq,
+      long targetPosition, String targetState) {}
 
   private static final class Member
   {
@@ -109,6 +120,7 @@ public final class PartyService
     String preparationId;
     long preparingSince = -1;
     long disconnectedAt = -1;
+    long lastActivity;
     long lastHeartbeat = -1;
     long lastSample = -1;
     long lastPosition;
@@ -116,6 +128,25 @@ public final class PartyService
     long ackCommandSeq;
     long lastCorrectionAt = -1;
     int driftViolations;
+    String directiveId;
+    long directiveStateVersion = -1;
+    long directiveCommandSeq = -1;
+    long directiveStartedAt = -1;
+    long directiveExecuteAt = -1;
+    long directiveTargetPosition = -1;
+    String directiveTargetState;
+    boolean directiveNeedsPresentation;
+    boolean directiveBarrier;
+    boolean directiveArmed;
+    long directivePrepareAt = -1;
+    long directiveVisibleAt = -1;
+    String directiveCause;
+    final PartyPresentationLatency presentationLatency = new PartyPresentationLatency();
+    boolean starved;
+    String notifiedStatus;
+    boolean notifiedPrepared;
+    boolean notifiedClockConfident;
+    boolean notifiedReadyForPlayback;
 
     Member(String id, String recoveryToken, Peer peer)
     {
@@ -129,6 +160,11 @@ public final class PartyService
   private static final class Party extends PartySession
   {
     final LinkedHashMap<String, Member> members = new LinkedHashMap<>();
+    long canonicalCommandSeq = -1;
+    long barrierCommandSeq = -1;
+    long barrierVisibleAt = -1;
+    boolean barrierRevealed;
+    long abandonedSince = -1;
 
     Party(String id, int media, MediaWindow window, long liveEdgeDelayMs, long now)
     {
@@ -141,8 +177,10 @@ public final class PartyService
   private final long liveEdgeDelayMs;
   private final SecureRandom random = new SecureRandom();
   private final PartyJoinCodes joinCodes = new PartyJoinCodes();
-  private final PartySessionCoordinator coordinator = new PartySessionCoordinator(300, 2500);
+  private final PartySessionCoordinator coordinator = new PartySessionCoordinator(300, 7500);
   private final Map<String, Party> parties = new LinkedHashMap<>();
+  private final Map<String, Long> expiredParties = new HashMap<>();
+  private final Map<String, Long> expiredResumes = new HashMap<>();
   private final Map<Peer, Link> links = new HashMap<>();
   private final Deque<Long> joinAttempts = new ArrayDeque<>();
   private final Deque<Long> codeIssues = new ArrayDeque<>();
@@ -214,6 +252,8 @@ public final class PartyService
     if (party != null)
     {
       Member member = requireMember(party, peer);
+      member.lastActivity = now;
+      party.abandonedSince = -1;
       member.recoveryExpires = now + 1800000;
       out.addProperty("recoveryToken", member.recoveryToken);
       out.addProperty("recoveryTokenExpiresAtServerMonoMs", member.recoveryExpires);
@@ -278,6 +318,8 @@ public final class PartyService
             joinCodes.rotationRetryAfter(text(request, "partyId"), time.getAsLong()));
       if ("CODE_ISSUE_RATE_LIMITED".equals(failure.getMessage()))
         response.addProperty("retryAfterMs", codeIssueRetryAfter(time.getAsLong()));
+      if ("STALE_STATE".equals(failure.getMessage()) && request != null)
+        addStaleStateDetails(response, request);
       if (request != null) response.addProperty("requestId", text(request, "requestId"));
       diagnostic(peer, request, "REJECT_" + failure.getMessage(), time.getAsLong());
     }
@@ -288,13 +330,14 @@ public final class PartyService
         link.replies.remove(link.replies.keySet().iterator().next());
     }
     peer.send(response);
+    afterResponse(peer, request, response);
   }
 
   private JsonObject dispatch(Peer peer, JsonObject request, long now)
   {
     String type = text(request, "type");
     if ("HELLO".equals(type)) return availability(peer);
-    if ("LIST_CLIENTS".equals(type)) return clients();
+    if ("LIST_CLIENTS".equals(type)) return clients(peer);
     if ("CREATE".equals(type)) return create(peer, request, now);
 
     String partyId;
@@ -303,17 +346,28 @@ public final class PartyService
       if (find(peer) != null) throw new Fault("ALREADY_JOINED");
       attemptJoin(links.get(peer), now);
       partyId = joinCodes.resolve(text(request, "joinCode"), now);
+      if (request.has("partyId") != request.has("mediaFileId"))
+        throw new Fault("INVALID_REQUEST");
       if (request.has("partyId") && !partyId.equals(text(request, "partyId")))
         throw new Fault("JOIN_DENIED");
     }
     else partyId = text(request, "partyId");
 
     Party party = parties.get(partyId);
-    if (party == null) throw new Fault("PARTY_GONE");
+    if (party == null)
+    {
+      if (expiredParties.containsKey(partyId)) throw new Fault("PARTY_EXPIRED");
+      if ("RESUME".equals(type)
+          && expiredResumes.containsKey(resumeKey(partyId, text(request, "participantId"))))
+        throw new Fault("RESUME_EXPIRED");
+      throw new Fault("PARTY_GONE");
+    }
     if ("JOIN".equals(type)) return join(party, peer, request, now);
     if ("RESUME".equals(type)) return resume(party, peer, request, now);
 
     Member member = requireMember(party, peer);
+    member.lastActivity = now;
+    party.abandonedSince = -1;
     return switch (type)
     {
       case "SNAPSHOT" -> snapshot(party, now);
@@ -324,7 +378,7 @@ public final class PartyService
       case "PREPARE" -> prepare(party, member, now);
       case "READY" -> ready(party, member, request, now);
       case "ACTION" -> action(party, member, request, now);
-      case "ACK" -> commandResult(party, member, request);
+      case "ACK" -> commandResult(party, member, request, now);
       case "HEARTBEAT" -> heartbeat(party, member, request, now);
       case "LEAVE" ->
       {
@@ -334,8 +388,7 @@ public final class PartyService
       case "END" ->
       {
         requireHost(party, member);
-        end(party, true, "HOST_ENDED", now);
-        yield envelope("ENDED");
+        yield end(party, true, "HOST_ENDED", now, member.peer);
       }
       default -> throw new Fault("UNKNOWN_TYPE");
     };
@@ -344,7 +397,7 @@ public final class PartyService
   private JsonObject create(Peer peer, JsonObject request, long now)
   {
     if (find(peer) != null) throw new Fault("ALREADY_JOINED");
-    if (parties.size() >= 16) throw new Fault("SERVER_CAPACITY");
+    if (parties.size() >= 8) throw new Fault("SERVER_CAPACITY");
     int media = request.has("mediaFileId")
         ? (int)number(request, "mediaFileId", 1, Integer.MAX_VALUE)
         : peer.currentMediaFileId();
@@ -361,7 +414,7 @@ public final class PartyService
     party.host = host.id;
     parties.put(party.id, party);
     issueCode(party, now);
-    peer.progressOwner(true);
+    peer.preparationOwner(true);
     JsonObject out = joined(party, host, "CREATED", now, true);
     out.addProperty("startMode", startMode);
     out.addProperty("startPositionMs", party.timeline.anchorPositionMs());
@@ -377,7 +430,14 @@ public final class PartyService
     refreshWindow(party, peer);
     Member member = member(peer, now);
     party.members.put(member.id, member);
-    peer.progressOwner(true);
+    Link link = links.get(peer);
+    if (link != null)
+    {
+      link.invitedPartyId = null;
+      link.invitedMediaFileId = 0;
+      link.invitationExpires = 0;
+    }
+    peer.preparationOwner(true);
     roster(party, member);
     return joined(party, member, "JOINED", now, false);
   }
@@ -385,11 +445,15 @@ public final class PartyService
   private JsonObject resume(Party party, Peer peer, JsonObject request, long now)
   {
     if (find(peer) != null) throw new Fault("ALREADY_JOINED");
-    Member member = party.members.get(text(request, "participantId"));
-    if (member == null || member.peer != null || member.disconnectedAt < 0
-        || now - member.disconnectedAt > RECONNECT_GRACE_MS
-        || member.recoveryExpires <= now
-        || !member.principal.equals(peer.principal())
+    String participantId = text(request, "participantId");
+    if (expiredResumes.containsKey(resumeKey(party.id, participantId)))
+      throw new Fault("RESUME_EXPIRED");
+    Member member = party.members.get(participantId);
+    if (member == null || member.peer != null || member.disconnectedAt < 0)
+      throw new Fault("RESUME_DENIED");
+    if (now - member.disconnectedAt > RECONNECT_GRACE_MS || member.recoveryExpires <= now)
+      throw new Fault("RESUME_EXPIRED");
+    if (!member.principal.equals(peer.principal())
         || !constantEquals(member.recoveryToken, text(request, "recoveryToken")))
       throw new Fault("RESUME_DENIED");
     member.peer = peer;
@@ -398,22 +462,26 @@ public final class PartyService
     member.preparationId = null;
     member.preparingSince = now;
     member.disconnectedAt = -1;
+    member.lastActivity = now;
     member.lastHeartbeat = -1;
     member.lastSample = -1;
     member.clock.reset();
     member.probes.clear();
-    peer.progressOwner(true);
+    party.abandonedSince = -1;
+    peer.preparationOwner(true);
     if (party.host == null) party.host = member.id;
     roster(party, member);
     return joined(party, member, "JOINED", now, false);
   }
 
-  private JsonObject clients()
+  private JsonObject clients(Peer requester)
   {
     JsonObject out = envelope("CLIENTS");
     JsonArray clients = new JsonArray();
     for (Map.Entry<Peer, Link> entry : links.entrySet())
-      if (eligible(entry.getKey())) clients.add(entry.getValue().handle);
+      if (entry.getKey() != requester && eligible(entry.getKey())
+          && find(entry.getKey()) == null)
+        clients.add(entry.getValue().handle);
     out.add("sessionHandles", clients);
     return out;
   }
@@ -423,12 +491,24 @@ public final class PartyService
     requireHost(party, member);
     String target = text(request, "sessionHandle");
     for (Map.Entry<Peer, Link> entry : links.entrySet())
-      if (entry.getValue().handle.equals(target) && eligible(entry.getKey()))
+      if (entry.getKey() != member.peer
+          && entry.getValue().handle.equals(target) && eligible(entry.getKey())
+          && find(entry.getKey()) == null)
       {
+        Link targetLink = entry.getValue();
+        long now = time.getAsLong();
+        if (party.id.equals(targetLink.invitedPartyId)
+            && targetLink.invitedMediaFileId == party.media
+            && targetLink.invitationExpires > now)
+          return envelope("ACK");
         JsonObject invite = envelope("INVITED");
         invite.addProperty("partyId", party.id);
         invite.addProperty("mediaFileId", party.media);
         invite.addProperty("joinCodeRequired", true);
+        targetLink.invitedPartyId = party.id;
+        targetLink.invitedMediaFileId = party.media;
+        targetLink.invitationExpires = Math.min(
+            joinCodes.current(party.id, now).expiresAt(), now + 300000);
         entry.getKey().send(invite);
         return envelope("ACK");
       }
@@ -450,13 +530,21 @@ public final class PartyService
   private JsonObject prepare(Party party, Member member, long now)
   {
     refreshWindow(party, member.peer);
-    if (member.preparationId != null) throw new Fault("PREPARATION_PENDING");
+    long loadedGeneration = member.peer.preparedGeneration(party.media);
+    if (member.preparationId != null)
+    {
+      if (loadedGeneration < 0) throw new Fault("PREPARATION_PENDING");
+      member.peer.prepare(party.media, member.preparationId,
+          party.timeline.positionAt(now));
+      return prepareAccepted(party, member.preparationId, now);
+    }
     member.peer.cancelScheduled();
     member.peer.cancelPreparation();
     member.status = "PREPARING";
     member.prepared = false;
     member.preparationId = opaque();
     member.preparingSince = now;
+    roster(party, member);
     try
     {
       member.peer.prepare(party.media, member.preparationId,
@@ -467,10 +555,15 @@ public final class PartyService
       member.preparationId = null;
       throw failure;
     }
+    return prepareAccepted(party, member.preparationId, now);
+  }
+
+  private JsonObject prepareAccepted(Party party, String preparationId, long now)
+  {
     JsonObject out = envelope("PREPARE_ACCEPTED");
     out.addProperty("partyId", party.id);
     out.addProperty("mediaFileId", party.media);
-    out.addProperty("preparationId", member.preparationId);
+    out.addProperty("preparationId", preparationId);
     out.addProperty("targetPositionMs", party.timeline.positionAt(now));
     out.addProperty("holdPlayback", true);
     return out;
@@ -483,7 +576,7 @@ public final class PartyService
     if (!member.clock.confident(now)) throw new Fault("CLOCK_UNCERTAIN");
     if (!"PREPARING".equals(member.status))
     {
-      member.status = "READY";
+      if (member.directiveId == null) member.status = "READY";
       member.lastHeartbeat = now;
       member.bufferAhead = request.has("bufferAheadMs")
           ? number(request, "bufferAheadMs", 0, 3600000) : 0;
@@ -504,28 +597,32 @@ public final class PartyService
     roster(party, member);
     JsonObject correction = correction(party, member, now, "INITIAL_ALIGNMENT");
     correction.add("delivery", deliveryJson(delivery));
-    schedule(member, correction);
-    return correction;
+    member.peer.progressOwner(true);
+    return schedule(member, correction, now, true);
   }
 
   private JsonObject action(Party party, Member member, JsonObject request, long now)
   {
     requireCurrent(party, request);
     String action = text(request, "action");
-    if (!Set.of("PLAY", "PAUSE", "SEEK", "FF", "REW", "FF2", "REW2", "COMSKIP")
+    if (!Set.of("PLAY", "PAUSE", "JUMP", "FF", "REW", "FF2", "REW2", "COMSKIP")
         .contains(action))
       throw new Fault("INVALID_ACTION");
+    if (!"JUMP".equals(action) && request.has("targetPositionMs"))
+      throw new Fault("INVALID_REQUEST");
     if ("COMSKIP".equals(action)) requireHost(party, member);
+    if (party.timeline.pending() != null || party.canonicalCommandSeq >= 0)
+      throw new Fault("TRANSITION_PENDING");
+    if (!member.clock.confident(now)) throw new Fault("CLOCK_UNCERTAIN");
     if (!canControl(party, member, now, "PAUSE".equals(action)))
       throw new Fault("NOT_READY");
-    if (party.timeline.pending() != null) throw new Fault("TRANSITION_PENDING");
 
     long lead = lead(party, now);
     long target = party.timeline.positionAt(now + lead);
     String targetState = party.timeline.state();
     if ("PLAY".equals(action)) targetState = "PLAYING";
     else if ("PAUSE".equals(action)) targetState = "PAUSED";
-    else if ("SEEK".equals(action))
+    else if ("JUMP".equals(action))
       target = number(request, "targetPositionMs", 0, party.timeline.playableEndMs());
     else if (action.startsWith("FF") || action.startsWith("REW"))
       target = clamp(party, target + member.peer.skip(action));
@@ -538,21 +635,86 @@ public final class PartyService
     return transition(party, member, action, now, target, targetState);
   }
 
-  private JsonObject commandResult(Party party, Member member, JsonObject request)
+  private JsonObject commandResult(Party party, Member member, JsonObject request, long now)
   {
-    requireCurrent(party, request);
-    long seq = number(request, "commandSeq", 1, party.timeline.commandSeq());
-    String stage = text(request, "stage");
-    if (!Set.of("RECEIVED", "EXECUTED").contains(stage)) throw new Fault("INVALID_REQUEST");
-    member.ackCommandSeq = Math.max(member.ackCommandSeq, seq);
-    if ("EXECUTED".equals(stage) && request.has("success") && !flag(request, "success"))
+    AckPending pending = new AckPending(
+        member.directiveId, member.directiveStateVersion, member.directiveCommandSeq,
+        member.directiveTargetPosition, member.directiveTargetState);
+    long seq = -1;
+    String stage = diagnosticText(request, "stage");
+    boolean matched = false;
+    String accepted = "ACCEPTED";
+    try
     {
-      member.status = "LATE";
-      roster(party, member);
+      requireCurrent(party, request);
+      seq = number(request, "commandSeq", 0, party.timeline.commandSeq());
+      stage = text(request, "stage");
+      if (!Set.of("EXECUTED", "ARMED", "PRESENTED").contains(stage))
+        throw new Fault("INVALID_REQUEST");
+      if ("EXECUTED".equals(stage)
+          && (request.has("sampleMonoMs") || request.has("positionMs")
+              || request.has("state")))
+        throw new Fault("INVALID_REQUEST");
+      if (member.directiveId == null
+          || !constantEquals(member.directiveId, text(request, "directiveId"))
+          || member.directiveCommandSeq != seq)
+        throw new Fault("STALE_DIRECTIVE");
+      matched = true;
+      member.ackCommandSeq = Math.max(member.ackCommandSeq, seq);
+      if (!flag(request, "success"))
+      {
+        failDirective(party, member);
+        accepted = "ACCEPTED_CLIENT_FAILURE";
+      }
+      else if ("ARMED".equals(stage))
+      {
+        try
+        {
+          armed(party, member, request, now);
+          accepted = "ACCEPTED_ARMED_REVEAL_SCHEDULED";
+        }
+        catch (Fault failure)
+        {
+          failDirective(party, member);
+          throw failure;
+        }
+      }
+      else if ("PRESENTED".equals(stage))
+      {
+        try
+        {
+          presented(party, member, request, now);
+          accepted = "ACCEPTED_PRESENTED_SETTLED";
+        }
+        catch (Fault failure)
+        {
+          failDirective(party, member);
+          throw failure;
+        }
+      }
+      else if (!member.directiveNeedsPresentation)
+      {
+        completeDirective(party, member);
+        accepted = "ACCEPTED_EXECUTED_SETTLED";
+      }
+      else
+      {
+        accepted = member.directiveBarrier
+            ? "ACCEPTED_EXECUTED_AWAITING_ARMED"
+            : "ACCEPTED_EXECUTED_AWAITING_PRESENTED";
+      }
     }
+    catch (Fault failure)
+    {
+      ackDiagnostic(party, member, pending, request, now,
+          "REJECT_" + failure.getMessage() + (matched ? "_DIRECTIVE_FAILED" : ""));
+      throw failure;
+    }
+    ackDiagnostic(party, member, pending, request, now, accepted);
     JsonObject out = envelope("ACK");
     out.addProperty("commandSeq", seq);
     out.addProperty("stage", stage);
+    out.addProperty("directiveId", text(request, "directiveId"));
     return out;
   }
 
@@ -577,35 +739,60 @@ public final class PartyService
       member.prepared = false;
       member.peer.cancelScheduled();
       member.peer.cancelPreparation();
-      if (member.id.equals(party.host)) pauseForHostExit(party, member, now, true);
-      roster(party, member);
+      clearDirective(member);
+      if (member.id.equals(party.host)) pauseForHostExit(party, member, now);
     }
-    else if ("BUFFERING".equals(state) || "ERROR".equals(state))
+    else if ("ERROR".equals(state))
     {
-      member.status = "LATE";
+      if (member.directiveId != null) failDirective(party, member);
+      else
+      {
+        member.status = "LATE";
+        member.driftViolations = 0;
+      }
+    }
+    else if ("BUFFERING".equals(state))
+    {
+      member.starved = true;
       member.driftViolations = 0;
-      roster(party, member);
+      if (member.directiveId != null || party.canonicalCommandSeq >= 0)
+        member.status = "ACTIVATING";
+      else
+        member.status = "LATE";
+    }
+    else if (member.directiveId != null || party.canonicalCommandSeq >= 0)
+    {
+      member.status = "ACTIVATING";
+      member.driftViolations = 0;
     }
     else
     {
       member.status = "ACTIVE";
       long skew = position - party.timeline.positionAt(sample);
       boolean wrongState = !state.equals(party.timeline.state());
-      boolean severe = wrongState || Math.abs(skew) > SEVERE_DRIFT_MS;
-      if (Math.abs(skew) < MIN_DRIFT_MS && !wrongState) member.driftViolations = 0;
-      else if (severe || ++member.driftViolations >= 3)
+      long absoluteSkew = Math.abs(skew);
+      boolean hard = wrongState || absoluteSkew > HARD_DRIFT_MS
+          || (member.starved && absoluteSkew > VISIBLE_DRIFT_DEADBAND_MS);
+      if (absoluteSkew <= VISIBLE_DRIFT_DEADBAND_MS && !wrongState)
       {
         member.driftViolations = 0;
-        if (party.timeline.pending() == null
-            && (member.lastCorrectionAt < 0
-                || now - member.lastCorrectionAt >= CORRECTION_COOLDOWN_MS))
+        member.starved = false;
+      }
+      else if (hard || ++member.driftViolations >= SUSTAINED_DRIFT_SAMPLES)
+      {
+        member.driftViolations = 0;
+        if (party.timeline.pending() == null && party.canonicalCommandSeq < 0
+            && member.directiveId == null && (member.lastCorrectionAt < 0
+            || now - member.lastCorrectionAt >= CORRECTION_COOLDOWN_MS))
         {
           JsonObject correction = correction(party, member, now,
-              severe ? "SEVERE_DRIFT" : "SUSTAINED_DRIFT");
-          schedule(member, correction);
-          member.peer.send(copy(correction));
+              hard ? (member.starved ? "STARVATION_RECOVERY" : "SEVERE_DRIFT")
+                  : "SUSTAINED_VISIBLE_DRIFT",
+              hard ? "HARD" : "SOFT");
+          member.peer.send(schedule(member, correction, now, true));
         }
       }
+      roster(party, member);
     }
 
     JsonObject out = envelope("HEARTBEAT_ACK");
@@ -615,40 +802,70 @@ public final class PartyService
     out.addProperty("desiredState", party.timeline.state());
     out.addProperty("desiredPositionMs", party.timeline.positionAt(now));
     out.addProperty("skewMs", position - party.timeline.positionAt(sample));
+    out.addProperty("activationPending",
+        member.directiveId != null || party.canonicalCommandSeq >= 0);
     return out;
   }
 
   private JsonObject transition(Party party, Member origin, String cause, long now,
       long targetPositionMs, String targetState)
   {
-    List<PartySessionCoordinator.ParticipantTiming> timing = participantTiming(party, now);
+    boolean barrier = requiresPresentation(cause, targetState)
+        && requiresBarrier(cause, "COMMAND");
+    List<PartySessionCoordinator.ParticipantTiming> timing =
+        participantTiming(party, now, barrier);
     PartyCommand command = coordinator.schedule(party.timeline, cause,
         targetPositionMs, targetState, now, origin.id, timing);
-    JsonObject out = commandJson(party.id, command);
+    JsonObject commandEvent = commandJson(party.id, command);
+    boolean needsPresentation = requiresPresentation(cause, targetState);
+    if (needsPresentation)
+    {
+      party.canonicalCommandSeq = command.commandSeq();
+    }
+    if (barrier)
+    {
+      party.barrierCommandSeq = command.commandSeq();
+      party.barrierVisibleAt = command.executeAtServerMonoMs();
+      party.barrierRevealed = false;
+      party.timeline.reschedule(command.commandSeq(), MAX_TIME);
+    }
+    JsonObject originResponse = null;
     for (Member member : party.members.values())
     {
-      if (member.peer != null) member.peer.cancelScheduled();
+      if (member.peer != null)
+      {
+        member.peer.cancelScheduled();
+        clearDirective(member);
+      }
       if (commandRecipient(party, member, targetState, now))
       {
-        schedule(member, out);
-        member.peer.send(copy(out));
+        member.lastCorrectionAt = -1;
+        JsonObject scheduled = schedule(member, commandEvent, now, needsPresentation, barrier);
+        if (member == origin) originResponse = scheduled;
+        else member.peer.send(scheduled);
       }
     }
     diagnostic(party, origin,
         "COMMAND_" + cause + "_DEADLINE_" + command.executeAtServerMonoMs(), now);
-    return out;
+    return originResponse == null ? commandEvent : originResponse;
   }
 
   private JsonObject correction(Party party, Member member, long now, String reason)
   {
-    long executeAt = now + participantLead(member, now);
+    return correction(party, member, now, reason, "HARD");
+  }
+
+  private JsonObject correction(Party party, Member member, long now, String reason, String kind)
+  {
+    long executeAt = now + (requiresBarrier(reason, kind)
+        ? participantLead(member, now) : networkLead(member, now));
     JsonObject out = envelope("CORRECTION");
     out.addProperty("partyId", party.id);
     out.addProperty("participantId", member.id);
     out.addProperty("stateVersion", party.timeline.stateVersion());
     out.addProperty("commandSeq", party.timeline.commandSeq());
     out.addProperty("reason", reason);
-    out.addProperty("kind", "HARD");
+    out.addProperty("kind", kind);
     out.addProperty("targetPositionMs", party.timeline.positionAt(executeAt));
     out.addProperty("targetState", party.timeline.state());
     out.addProperty("targetRate", 1);
@@ -682,6 +899,7 @@ public final class PartyService
     out.addProperty("serverMinusClientMs", member.clock.offset(now));
     out.addProperty("uncertaintyMs", member.clock.uncertainty(now));
     out.addProperty("p95RttMs", member.clock.p95(now));
+    roster(party, member);
     return out;
   }
 
@@ -690,7 +908,9 @@ public final class PartyService
     if (!member.clock.confident(now)) throw new Fault("CLOCK_UNCERTAIN");
     long local = number(request, "sampleMonoMs", 0, MAX_TIME);
     long sample = Math.round(local + member.clock.offset(now));
-    if (sample < now - 5000 || sample > now + member.clock.uncertainty(now))
+    double futureTolerance =
+        Math.max(FUTURE_SAMPLE_TOLERANCE_MS, member.clock.uncertainty(now));
+    if (sample < now - 5000 || sample > now + futureTolerance)
       throw new Fault("STALE_SAMPLE");
     if (sample <= member.lastSample) throw new Fault("STALE_SAMPLE");
     return sample;
@@ -727,28 +947,277 @@ public final class PartyService
 
   private List<PartySessionCoordinator.ParticipantTiming> participantTiming(Party party, long now)
   {
+    return participantTiming(party, now, false);
+  }
+
+  private List<PartySessionCoordinator.ParticipantTiming> participantTiming(
+      Party party, long now, boolean includePresentation)
+  {
     List<PartySessionCoordinator.ParticipantTiming> timing = new ArrayList<>();
     for (Member member : party.members.values())
+    {
+      boolean confident = includePresentation && member.presentationLatency.confident();
       timing.add(new PartySessionCoordinator.ParticipantTiming(
-          commandRecipient(party, member, "PLAYING", now), member.clock.p95(now)));
+          commandRecipient(party, member, "PLAYING", now), member.clock.p95(now),
+          confident ? member.presentationLatency.predictedTotalMs() : 0,
+          confident ? member.presentationLatency.uncertaintyMs() : 0));
+    }
     return timing;
   }
 
   private long participantLead(Member member, long now)
   {
+    long presentationLead = member.presentationLatency.confident()
+        ? member.presentationLatency.predictedTotalMs()
+            + member.presentationLatency.uncertaintyMs()
+        : 0;
+    return Math.min(7500, Math.max(300,
+        Math.max(2 * member.clock.p95(now) + 100,
+            presentationLead)));
+  }
+
+  private long networkLead(Member member, long now)
+  {
     return Math.min(2500, Math.max(300, 2 * member.clock.p95(now) + 100));
   }
 
-  private void schedule(Member member, JsonObject transition)
+  private JsonObject schedule(Member member, JsonObject transition, long now,
+      boolean needsPresentation)
   {
+    String cause = transition.has("cause") ? transition.get("cause").getAsString()
+        : transition.has("reason") ? transition.get("reason").getAsString() : "";
+    String kind = transition.has("kind") ? transition.get("kind").getAsString() : "COMMAND";
+    return schedule(member, transition, now, needsPresentation,
+        needsPresentation && requiresBarrier(cause, kind));
+  }
+
+  private JsonObject schedule(Member member, JsonObject transition, long now,
+      boolean needsPresentation, boolean barrier)
+  {
+    JsonObject scheduled = copy(transition);
+    String kind = transition.has("kind") ? transition.get("kind").getAsString() : "COMMAND";
+    String directiveId = opaque();
+    scheduled.addProperty("directiveId", directiveId);
+    long visibleAt = transition.get("executeAtServerMonoMs").getAsLong();
+    long prepareAt = visibleAt;
+    if (barrier)
+    {
+      long predicted = member.presentationLatency.predictedTotalMs();
+      prepareAt = Math.max(now + Math.max(MIN_REVEAL_LEAD_MS, 2 * member.clock.p95(now)),
+          visibleAt - predicted);
+      scheduled.addProperty("phase", "PREPARE");
+      scheduled.addProperty("barrier", true);
+      scheduled.addProperty("visibleAtServerMonoMs", visibleAt);
+      scheduled.addProperty("executeAtServerMonoMs", prepareAt);
+      scheduled.addProperty("predictedPresentationLatencyMs", predicted);
+      scheduled.addProperty("presentationUncertaintyMs",
+          member.presentationLatency.uncertaintyMs());
+    }
+    member.directiveId = directiveId;
+    member.directiveStateVersion = transition.get("stateVersion").getAsLong();
+    member.directiveCommandSeq = transition.get("commandSeq").getAsLong();
+    member.directiveStartedAt = now;
+    member.directiveExecuteAt = prepareAt;
+    member.directivePrepareAt = prepareAt;
+    member.directiveVisibleAt = visibleAt;
+    member.directiveTargetPosition = transition.get("targetPositionMs").getAsLong();
+    member.directiveTargetState = transition.get("targetState").getAsString();
+    member.directiveNeedsPresentation = needsPresentation;
+    member.directiveBarrier = barrier;
+    member.directiveArmed = false;
+    member.directiveCause = transition.has("cause")
+        ? transition.get("cause").getAsString()
+        : transition.has("reason") ? transition.get("reason").getAsString() : kind;
+    member.status = "ACTIVATING";
+    roster(find(member.peer), member);
     member.peer.schedule(new PartyPlaybackDirective(
         transition.get("stateVersion").getAsLong(),
         transition.get("commandSeq").getAsLong(),
-        transition.has("kind") ? transition.get("kind").getAsString() : "COMMAND",
+        barrier ? "ARM" : kind,
         transition.get("targetPositionMs").getAsLong(),
-        transition.get("targetState").getAsString(),
+        barrier ? "PAUSED" : transition.get("targetState").getAsString(),
         transition.get("targetRate").getAsDouble(),
-        transition.get("executeAtServerMonoMs").getAsLong()));
+        prepareAt));
+    return scheduled;
+  }
+
+  private void armed(Party party, Member member, JsonObject request, long now)
+  {
+    if (!member.directiveBarrier || member.directiveArmed)
+      throw new Fault("INVALID_REQUEST");
+    long sample = sampleTime(member, request, now);
+    long position = number(request, "positionMs", 0, party.timeline.availableEndMs());
+    String state = text(request, "state");
+    if (!"PAUSED".equals(state)
+        || Math.abs(position - member.directiveTargetPosition) > HARD_DRIFT_MS)
+      throw new Fault("INVALID_PRESENTATION");
+    if (sample + VISIBLE_DRIFT_DEADBAND_MS < member.directivePrepareAt)
+      throw new Fault("EARLY_PRESENTATION");
+
+    member.lastHeartbeat = now;
+    member.lastSample = sample;
+    member.lastPosition = position;
+    member.directiveArmed = true;
+    member.status = "ARMED";
+    member.presentationLatency.preparation(sample - member.directivePrepareAt);
+  }
+
+  private void afterResponse(Peer peer, JsonObject request, JsonObject response)
+  {
+    if (request == null || response == null
+        || !"ACK".equals(diagnosticText(request, "type"))
+        || !"ARMED".equals(diagnosticText(request, "stage"))
+        || !"ACK".equals(diagnosticText(response, "type")))
+      return;
+    Party party = find(peer);
+    Member member = findMember(party, peer);
+    if (party == null || member == null || !member.directiveBarrier
+        || !member.directiveArmed || member.directiveId == null)
+      return;
+    long now = time.getAsLong();
+    if (member.directiveCommandSeq == party.barrierCommandSeq)
+      revealSharedBarrier(party, now);
+    else
+      reveal(party, member, now, Math.max(member.directiveVisibleAt,
+          now + Math.max(MIN_REVEAL_LEAD_MS, 2 * member.clock.p95(now))));
+  }
+
+  private void revealSharedBarrier(Party party, long now)
+  {
+    if (party.barrierCommandSeq < 0 || party.barrierRevealed) return;
+    List<Member> cohort = new ArrayList<>();
+    for (Member candidate : party.members.values())
+      if (candidate.directiveId != null
+          && candidate.directiveCommandSeq == party.barrierCommandSeq
+          && candidate.directiveBarrier)
+      {
+        if (!candidate.directiveArmed) return;
+        cohort.add(candidate);
+      }
+    if (cohort.isEmpty())
+    {
+      if (party.timeline.pending() != null
+          && party.timeline.pending().commandSeq() == party.barrierCommandSeq)
+        party.timeline.cancelPending(party.barrierCommandSeq);
+      if (party.canonicalCommandSeq == party.barrierCommandSeq)
+        party.canonicalCommandSeq = -1;
+      party.barrierCommandSeq = -1;
+      party.barrierVisibleAt = -1;
+      party.barrierRevealed = false;
+      return;
+    }
+    long revealAt = Math.max(party.barrierVisibleAt,
+        now + MIN_REVEAL_LEAD_MS);
+    PartyCommand command = party.timeline.reschedule(party.barrierCommandSeq, revealAt);
+    party.barrierRevealed = true;
+    for (Member candidate : cohort) reveal(party, candidate, now, revealAt);
+    diagnostic(party, null,
+        "REVEAL_COMMAND_" + command.commandSeq() + "_DEADLINE_" + revealAt, now);
+  }
+
+  private void reveal(Party party, Member member, long now, long revealAt)
+  {
+    member.directiveExecuteAt = revealAt;
+    member.directiveVisibleAt = revealAt;
+    member.status = "ACTIVATING";
+    roster(party, member);
+    JsonObject out = envelope("REVEAL");
+    out.addProperty("directiveId", member.directiveId);
+    out.addProperty("stateVersion", member.directiveStateVersion);
+    out.addProperty("commandSeq", member.directiveCommandSeq);
+    out.addProperty("executeAtServerMonoMs", revealAt);
+    out.addProperty("targetPositionMs", member.directiveTargetPosition);
+    out.addProperty("targetState", member.directiveTargetState);
+    out.addProperty("targetRate", 1);
+    member.peer.send(out);
+    member.peer.schedule(new PartyPlaybackDirective(
+        member.directiveStateVersion, member.directiveCommandSeq, "REVEAL",
+        member.directiveTargetPosition, member.directiveTargetState, 1, revealAt));
+  }
+
+  private void presented(Party party, Member member, JsonObject request, long now)
+  {
+    long sample = sampleTime(member, request, now);
+    long position = number(request, "positionMs", 0, party.timeline.availableEndMs());
+    String state = text(request, "state");
+    if (!Set.of("PLAYING", "PAUSED").contains(state)
+        || !state.equals(member.directiveTargetState))
+      throw new Fault("INVALID_PRESENTATION");
+    if (member.directiveNeedsPresentation
+        && sample + VISIBLE_DRIFT_DEADBAND_MS < member.directiveExecuteAt)
+      throw new Fault("EARLY_PRESENTATION");
+    if (member.directiveBarrier && !member.directiveArmed)
+      throw new Fault("INVALID_PRESENTATION");
+
+    member.lastHeartbeat = now;
+    member.lastSample = sample;
+    member.lastPosition = position;
+    member.starved = false;
+    member.driftViolations = 0;
+    if (member.directiveBarrier)
+      member.presentationLatency.reveal(sample - member.directiveExecuteAt);
+    if (party.canonicalCommandSeq == member.directiveCommandSeq)
+    {
+      try
+      {
+        party.timeline.establishPresentedFrame(
+            member.directiveCommandSeq, position, sample);
+      }
+      catch (IllegalStateException failure)
+      {
+        throw new Fault("STALE_DIRECTIVE");
+      }
+      party.canonicalCommandSeq = -1;
+    }
+    completeDirective(party, member);
+  }
+
+  private void completeDirective(Party party, Member member)
+  {
+    clearDirective(member);
+    member.status = "ACTIVE";
+    roster(party, member);
+  }
+
+  private void failDirective(Party party, Member member)
+  {
+    long failedSeq = member.directiveCommandSeq;
+    if (member.peer != null) member.peer.cancelScheduled();
+    clearDirective(member);
+    member.status = "LATE";
+    member.driftViolations = 0;
+    roster(party, member);
+    if (failedSeq == party.barrierCommandSeq)
+      revealSharedBarrier(party, time.getAsLong());
+  }
+
+  private void clearDirective(Member member)
+  {
+    member.directiveId = null;
+    member.directiveStateVersion = -1;
+    member.directiveCommandSeq = -1;
+    member.directiveStartedAt = -1;
+    member.directiveExecuteAt = -1;
+    member.directiveTargetPosition = -1;
+    member.directiveTargetState = null;
+    member.directiveNeedsPresentation = false;
+    member.directiveBarrier = false;
+    member.directiveArmed = false;
+    member.directivePrepareAt = -1;
+    member.directiveVisibleAt = -1;
+    member.directiveCause = null;
+  }
+
+  private boolean requiresBarrier(String cause, String kind)
+  {
+    return "HARD".equals(kind) && !"INITIAL_ALIGNMENT".equals(cause)
+        || Set.of("JUMP", "FF", "REW", "FF2", "REW2", "COMSKIP").contains(cause);
+  }
+
+  private boolean requiresPresentation(String cause, String targetState)
+  {
+    return "PLAYING".equals(targetState)
+        || Set.of("JUMP", "FF", "REW", "FF2", "REW2", "COMSKIP").contains(cause);
   }
 
   private JsonObject commandJson(String partyId, PartyCommand command)
@@ -806,8 +1275,14 @@ public final class PartyService
     out.addProperty("rate", 1);
     out.addProperty("serverMonoMs", now);
     if (party.host != null) out.addProperty("hostParticipantId", party.host);
-    if (party.timeline.pending() != null)
+    if (party.timeline.pending() != null
+        && (party.barrierCommandSeq < 0 || party.barrierRevealed))
       out.add("pendingCommand", commandJson(party.id, party.timeline.pending()));
+    if (party.barrierCommandSeq >= 0 && !party.barrierRevealed)
+    {
+      out.addProperty("barrierPending", true);
+      out.addProperty("barrierCommandSeq", party.barrierCommandSeq);
+    }
     JsonArray roster = new JsonArray();
     for (Member member : party.members.values())
     {
@@ -816,8 +1291,14 @@ public final class PartyService
       entry.addProperty("status", member.status);
       entry.addProperty("prepared", member.prepared);
       entry.addProperty("clockConfident", member.clock.confident(now));
+      entry.addProperty("readyForPlayback", playEligible(party, member, now));
       entry.addProperty("p95RttMs", member.clock.p95(now));
       entry.addProperty("ackCommandSeq", member.ackCommandSeq);
+      entry.addProperty("presentationLatencyConfident", member.presentationLatency.confident());
+      entry.addProperty("predictedPresentationLatencyMs",
+          member.presentationLatency.predictedTotalMs());
+      entry.addProperty("presentationUncertaintyMs",
+          member.presentationLatency.uncertaintyMs());
       roster.add(entry);
     }
     out.add("roster", roster);
@@ -873,6 +1354,7 @@ public final class PartyService
     Member member = new Member(opaque(), opaque(), peer);
     member.recoveryExpires = now + 1800000;
     member.preparingSince = now;
+    member.lastActivity = now;
     return member;
   }
 
@@ -920,12 +1402,29 @@ public final class PartyService
 
   private void roster(Party party, Member member)
   {
+    if (party == null) return;
+    long now = time.getAsLong();
+    boolean clockConfident = member.clock.confident(now);
+    boolean readyForPlayback = playEligible(party, member, now);
+    if (member.status.equals(member.notifiedStatus)
+        && member.prepared == member.notifiedPrepared
+        && clockConfident == member.notifiedClockConfident
+        && readyForPlayback == member.notifiedReadyForPlayback)
+      return;
+    member.notifiedStatus = member.status;
+    member.notifiedPrepared = member.prepared;
+    member.notifiedClockConfident = clockConfident;
+    member.notifiedReadyForPlayback = readyForPlayback;
     JsonObject out = envelope("PARTICIPANT_STATE");
     out.addProperty("partyId", party.id);
     out.addProperty("participantId", member.id);
     out.addProperty("status", member.status);
     out.addProperty("prepared", member.prepared);
-    broadcast(party, out);
+    out.addProperty("clockConfident", clockConfident);
+    out.addProperty("readyForPlayback", readyForPlayback);
+    for (Member recipient : party.members.values())
+      if (recipient != member && recipient.peer != null)
+        recipient.peer.send(copy(out));
   }
 
   private void broadcast(Party party, JsonObject message)
@@ -934,22 +1433,13 @@ public final class PartyService
       if (member.peer != null) member.peer.send(copy(message));
   }
 
-  private void pauseForHostExit(Party party, Member host, long now, boolean sendCode)
+  private void pauseForHostExit(Party party, Member host, long now)
   {
     PartyCommand pending = party.timeline.pending();
     if ("PLAYING".equals(party.timeline.state())
         || pending != null && "PLAYING".equals(pending.targetState()))
       transition(party, host, "HOST_EXIT_PAUSE", now,
           party.timeline.positionAt(now + lead(party, now)), "PAUSED");
-    if (sendCode && host.peer != null)
-    {
-      PartyJoinCodes.Grant code = joinCodes.current(party.id, now);
-      JsonObject notice = envelope("JOIN_CODE");
-      notice.addProperty("partyId", party.id);
-      notice.addProperty("joinCode", code.code());
-      notice.addProperty("expiresAtServerMonoMs", code.expiresAt());
-      host.peer.send(notice);
-    }
     transfer(party, host);
   }
 
@@ -978,29 +1468,50 @@ public final class PartyService
       if (commit && member.prepared)
         member.peer.commit(party.media, party.timeline.positionAt(now));
       member.peer.progressOwner(false);
+      member.peer.preparationOwner(false);
     }
     boolean wasHost = member.id.equals(party.host);
+    expireResume(party, member, now);
     party.members.remove(member.id);
     member.status = "LEFT";
     roster(party, member);
     if (party.members.isEmpty())
     {
+      expireParty(party, now);
       parties.remove(party.id);
       joinCodes.remove(party.id, now);
     }
     else if (wasHost) transfer(party, member);
   }
 
-  private void end(Party party, boolean commit, String reason, long now)
+  private JsonObject end(Party party, boolean commit, String reason, long now,
+      Peer responsePeer)
   {
     JsonObject out = envelope("ENDED");
     out.addProperty("partyId", party.id);
     out.addProperty("reason", reason);
-    broadcast(party, out);
-    for (Member member : new ArrayList<>(party.members.values()))
-      remove(party, member, commit, now);
+    for (Member member : party.members.values())
+      if (member.peer != null && member.peer != responsePeer)
+        member.peer.send(copy(out));
+    for (Member member : party.members.values())
+    {
+      expireResume(party, member, now);
+      if (member.peer != null)
+      {
+        member.peer.cancelScheduled();
+        member.peer.cancelPreparation();
+        if (commit && member.prepared)
+          member.peer.commit(party.media, party.timeline.positionAt(now));
+        member.peer.progressOwner(false);
+        member.peer.preparationOwner(false);
+      }
+      member.status = "LEFT";
+    }
+    party.members.clear();
+    expireParty(party, now);
     parties.remove(party.id);
     joinCodes.remove(party.id, now);
+    return out;
   }
 
   /** Routes existing SageTV playback controls into the authoritative timeline. */
@@ -1036,10 +1547,12 @@ public final class PartyService
     if (party == null) return;
     Member member = requireMember(party, peer);
     long now = time.getAsLong();
-    if (member.id.equals(party.host)) pauseForHostExit(party, member, now, false);
+    if (member.id.equals(party.host)) pauseForHostExit(party, member, now);
     peer.cancelScheduled();
     peer.cancelPreparation();
     peer.progressOwner(false);
+    peer.preparationOwner(false);
+    clearDirective(member);
     member.peer = null;
     member.status = "DISCONNECTED";
     member.disconnectedAt = now;
@@ -1053,10 +1566,13 @@ public final class PartyService
   public synchronized void tick()
   {
     long now = time.getAsLong();
+    expiredParties.entrySet().removeIf(entry -> entry.getValue() <= now);
+    expiredResumes.entrySet().removeIf(entry -> entry.getValue() <= now);
     for (Peer peer : new ArrayList<>(links.keySet())) peer.maintenance();
     for (Party party : new ArrayList<>(parties.values()))
     {
-      party.timeline.advance(now);
+      if (party.barrierCommandSeq < 0 || party.barrierRevealed)
+        party.timeline.advance(now);
       for (Member member : new ArrayList<>(party.members.values()))
       {
         if (member.peer == null && member.disconnectedAt >= 0
@@ -1068,12 +1584,25 @@ public final class PartyService
         if (member.preparationId != null
             && now - member.preparingSince > PREPARATION_TIMEOUT_MS)
         {
+          String preparationId = member.preparationId;
+          if (member.peer != null)
+            preparationResult(member.peer, preparationId,
+                sage.VideoFrame.WATCH_FAILED_UNKNOWN, -1, "NO_MEDIA_PROGRESS");
+          else
+          {
+            member.preparationId = null;
+            member.status = "LATE";
+            roster(party, member);
+          }
+        }
+        if (member.directiveId != null
+            && now - member.directiveStartedAt > ACTIVATION_TIMEOUT_MS)
+        {
           JsonObject error = envelope("ERROR");
-          error.addProperty("code", "PREPARATION_EXPIRED");
+          error.addProperty("code", "ACTIVATION_EXPIRED");
+          error.addProperty("directiveId", member.directiveId);
           if (member.peer != null) member.peer.send(error);
-          member.preparationId = null;
-          member.status = "LATE";
-          roster(party, member);
+          failDirective(party, member);
         }
         if (member.peer != null && "PLAYING".equals(party.timeline.state())
             && "ACTIVE".equals(member.status)
@@ -1083,9 +1612,50 @@ public final class PartyService
           member.status = "LATE";
           roster(party, member);
         }
+        roster(party, member);
+      }
+      if (!parties.containsKey(party.id)) continue;
+      boolean genuinelyConnected = false;
+      long abandonedAt = -1;
+      for (Member member : party.members.values())
+      {
+        if (member.peer != null
+            && now - member.lastActivity <= CONNECTED_ACTIVITY_STALE_MS)
+        {
+          genuinelyConnected = true;
+          break;
+        }
+        long memberAbandonedAt = member.peer != null
+            ? member.lastActivity + CONNECTED_ACTIVITY_STALE_MS
+            : member.disconnectedAt;
+        abandonedAt = Math.max(abandonedAt, memberAbandonedAt);
+      }
+      if (genuinelyConnected)
+        party.abandonedSince = -1;
+      else if (party.abandonedSince < 0
+          || abandonedAt >= 0 && abandonedAt < party.abandonedSince)
+        party.abandonedSince = abandonedAt >= 0 ? abandonedAt : now;
+      else if (now - party.abandonedSince > RECONNECT_GRACE_MS)
+      {
+        end(party, false, "ABANDONED", now, null);
+        continue;
+      }
+      if (party.canonicalCommandSeq >= 0
+          && party.members.values().stream().noneMatch(member ->
+              member.directiveId != null
+                  && member.directiveCommandSeq == party.canonicalCommandSeq))
+        party.canonicalCommandSeq = -1;
+      if (party.barrierCommandSeq >= 0
+          && party.members.values().stream().noneMatch(member ->
+              member.directiveId != null
+                  && member.directiveCommandSeq == party.barrierCommandSeq))
+      {
+        party.barrierCommandSeq = -1;
+        party.barrierVisibleAt = -1;
+        party.barrierRevealed = false;
       }
       if (now - party.created > PARTY_LIFETIME_MS)
-        end(party, false, "EXPIRED", now);
+        end(party, false, "EXPIRED", now, null);
     }
   }
 
@@ -1093,8 +1663,10 @@ public final class PartyService
   public synchronized void shutdown()
   {
     for (Party party : new ArrayList<>(parties.values()))
-      end(party, false, "SERVER_SHUTDOWN", time.getAsLong());
+      end(party, false, "SERVER_SHUTDOWN", time.getAsLong(), null);
     parties.clear();
+    expiredParties.clear();
+    expiredResumes.clear();
     links.clear();
     joinCodes.clear();
     joinAttempts.clear();
@@ -1106,12 +1678,31 @@ public final class PartyService
   public synchronized void preparationResult(Peer peer, String preparationId,
       int watchCode, long generation)
   {
+    preparationResult(peer, preparationId, watchCode, generation,
+        watchCode == sage.VideoFrame.WATCH_OK ? null : "WATCH_REJECTED");
+  }
+
+  /** Completes one preparation with a stable diagnostic reason. */
+  public synchronized void preparationResult(Peer peer, String preparationId,
+      int watchCode, long generation, String failureCode)
+  {
     Party party = find(peer);
     if (party == null || !eligible(peer)) return;
     Member member = requireMember(party, peer);
     if (member.preparationId == null || !member.preparationId.equals(preparationId)) return;
     member.preparationId = null;
-    member.prepared = watchCode == 0 && generation >= 0;
+    Delivery delivery = null;
+    member.prepared = watchCode == sage.VideoFrame.WATCH_OK && generation >= 0;
+    if (member.prepared)
+    {
+      try { delivery = peer.preparedDelivery(party.media); }
+      catch (Fault failure)
+      {
+        member.prepared = false;
+        watchCode = sage.VideoFrame.WATCH_FAILED_UNKNOWN;
+        failureCode = "TRANSCODE_START_FAILED";
+      }
+    }
     member.status = member.prepared ? "PREPARING" : "LATE";
     JsonObject out = envelope("PREPARATION_RESULT");
     out.addProperty("partyId", party.id);
@@ -1122,13 +1713,12 @@ public final class PartyService
     if (member.prepared)
     {
       out.addProperty("playbackGeneration", generation);
-      try { out.add("delivery", deliveryJson(peer.preparedDelivery(party.media))); }
-      catch (Fault failure) { member.prepared = false; member.status = "LATE"; }
+      out.add("delivery", deliveryJson(delivery));
     }
     if (!member.prepared)
     {
       peer.cancelPreparation();
-      out.addProperty("code", "PREPARATION_FAILED");
+      out.addProperty("code", failureCode == null ? "WATCH_REJECTED" : failureCode);
     }
     peer.send(out);
     roster(party, member);
@@ -1185,6 +1775,60 @@ public final class PartyService
     return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
   }
 
+  private void ackDiagnostic(Party party, Member member, AckPending pending,
+      JsonObject request, long now, String result)
+  {
+    long sampleMono = diagnosticLong(request, "sampleMonoMs");
+    long normalizedSample = sampleMono < 0 || member == null
+        ? -1 : Math.round(sampleMono + member.clock.offset(now));
+    System.out.println("PartyAck"
+        + " party=" + (party == null ? "-" : party.id)
+        + " participant=" + (member == null ? "-" : member.id)
+        + " authenticated=" + (member != null && member.peer != null)
+        + " directiveReceived=" + diagnosticText(request, "directiveId")
+        + " directivePending=" + (pending.directiveId() == null ? "-" : pending.directiveId())
+        + " stage=" + diagnosticText(request, "stage")
+        + " stateVersionReceived=" + diagnosticLong(request, "stateVersion")
+        + " stateVersionExpected=" + pending.stateVersion()
+        + " commandSeqReceived=" + diagnosticLong(request, "commandSeq")
+        + " commandSeqExpected=" + pending.commandSeq()
+        + " requestId=" + diagnosticText(request, "requestId")
+        + " requestSeq=" + diagnosticLong(request, "requestSeq")
+        + " sampleMonoMs=" + sampleMono
+        + " normalizedServerMonoMs=" + normalizedSample
+        + " serverMonoMs=" + now
+        + " positionMs=" + diagnosticLong(request, "positionMs")
+        + " targetPositionMs=" + pending.targetPosition()
+        + " toleranceMs=" + VISIBLE_DRIFT_DEADBAND_MS
+        + " stateReceived=" + diagnosticText(request, "state")
+        + " stateExpected=" + (pending.targetState() == null ? "-" : pending.targetState())
+        + " result=" + result);
+  }
+
+  private static String diagnosticText(JsonObject request, String name)
+  {
+    try
+    {
+      return request != null && request.has(name) ? request.get(name).getAsString() : "-";
+    }
+    catch (RuntimeException failure)
+    {
+      return "<invalid>";
+    }
+  }
+
+  private static long diagnosticLong(JsonObject request, String name)
+  {
+    try
+    {
+      return request != null && request.has(name) ? request.get(name).getAsLong() : -1;
+    }
+    catch (RuntimeException failure)
+    {
+      return -1;
+    }
+  }
+
   private void diagnostic(Party party, Member member, String outcome, long now)
   {
     System.out.println("PartyMode party=" + (party == null ? "-" : party.id)
@@ -1209,5 +1853,43 @@ public final class PartyService
     if (party == null && request != null && request.has("partyId"))
       party = parties.get(text(request, "partyId"));
     diagnostic(party, findMember(party, peer), outcome, now);
+  }
+
+  private void addStaleStateDetails(JsonObject response, JsonObject request)
+  {
+    String partyId = diagnosticText(request, "partyId");
+    Party party = parties.get(partyId);
+    long suppliedVersion = diagnosticLong(request, "stateVersion");
+    long suppliedSeq = diagnosticLong(request, "commandSeq");
+    long authoritativeVersion = party == null ? -1 : party.timeline.stateVersion();
+    long authoritativeSeq = party == null ? -1 : party.timeline.commandSeq();
+    response.addProperty("requestType", diagnosticText(request, "type"));
+    response.addProperty("partyId", partyId);
+    response.addProperty("suppliedStateVersion", suppliedVersion);
+    response.addProperty("suppliedCommandSeq", suppliedSeq);
+    response.addProperty("authoritativeStateVersion", authoritativeVersion);
+    response.addProperty("authoritativeCommandSeq", authoritativeSeq);
+    System.out.println("PartyMode stale-state requestType=" + diagnosticText(request, "type")
+        + " requestId=" + diagnosticText(request, "requestId")
+        + " party=" + partyId
+        + " suppliedVersion=" + suppliedVersion
+        + " suppliedSeq=" + suppliedSeq
+        + " authoritativeVersion=" + authoritativeVersion
+        + " authoritativeSeq=" + authoritativeSeq);
+  }
+
+  private void expireResume(Party party, Member member, long now)
+  {
+    expiredResumes.put(resumeKey(party.id, member.id), now + TERMINAL_TOMBSTONE_MS);
+  }
+
+  private void expireParty(Party party, long now)
+  {
+    expiredParties.put(party.id, now + TERMINAL_TOMBSTONE_MS);
+  }
+
+  private static String resumeKey(String partyId, String participantId)
+  {
+    return partyId + '\u0000' + participantId;
   }
 }

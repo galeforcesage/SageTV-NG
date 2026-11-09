@@ -9,6 +9,7 @@
  */
 package sage.hdhr;
 
+import sage.ChannelQuality;
 import sage.Sage;
 import sage.epg.sd.gson.JsonArray;
 import sage.epg.sd.gson.JsonElement;
@@ -30,15 +31,18 @@ import java.util.Map;
  * Only used by the new ATSC 3.0 HTTP-pull capture path (Phases 3-4).
  * Existing libhdhomerun-based capture for ATSC 1.0 channels is unchanged.
  *
- * Per-channel JSON entry shape (HDHomeRun firmware 20260326):
+ * Per-channel JSON entry shape (current HDHomeRun firmware):
  * <pre>
  *   {
  *     "GuideNumber": "109.1",
  *     "GuideName":   "WGN-NG",
  *     "VideoCodec":  "HEVC",
  *     "AudioCodec":  "AC4",
+ *     "UHD": 1,
  *     "URL":         "http://<hdhr-ip>:5004/auto/v<channel>",
- *     "DRM": 1                  // present + truthy => DRM, omit/0 => clear
+ *     "DRM": 1,
+ *     "Enabled": 0,
+ *     "Subscribed": 0
  *   }
  * </pre>
  *
@@ -180,7 +184,7 @@ public class HDHomeRunLineup
         if (k.equals(channelNumber) || k.startsWith(majorDot))
         {
           Entry cand = me.getValue();
-          if (cand == null) continue;
+          if (cand == null || !cand.isAvailable()) continue;
           if (best == null) { best = cand; continue; }
           // Prefer HEVC over non-HEVC; among same-codec ties, keep first.
           boolean bestIsHevc = "HEVC".equalsIgnoreCase(best.videoCodec);
@@ -218,14 +222,15 @@ public class HDHomeRunLineup
   public boolean isHevcNonDrm(String channelNumber)
   {
     Entry e = lookup(channelNumber);
-    return e != null && !e.drm && "HEVC".equalsIgnoreCase(e.videoCodec);
+    return e != null && e.isAvailable() && !e.drm
+        && "HEVC".equalsIgnoreCase(e.videoCodec);
   }
 
   /** Direct HTTP-pull URL for the channel, or null. */
   public String getHttpUrl(String channelNumber)
   {
     Entry e = lookup(channelNumber);
-    return e == null ? null : e.url;
+    return e == null || !e.isAvailable() ? null : e.url;
   }
 
   /** Snapshot of all current cache entries (Phase B variant pairing). */
@@ -238,7 +243,7 @@ public class HDHomeRunLineup
 
   private Map<String, Entry> fetchAndParse() throws Exception
   {
-    URL u = new URL("http://" + host + "/lineup.json");
+    URL u = new URL("http://" + host + "/lineup.json?show=all");
     HttpURLConnection c = (HttpURLConnection) u.openConnection();
     c.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
     c.setReadTimeout(HTTP_READ_TIMEOUT_MS);
@@ -258,19 +263,7 @@ public class HDHomeRunLineup
       }
       finally { br.close(); }
 
-      JsonElement root = new JsonParser().parse(sb.toString());
-      if (!root.isJsonArray()) return Collections.emptyMap();
-      JsonArray arr = root.getAsJsonArray();
-      Map<String, Entry> out = new HashMap<String, Entry>(arr.size() * 2);
-      for (int i = 0; i < arr.size(); i++)
-      {
-        JsonElement el = arr.get(i);
-        if (!el.isJsonObject()) continue;
-        Entry e = parseEntry(el.getAsJsonObject());
-        if (e != null && e.guideNumber != null)
-          out.put(e.guideNumber, e);
-      }
-      return out;
+      return parseLineupJson(sb.toString());
     }
     finally
     {
@@ -278,7 +271,25 @@ public class HDHomeRunLineup
     }
   }
 
-  private static Entry parseEntry(JsonObject o)
+  static Map<String, Entry> parseLineupJson(String json)
+  {
+    if (json == null || json.length() == 0) return Collections.emptyMap();
+    JsonElement root = new JsonParser().parse(json);
+    if (!root.isJsonArray()) return Collections.emptyMap();
+    JsonArray arr = root.getAsJsonArray();
+    Map<String, Entry> out = new HashMap<String, Entry>(arr.size() * 2);
+    for (int i = 0; i < arr.size(); i++)
+    {
+      JsonElement el = arr.get(i);
+      if (!el.isJsonObject()) continue;
+      Entry e = parseEntry(el.getAsJsonObject());
+      if (e != null && e.guideNumber != null)
+        out.put(e.guideNumber, e);
+    }
+    return out;
+  }
+
+  static Entry parseEntry(JsonObject o)
   {
     Entry e = new Entry();
     e.guideNumber = optString(o, "GuideNumber");
@@ -287,7 +298,32 @@ public class HDHomeRunLineup
     e.audioCodec  = optString(o, "AudioCodec");
     e.url         = optString(o, "URL");
     e.drm         = optInt(o, "DRM", 0) != 0;
+    e.quality     = parseQuality(o);
+    e.enabled     = parseFlag(o, "Enabled");
+    e.subscribed  = parseFlag(o, "Subscribed");
     return e.guideNumber == null ? null : e;
+  }
+
+  private static ChannelQuality parseQuality(JsonObject o)
+  {
+    if (optInt(o, "UHD", 0) != 0) return ChannelQuality.UHD;
+    if (optInt(o, "HD", 0) != 0) return ChannelQuality.HD;
+    if (optInt(o, "SD", 0) != 0) return ChannelQuality.SD;
+    return ChannelQuality.UNKNOWN;
+  }
+
+  private static Flag parseFlag(JsonObject o, String key)
+  {
+    JsonElement el = o.get(key);
+    if (el == null || el.isJsonNull()) return Flag.UNKNOWN;
+    try
+    {
+      String value = el.getAsString();
+      if ("false".equalsIgnoreCase(value) || "0".equals(value)) return Flag.FALSE;
+      if ("true".equalsIgnoreCase(value) || "1".equals(value)) return Flag.TRUE;
+      return Integer.parseInt(value) == 0 ? Flag.FALSE : Flag.TRUE;
+    }
+    catch (RuntimeException e) { return Flag.UNKNOWN; }
   }
 
   private static String optString(JsonObject o, String k)
@@ -300,7 +336,22 @@ public class HDHomeRunLineup
   {
     JsonElement el = o.get(k);
     if (el == null || el.isJsonNull()) return def;
-    try { return el.getAsInt(); } catch (Throwable t) { return def; }
+    try
+    {
+      String value = el.getAsString();
+      if ("true".equalsIgnoreCase(value)) return 1;
+      if ("false".equalsIgnoreCase(value)) return 0;
+      return Integer.parseInt(value);
+    }
+    catch (RuntimeException e) { return def; }
+  }
+
+  /** Tri-state lineup flag that preserves an absent field. */
+  public enum Flag
+  {
+    UNKNOWN,
+    TRUE,
+    FALSE
   }
 
   public static final class Entry
@@ -311,11 +362,27 @@ public class HDHomeRunLineup
     public String  audioCodec;   // "AC3", "AAC", "AC4", ...
     public String  url;
     public boolean drm;
+    public ChannelQuality quality = ChannelQuality.UNKNOWN;
+    public Flag enabled = Flag.UNKNOWN;
+    public Flag subscribed = Flag.UNKNOWN;
+
+    /**
+     * Returns whether the channel is eligible for tuning.
+     *
+     * <p>Older firmware omits these fields, so unknown remains compatible and
+     * only an explicit false disables the channel.
+     */
+    public boolean isAvailable()
+    {
+      return enabled != Flag.FALSE && subscribed != Flag.FALSE;
+    }
 
     @Override public String toString()
     {
       return "HDHRLineup{" + guideNumber + " " + guideName
           + " v=" + videoCodec + " a=" + audioCodec
+          + " quality=" + quality
+          + " enabled=" + enabled + " subscribed=" + subscribed
           + (drm ? " DRM" : "") + "}";
     }
   }

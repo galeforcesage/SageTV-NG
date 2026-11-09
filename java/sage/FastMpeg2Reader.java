@@ -331,9 +331,16 @@ public final class FastMpeg2Reader
    */
   public void setEnhancementTier(sage.enhance.EnhancementTier tier)
   {
+    setEnhancementTier(tier, false);
+  }
+  public void setEnhancementTier(sage.enhance.EnhancementTier tier,
+      boolean specializedOnly)
+  {
     this.enhancementTier = tier;
+    this.enhancementSpecializedOnly = specializedOnly;
   }
   private sage.enhance.EnhancementTier enhancementTier;
+  private boolean enhancementSpecializedOnly;
   public void setRemuxToTS(boolean ts)
   {
     remuxToTS = ts;
@@ -413,7 +420,8 @@ public final class FastMpeg2Reader
       if (inxs instanceof FFMPEGTranscoder)
         ((FFMPEGTranscoder) inxs).setSidecarMaxAudioChannels(sidecarMaxAudioChannels);
       if (enhancementTier != null && enhancementTier.isActive() && inxs instanceof FFMPEGTranscoder)
-        ((FFMPEGTranscoder) inxs).setEnhancementRequest(enhancementTier);
+        ((FFMPEGTranscoder) inxs).setEnhancementRequest(
+            enhancementTier, enhancementSpecializedOnly);
       forcedPS = true;
       firstPTS = 45000;
       findFirstPTS = false;

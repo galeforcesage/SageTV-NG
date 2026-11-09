@@ -1891,6 +1891,76 @@ public class FFMPEGTranscoder implements TranscodeEngine
   }
 
   /**
+   * Gives every active MPEG-TS push relaunch one shared local timestamp origin
+   * when video is re-encoded but AC-3-family audio would otherwise be copied.
+   *
+   * <p>After an {@code -ss} relaunch, encoded video naturally begins a new local
+   * epoch. Copied AC-3/E-AC-3 packets can retain the source packet epoch despite
+   * {@code -avoid_negative_ts make_zero}; repeated growing-file relaunches then
+   * expose large forward/backward audio PTS steps to the native client. Decode
+   * and re-encode only that audio path, resetting its PTS to zero and absorbing
+   * source discontinuities before muxing. Completed files, pull delivery, true
+   * video remux/copy, non-TS containers and non-AC-3 audio are unchanged.
+   */
+  @SuppressWarnings({"rawtypes","unchecked"})
+  void maybeReclockActiveEncodedTsPushAudio(java.util.ArrayList xcodeParamsVec)
+  {
+    if (!activeFile || !directPushSession || outputFile != null || fmp4Mode
+        || sourceFormat == null || xcodeParamsVec.contains("-copyts")
+        || !sage.media.format.MediaFormat.MPEG2_TS.equals(sourceFormat.getFormatName()))
+      return;
+    sage.media.format.AudioFormat audio = sourceFormat.getAudioFormat();
+    if (audio == null) return;
+    String sourceCodec = audio.getFormatName();
+    boolean ac3 = sage.media.format.MediaFormat.AC3.equalsIgnoreCase(sourceCodec);
+    boolean eac3 = sage.media.format.MediaFormat.EAC3.equalsIgnoreCase(sourceCodec);
+    if (!ac3 && !eac3) return;
+
+    int input = xcodeParamsVec.indexOf("-i");
+    if (input < 0) return;
+    int videoCodec = -1, audioCodec = -1;
+    String mux = null;
+    for (int i = input + 1; i + 1 < xcodeParamsVec.size(); i++)
+    {
+      String flag = String.valueOf(xcodeParamsVec.get(i));
+      String value = String.valueOf(xcodeParamsVec.get(i + 1));
+      if (("-vcodec".equals(flag) || "-c:v".equals(flag) || "-codec:v".equals(flag))
+          && videoCodec < 0)
+        videoCodec = i;
+      else if (("-acodec".equals(flag) || "-c:a".equals(flag) || "-codec:a".equals(flag))
+          && audioCodec < 0)
+        audioCodec = i;
+      else if ("-f".equals(flag) && mux == null)
+        mux = value;
+    }
+    if (videoCodec < 0 || audioCodec < 0 || !"mpegts".equalsIgnoreCase(mux)
+        || "copy".equalsIgnoreCase(String.valueOf(xcodeParamsVec.get(videoCodec + 1)))
+        || !"copy".equalsIgnoreCase(String.valueOf(xcodeParamsVec.get(audioCodec + 1))))
+      return;
+
+    String encoder = ac3 ? "ac3" : "eac3";
+    xcodeParamsVec.set(audioCodec + 1, encoder);
+    if (!xcodeParamsVec.contains("-b:a") && !xcodeParamsVec.contains("-ab"))
+    {
+      int bitrate = audio.getBitrate() > 0 ? audio.getBitrate()
+          : (ac3 ? 384000 : 640000);
+      addBeforeOutputSentinel(xcodeParamsVec, "-b:a", Integer.toString(bitrate));
+    }
+    String filter = "asetpts=PTS-STARTPTS,aresample=async="
+        + Sage.get("ffmpeg/live_push_audio_async", "1000");
+    int af = xcodeParamsVec.indexOf("-af");
+    if (af > input && af + 1 < xcodeParamsVec.size())
+      xcodeParamsVec.set(af + 1, filter + "," + xcodeParamsVec.get(af + 1));
+    else
+      addBeforeOutputSentinel(xcodeParamsVec, "-af", filter);
+    if (!xcodeParamsVec.contains("-avoid_negative_ts"))
+      addBeforeOutputSentinel(xcodeParamsVec, "-avoid_negative_ts", "make_zero");
+    System.out.println("FFMPEGTranscoder: active encoded MPEG-TS push — re-clocked copied "
+        + sourceCodec + " as " + encoder + " with " + filter
+        + " (fresh monotonic A/V origin for this launch)");
+  }
+
+  /**
    * Protocol 2.1 (option B): when a surface-aware target audio codec/channels
    * were supplied via the XCODE_SETUP ";acodec=;ac=" params, rewrite the audio
    * codec + channel count + bitrate in the assembled command. Realizes the
@@ -3113,21 +3183,45 @@ public class FFMPEGTranscoder implements TranscodeEngine
   static void repairInvalidSoftwareFallbackVideoArgs(
       java.util.List<String> argv, sage.media.format.VideoFormat video)
   {
-    if (argv == null || video == null || video.getWidth() <= 0
-        || video.getHeight() <= 0 || video.getFps() <= 0.0f)
-      return;
+    if (argv == null) return;
     int input = argv.indexOf("-i");
     if (input < 0) return;
-    for (int i = input + 1; i < argv.size() - 1; i++)
+    boolean knownSize = video != null && video.getWidth() > 0 && video.getHeight() > 0;
+    boolean knownFps = video != null && video.getFps() > 0.0f;
+    for (int i = argv.size() - 2; i > input; i--)
     {
       String flag = argv.get(i);
       String value = argv.get(i + 1);
       if ("-s".equals(flag) && isInvalidVideoSize(value))
-        argv.set(i + 1, video.getWidth() + "x" + video.getHeight());
+      {
+        if (knownSize)
+          argv.set(i + 1, video.getWidth() + "x" + video.getHeight());
+        else
+        {
+          argv.remove(i + 1);
+          argv.remove(i);
+        }
+      }
       else if ("-r".equals(flag) && parsePositiveDouble(value) <= 0.0)
-        argv.set(i + 1, Float.toString(video.getFps()));
+      {
+        if (knownFps)
+          argv.set(i + 1, Float.toString(video.getFps()));
+        else
+        {
+          argv.remove(i + 1);
+          argv.remove(i);
+        }
+      }
       else if ("-g".equals(flag) && parsePositiveDouble(value) <= 0.0)
-        argv.set(i + 1, Integer.toString(Math.max(1, Math.round(video.getFps() * 10.0f))));
+      {
+        if (knownFps)
+          argv.set(i + 1, Integer.toString(Math.max(1, Math.round(video.getFps() * 10.0f))));
+        else
+        {
+          argv.remove(i + 1);
+          argv.remove(i);
+        }
+      }
     }
   }
 
@@ -3542,10 +3636,20 @@ public class FFMPEGTranscoder implements TranscodeEngine
       }
 
       sage.enhance.EnhancementTier granted = adm.getTier();
+      if (enhanceSpecializedOnly && !adm.permitsSpecializedScale())
+      {
+        gov.release(sessionId);
+        if (Sage.DBG) System.out.println("GPU_ENHANCE apply: AI-only request was not"
+            + " admitted to a specialized provider (" + adm.getReason()
+            + "); delivering source");
+        applyMpeg2SoftwareCompatibilityFallback(xcodeParamsVec,
+            "specialized_provider_not_admitted");
+        return;
+      }
       boolean deterministicOnly = !adm.permitsSpecializedScale();
       sage.enhance.EnhancementPlan plan = sage.enhance.GpuEnhancePipeline.buildPlan(
-          granted, interlaced, srcW, srcH, estKbps, deterministicOnly, srcFpsExact,
-          srcPixelFormat, srcBitDepth);
+          granted, interlaced, srcW, srcH, estKbps, deterministicOnly,
+          enhanceSpecializedOnly, srcFpsExact, srcPixelFormat, srcBitDepth);
       if (plan == null || !plan.isActive())
       {
         gov.release(sessionId);
@@ -3717,10 +3821,13 @@ public class FFMPEGTranscoder implements TranscodeEngine
           // competes with the VSR lease the primary plan already holds.
           try
           {
-            sage.enhance.EnhancementPlan lf = sage.enhance.GpuEnhancePipeline.buildPlan(
-                granted, interlaced, srcW, srcH, estKbps, true, srcFpsExact,
-                srcPixelFormat, srcBitDepth);
-            if (lf != null && lf.isActive() && lf.isScaling()) lanczosFallbackPlan = lf;
+            if (!enhanceSpecializedOnly)
+            {
+              sage.enhance.EnhancementPlan lf = sage.enhance.GpuEnhancePipeline.buildPlan(
+                  granted, interlaced, srcW, srcH, estKbps, true, srcFpsExact,
+                  srcPixelFormat, srcBitDepth);
+              if (lf != null && lf.isActive() && lf.isScaling()) lanczosFallbackPlan = lf;
+            }
           }
           catch (Throwable t)
           {
@@ -6097,6 +6204,7 @@ public class FFMPEGTranscoder implements TranscodeEngine
     // aware ceiling. No-op when enhancement claimed the bitrate just above, or
     // for any non-browserhd mode.
     applyBrowserHdRateCap(xcodeParamsVec);
+    maybeReclockActiveEncodedTsPushAudio(xcodeParamsVec);
     // Native placeshifter copy-push hygiene: drop the spurious NVDEC decoder on
     // a video-copy output and re-base timestamps so the client media clock can't
     // rewind mid-stream (freeze). Last argv edit, so it sees the final codecs.
@@ -7663,11 +7771,14 @@ public class FFMPEGTranscoder implements TranscodeEngine
 
   /**
    * The enhancement tier requested for this transcode session, carried from the
-   * MiniPlayer decision through the {@code XCODE_SETUP ;enhance=<tier>} param.
+   * MiniPlayer decision through the {@code XCODE_SETUP :enhance;tier=<tier>}
+   * parameters.
    * {@link sage.enhance.EnhancementTier#NONE} (the default) means no request and
    * the command is left byte-identical to today.
    */
   protected sage.enhance.EnhancementTier enhanceRequest = sage.enhance.EnhancementTier.NONE;
+  /** True when this request may use only a specialized server upscaler. */
+  protected boolean enhanceSpecializedOnly;
   /** Governor session id held while an enhanced session is admitted; null when none. */
   protected String enhanceSessionId;
   /** Specialized scale-provider permit held for this enhanced session; null for
@@ -7684,7 +7795,14 @@ public class FFMPEGTranscoder implements TranscodeEngine
    */
   public void setEnhancementRequest(sage.enhance.EnhancementTier tier)
   {
+    setEnhancementRequest(tier, false);
+  }
+
+  public void setEnhancementRequest(sage.enhance.EnhancementTier tier,
+      boolean specializedOnly)
+  {
     enhanceRequest = (tier == null) ? sage.enhance.EnhancementTier.NONE : tier;
+    enhanceSpecializedOnly = enhanceRequest.isActive() && specializedOnly;
   }
 
   /** New physical display sink width for a mid-session monitor move; 0 = none. */

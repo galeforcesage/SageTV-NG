@@ -321,6 +321,14 @@ public class MiniPlayer implements DVDMediaPlayer
   static String buildEffDeliveryToken(String chosenSurfaceDelivery,
       String chosenSurfaceXcodeMode, sage.enhance.EnhancementTier enhanceTier)
   {
+    return buildEffDeliveryToken(chosenSurfaceDelivery, chosenSurfaceXcodeMode,
+        enhanceTier, false);
+  }
+
+  static String buildEffDeliveryToken(String chosenSurfaceDelivery,
+      String chosenSurfaceXcodeMode, sage.enhance.EnhancementTier enhanceTier,
+      boolean specializedOnly)
+  {
     if (chosenSurfaceDelivery == null || chosenSurfaceDelivery.length() == 0)
       return null;
     String base;
@@ -357,7 +365,8 @@ public class MiniPlayer implements DVDMediaPlayer
     }
     String wire = enhanceTier.wireToken();
     if (wire == null) return base;
-    return base + ":enhance;tier=" + wire;
+    return base + ":enhance;tier=" + wire
+        + (specializedOnly ? ";policy=ai_only" : "");
   }
 
   /**
@@ -1824,6 +1833,7 @@ public class MiniPlayer implements DVDMediaPlayer
     CaptureDevice capDev = currMF.guessCaptureDeviceFromEncoding();
     // Reset per-tune server-enhancement state; the decision below re-derives it.
     this.currentTuneEnhanceTier = sage.enhance.EnhancementTier.NONE;
+    this.currentTuneEnhanceSpecializedOnly = false;
     this.enhanceLiveStartPending = false;
     this.currentTunePushEnhanceMode = null;
     this.ngOutVideoCodec = null;
@@ -2893,6 +2903,10 @@ public class MiniPlayer implements DVDMediaPlayer
             int enhSrcW = mediaW, enhSrcH = mediaH;
             boolean enhSrcInterlaced = srcInterlaced;
             int enhSrcFps = srcFps;
+            ChannelQuality enhSourceQuality = cf == null
+                ? ChannelQuality.UNKNOWN
+                : ChannelQuality.fromToken(cf.getMetadataProperty(
+                    sage.media.format.MediaFormat.META_HDHR_SOURCE_QUALITY));
             if ((enhSrcW <= 0 || enhSrcH <= 0) && file != null
                 && Sage.getBoolean("playback/gpu_enhance/live_source_probe", true))
             {
@@ -2982,12 +2996,14 @@ public class MiniPlayer implements DVDMediaPlayer
                 (mcsr != null ? mcsr.getDeviceFormFactor() : null),
                 (mcsr != null ? mcsr.getLocalEnhancementPref() : "auto"),
                 (mcsr != null ? mcsr.getLocalEnhancementStatus() : "none"),
+                (mcsr != null ? mcsr.getLocalUpscalingCapability() : "none"),
                 sage.HwEncoder.gpuEnhanceSupported(),
                 // The network gate (§4 rule 6a). Enhancement is measured against
                 // enhanceBwKbps (LAN-unmetered / fresh active probe / passive
                 // fallback) rather than the passive estimate that sized the
                 // legacy stream. 0 imposes no cap.
-                sourceBitrateKbps, enhanceBwKbps, srcFpsExact, srcPixelFormat, srcBitDepth);
+                sourceBitrateKbps, enhanceBwKbps, srcFpsExact, srcPixelFormat, srcBitDepth,
+                enhSourceQuality);
             // NG live 4K upscaling -- provisional tier when the source geometry
             // is still unknown at tune. A newborn live segment (recording
             // started moments ago, no video GOP on disk yet) makes even the
@@ -3010,10 +3026,18 @@ public class MiniPlayer implements DVDMediaPlayer
             // known-geometry tune is byte-identical (cannot fire when enhSrcH>0).
             if ((enhanceTier == null || !enhanceTier.isActive())
                 && enhSrcH <= 0
+                && enhSourceQuality != ChannelQuality.UHD
                 && currMF != null && currMF.isRecording()
                 && mcsr != null && mcsr.getSinkWidth() > 0 && mcsr.getSinkHeight() > 0
                 && sage.HwEncoder.gpuEnhanceSupported()
-                && sage.enhance.spi.ScaleProviderRegistry.getInstance().selectedProviderCanUpscale()
+                && (sage.enhance.UpscalingPolicy.fromToken(mcsr.getLocalEnhancementPref())
+                        .requiresSpecializedServerUpscaler(
+                            sage.enhance.UpscalingCapability.fromToken(
+                                mcsr.getLocalUpscalingCapability()))
+                    ? sage.enhance.spi.ScaleProviderRegistry.getInstance()
+                        .selectedSpecializedProviderCanUpscale()
+                    : sage.enhance.spi.ScaleProviderRegistry.getInstance()
+                        .selectedProviderCanUpscale())
                 && Sage.getBoolean("playback/gpu_enhance/live_provisional_tier", true))
             {
               sage.enhance.EnhancementTier provisional =
@@ -3047,6 +3071,13 @@ public class MiniPlayer implements DVDMediaPlayer
         // one on a reused MiniPlayer.
         this.currentTuneEnhanceTier =
             (enhanceTier != null) ? enhanceTier : sage.enhance.EnhancementTier.NONE;
+        this.currentTuneEnhanceSpecializedOnly =
+            this.currentTuneEnhanceTier.isActive()
+            && sage.enhance.UpscalingPolicy.fromToken(
+                mcsr != null ? mcsr.getLocalEnhancementPref() : "auto")
+                .requiresSpecializedServerUpscaler(
+                    sage.enhance.UpscalingCapability.fromToken(
+                        mcsr != null ? mcsr.getLocalUpscalingCapability() : "none"));
         String currentEnhanceVideoCodec = getEnhanceOutputVideoCodec(cf);
         if (this.currentTuneEnhanceTier.isActive()
             && chosenSurface != null
@@ -3293,7 +3324,7 @@ public class MiniPlayer implements DVDMediaPlayer
             // branches share. In dry-run it is always NONE, so this token is
             // byte-identical to today.
             String effDelivery = buildEffDeliveryToken(chosenSurfaceDelivery,
-                chosenSurfaceXcodeMode, enhanceTier);
+                chosenSurfaceXcodeMode, enhanceTier, currentTuneEnhanceSpecializedOnly);
             // Protocol 2.1 option B: for the fMP4 modes that TRANSCODE audio
             // (browserhd, browserhd_copyv) carry the decision's best target
             // audio codec + source channel count as ";acodec=<v>;ac=<n>" so the
@@ -4348,7 +4379,8 @@ public class MiniPlayer implements DVDMediaPlayer
             // transcodes are byte-identical; an active tier attaches the request
             // that maybeApplyGpuEnhancement honors (after its own live/recording/
             // copy-family/governor re-checks) to rewrite the copy into the upscale.
-            mpegSrc.setEnhancementTier(currentTuneEnhanceTier);
+            mpegSrc.setEnhancementTier(currentTuneEnhanceTier,
+                currentTuneEnhanceSpecializedOnly);
             // Per-client 5.1-vs-stereo capability for the enhance AC-4 sidecar
             // (0 = legacy/undeclared -> resolved from the chosen codec below).
             mpegSrc.setSidecarMaxAudioChannels(currentTuneSurfaceMaxAudioChannels);
@@ -4412,7 +4444,8 @@ public class MiniPlayer implements DVDMediaPlayer
             serverSideTranscoding = true;
             this.timeshifted = timeshifted = true;
             pushTranscodePlan = PushTranscodePlan.transcode(currMF, prefTranscodeMode,
-                currentTuneEnhanceTier, currentTuneSurfaceMaxAudioChannels, seamAc4AudioCodec);
+                currentTuneEnhanceTier, currentTuneEnhanceSpecializedOnly,
+                currentTuneSurfaceMaxAudioChannels, seamAc4AudioCodec);
           }
         }
         else if (hdhrPrimeSpecial || (hostname != null && (hostname.equals(Sage.get("alternate_media_server", "")) ||
@@ -9211,34 +9244,36 @@ public class MiniPlayer implements DVDMediaPlayer
     final boolean usingRemuxer;
     final String transcodeMode;
     final sage.enhance.EnhancementTier enhanceTier;
+    final boolean enhanceSpecializedOnly;
     final int sidecarMaxAudioChannels;
     final String ac4AudioCodec;
 
     private PushTranscodePlan(MediaFile source, boolean usingRemuxer, String transcodeMode,
-        sage.enhance.EnhancementTier enhanceTier, int sidecarMaxAudioChannels,
-        String ac4AudioCodec)
+        sage.enhance.EnhancementTier enhanceTier, boolean enhanceSpecializedOnly,
+        int sidecarMaxAudioChannels, String ac4AudioCodec)
     {
       sourceMediaFileId = source == null ? 0 : source.getID();
       this.usingRemuxer = usingRemuxer;
       this.transcodeMode = transcodeMode;
       this.enhanceTier = enhanceTier == null
           ? sage.enhance.EnhancementTier.NONE : enhanceTier;
+      this.enhanceSpecializedOnly = this.enhanceTier.isActive() && enhanceSpecializedOnly;
       this.sidecarMaxAudioChannels = sidecarMaxAudioChannels;
       this.ac4AudioCodec = ac4AudioCodec;
     }
 
     static PushTranscodePlan transcode(MediaFile source, String mode,
-        sage.enhance.EnhancementTier enhanceTier, int sidecarMaxAudioChannels,
-        String ac4AudioCodec)
+        sage.enhance.EnhancementTier enhanceTier, boolean enhanceSpecializedOnly,
+        int sidecarMaxAudioChannels, String ac4AudioCodec)
     {
-      return new PushTranscodePlan(source, false, mode, enhanceTier,
+      return new PushTranscodePlan(source, false, mode, enhanceTier, enhanceSpecializedOnly,
           sidecarMaxAudioChannels, ac4AudioCodec);
     }
 
     static PushTranscodePlan remux(MediaFile source)
     {
       return new PushTranscodePlan(source, true, null,
-          sage.enhance.EnhancementTier.NONE, 0, null);
+          sage.enhance.EnhancementTier.NONE, false, 0, null);
     }
 
     boolean isSafeFor(MediaFile previous, MediaFile next, boolean seamPermitted)
@@ -9258,7 +9293,7 @@ public class MiniPlayer implements DVDMediaPlayer
     void applyTo(FastMpeg2Reader reader, sage.media.format.ContainerFormat format)
     {
       reader.setStreamTranscodeMode(transcodeMode, format);
-      reader.setEnhancementTier(enhanceTier);
+      reader.setEnhancementTier(enhanceTier, enhanceSpecializedOnly);
       reader.setSidecarMaxAudioChannels(sidecarMaxAudioChannels);
       if (ac4AudioCodec != null && ac4AudioCodec.length() > 0)
         reader.setAc4SourceAudioCodec(ac4AudioCodec);
@@ -9405,6 +9440,7 @@ public class MiniPlayer implements DVDMediaPlayer
   // different lexical scope). NONE = no enhancement, behavior unchanged.
   private volatile sage.enhance.EnhancementTier currentTuneEnhanceTier =
       sage.enhance.EnhancementTier.NONE;
+  private volatile boolean currentTuneEnhanceSpecializedOnly;
 
   // Winning surface's declared AUDIO_MAX_CHANNELS for the CURRENT tune (0 =
   // legacy/undeclared). Carried from the post-rank decision block to the AC-4

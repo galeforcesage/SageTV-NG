@@ -144,6 +144,9 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
   {
     if (Sage.DBG) System.out.println("startEncoding for "+ getName() +", file=" + encodeFile + ", chan=" + channel);
     currRecordedBytes = 0;
+    String lineupHost = null;
+    HDHomeRunLineup.Entry lineupEntry = null;
+    boolean httpPullEnabled = Sage.getBoolean("hdhr/atsc3_http_pull_enabled", true);
     if (cdi != null)
       activateInput(cdi);
     if (channel != null)
@@ -163,6 +166,21 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
             + Sage.get("mmc/atsc3/recording_policy", "prefer_atsc3") + ")");
         channel = remapped;
       }
+      if (httpPullEnabled)
+      {
+        lineupHost = resolveLineupHost();
+        if (lineupHost != null)
+        {
+          lineupEntry = HDHomeRunLineup.forHost(lineupHost).lookup(channel);
+          if (lineupEntry != null && !lineupEntry.isAvailable())
+          {
+            if (Sage.DBG) System.out.println("HDHR: refusing unavailable channel "
+                + channel + " enabled=" + lineupEntry.enabled
+                + " subscribed=" + lineupEntry.subscribed);
+            throw new EncodingException(EncodingException.CAPTURE_DEVICE_INSTALL, 0);
+          }
+        }
+      }
       tuneToChannel(channel);
     }
 
@@ -172,9 +190,9 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
     // ffmpeg -c copy. Disk file is identical-shape MPEG-TS; demuxer Phase 1
     // covers HEVC stream_type 0x24 + AC-4 0xAC.
     if (encodeFile != null && channel != null && channel.length() > 0
-        && Sage.getBoolean("hdhr/atsc3_http_pull_enabled", true))
+        && httpPullEnabled)
     {
-      String host = resolveLineupHost();
+      String host = lineupHost != null ? lineupHost : resolveLineupHost();
       if (host != null)
       {
         HDHomeRunLineup lu = HDHomeRunLineup.forHost(host);
@@ -182,8 +200,8 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
         // can't decrypt them either, so falling through would just produce a
         // 0-byte capture that gets reaped 30s later. Throwing here surfaces a
         // clean error to the scheduler instead of a silent timeout cycle.
-        HDHomeRunLineup.Entry lu_entry = lu.lookup(channel);
-        if (lu_entry != null && lu_entry.drm)
+        HDHomeRunLineup.Entry lu_entry = lineupEntry != null ? lineupEntry : lu.lookup(channel);
+        if (lu_entry != null && lu_entry.isAvailable() && lu_entry.drm)
         {
           if (Sage.DBG) System.out.println("HDHR: refusing to record DRM-locked "
               + "channel " + channel + " (" + lu_entry.guideName + ", codec="
@@ -197,7 +215,8 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
         // delivers data. ATSC1 pull can be turned off via
         // hdhr/atsc1_http_pull_enabled for environments where native works.
         boolean isHevc = lu_entry != null && "HEVC".equalsIgnoreCase(lu_entry.videoCodec);
-        boolean httpPullEligible = lu_entry != null && lu_entry.url != null
+        boolean httpPullEligible = lu_entry != null && lu_entry.isAvailable()
+            && lu_entry.url != null
             && (isHevc || Sage.getBoolean("hdhr/atsc1_http_pull_enabled", true));
         if (httpPullEligible)
         {
@@ -258,6 +277,7 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
                       + " mf=" + mf);
                   VideoFrame.kickAll();
                 }
+                applyLineupMetadata(mf, lu_entry);
 
                 // ---- Optional ffprobe enrichment fallback ----
                 // Native MPEG parsing now identifies HEVC/AC-4 directly; keep
@@ -326,6 +346,8 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
                         }
                         if (probed.getFormatName() == null || probed.getFormatName().length() == 0)
                           probed.setFormatName(sage.media.format.MediaFormat.MPEG2_TS);
+                        if (current != null && current.getMetadata() != null)
+                          probed.addMetadata(current.getMetadata());
                         reprobeMf.setMediafileFormat(probed);
                         if (Sage.DBG) System.out.println("ATSC3 HTTP-pull: re-probed format="
                             + probed + " mf=" + reprobeMf);
@@ -383,6 +405,31 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
       activeSource.setLastChannel(getChannel());
       activeSource.writePrefs();
     }
+
+  }
+
+  /**
+   * Preserves advisory lineup metadata on the captured MediaFile.
+   *
+   * <p>These values describe the source listing. A later parser/probe can
+   * replace codec and geometry decisions with decoded stream information.
+   */
+  private static void applyLineupMetadata(MediaFile mediaFile,
+      HDHomeRunLineup.Entry entry)
+  {
+    if (mediaFile == null || entry == null) return;
+    mediaFile.addMetadata(sage.media.format.MediaFormat.META_HDHR_SOURCE_QUALITY,
+        entry.quality.name());
+    mediaFile.addMetadata(sage.media.format.MediaFormat.META_HDHR_VIDEO_CODEC,
+        entry.videoCodec == null ? "" : entry.videoCodec);
+    mediaFile.addMetadata(sage.media.format.MediaFormat.META_HDHR_AUDIO_CODEC,
+        entry.audioCodec == null ? "" : entry.audioCodec);
+    mediaFile.addMetadata(sage.media.format.MediaFormat.META_HDHR_DRM,
+        Boolean.toString(entry.drm));
+    mediaFile.addMetadata(sage.media.format.MediaFormat.META_HDHR_ENABLED,
+        entry.enabled.name());
+    mediaFile.addMetadata(sage.media.format.MediaFormat.META_HDHR_SUBSCRIBED,
+        entry.subscribed.name());
   }
 
   public void stopEncoding()
@@ -675,6 +722,7 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
     for (HDHomeRunLineup.Entry e : entries)
     {
       if (e == null || e.guideNumber == null) continue;
+      if (!e.isAvailable()) continue;
       // FLEX 4K marks ATSC 3.0 services with VideoCodec=HEVC + AudioCodec=AC4.
       if (!"HEVC".equalsIgnoreCase(e.videoCodec)) continue;
       if (e.drm && !includeDrm) continue;
@@ -900,9 +948,14 @@ public class HDHomeRunCaptureDevice extends CaptureDevice implements Runnable
       if (shouldProbe)
       {
         lineupDiscoverThrottle.put(hexId, Sage.time());
-        String ip = sage.hdhr.HDHomeRunDiscover.findIp(hexId);
+        sage.hdhr.HDHomeRunDiscover.DeviceInfo discovered =
+            sage.hdhr.HDHomeRunDiscover.findDevice(hexId);
+        String ip = discovered == null ? null : discovered.getHost();
         if (ip != null && ip.length() > 0)
         {
+          if (Sage.DBG && !discovered.getCapabilities().isEmpty())
+            System.out.println("HDHomeRunCaptureDevice: device " + hexId
+                + " capabilities=" + discovered.getCapabilities());
           if (!ip.equals(cached))
           {
             Sage.put("hdhr/lineup_host_" + hexId, ip);

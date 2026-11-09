@@ -28,14 +28,18 @@ canonical in [PartyModeV1.md](PartyModeV1.md). Existing no-login LAN admission i
 supported with transport-bound session tokens; no admin pairing is needed.
 Legacy/unnegotiated clients are ineligible; normal playback defaults are unchanged.
 Party v1 uses the renderer's ordinary SageTV Watch/source path and requires
-`PARTY_JOIN_CODE_V1`, `PARTY_MONOTONIC_V1`, `PARTY_SCHEDULED_V1`,
+`PARTY_JOIN_CODE_V1`, `PARTY_INVITATION_V1`, `PARTY_MONOTONIC_V1`, `PARTY_SCHEDULED_V1`,
 `PARTY_HEARTBEAT_V1`, `PARTY_PLAYER_ADAPTER_V1` and
-`PARTY_LOCAL_STOP_V1`. Even selected connected invitees enter the host's
+`PARTY_PRESENTED_FRAME_V1`, `PARTY_ARMED_REVEAL_V1`, plus
+`PARTY_LOCAL_STOP_V1`. Even selected connected
+invitees enter the host's
 three-digit code on their existing admitted session. No join-token bypass or
 deep link is offered. The player adapter prepares the canonical `MediaFile`
 through normal Watch, remains paused until a future command/correction, executes
-generation-fenced monotonic deadlines, and reports observed media time through
-HEARTBEAT. Party Mode does not select a renderer surface, issue media admission
+generation-fenced monotonic deadlines, holds disruptive reposition frames
+behind an ARMED/reveal barrier, reports the first screen-presented frame for
+activation, and sends later observed media time through HEARTBEAT. Party
+Mode does not select a renderer surface, issue media admission
 handles, or expose GPU/transcoder internals.
 Optional `PARTY_GROWING_MEDIA_V1` is required for active Sage recording/timeshift
 parties. It means the adapter consumes the dynamic `availableEndMs` /
@@ -70,14 +74,17 @@ every property below to be answerable.
 | `DISPLAY_HDR_TYPES` | `Display.getHdrCapabilities()` | csv: `HDR10,HDR10+,DOLBY_VISION,HLG` |
 | `DISPLAY_MAX_LUMINANCE` | same | nits — for tone mapping |
 | `DISPLAY_WIDE_COLOR` | `Configuration.isScreenWideColorGamut()` | `true` for BT.2020-capable sinks |
-| `LOCAL_ENHANCEMENT` | client's own upscaler state | `pref=auto\|local\|server;status=active\|available\|none`. Report `status=active` when the device is already upscaling, so the server doesn't duplicate it |
+| `LOCAL_ENHANCEMENT` | user policy + client upscaler capability | `pref=auto\|always\|ai_only\|never;cap=none\|standard\|high_quality\|ai;status=active\|available\|none`. The client declares its own capability; do not send a device or product model |
+
+Under `pref=auto`, a specialized/AI server provider outranks `cap=high_quality`.
+If specialized scaling is unavailable, `high_quality` and `ai` clients receive
+the source resolution unchanged. `standard` and `none` clients may receive the
+standard server scaler.
 
 > **There is no `SUPPORTS_4K` field.** A client's user-facing
-> Auto / Always / Never setting for server upscaling is carried entirely by
-> *whether and when* it populates `DISPLAY_SINK_RESOLUTION` — Never sends `""`,
-> Always sends the honest physical panel unconditionally, Auto sends it only
-> when the client judges itself eligible. The value is always the true panel and
-> never a fabricated 4K. See
+> Auto / Always / AI Only / Never is carried by `LOCAL_ENHANCEMENT.pref`.
+> `DISPLAY_SINK_RESOLUTION` always remains the honest physical panel and is
+> never withheld or fabricated to express policy. See
 > [NGServerVideoEnhancement.md](NGServerVideoEnhancement.md) §2.9.
 
 > **Server video enhancement (GPU upscale to 4K)** additionally requires the
@@ -336,10 +343,10 @@ on NOTIFY NET_STATS with throughput drop > 30% sustained 10 s:
 - [ ] 5 display `GetProperty` handlers
 - [ ] `DISPLAY_SINK_RESOLUTION` — the **physical panel**, distinct from
       `DISPLAY_RESOLUTION`; without it the server can never offer 4K enhancement
-- [ ] `LOCAL_ENHANCEMENT` (`pref=…;status=…`)
-- [ ] Wire the user's Auto / Always / Never upscale setting to *whether* you send
-      `DISPLAY_SINK_RESOLUTION` (Never ⇒ `""`, Always ⇒ always the honest panel).
-      There is no separate field for this — see §2.9 of the enhancement doc
+- [ ] `LOCAL_ENHANCEMENT`
+      (`pref=…;cap=none|standard|high_quality|ai;status=…`)
+- [ ] Wire the user's Auto / Always / AI Only / Never setting to `pref`; always
+      report the honest `DISPLAY_SINK_RESOLUTION`
 - [ ] Per-surface `MAX_OUTPUT_WIDTH` / `MAX_OUTPUT_HEIGHT` (both, or neither
       counts) and optional `MAX_FPS`
 - [ ] `VIDEO_DECODER_MATRIX` JSON builder

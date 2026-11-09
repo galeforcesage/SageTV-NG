@@ -362,6 +362,55 @@ public class ScaleProviderRegistryTest
     r.close();
   }
 
+  // ---- Specialized-only selection ---------------------------------------
+
+  @Test
+  public void selectSpecializedUsesSpecializedProvider()
+  {
+    ScaleProviderRegistration r = reg.register(new FakeSpecialized("adaptive-upscaler"));
+    ScaleSelection sel = reg.selectSpecialized(live());
+    assertEquals(sel.getProviderId(), "adaptive-upscaler");
+    assertNotNull(sel.getLease());
+    sel.getLease().close();
+    r.close();
+  }
+
+  @Test
+  public void selectSpecializedNeverFallsThroughToCudaLanczos()
+  {
+    ScaleSelection sel = reg.selectSpecialized(live());
+    assertEquals(sel.getProviderId(), BuiltinScaleProvider.ID);
+    assertTrue(sel.fellBackToBuiltin());
+    assertFalse(sel.getExecutionPlan().isRenderable(),
+        "specialized-only must deliver source when no specialized provider is usable");
+  }
+
+  @Test
+  public void specializedOfferGateIgnoresStandardProvider()
+  {
+    assertFalse(reg.selectedSpecializedProviderCanUpscale());
+    assertFalse(reg.selectedSpecializedProviderCanUpscale(live()));
+
+    ScaleProviderRegistration r = reg.register(new FakeSpecialized("adaptive-upscaler"));
+    assertTrue(reg.selectedSpecializedProviderCanUpscale());
+    assertTrue(reg.selectedSpecializedProviderCanUpscale(live()));
+    r.close();
+  }
+
+  @Test
+  public void specializedBudgetExhaustionDeliversSource()
+  {
+    Sage.putInt(PROP_MAX, 1);
+    ScaleProviderRegistration r = reg.register(new FakeSpecialized("adaptive-upscaler"));
+    ScaleSelection first = reg.selectSpecialized(live());
+    ScaleSelection second = reg.selectSpecialized(live());
+    assertEquals(second.getProviderId(), BuiltinScaleProvider.ID);
+    assertTrue(second.fellBackToBuiltin(),
+        "AI-only selection must not fall through to the standard scaler");
+    first.getLease().close();
+    r.close();
+  }
+
   // ---- Registration lifecycle --------------------------------------------
 
   @Test(expectedExceptions = IllegalStateException.class)

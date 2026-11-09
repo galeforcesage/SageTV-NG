@@ -78,13 +78,16 @@ public class Atsc3StppExtractorIncrementalTest
     return out;
   }
 
-  /** Reference: the full-file result — coalesce everything after normalizing to first begin. */
+  /**
+   * Reference: the production full-file result, including the configured
+   * hold-until-next behavior used by {@link Atsc3StppExtractor#extract}.
+   */
   private static List<CaptionEvent> fullReference(List<CaptionEvent> rawAll)
   {
     List<CaptionEvent> copy = new ArrayList<>(rawAll);
     Atsc3StppExtractor.normalizeTimestamps(copy);
     java.util.Collections.sort(copy);
-    return CaptionEvent.coalesce(copy);
+    return Atsc3StppExtractor.coalesceWithHold(copy);
   }
 
   @Test

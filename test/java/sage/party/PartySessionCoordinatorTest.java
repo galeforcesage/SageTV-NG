@@ -31,4 +31,16 @@ public class PartySessionCoordinatorTest
     assertEquals(command.executeAtServerMonoMs(), 2050L);
     assertSame(timeline.pending(), command);
   }
+
+  @Test
+  public void learnedPresentationLatencyExtendsVisibleDeadline()
+  {
+    PartySessionCoordinator coordinator = new PartySessionCoordinator(300, 7500);
+
+    long lead = coordinator.commandLead(List.of(
+        new PartySessionCoordinator.ParticipantTiming(true, 50, 3000, 250),
+        new PartySessionCoordinator.ParticipantTiming(true, 75, 900, 100)));
+
+    assertEquals(lead, 3550L);
+  }
 }

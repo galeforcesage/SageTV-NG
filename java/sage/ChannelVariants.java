@@ -74,7 +74,12 @@ public final class ChannelVariants
     return null;
   }
 
-  /** Append a variant; persists immediately. Duplicates (by equals) ignored. */
+  /**
+   * Adds or refreshes a variant and persists immediately.
+   *
+   * <p>Identity fields use {@link ChannelVariant#equals(Object)}; rescans
+   * replace a matching record so codec, DRM, and quality metadata stay current.
+   */
   public static void add(int stationID, ChannelVariant v)
   {
     if (v == null) return;
@@ -87,7 +92,9 @@ public final class ChannelVariants
         list = new ArrayList<>(2);
         REG.put(stationID, list);
       }
-      if (!list.contains(v)) list.add(v);
+      int existing = list.indexOf(v);
+      if (existing < 0) list.add(v);
+      else list.set(existing, v);
       persistOne(stationID, list);
     }
   }

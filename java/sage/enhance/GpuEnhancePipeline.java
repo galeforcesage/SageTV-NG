@@ -118,8 +118,21 @@ public final class GpuEnhancePipeline
                                           boolean deterministicOnly, double sourceFps,
                                           String sourcePixelFormat, int sourceBitDepth)
   {
+    return buildPlan(tier, sourceInterlaced, sourceWidth, sourceHeight, bitrateKbps,
+        deterministicOnly, false, sourceFps, sourcePixelFormat, sourceBitDepth);
+  }
+
+  public static EnhancementPlan buildPlan(EnhancementTier tier, boolean sourceInterlaced,
+                                          int sourceWidth, int sourceHeight, long bitrateKbps,
+                                          boolean deterministicOnly, boolean specializedOnly,
+                                          double sourceFps, String sourcePixelFormat,
+                                          int sourceBitDepth)
+  {
     if (tier == null || !tier.isActive())
       return EnhancementPlan.NONE;
+    if (deterministicOnly && specializedOnly)
+      return new EnhancementPlan(EnhancementTier.NONE, false, null, null, 0, 0, 0, 0,
+          "conflicting scale-provider restrictions");
 
     // Source floor. Upscaling tiers require >= 720 LINES; the check is on height,
     // so 720x480 SD is correctly excluded.
@@ -170,7 +183,9 @@ public final class GpuEnhancePipeline
       sage.enhance.spi.ScaleSelection sel =
           deterministicOnly
               ? sage.enhance.spi.ScaleProviderRegistry.getInstance().selectDeterministic(req)
-              : sage.enhance.spi.ScaleProviderRegistry.getInstance().select(req);
+              : specializedOnly
+                  ? sage.enhance.spi.ScaleProviderRegistry.getInstance().selectSpecialized(req)
+                  : sage.enhance.spi.ScaleProviderRegistry.getInstance().select(req);
       if (sel != null)
       {
         scaleExec = sel.getExecutionPlan();
@@ -508,6 +523,13 @@ public final class GpuEnhancePipeline
     // Strip encoder-supplied duplicates from the output section only.
     stripPairAfter(argv, iIdx, "-tag:v");
     stripPairAfter(argv, iIdx, "-fps_mode");
+    // The legacy profile may have been assembled before a growing source exposed
+    // its geometry or frame rate, leaving invalid "-s 0x0 -r 0 -g 0" output
+    // options. The enhancement filter owns output geometry and cadence, while
+    // buildEncoderArgs owns GOP, so none of those legacy pairs may survive.
+    stripPairAfter(argv, iIdx, "-s");
+    stripPairAfter(argv, iIdx, "-r");
+    stripPairAfter(argv, iIdx, "-g");
     iIdx = argv.indexOf("-i");
     vci = indexOfVideoCodec(argv, iIdx + 1);
     if (vci < 0 || vci + 1 >= argv.size() || !"copy".equalsIgnoreCase(argv.get(vci + 1)))
@@ -618,6 +640,7 @@ public final class GpuEnhancePipeline
     // so the filter graph fails and NVENC reports the misleading terminal -22.
     iIdx = argv.indexOf("-i");
     removeFlagPair(argv, iIdx, "-s");
+    repairInvalidOutputCadence(argv, iIdx, fps);
 
     // (3) VBR rate control after the codec token. An active enhancement OWNS the
     // bitrate, so strip any rate-control the base browserhd profile already set
@@ -633,6 +656,23 @@ public final class GpuEnhancePipeline
     java.util.List<String> rc = buildReencodeRateControlArgs(plan, argv, iIdx);
     if (!rc.isEmpty() && vci >= 0) argv.addAll(vci + 2, rc);
     return true;
+  }
+
+  private static void repairInvalidOutputCadence(
+      java.util.List<String> argv, int inputIndex, int fps)
+  {
+    int safeFps = fps > 0 ? fps : 30;
+    for (int i = inputIndex + 1; i + 1 < argv.size(); i++)
+    {
+      String flag = argv.get(i);
+      if (!"-r".equals(flag) && !"-g".equals(flag)) continue;
+      double value;
+      try { value = Double.parseDouble(argv.get(i + 1)); }
+      catch (NumberFormatException failure) { value = 0.0; }
+      if (value > 0.0) continue;
+      argv.set(i + 1, "-r".equals(flag)
+          ? Integer.toString(safeFps) : Integer.toString(safeFps * 2));
+    }
   }
 
   // ---- External-process (upscale worker) pipeline --------------------------

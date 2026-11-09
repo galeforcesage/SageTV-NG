@@ -69,6 +69,7 @@ public final class ChannelVariantAttacher
     Map<String, List<HDHomeRunLineup.Entry>> byMajor = new HashMap<>();
     for (HDHomeRunLineup.Entry e : all)
     {
+      if (e == null || !e.isAvailable()) continue;
       String major = majorOf(e.guideNumber);
       if (major == null) continue;
       byMajor.computeIfAbsent(major, k -> new ArrayList<>(2)).add(e);
@@ -121,7 +122,9 @@ public final class ChannelVariantAttacher
               normCodec(atsc1.videoCodec, ChannelVariant.VCODEC_MPEG2),
               normCodec(atsc1.audioCodec, ChannelVariant.ACODEC_AC3),
               atsc1.guideNumber,
-              hdhrDeviceHexId);
+              hdhrDeviceHexId,
+              atsc1.drm,
+              atsc1.quality);
           ChannelVariants.add(sid, v);
           attached++;
         }
@@ -133,7 +136,8 @@ public final class ChannelVariantAttacher
               normCodec(atsc3.audioCodec, ChannelVariant.ACODEC_AC4),
               atsc3.guideNumber,
               hdhrDeviceHexId,
-              atsc3.drm);
+              atsc3.drm,
+              atsc3.quality);
           ChannelVariants.add(sid, v);
           attached++;
           if (Sage.DBG) System.out.println("ATSC3: paired GuideNumber="

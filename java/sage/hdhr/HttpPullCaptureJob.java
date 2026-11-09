@@ -41,9 +41,17 @@ public class HttpPullCaptureJob implements Runnable
   private static final String CONNECT_TIMEOUT_PROP = "hdhr/atsc3_connect_timeout_ms";
   private static final String READ_TIMEOUT_PROP    = "hdhr/atsc3_read_timeout_ms";
   private static final String BUFFER_SIZE_PROP     = "hdhr/atsc3_buffer_size";
+  private static final String MIN_RATE_PROP        = "hdhr/http_pull_min_bytes_per_sec";
+  private static final String RATE_WINDOW_PROP     = "hdhr/http_pull_rate_window_ms";
+  private static final String PROGRESS_LOG_PROP    = "hdhr/http_pull_progress_log_ms";
+  private static final String FLUSH_INTERVAL_PROP  = "hdhr/http_pull_flush_interval_ms";
   private static final int    DEFAULT_CONNECT_TO   = 5000;
   private static final int    DEFAULT_READ_TO      = 15000;
   private static final int    DEFAULT_BUFSZ        = 64 * 1024; // 64 KiB
+  private static final long   DEFAULT_MIN_RATE     = 32 * 1024; // 256 kbps
+  private static final long   DEFAULT_RATE_WINDOW  = 10000;
+  private static final long   DEFAULT_PROGRESS_LOG = 30000;
+  private static final long   DEFAULT_FLUSH        = 1000;
 
   private final String url;
   private volatile String currentFile;
@@ -54,6 +62,8 @@ public class HttpPullCaptureJob implements Runnable
   private volatile boolean stop = false;
   private volatile String  pendingSwitchFile;
   private volatile long    bytesWritten = 0L;
+  private volatile long    lastReadTime;
+  private volatile int     lastReadSize;
   private volatile String  lastErrorLine;
 
   public HttpPullCaptureJob(String url, String firstFile)
@@ -97,6 +107,8 @@ public class HttpPullCaptureJob implements Runnable
   }
 
   public String getLastErrorLine() { return lastErrorLine; }
+  public long getLastReadTime() { return lastReadTime; }
+  public int getLastReadSize() { return lastReadSize; }
 
   @Override
   public void run()
@@ -105,9 +117,10 @@ public class HttpPullCaptureJob implements Runnable
         + " file=" + currentFile);
     try
     {
+      boolean append = false;
       while (!stop)
       {
-        runOne(currentFile);
+        runOne(currentFile, append);
         synchronized (lock)
         {
           if (stop) break;
@@ -116,9 +129,11 @@ public class HttpPullCaptureJob implements Runnable
             currentFile = pendingSwitchFile;
             pendingSwitchFile = null;
             bytesWritten = 0L;
+            append = false;
             continue;
           }
           // Stream ended unexpectedly: brief backoff then reconnect to same file.
+          append = true;
           try { lock.wait(500); } catch (InterruptedException ie) { break; }
           if (stop) break;
         }
@@ -131,11 +146,18 @@ public class HttpPullCaptureJob implements Runnable
     }
   }
 
-  private void runOne(String outFile)
+  private void runOne(String outFile, boolean append)
   {
     int connectTo = Sage.getInt(CONNECT_TIMEOUT_PROP, DEFAULT_CONNECT_TO);
     int readTo    = Sage.getInt(READ_TIMEOUT_PROP,    DEFAULT_READ_TO);
     int bufSz     = Sage.getInt(BUFFER_SIZE_PROP,     DEFAULT_BUFSZ);
+    long minRate  = Math.max(0L, Sage.getLong(MIN_RATE_PROP, DEFAULT_MIN_RATE));
+    long rateWindow = Math.max(1000L,
+        Sage.getLong(RATE_WINDOW_PROP, DEFAULT_RATE_WINDOW));
+    long progressLog = Math.max(1000L,
+        Sage.getLong(PROGRESS_LOG_PROP, DEFAULT_PROGRESS_LOG));
+    long flushInterval = Math.max(100L,
+        Sage.getLong(FLUSH_INTERVAL_PROP, DEFAULT_FLUSH));
 
     HttpURLConnection c = null;
     InputStream       is = null;
@@ -165,23 +187,62 @@ public class HttpPullCaptureJob implements Runnable
         in   = is;
         lock.notifyAll();
       }
-      // append=false: each runOne() truncates and starts fresh.
-      os = new BufferedOutputStream(new FileOutputStream(outFile, false), bufSz);
+      File outputFile = new File(outFile);
+      long total = append && outputFile.exists() ? outputFile.length() : 0L;
+      os = new BufferedOutputStream(new FileOutputStream(outputFile, append), bufSz);
 
       byte[] buf = new byte[bufSz];
-      long total = 0L;
+      long windowStart = Sage.eventTime();
+      long windowBytes = 0L;
+      long lastProgressLog = windowStart;
+      long lastFlush = windowStart;
       int n;
       while (!stop && (n = is.read(buf)) > 0)
       {
         os.write(buf, 0, n);
         total += n;
+        windowBytes += n;
         bytesWritten = total;
+        lastReadSize = n;
+        lastReadTime = Sage.eventTime();
+        long now = lastReadTime;
+        if (now - lastFlush >= flushInterval)
+        {
+          os.flush();
+          lastFlush = now;
+        }
+        long elapsed = now - windowStart;
+        if (elapsed >= rateWindow)
+        {
+          long bytesPerSec = calculateBytesPerSecond(windowBytes, elapsed);
+          if (Sage.DBG && now - lastProgressLog >= progressLog)
+          {
+            System.out.println("HTTP_CAPTURE_PROGRESS file=" + outFile
+                + " cumulativeBytes=" + total
+                + " intervalBytes=" + windowBytes
+                + " bytesPerSec=" + bytesPerSec
+                + " lastReadSize=" + lastReadSize
+                + " lastReadAgeMs=" + (now - lastReadTime)
+                + " state=source-read");
+            lastProgressLog = now;
+          }
+          if (minRate > 0L && bytesPerSec < minRate)
+          {
+            throw new IOException("capture throughput below minimum: bytesPerSec="
+                + bytesPerSec + " minimum=" + minRate + " windowMs=" + elapsed);
+          }
+          windowStart = now;
+          windowBytes = 0L;
+        }
         if (pendingSwitchFile != null) break;
       }
       os.flush();
       if (Sage.DBG) System.out.println("HttpPullCaptureJob: file=" + outFile
-          + " bytes=" + total);
+          + " cumulativeBytes=" + total + " append=" + append
+          + " lastReadSize=" + lastReadSize
+          + " lastReadAgeMs=" + Math.max(0L, Sage.eventTime() - lastReadTime));
     }
+
     catch (IOException e)
     {
       lastErrorLine = e.getClass().getSimpleName() + ": " + e.getMessage();
@@ -195,6 +256,13 @@ public class HttpPullCaptureJob implements Runnable
       if (c  != null) { try { c.disconnect(); } catch (Throwable t) {} }
       synchronized (lock) { conn = null; in = null; }
     }
+  }
+
+  static long calculateBytesPerSecond(long bytes, long elapsedMs)
+  {
+    if (bytes <= 0L || elapsedMs <= 0L) return 0L;
+    return bytes > Long.MAX_VALUE / 1000L
+        ? Long.MAX_VALUE : bytes * 1000L / elapsedMs;
   }
 
   private void closeStreamQuiet()

@@ -9,6 +9,7 @@
  */
 package sage.enhance;
 
+import sage.ChannelQuality;
 import sage.Sage;
 import sage.client.ClientConstraints;
 import sage.client.PlaybackSurface;
@@ -134,6 +135,7 @@ public final class EnhancementAdvisor
     DISABLED("feature disabled"),
     NO_GPU_SUPPORT("ffmpeg/GPU cannot run the pipeline"),
     UNKNOWN_SOURCE("source geometry unknown"),
+    SOURCE_ALREADY_UHD("lineup classifies the source as UHD"),
     UNKNOWN_SINK("client reported no sink and policy is to refuse rather than infer"),
     SOURCE_BELOW_FLOOR("source below the 720-line floor and not interlaced"),
     NO_VISIBLE_GAIN("sink is not meaningfully larger than the source"),
@@ -143,6 +145,7 @@ public final class EnhancementAdvisor
     SURFACE_CANNOT_DECODE("client cannot decode the enhanced output (no surface or codec proved it)"),
     INSUFFICIENT_BANDWIDTH("measured link cannot carry the enhanced stream"),
     CLIENT_UPSCALES_LOCALLY("client's own upscaler is active and preferred"),
+    CLIENT_UPSCALER_CAPABLE("client reports a high-quality local upscaler"),
     CLIENT_PREFERS_LOCAL("client explicitly prefers local enhancement"),
     CLIENT_DISABLED("client explicitly disabled enhancement (pref=never)");
 
@@ -196,7 +199,7 @@ public final class EnhancementAdvisor
    * @param sinkWidth        physical display width; 0 when the client didn't say.
    * @param sinkHeight       physical display height; 0 when the client didn't say.
    * @param surface          the winning playback surface, or null if unknown.
-   * @param localPref        {@code auto|local|server} from LOCAL_ENHANCEMENT.
+   * @param localPref        {@code auto|always|ai_only|never} from LOCAL_ENHANCEMENT.
    * @param localStatus      {@code active|available|none} from LOCAL_ENHANCEMENT.
    * @param gpuSupported     result of {@code HwEncoder.gpuEnhanceSupported()}.
    */
@@ -281,29 +284,67 @@ public final class EnhancementAdvisor
       long sourceBitrateKbps, long availableBandwidthKbps, double sourceFpsExact,
       String sourcePixelFormat, int sourceBitDepth)
   {
-    if (!isEnabled()) return NONE_DISABLED;
-    // A client that explicitly chose "never" is a hard opt-out that outranks
-    // every server-side heuristic (and even GPU/source checks): the viewer has
-    // said do not upscale me, full stop. Distinct from "local" (client will do
-    // its own upscale) -- "never" means no enhancement anywhere.
-    if ("never".equals(localPref))
-      return new Advice(EnhancementTier.NONE, Verdict.CLIENT_DISABLED);
-    if (!gpuSupported) return new Advice(EnhancementTier.NONE, Verdict.NO_GPU_SUPPORT);
-    if (sourceHeight <= 0) return new Advice(EnhancementTier.NONE, Verdict.UNKNOWN_SOURCE);
+    return advise(sourceWidth, sourceHeight, sourceInterlaced, sourceFps, sinkWidth,
+        sinkHeight, surface, constraints, formFactor, localPref, localStatus, "none",
+        gpuSupported, sourceBitrateKbps, availableBandwidthKbps, sourceFpsExact,
+        sourcePixelFormat, sourceBitDepth);
+  }
 
-    // The client's own opinion comes first: never spend a GPU session fighting
-    // an upscaler the device is already running well. A Shield doing its own AI
-    // upscale of a pristine remux beats a server upscale of a re-encode.
-    if ("local".equals(localPref))
+  public static Advice advise(int sourceWidth, int sourceHeight, boolean sourceInterlaced,
+      int sourceFps, int sinkWidth, int sinkHeight, PlaybackSurface surface,
+      ClientConstraints constraints, String formFactor,
+      String localPref, String localStatus, String localCapability, boolean gpuSupported,
+      long sourceBitrateKbps, long availableBandwidthKbps, double sourceFpsExact,
+      String sourcePixelFormat, int sourceBitDepth)
+  {
+    return advise(sourceWidth, sourceHeight, sourceInterlaced, sourceFps,
+        sinkWidth, sinkHeight, surface, constraints, formFactor, localPref,
+        localStatus, localCapability, gpuSupported, sourceBitrateKbps,
+        availableBandwidthKbps, sourceFpsExact, sourcePixelFormat,
+        sourceBitDepth, ChannelQuality.UNKNOWN);
+  }
+
+  /**
+   * Evaluates enhancement with advisory source metadata from the lineup.
+   *
+   * <p>The quality hint is consulted only when decoded geometry is unknown.
+   * Explicit stream dimensions always take precedence.
+   */
+  public static Advice advise(int sourceWidth, int sourceHeight, boolean sourceInterlaced,
+      int sourceFps, int sinkWidth, int sinkHeight, PlaybackSurface surface,
+      ClientConstraints constraints, String formFactor,
+      String localPref, String localStatus, String localCapability, boolean gpuSupported,
+      long sourceBitrateKbps, long availableBandwidthKbps, double sourceFpsExact,
+      String sourcePixelFormat, int sourceBitDepth, ChannelQuality sourceQuality)
+  {
+    if (!isEnabled()) return NONE_DISABLED;
+    UpscalingPolicy policy = UpscalingPolicy.fromToken(localPref);
+    UpscalingCapability capability = UpscalingCapability.fromToken(localCapability);
+    if (policy == UpscalingPolicy.NEVER)
+      return new Advice(EnhancementTier.NONE, Verdict.CLIENT_DISABLED);
+    boolean autoHighQuality = policy == UpscalingPolicy.AUTO
+        && capability == UpscalingCapability.HIGH_QUALITY;
+    if (policy == UpscalingPolicy.AUTO && capability == UpscalingCapability.AI)
+      return new Advice(EnhancementTier.NONE, Verdict.CLIENT_UPSCALER_CAPABLE);
+    if (!gpuSupported)
+      return autoHighQuality
+          ? new Advice(EnhancementTier.NONE, Verdict.CLIENT_UPSCALER_CAPABLE)
+          : new Advice(EnhancementTier.NONE, Verdict.NO_GPU_SUPPORT);
+    if (sourceHeight <= 0)
+      return new Advice(EnhancementTier.NONE,
+          sourceQuality == ChannelQuality.UHD
+              ? Verdict.SOURCE_ALREADY_UHD : Verdict.UNKNOWN_SOURCE);
+
+    if (policy == UpscalingPolicy.LOCAL)
       return new Advice(EnhancementTier.NONE, Verdict.CLIENT_PREFERS_LOCAL);
     boolean overrideLocal = Sage.getBoolean(PROP_OVERRIDE_LOCAL, false);
-    if (!overrideLocal && "active".equals(localStatus) && !"server".equals(localPref))
+    if (!overrideLocal && policy == UpscalingPolicy.AUTO && "active".equals(localStatus))
       return new Advice(EnhancementTier.NONE, Verdict.CLIENT_UPSCALES_LOCALLY);
 
     // Deinterlacing is judged on its own terms. It is not upscaling, it is
     // exempt from the source floor, and for interlaced content it is most of
     // the visible win at a fraction of the cost.
-    EnhancementTier deintFloor = sourceInterlaced
+    EnhancementTier deintFloor = sourceInterlaced && policy != UpscalingPolicy.AI_ONLY
         ? EnhancementTier.DEINTERLACE_ONLY : EnhancementTier.NONE;
 
     // An absent sink REFUSES upscaling for AUTO (by default; see PROP_UNKNOWN_SINK).
@@ -321,7 +362,8 @@ public final class EnhancementAdvisor
     // the decode gate and link allow (exactly the infer path). Only AUTO treats
     // an unknown sink as "no".
     boolean sinkKnown = sinkWidth > 0 && sinkHeight > 0;
-    boolean userForcedServerUpscale = "server".equals(localPref);
+    boolean userForcedServerUpscale =
+        policy == UpscalingPolicy.ALWAYS || policy == UpscalingPolicy.AI_ONLY;
     if (!sinkKnown && !userForcedServerUpscale && !inferOnUnknownSink())
       return finish(deintFloor, Verdict.UNKNOWN_SINK, surface, constraints, deintFloor,
           sourceFps, sourceBitrateKbps, availableBandwidthKbps);
@@ -355,9 +397,19 @@ public final class EnhancementAdvisor
     // passthrough), so without a registered provider we never advertise an
     // enhance tier -- the client receives the source stream and scales itself.
     // Deinterlacing is unaffected: it drops to the deinterlace floor here.
-    if (!sage.enhance.spi.ScaleProviderRegistry.getInstance().selectedProviderCanUpscale())
+    sage.enhance.spi.ScaleProviderRegistry scaleProviders =
+        sage.enhance.spi.ScaleProviderRegistry.getInstance();
+    boolean specializedOnly = policy.requiresSpecializedServerUpscaler(capability);
+    boolean providerInstalled = specializedOnly
+        ? scaleProviders.selectedSpecializedProviderCanUpscale()
+        : scaleProviders.selectedProviderCanUpscale();
+    if (!providerInstalled)
+    {
+      if (autoHighQuality)
+        return new Advice(EnhancementTier.NONE, Verdict.CLIENT_UPSCALER_CAPABLE);
       return finish(deintFloor, Verdict.NO_UPSCALE_PROVIDER, surface, constraints, deintFloor,
           sourceFps, sourceBitrateKbps, availableBandwidthKbps);
+    }
 
     // Never build a picture larger than the panel can show -- in EITHER
     // dimension -- then apply the admin ceiling on top. With no panel reported
@@ -389,9 +441,16 @@ public final class EnhancementAdvisor
     sage.enhance.spi.ScaleRequest offerProbe = GpuEnhancePipeline.exactScaleRequest(tier,
         sourceWidth, sourceHeight, sourceInterlaced, sourceFpsExact, sourcePixelFormat,
         sourceBitDepth, null, sage.enhance.spi.ScaleRequest.Purpose.PROBE);
-    if (!sage.enhance.spi.ScaleProviderRegistry.getInstance().selectedProviderCanUpscale(offerProbe))
+    boolean providerReady = specializedOnly
+        ? scaleProviders.selectedSpecializedProviderCanUpscale(offerProbe)
+        : scaleProviders.selectedProviderCanUpscale(offerProbe);
+    if (!providerReady)
+    {
+      if (autoHighQuality)
+        return new Advice(EnhancementTier.NONE, Verdict.CLIENT_UPSCALER_CAPABLE);
       return finish(deintFloor, Verdict.UPSCALE_PROVIDER_UNAVAILABLE, surface, constraints,
           deintFloor, sourceFps, sourceBitrateKbps, availableBandwidthKbps);
+    }
 
     // We are about to offer this tier. Pre-warm the selected provider now, during
     // the advisory window, so an expensive external worker is ready by play-start

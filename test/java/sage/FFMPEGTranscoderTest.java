@@ -105,6 +105,61 @@ public class FFMPEGTranscoderTest
   }
 
   @Test
+  public void activeEncodedTsPushReclocksCopiedAc3AtEveryLaunch() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder transcoder = new FFMPEGTranscoder();
+    transcoder.setActiveFile(true);
+    transcoder.setDirectPushSession(true);
+    ContainerFormat source = new ContainerFormat();
+    source.setFormatName(sage.media.format.MediaFormat.MPEG2_TS);
+    AudioFormat audio = new AudioFormat();
+    audio.setFormatName(sage.media.format.MediaFormat.AC3);
+    audio.setBitrate(384000);
+    source.setStreamFormats(new BitstreamFormat[] { audio });
+    transcoder.setSourceFormat(source);
+    java.util.ArrayList<String> args = new java.util.ArrayList<String>(
+        java.util.Arrays.asList("ffmpeg", "-ss", "600.000", "-i", "recording.mpg",
+            "-f", "mpegts", "-vcodec", "h264_nvenc", "-acodec", "copy", "-"));
+
+    transcoder.maybeReclockActiveEncodedTsPushAudio(args);
+
+    assertEquals(args.get(args.indexOf("-acodec") + 1), "ac3");
+    assertEquals(args.get(args.indexOf("-b:a") + 1), "384000");
+    assertEquals(args.get(args.indexOf("-af") + 1),
+        "asetpts=PTS-STARTPTS,aresample=async=1000");
+    assertEquals(args.get(args.indexOf("-avoid_negative_ts") + 1), "make_zero");
+  }
+
+  @Test
+  public void audioReclockDoesNotChangeCompletedOrVideoCopyPushes() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    FFMPEGTranscoder transcoder = new FFMPEGTranscoder();
+    transcoder.setDirectPushSession(true);
+    ContainerFormat source = new ContainerFormat();
+    source.setFormatName(sage.media.format.MediaFormat.MPEG2_TS);
+    AudioFormat audio = new AudioFormat();
+    audio.setFormatName(sage.media.format.MediaFormat.AC3);
+    source.setStreamFormats(new BitstreamFormat[] { audio });
+    transcoder.setSourceFormat(source);
+    java.util.ArrayList<String> args = new java.util.ArrayList<String>(
+        java.util.Arrays.asList("ffmpeg", "-i", "recording.mpg", "-f", "mpegts",
+            "-vcodec", "h264_nvenc", "-acodec", "copy", "-"));
+    java.util.ArrayList<String> original = new java.util.ArrayList<String>(args);
+
+    transcoder.setActiveFile(false);
+    transcoder.maybeReclockActiveEncodedTsPushAudio(args);
+    assertEquals(args, original);
+
+    transcoder.setActiveFile(true);
+    args.set(args.indexOf("h264_nvenc"), "copy");
+    original = new java.util.ArrayList<String>(args);
+    transcoder.maybeReclockActiveEncodedTsPushAudio(args);
+    assertEquals(args, original);
+  }
+
+  @Test
   public void frameZeroNvencCapacityFailureIsDetectedBeforeFirstFrame()
   {
     assertTrue(FFMPEGTranscoder.isNvencInitFailureLine(
@@ -1133,6 +1188,19 @@ public class FFMPEGTranscoderTest
   }
 
   @Test
+  public void testEnhancementRequestCarriesSpecializedOnlyPolicy()
+  {
+    FFMPEGTranscoder t = new FFMPEGTranscoder();
+    t.setEnhancementRequest(sage.enhance.EnhancementTier.ENHANCE_2160P, true);
+    assertEquals(t.enhanceRequest, sage.enhance.EnhancementTier.ENHANCE_2160P);
+    assertTrue(t.enhanceSpecializedOnly);
+
+    t.setEnhancementRequest(sage.enhance.EnhancementTier.NONE, true);
+    assertFalse(t.enhanceSpecializedOnly,
+        "an inactive request must not retain specialized-only state");
+  }
+
+  @Test
   public void testNvencFailureDisablesEnhancementAcrossLaterSeeksInSession() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();
@@ -1183,6 +1251,25 @@ public class FFMPEGTranscoderTest
     assertTrue(hasPair(args, "-s", "1920x1080"));
     assertTrue(hasPair(args, "-g", "300"));
     assertTrue(hasPair(args, "-vf", "yadif=0:-1:1,format=yuv420p"));
+  }
+
+  @Test
+  public void testSoftwareFallbackOmitsInvalidVideoArgsUntilGrowingSourceIsKnown()
+  {
+    VideoFormat video = new VideoFormat();
+    video.setFormatName(sage.media.format.MediaFormat.MPEG2_VIDEO);
+    java.util.ArrayList<String> args = new java.util.ArrayList<String>(
+        java.util.Arrays.asList("ffmpeg", "-i", "recording.mpg",
+            "-f", "mpegts", "-vcodec", "libx264", "-r", "0",
+            "-s", "0x0", "-g", "0", "-acodec", "copy", "-"));
+
+    FFMPEGTranscoder.repairInvalidSoftwareFallbackVideoArgs(args, video);
+
+    assertFalse(args.contains("-r"), args.toString());
+    assertFalse(args.contains("-s"), args.toString());
+    assertFalse(args.contains("-g"), args.toString());
+    assertTrue(hasPair(args, "-vcodec", "libx264"));
+    assertTrue(hasPair(args, "-acodec", "copy"));
   }
 
   @Test

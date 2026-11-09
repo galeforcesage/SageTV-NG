@@ -9,6 +9,7 @@
  */
 package sage.enhance;
 
+import sage.ChannelQuality;
 import sage.Sage;
 import sage.client.ClientConstraints;
 import sage.client.PlaybackSurface;
@@ -137,12 +138,45 @@ public final class EnhancementDryRun
       long sourceBitrateKbps, long availableBandwidthKbps, double sourceFpsExact,
       String sourcePixelFormat, int sourceBitDepth)
   {
+    return evaluateAndLog(clientId, mediaDesc, sourceWidth, sourceHeight, interlaced,
+        sourceFps, sinkWidth, sinkHeight, surface, constraints, formFactor, localPref,
+        localStatus, "none", gpuSupported, sourceBitrateKbps, availableBandwidthKbps,
+        sourceFpsExact, sourcePixelFormat, sourceBitDepth);
+  }
+
+  public static EnhancementTier evaluateAndLog(String clientId, String mediaDesc,
+      int sourceWidth, int sourceHeight, boolean interlaced, int sourceFps,
+      int sinkWidth, int sinkHeight, PlaybackSurface surface,
+      ClientConstraints constraints, String formFactor,
+      String localPref, String localStatus, String localCapability, boolean gpuSupported,
+      long sourceBitrateKbps, long availableBandwidthKbps, double sourceFpsExact,
+      String sourcePixelFormat, int sourceBitDepth)
+  {
+    return evaluateAndLog(clientId, mediaDesc, sourceWidth, sourceHeight, interlaced,
+        sourceFps, sinkWidth, sinkHeight, surface, constraints, formFactor,
+        localPref, localStatus, localCapability, gpuSupported, sourceBitrateKbps,
+        availableBandwidthKbps, sourceFpsExact, sourcePixelFormat,
+        sourceBitDepth, ChannelQuality.UNKNOWN);
+  }
+
+  /**
+   * Evaluates one candidate with advisory source quality from the lineup.
+   */
+  public static EnhancementTier evaluateAndLog(String clientId, String mediaDesc,
+      int sourceWidth, int sourceHeight, boolean interlaced, int sourceFps,
+      int sinkWidth, int sinkHeight, PlaybackSurface surface,
+      ClientConstraints constraints, String formFactor,
+      String localPref, String localStatus, String localCapability, boolean gpuSupported,
+      long sourceBitrateKbps, long availableBandwidthKbps, double sourceFpsExact,
+      String sourcePixelFormat, int sourceBitDepth, ChannelQuality sourceQuality)
+  {
     if (!EnhancementAdvisor.isEnabled()) return EnhancementTier.NONE;
 
     EnhancementAdvisor.Advice advice = EnhancementAdvisor.advise(sourceWidth, sourceHeight,
         interlaced, sourceFps, sinkWidth, sinkHeight, surface, constraints, formFactor,
-        localPref, localStatus, gpuSupported, sourceBitrateKbps, availableBandwidthKbps,
-        sourceFpsExact, sourcePixelFormat, sourceBitDepth);
+        localPref, localStatus, localCapability, gpuSupported, sourceBitrateKbps,
+        availableBandwidthKbps, sourceFpsExact, sourcePixelFormat, sourceBitDepth,
+        sourceQuality);
 
     boolean dry = isDryRun();
     if (Sage.DBG)
@@ -165,6 +199,7 @@ public final class EnhancementDryRun
           + " media=" + safe(mediaDesc)
           + " src=" + sourceWidth + "x" + sourceHeight + (interlaced ? "i" : "p")
           + "@" + sourceFps
+          + " sourceQuality=" + sourceQuality
           + " sink=" + sinkWidth + "x" + sinkHeight
           + " sinkKind=" + sinkKind
           + " form=" + safe(formFactor)
@@ -178,7 +213,8 @@ public final class EnhancementDryRun
           + (availableBandwidthKbps > 0
               ? "/" + (long) (availableBandwidthKbps * EnhancementAdvisor.bandwidthSafetyFactor())
               : "")
-          + " local=" + safe(localPref) + "/" + safe(localStatus)
+          + " local=" + safe(localPref) + "/" + safe(localCapability)
+          + "/" + safe(localStatus)
           + " -> tier=" + advice.getTier().token()
           + " verdict=" + advice.getVerdict()
           + " (" + advice.getVerdict().getDescription() + ")");

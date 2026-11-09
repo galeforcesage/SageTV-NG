@@ -166,18 +166,22 @@ public class MediaServer implements Runnable
   /**
    * Immutable result of {@link #parseXcodeEnhanceRequest(String)}: the base
    * transcode mode with any enhancement marker removed, whether enhancement was
-   * requested, and the requested tier token (or null).
+   * requested, the requested tier token (or null), and whether provider
+   * selection is restricted to specialized scaling.
    */
   static final class XcodeEnhanceRequest
   {
     final String baseMode;       // xcode mode with any trailing ":enhance" marker stripped
     final boolean enhanceRequested; // the mode carried the ":enhance" marker
     final String tierToken;      // value of the ";tier=" param, or null
-    XcodeEnhanceRequest(String baseMode, boolean enhanceRequested, String tierToken)
+    final boolean specializedOnly; // policy=ai_only
+    XcodeEnhanceRequest(String baseMode, boolean enhanceRequested, String tierToken,
+        boolean specializedOnly)
     {
       this.baseMode = baseMode;
       this.enhanceRequested = enhanceRequested;
       this.tierToken = tierToken;
+      this.specializedOnly = specializedOnly;
     }
   }
 
@@ -185,9 +189,9 @@ public class MediaServer implements Runnable
    * Extract the GPU-enhancement request from an {@code XCODE_SETUP} mode argument.
    *
    * <p>{@link MiniPlayer#buildEffDeliveryToken} publishes
-   * {@code pull-xcode:<mode>:enhance;tier=<wire>}; the pull bridge strips the
+   * {@code pull-xcode:<mode>:enhance;tier=<wire>[;policy=ai_only]}; the pull bridge strips the
    * {@code pull-xcode:} prefix and forwards the remainder verbatim, so the server
-   * receives {@code <mode>:enhance;tier=<wire>}. This recovers the base
+   * receives {@code <mode>:enhance;tier=<wire>[;policy=ai_only]}. This recovers the base
    * {@code <mode>} (marker stripped, so it is recognized as a copy-family mode
    * rather than falling through to the default SD transcode), the fact that
    * enhancement was requested, and the tier token. Non-enhancement {@code ;k=v}
@@ -197,9 +201,10 @@ public class MediaServer implements Runnable
    */
   static XcodeEnhanceRequest parseXcodeEnhanceRequest(String xcodeArg)
   {
-    if (xcodeArg == null) return new XcodeEnhanceRequest(null, false, null);
+    if (xcodeArg == null) return new XcodeEnhanceRequest(null, false, null, false);
     String mode = xcodeArg;
     String tier = null;
+    boolean specializedOnly = false;
     int semi = xcodeArg.indexOf(';');
     if (semi >= 0)
     {
@@ -212,6 +217,9 @@ public class MediaServer implements Runnable
         if (eq <= 0) continue;
         String k = p.substring(0, eq).trim().toLowerCase();
         if (k.equals("tier")) tier = p.substring(eq + 1).trim();
+        else if (k.equals("policy"))
+          specializedOnly = sage.enhance.UpscalingPolicy.fromToken(
+              p.substring(eq + 1).trim()).requiresSpecializedServerUpscaler();
       }
 
     }
@@ -227,7 +235,7 @@ public class MediaServer implements Runnable
     if (req && "direct".equalsIgnoreCase(mode)
         && sage.enhance.EnhancementTier.fromToken(tier).isActive())
       mode = "mpeg2tsremux";
-    return new XcodeEnhanceRequest(mode, req, tier);
+    return new XcodeEnhanceRequest(mode, req, tier, specializedOnly);
   }
 
   static boolean isParameterizedXcodeSetup(String xcodeArg)
@@ -1599,7 +1607,8 @@ public class MediaServer implements Runnable
             // re-checks the dry-run interlock, copy-family/activeFile safety, and
             // GpuGovernor admission (recording veto + capacity) before honoring it.
             if (surfEnhanceReq && surfEnhance != null && surfEnhance.length() > 0)
-              fftc.setEnhancementRequest(sage.enhance.EnhancementTier.fromToken(surfEnhance));
+              fftc.setEnhancementRequest(sage.enhance.EnhancementTier.fromToken(surfEnhance),
+                  enhReq.specializedOnly);
             // Live sink update (Protocol 2.1 ";sink=WxH"): a PWA dragged to a
             // different-resolution monitor re-opens with its new physical sink.
             // Forward it verbatim (MediaServer decides nothing -- like ss/acodec);

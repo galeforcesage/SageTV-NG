@@ -132,6 +132,35 @@ public final class PartyTimeline
   }
 
   /**
+   * Moves an uncommitted transition to its cohort reveal deadline.
+   *
+   * @param expectedCommandSeq pending command generation
+   * @param executeAtServerMonoMs replacement visible deadline
+   * @return replacement immutable command
+   */
+  public PartyCommand reschedule(long expectedCommandSeq, long executeAtServerMonoMs)
+  {
+    if (pending == null || pending.commandSeq() != expectedCommandSeq)
+      throw new IllegalStateException("command is not pending");
+    pending = new PartyCommand(pending.stateVersion(), pending.commandSeq(), pending.cause(),
+        pending.targetPositionMs(), pending.targetState(), pending.targetRate(),
+        executeAtServerMonoMs, pending.originParticipantId());
+    return pending;
+  }
+
+  /**
+   * Aborts an uncommitted transition after its entire barrier cohort fails.
+   *
+   * @param expectedCommandSeq pending command generation
+   */
+  public void cancelPending(long expectedCommandSeq)
+  {
+    if (pending == null || pending.commandSeq() != expectedCommandSeq)
+      throw new IllegalStateException("command is not pending");
+    pending = null;
+  }
+
+  /**
    * Commits a due transition.
    *
    * @param serverMonoMs current server-monotonic time
@@ -146,6 +175,22 @@ public final class PartyTimeline
     state = committed.targetState();
     pending = null;
     return committed;
+  }
+
+  /**
+   * Re-anchors the current generation to the first screen-presented frame.
+   *
+   * @param expectedCommandSeq command generation being activated
+   * @param presentedPositionMs media position of the presented frame
+   * @param presentedServerMonoMs server-monotonic presentation instant
+   */
+  public void establishPresentedFrame(long expectedCommandSeq, long presentedPositionMs,
+      long presentedServerMonoMs)
+  {
+    if (pending != null || commandSeq != expectedCommandSeq)
+      throw new IllegalStateException("command is not ready for presentation");
+    anchorPositionMs = clamp(presentedPositionMs);
+    anchorServerMonoMs = presentedServerMonoMs;
   }
 
   private long clamp(long positionMs)

@@ -113,41 +113,34 @@ that lands.
 ### 2.4 `LOCAL_ENHANCEMENT` — the client's honest self-assessment
 
 ```
-LOCAL_ENHANCEMENT  ->  "pref=auto;status=active"
+LOCAL_ENHANCEMENT  ->  "pref=auto;cap=ai;status=active"
 ```
 
 | Key | Values | Meaning |
 |---|---|---|
-| `pref` | `auto` \| `local` \| `server` | what the user (or the client's default) prefers |
+| `pref` | `auto` \| `always` \| `ai_only` \| `never` | user policy for server upscaling |
+| `cap` | `none` \| `standard` \| `high_quality` \| `ai` | client-declared local/display upscaling quality |
 | `status` | `active` \| `available` \| `none` | is the device's own upscaler actually running |
 
-This deliberately replaces the more tempting design of an `AI_CAPABLE` boolean or
-an `UPSCALER_RATING` number. Those invite the server to keep a table of which
-devices are "good", which is a device myth that goes stale the moment a firmware
-update ships. Instead the client states what it is doing, the server states what
-it can do, and the outcome telemetry settles which one actually looked better.
+The client decides its capability. The server does not infer it from manufacturer,
+device model, product generation, or a hard-coded device table. Missing or invalid
+`cap` values parse as `none`.
 
 Guidance:
 
-- A Shield with AI upscaling enabled should report `status=active`. The server
-  will then prefer to leave the stream alone when direct play or remux is viable,
-  because a local upscale of a pristine source usually beats a server upscale of a
-  re-encoded one.
-- A Tizen TV, or any client with no upscaler worth the name, should report
-  `status=none`, which biases toward server enhancement.
-- If the user explicitly picked a side, report it in `pref` and the server will
-  honor it.
+- `auto`: prefer a specialized/AI server provider over a `high_quality` client
+  scaler. If no specialized provider can render, send source resolution to a
+  `high_quality` or `ai` client; weak/unknown clients may use the standard server
+  scaler.
+- `always`: server upscales with its best available provider and may fall back to
+  its standard scaler.
+- `ai_only`: server uses only its specialized/AI provider. If that provider is
+  unavailable or fails admission/startup, the server sends source resolution
+  unchanged and never falls through to the standard scaler.
+- `never`: server sends source resolution unchanged.
 
-**Note — `pref` has no value meaning "nobody".** The three values answer *which
-side* should enhance, and every one of them presumes that enhancement is wanted:
-`auto` defers, `local` claims it, `server` requests it. There is no way to say
-"neither of you — leave the stream alone." This matters because it is the field
-that would most naturally carry a user's opt-out: it is already sent
-unconditionally, on every connection, and already has the shape of a preference
-rather than a measurement. It is recorded here as an observation about the
-existing contract, **not as a proposal** — and note that for the *bandwidth* axis
-§2.5's `QUALITY_HINT=savings` already says most of it. Whether anything more is
-needed, and where it would live, is an open question owned by the client teams.
+The legacy `local` and `server` values remain accepted as aliases for existing
+clients; new clients send the four values above.
 See §2.9.1.
 
 ### 2.5 `QUALITY_HINT`
@@ -285,39 +278,21 @@ only spend power downscaling.
 
 ---
 
-### 2.9 The user's Auto / Always / Never override rides on the sink
+### 2.9 Auto / Always / AI Only / Never
 
-Clients expose a user-facing setting for server upscaling, because the detection
-behind §2.1 is not always right — most obviously on a phone in dock mode. There
-is **no separate flag for this.** The override is expressed entirely through
-`DISPLAY_SINK_RESOLUTION`, and the reported value is always the true physical
-panel — never a fabricated 4K.
+The policy is carried by `LOCAL_ENHANCEMENT.pref`; the sink always reports the
+honest physical panel.
 
-| Client setting | `DISPLAY_SINK_RESOLUTION` sent | Result |
-|---|---|---|
-| **Never** (off) | `""` | **Does not produce an opt-out.** An empty sink is an abstention (§2.9.1), so the server decides from the client's declared decode ceilings. |
-| **Auto** | physical `WxH`, but only when the client judges itself eligible (TV-class, external/HDMI display, or an internal panel over 12"); otherwise `""` | Phone/small tablet → no upscale. Shield on a 4K TV → `3840x2160`. |
-| **Always** (on) | honest physical `WxH`, unconditionally — a 6" phone sends `2400x1080` | Forces the invitation; server still clamps to `min(tier, sink)`. |
+| Client setting | Server behavior |
+|---|---|
+| **Auto** | An active local upscaler wins. Otherwise prefer a specialized/AI server provider over a `high_quality` client scaler. If specialized scaling is unavailable, send source resolution to `high_quality`/`ai` clients; the standard server scaler remains available only for weak or unknown clients. |
+| **Always** | Server upscales whenever the source is below the resolved target. It selects the best provider and may fall back to the standard server scaler. |
+| **AI Only** | Server uses only a specialized/AI provider. If none can render the exact request, admission denies it, or startup fails, the source resolution is sent unchanged. |
+| **Never** | Server sends the source resolution unchanged and performs no server enhancement. |
 
-> **Status of this table: DESCRIPTIVE, NOT NORMATIVE.** It records how the Android
-> client currently behaves, as reported by that client's team. It is not a
-> specification, nothing was written against it, and no other client is obliged to
-> match it. It is also **in direct conflict with the normative rule in §2.1**,
-> which forbids using the sink to express a preference. That conflict is the
-> subject of §2.9.1 and is not resolved in this document.
-
-Two consequences the server honours **given the behaviour above**:
-
-**Auto and Always are indistinguishable *on the sink alone*.** Both simply
-produce a sink, so nothing in `DISPLAY_SINK_RESOLUTION` separates them. But they
-are **not** indistinguishable on the wire: `LOCAL_ENHANCEMENT` (§2.14) carries
-`pref=auto|local|server` as a field of its own, and the server now reads it. When
-a sink *is* present the server still treats "a sink that arrives at all is a
-request to upscale, up to that size" — under Auto the client has already applied
-its own eligibility test, so second-guessing it server-side would override a
-decision made with better information. Where `pref` now matters is the *empty*
-sink: `pref=server` ("Always") upscales anyway (§2.9.1), while `pref=auto` with no
-sink refuses. See the implemented-behaviour note in §2.9.1.
+`DISPLAY_SINK_RESOLUTION` still clamps the target, and the surface/codec decode
+ceilings still decide whether the resulting stream can be decoded. Policy never
+overrides those safety gates.
 
 **The setting can never talk past the decode gate.** The per-codec rows of §2.7
 report real MediaCodec limits and are sent unconditionally, unaffected by the
@@ -335,7 +310,12 @@ panel as an external display, so `DEVICE_FORM_FACTOR=PHONE` does not refuse it.
 can show. The server never invents a 4K target for a screen that can't display
 one.
 
-### 2.9.1 The sink field is overloaded, and that is the defect (OPEN)
+### 2.9.1 Historical sink-overload analysis (resolved)
+
+> **Superseded by §2.4 and §2.9.** Policy now rides in
+> `LOCAL_ENHANCEMENT.pref`, capability in `LOCAL_ENHANCEMENT.cap`, and the sink
+> is always a physical measurement. The remainder of this subsection records
+> the defect that motivated that separation; it is not the current contract.
 
 `DISPLAY_SINK_RESOLUTION` is currently asked to carry two incompatible things:
 
@@ -460,7 +440,7 @@ Two escape hatches preserve the abstention semantics where they are wanted:
   whole installation: an empty sink skips the panel clamp and settles the tier
   from the decode ceilings, source floor, admin ceiling, GPU admission and
   network, logging `sinkKind=inferred`.
-- **An explicit "Always" (`LOCAL_ENHANCEMENT pref=server`) overrides the refusal,
+- **An explicit "Always" (`LOCAL_ENHANCEMENT pref=always`) overrides the refusal,
   per client.** That is the user *requesting* a server upscale — the opposite of
   silence — so it is honoured even with no sink: it upscales to the maximum the
   decode gate, admin ceiling and network allow (`verdict=OFFERED`). Crucially this
@@ -474,7 +454,7 @@ indistinguishable, and the fail-closed default now treats them all as "no". What
 changed is that the explicit *Always* intent no longer has to ride the sink, and that
 the safe default is refusal rather than inference.
 
-#### Why deinterlace is offered regardless of the sink
+#### Why deinterlace is normally offered regardless of the sink
 
 The **deinterlace floor applies whatever the sink says**, including when it says
 nothing: an interlaced source on a client with no declared panel is still offered
@@ -483,6 +463,10 @@ a defect at any resolution, costs a fraction of an upscale, and never changes th
 frame size, so none of the sink-based reasoning above bears on it. It is also the
 one tier that needs no decode ceiling, because it emits exactly the geometry the
 client was already decoding.
+
+This sink rule does not override explicit policy: `never` sends source unchanged,
+and `ai_only` also sends source unchanged when no specialized provider can render
+the requested upscale.
 
 Suppressing it on an empty sink would silently strip deinterlacing from **every
 legacy client**, a regression inflicted on clients that never asked for anything.
@@ -503,6 +487,7 @@ gains one extra suffix, in the `;k=v` shape the format already carries for audio
 
 ```
 pull-xcode:<mode>:enhance;tier=2160p
+pull-xcode:<mode>:enhance;tier=2160p;policy=ai_only
 ```
 
 Concretely, a surface whose delivery is `pull-xcode` with xcode mode `dynamich264`
@@ -515,10 +500,10 @@ to `pull:direct` first.
 |---|---|
 | `enhance` | present only when enhancement is active |
 | `tier` | `deint` \| `1080p` \| `1440p` \| `2160p` |
+| `policy` | `ai_only`, present only when the request must not use the standard server scaler |
 
-Nothing else is added to this token by the enhancement path — in particular the
-server does **not** append `vcodec`, `acodec` or `ac` here. Codec and channel
-information continues to arrive by the routes it always did.
+The `policy=ai_only` pair is copied through the pull bridge with the tier. Codec
+and channel information continues to arrive by the routes it always did.
 
 **Required client behavior: none.** Clients already map this token onto their
 request. The only requirement is the one that was always there — tolerate
@@ -606,7 +591,7 @@ diagnosis route.
 
 ---
 
-## 3.2 What the client echoes back — `XCODE_SETUP <mode>:enhance;tier=<tier>`
+## 3.2 What the client echoes back — `XCODE_SETUP <mode>:enhance;tier=<tier>[;policy=ai_only]`
 
 The token in §3 is an *advertisement*; it does nothing on its own. The transcode
 that actually runs is set up on the separate transcode socket, and the tier only
@@ -620,7 +605,7 @@ it appeared on the delivery token — the `:enhance` marker on the mode plus the
 `;tier=<t>` pair, in the same `;k=v` shape already used for `acodec`, `ac`, `ss`:
 
 ```
-XCODE_SETUP <mode>:enhance;tier=<tier>
+XCODE_SETUP <mode>:enhance;tier=<tier>[;policy=ai_only]
 ```
 
 - The `:enhance` suffix on the mode is the marker; the server strips it to recover
@@ -631,6 +616,8 @@ XCODE_SETUP <mode>:enhance;tier=<tier>
   prevents.
 - `<tier>` (on the `;tier=` pair) is the value taken verbatim from the delivery
   token: `deint`, `1080p`, `1440p`, or `2160p`. (`2160p` is the common case.)
+- `policy=ai_only`, when present, is also echoed verbatim. It prevents provider
+  selection and runtime startup fallback from using the standard server scaler.
 - The marker + pair are **optional and additive**. A client that never sends them
   gets exactly today's behavior — the server enhances nothing it was not asked to.
 - Sending them is only a **request**. The server re-checks every gate at transcode
@@ -775,6 +762,11 @@ diagnostic is controlled by
    qualify, because its 720 is the width. SD material is the domain of the offline
    AI upscale path. Interlaced SD can still receive `tier=deint`, since
    deinterlacing is not upscaling.
+   HDHomeRun lineup quality (`SD`, `HD`, or `UHD`) is only an early source hint.
+   If decoded/probed dimensions are available, they always win. If dimensions
+   are still unknown and the lineup explicitly classifies the service as `UHD`,
+   the server declines upscaling rather than inventing 1440p or 2160p geometry.
+   ATSC 3.0, HEVC, and AC-4 do not by themselves imply UHD.
 3. **Sink must be meaningfully bigger than source.** Roughly 1.5x source height.
    A 1080i source on a 1080p panel gets `tier=deint`, not an upscale. Only
    applied when a sink was actually reported; with none, rule 4's target-must-
@@ -864,10 +856,13 @@ Every decision is logged with a verdict. These are the ones a client controls:
 | `client reported no sink and policy is to refuse rather than infer` | `DISPLAY_SINK_RESOLUTION` empty, unparseable, or outside 640×480–7680×4320 — **and** this server sets `playback/gpu_enhance/unknown_sink=refuse`. On a default server this verdict never appears: an absent sink is an abstention and the decision falls through to the decode gate instead (`sinkKind=inferred`) |
 | `client cannot decode the enhanced output (no surface or codec proved it)` | neither §2.6 surface limits nor §2.7 codec ceilings permitted the target — declared nothing, target exceeds the declared ceiling, or every eligible codec was `decoder=sw` |
 | `measured link cannot carry the enhanced stream` | every upscale tier projected above `linkKbps × safety factor`; check `linkKbps=` in the log. Not a client fault, and deinterlace is still offered. Applies to recordings as much as to live |
-| `client's own upscaler is active and preferred` | `LOCAL_ENHANCEMENT` reported `status=active` || `client explicitly prefers local enhancement` | `LOCAL_ENHANCEMENT` reported `pref=local` |
+| `client's own upscaler is active and preferred` | `LOCAL_ENHANCEMENT` reported `pref=auto;status=active` |
+| `client reports a high-quality local upscaler` | `LOCAL_ENHANCEMENT` reported `pref=auto` with `cap=high_quality` or `cap=ai` |
+| `client explicitly prefers local enhancement` | legacy `LOCAL_ENHANCEMENT pref=local` |
 | `sink is not meaningfully larger than the source` | sink height below ~1.5× source height — expected on a 1080p panel |
 | `device form factor is not in the upscale-eligible set` | this server's admin restricted upscaling to certain `DEVICE_FORM_FACTOR` values, and the client's sink was not large enough to read as an external display; not a client fault, and deinterlace is still offered |
 | `source below the 720-line floor and not interlaced` | source material, not a client fault |
+| `lineup classifies the source as UHD` | provisional tuner/source metadata says the service is already UHD while decoded geometry is unavailable; actual probed dimensions supersede this hint |
 | `source geometry unknown` | server could not determine source size |
 | `feature disabled` / `ffmpeg/GPU cannot run the pipeline` | server-side, nothing the client can change |
 
@@ -892,14 +887,10 @@ If a client team implements only part of this, do it in this order:
    and portable across Android and the web) or §2.6 per-surface `MAX_OUTPUT_*`** —
    prevents sending a 4K stream to a decoder that will fail on it. Implement
    whichever one your platform already exposes; you do not need both.
-3. **`LOCAL_ENHANCEMENT`** — stops the server from duplicating work a Shield is
-   already doing better.
-4. **The Auto / Always / Never user setting.** **This item changed — see §7.**
-   Do *not* implement "Never" by withholding `DISPLAY_SINK_RESOLUTION`. As of the
-   server change described in §2.9.1, an absent sink is an abstention, so
-   withholding no longer refuses anything; it only discards the ceiling that
-   would have capped the target. Report the true panel under all three settings
-   (§2.1) and express the user's cost preference through `QUALITY_HINT` (§2.5).
+3. **`LOCAL_ENHANCEMENT`** — reports `cap=none|standard|high_quality|ai` so Auto
+   can choose between client and server scaling without device-model inference.
+4. **The Auto / Always / AI Only / Never user setting.** Report it through
+   `LOCAL_ENHANCEMENT.pref`; never encode policy by withholding the sink.
 5. **`DISPLAY_REFRESH_RATES`**, **`QUALITY_HINT`** — refinement.
 6. **`DISPLAY_HDR_TYPES`** — forward-looking only.
 

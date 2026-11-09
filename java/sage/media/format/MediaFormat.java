@@ -142,6 +142,18 @@ public abstract class MediaFormat
   public static final String META_ALT_EPISODE_NUMBER = "AltEpisodeNumber";
 
   public static final String META_COMPRESSION_DETAILS = "CompressionDetails";
+  /** Advisory HDHomeRun lineup quality; decoded geometry remains authoritative. */
+  public static final String META_HDHR_SOURCE_QUALITY = "HDHRSourceQuality";
+  /** Video codec reported by the HDHomeRun lineup. */
+  public static final String META_HDHR_VIDEO_CODEC = "HDHRVideoCodec";
+  /** Audio codec reported by the HDHomeRun lineup. */
+  public static final String META_HDHR_AUDIO_CODEC = "HDHRAudioCodec";
+  /** Encryption status reported by the HDHomeRun lineup. */
+  public static final String META_HDHR_DRM = "HDHRDRM";
+  /** Enabled status reported by the HDHomeRun lineup. */
+  public static final String META_HDHR_ENABLED = "HDHREnabled";
+  /** Subscription status reported by the HDHomeRun lineup. */
+  public static final String META_HDHR_SUBSCRIBED = "HDHRSubscribed";
 
   /**
    * Verbatim ffmpeg argument string for the *after*-{@code -i} portion of the
@@ -176,7 +188,8 @@ public abstract class MediaFormat
     META_EPISODE_NAME, META_EXTENDED_RATINGS, META_ORIGINAL_AIR_DATE, META_EXTERNAL_ID, META_MISC, META_AIRING_DURATION,
     META_SEASON_NUMBER, META_EPISODE_NUMBER, META_FORCED_UNIQUE, META_CORE_IMAGERY, META_3D, META_DD51, META_DOLBY, META_LETTERBOX,
     META_LIVE, META_NEW, META_WIDESCREEN, META_SURROUND, META_DUBBED, META_TAPED, META_SERIES_ID, META_SHOWCARD_ID, META_CORE_IMAGERY2,
-    META_ALT_EPISODE_NUMBER
+    META_ALT_EPISODE_NUMBER, META_HDHR_SOURCE_QUALITY, META_HDHR_VIDEO_CODEC,
+    META_HDHR_AUDIO_CODEC, META_HDHR_DRM, META_HDHR_ENABLED, META_HDHR_SUBSCRIBED
   };
 
   public static String[] DB_META_PROPS = { META_TRACK, META_EXTERNAL_ID, META_TITLE, META_EPISODE_NAME, META_ALBUM, META_GENRE,
@@ -185,7 +198,8 @@ public abstract class MediaFormat
     META_SERIES_PREMIERE, META_CHANNEL_PREMIERE, META_SEASON_FINALE, META_SERIES_FINALE, META_SAP, META_PARENTAL_RATING,
     META_SEASON_NUMBER, META_EPISODE_NUMBER, META_FORCED_UNIQUE, META_CORE_IMAGERY, META_3D, META_DD51, META_DOLBY, META_LETTERBOX,
     META_LIVE, META_NEW, META_WIDESCREEN, META_SURROUND, META_DUBBED, META_TAPED, META_SERIES_ID, META_SHOWCARD_ID, META_CORE_IMAGERY2,
-    META_ALT_EPISODE_NUMBER
+    META_ALT_EPISODE_NUMBER, META_HDHR_SOURCE_QUALITY, META_HDHR_VIDEO_CODEC,
+    META_HDHR_AUDIO_CODEC, META_HDHR_DRM, META_HDHR_ENABLED, META_HDHR_SUBSCRIBED
   };
 
   static

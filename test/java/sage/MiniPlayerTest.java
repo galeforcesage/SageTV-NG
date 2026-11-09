@@ -580,6 +580,14 @@ public class MiniPlayerTest
   }
 
   @Test
+  public void testAiOnlyPolicyAppendsToEnhancementSuffix()
+  {
+    assertEquals(MiniPlayer.buildEffDeliveryToken("pull-xcode", "mpeg2tsremux",
+        sage.enhance.EnhancementTier.ENHANCE_2160P, true),
+        "pull-xcode:mpeg2tsremux:enhance;tier=2160p;policy=ai_only");
+  }
+
+  @Test
   public void testEnhancementNeverResurrectsANullToken()
   {
     assertNull(MiniPlayer.buildEffDeliveryToken(null, null,

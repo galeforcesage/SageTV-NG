@@ -512,6 +512,35 @@ public class GpuEnhancePipelineTest
     assertEquals(count, 1, "must not leave a duplicate -tag:v: " + argv);
   }
 
+  @Test
+  public void testCopyRewriteRemovesInvalidLegacyCadence()
+  {
+    java.util.List<String> argv = new java.util.ArrayList<String>(java.util.Arrays.asList(
+        "ffmpeg", "-i", "/media/rec.mpg", "-c:v", "copy",
+        "-r", "0", "-s", "0x0", "-g", "0", "-c:a", "copy", "-"));
+
+    assertTrue(GpuEnhancePipeline.rewriteArgv(
+        argv, plan(EnhancementTier.ENHANCE_2160P, false, "scale_cuda"), 60));
+
+    assertFalse(argv.contains("-s"), "enhancement filter owns output size: " + argv);
+    assertFalse(argv.contains("-r"), "passthrough cadence must not retain legacy -r: " + argv);
+    assertEquals(argv.get(argv.indexOf("-g") + 1), "120", argv.toString());
+  }
+
+  @Test
+  public void testReencodeRewriteRepairsInvalidLegacyCadence()
+  {
+    java.util.List<String> argv = new java.util.ArrayList<String>(java.util.Arrays.asList(
+        "ffmpeg", "-i", "/media/rec.mpg", "-c:v", "h264_nvenc",
+        "-vf", "format=yuv420p", "-r", "0", "-g", "0", "-c:a", "copy", "-"));
+
+    assertTrue(GpuEnhancePipeline.rewriteReencodeArgv(
+        argv, plan(EnhancementTier.ENHANCE_2160P, false, "scale_cuda"), 0));
+
+    assertEquals(argv.get(argv.indexOf("-r") + 1), "30", argv.toString());
+    assertEquals(argv.get(argv.indexOf("-g") + 1), "60", argv.toString());
+  }
+
   /** The exact browserhd (PWA/MSE) re-encode command shape: H.264 nvenc, CPU
    *  format filter, no explicit bitrate, AAC stereo audio. */
   private static java.util.List<String> browserhdArgv()

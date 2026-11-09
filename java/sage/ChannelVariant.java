@@ -47,17 +47,38 @@ public final class ChannelVariant
   private final String tuningLocator;
   private final String sourceDeviceId;
   private final boolean drm;
+  private final ChannelQuality sourceQuality;
 
   /** Backward-compatible ctor (no DRM flag => clear). */
   public ChannelVariant(String variantType, String videoCodecHint,
       String audioCodecHint, String tuningLocator, String sourceDeviceId)
   {
-    this(variantType, videoCodecHint, audioCodecHint, tuningLocator, sourceDeviceId, false);
+    this(variantType, videoCodecHint, audioCodecHint, tuningLocator, sourceDeviceId,
+        false, ChannelQuality.UNKNOWN);
   }
 
   public ChannelVariant(String variantType, String videoCodecHint,
       String audioCodecHint, String tuningLocator, String sourceDeviceId,
       boolean drm)
+  {
+    this(variantType, videoCodecHint, audioCodecHint, tuningLocator, sourceDeviceId,
+        drm, ChannelQuality.UNKNOWN);
+  }
+
+  /**
+   * Creates a channel variant with source-provided quality metadata.
+   *
+   * @param variantType broadcast-standard variant type
+   * @param videoCodecHint lineup video codec
+   * @param audioCodecHint lineup audio codec
+   * @param tuningLocator device tuning locator
+   * @param sourceDeviceId source HDHomeRun ID
+   * @param drm whether the service is encrypted
+   * @param sourceQuality advisory lineup quality
+   */
+  public ChannelVariant(String variantType, String videoCodecHint,
+      String audioCodecHint, String tuningLocator, String sourceDeviceId,
+      boolean drm, ChannelQuality sourceQuality)
   {
     this.variantType    = variantType    == null ? TYPE_ATSC1 : variantType;
     this.videoCodecHint = videoCodecHint == null ? ""         : videoCodecHint;
@@ -65,6 +86,7 @@ public final class ChannelVariant
     this.tuningLocator  = tuningLocator  == null ? ""         : tuningLocator;
     this.sourceDeviceId = sourceDeviceId == null ? ""         : sourceDeviceId;
     this.drm            = drm;
+    this.sourceQuality  = sourceQuality == null ? ChannelQuality.UNKNOWN : sourceQuality;
   }
 
   public String getVariantType()    { return variantType; }
@@ -73,18 +95,19 @@ public final class ChannelVariant
   public String getTuningLocator()  { return tuningLocator; }
   public String getSourceDeviceId() { return sourceDeviceId; }
   public boolean isDrm()            { return drm; }
+  public ChannelQuality getSourceQuality() { return sourceQuality; }
   public boolean isAtsc3()          { return TYPE_ATSC3.equals(variantType); }
   public boolean isHevc()           { return VCODEC_HEVC.equalsIgnoreCase(videoCodecHint); }
   public boolean isAc4()            { return ACODEC_AC4.equalsIgnoreCase(audioCodecHint); }
 
   /** Pipe-delimited persistence form. Keep stable -- it round-trips through
-   *  Sage.properties via {@link ChannelVariants}. Field 6 (drm) is appended
-   *  optionally so older 5-field strings deserialize cleanly with drm=false. */
+   *  Sage.properties via {@link ChannelVariants}. Fields 6-7 are appended
+   *  optionally so older strings deserialize with safe defaults. */
   public String toPersistedString()
   {
     return variantType + '|' + videoCodecHint + '|' + audioCodecHint + '|'
          + escape(tuningLocator) + '|' + escape(sourceDeviceId)
-         + '|' + (drm ? "1" : "0");
+         + '|' + (drm ? "1" : "0") + '|' + sourceQuality.name();
   }
 
   public static ChannelVariant fromPersistedString(String s)
@@ -93,13 +116,16 @@ public final class ChannelVariant
     String[] parts = s.split("\\|", -1);
     if (parts.length < 4) return null;
     boolean drm = parts.length > 5 && "1".equals(parts[5]);
+    ChannelQuality sourceQuality = parts.length > 6
+        ? ChannelQuality.fromToken(parts[6]) : ChannelQuality.UNKNOWN;
     return new ChannelVariant(
         parts[0],
         parts[1],
         parts[2],
         unescape(parts[3]),
         parts.length > 4 ? unescape(parts[4]) : "",
-        drm);
+        drm,
+        sourceQuality);
   }
 
   private static String escape(String s)
@@ -147,7 +173,9 @@ public final class ChannelVariant
   {
     return "ChannelVariant{" + variantType + " v=" + videoCodecHint
         + " a=" + audioCodecHint + " loc=" + tuningLocator
-        + (sourceDeviceId.length() > 0 ? " dev=" + sourceDeviceId : "") + "}";
+        + " quality=" + sourceQuality
+        + (sourceDeviceId.length() > 0 ? " dev=" + sourceDeviceId : "")
+        + (drm ? " DRM" : "") + "}";
   }
 
   @Override public boolean equals(Object o)

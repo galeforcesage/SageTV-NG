@@ -4657,6 +4657,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     }
   }
 
+  private volatile boolean partyPreparationAuthorized;
   private volatile boolean partyProgressOwned;
   private volatile PartyPreparation partyPreparation;
   private final java.util.concurrent.atomic.AtomicLong partyWatchGeneration = new java.util.concurrent.atomic.AtomicLong();
@@ -4669,7 +4670,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   {
     synchronized (queueLock)
     {
-      if (!partyProgressOwned || partyWatchRequests != 0 || processingWatchRequest || !watchQueue.isEmpty()
+      if (!partyPreparationAuthorized || partyWatchRequests != 0 || processingWatchRequest || !watchQueue.isEmpty()
           || currFile != null && (player == null || player.getState() == MediaPlayer.NO_STATE)
           || player != null && player.getState() != MediaPlayer.PAUSE_STATE && player.getState() != MediaPlayer.NO_STATE)
         throw new sage.party.PartyProtocol.Fault("SURFACE_SWITCH_UNSAFE");
@@ -4731,7 +4732,8 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     PartyPreparation preparation = new PartyPreparation(media, id, authorized, positionMs);
     preparation.forceReload = forceReload;
     partyPreparation = preparation;
-    if (!partyProgressOwned || !preparation.active()) preparation.watchCode = WATCH_FAILED_INSUFFICIENT_PERMISSIONS;
+    if (!partyPreparationAuthorized || !preparation.active())
+      preparation.watchCode = WATCH_FAILED_INSUFFICIENT_PERMISSIONS;
     else preparation.watchCode = watchPartyMedia(preparation);
     if (preparation.watchCode != WATCH_OK) preparation.complete();
     return preparation;
@@ -4752,6 +4754,12 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
       if (mp == null || currFile != preparation.media)
       { preparation.watchCode = WATCH_FAILED_NO_MEDIA_PLAYER_FOR_FILE; return; }
       long generation = mp.getPartyPlaybackGeneration();
+      if (preparation.loaded)
+      {
+        if (preparation.generation != generation)
+          preparation.watchCode = WATCH_FAILED_USER_REJECTED_CONFLICT;
+        return;
+      }
       if (!mp.pause() || player != mp || currFile != preparation.media
           || mp.getPartyPlaybackGeneration() != generation || mp.getState() != MediaPlayer.PAUSE_STATE)
       { preparation.watchCode = WATCH_FAILED_UNKNOWN; return; }
@@ -4776,23 +4784,36 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     // Keep an already-loaded stage held until an explicit canonical transition or normal Watch.
   }
 
-  boolean isPartyPreparationLoaded(PartyPreparation preparation)
+  boolean establishPartyPreparationLoaded(PartyPreparation preparation)
   {
     MiniPlayer mp = getPartyPlayer();
-    return preparation.active() && preparation.loaded && preparation.watchCode == WATCH_OK
-        && currFile == preparation.media && mp != null
-        && mp.getPartyPlaybackGeneration() == preparation.generation && mp.getState() == MediaPlayer.PAUSE_STATE;
+    if (!preparation.active() || preparation.watchCode != WATCH_OK
+        || currFile != preparation.media || mp == null)
+      return false;
+    int state = mp.getState();
+    if (state != MediaPlayer.PAUSE_STATE && state != MediaPlayer.PLAY_STATE) return false;
+    long generation = mp.getPartyPlaybackGeneration();
+    if (preparation.generation >= 0 && preparation.generation != generation) return false;
+    preparation.generation = generation;
+    preparation.loaded = true;
+    preparation.complete();
+    return true;
   }
 
-  /** Enters the ordinary playback UI after a staged Party load is verified paused. */
+  boolean isPartyPreparationLoaded(PartyPreparation preparation)
+  {
+    return establishPartyPreparationLoaded(preparation);
+  }
+
+  /** Enters the ordinary playback UI after a staged Party load is established. */
   void presentPartyPreparation(final PartyPreparation preparation)
   {
-    if (!isPartyPreparationLoaded(preparation)) return;
+    if (!establishPartyPreparationLoaded(preparation)) return;
     uiMgr.getRouter().invokeLater(new Runnable()
     {
       @Override public void run()
       {
-        if (!isPartyPreparationLoaded(preparation)) return;
+        if (!establishPartyPreparationLoaded(preparation)) return;
         PseudoMenu currentMenu = uiMgr.getCurrUI();
         if (currentMenu != null)
           uiMgr.getGlobalContext().put("StartPlaybackMenu", currentMenu.getBlueprint());
@@ -4801,11 +4822,17 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     });
   }
 
+  /** Authorizes Party media staging without changing ordinary playback ownership. */
+  public void setPartyPreparationAuthorized(boolean authorized)
+  {
+    if (!authorized && partyPreparation != null)
+    { partyPreparation.cancelled = true; partyPreparation.held = false; }
+    partyPreparationAuthorized = authorized;
+  }
+
   /** Prevents per-viewer writes while party progress owns the shared account's history. */
   public void setPartyProgressOwned(boolean owned)
   {
-    if (!owned && partyPreparation != null)
-    { partyPreparation.cancelled = true; partyPreparation.held = false; }
     if (partyProgressOwned && !owned) loggedWatch = true;
     partyProgressOwned = owned;
   }
@@ -4820,6 +4847,15 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     if (!partyProgressOwned || mf == null || mf.getID() != mediaFileId) return;
     if (partyPreparation != null && partyPreparation.media == mf) partyPreparation.held = false;
     submitJob(new VFJob(TIME_SET, mf.getRecordTime() + positionMs));
+    submitJob(new VFJob(playing ? PLAY : PAUSE));
+  }
+
+  /** Releases a Party frame already prepared at the canonical position without seeking again. */
+  void applyPartyReveal(int mediaFileId, boolean playing)
+  {
+    MediaFile mf = currFile;
+    if (!partyProgressOwned || mf == null || mf.getID() != mediaFileId) return;
+    if (partyPreparation != null && partyPreparation.media == mf) partyPreparation.held = false;
     submitJob(new VFJob(playing ? PLAY : PAUSE));
   }
 

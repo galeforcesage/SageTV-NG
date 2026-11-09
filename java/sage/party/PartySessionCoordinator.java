@@ -32,10 +32,13 @@ public final class PartySessionCoordinator
    */
   public long commandLead(Collection<ParticipantTiming> participants)
   {
-    long p95 = 0;
+    long lead = minimumLeadMs;
     for (ParticipantTiming participant : participants)
-      if (participant.ready()) p95 = Math.max(p95, participant.p95RttMs());
-    return Math.min(maximumLeadMs, Math.max(minimumLeadMs, 4 * p95 + 250));
+      if (participant.ready())
+        lead = Math.max(lead, Math.max(
+            4 * participant.p95RttMs() + 250,
+            participant.presentationLatencyMs() + participant.presentationUncertaintyMs() + 300));
+    return Math.min(maximumLeadMs, lead);
   }
 
   /**
@@ -63,13 +66,23 @@ public final class PartySessionCoordinator
    *
    * @param ready whether the participant belongs to the current ready cohort
    * @param p95RttMs participant p95 round-trip delay
+   * @param presentationLatencyMs robust predicted preparation plus reveal latency
+   * @param presentationUncertaintyMs robust prediction uncertainty
    */
-  public record ParticipantTiming(boolean ready, long p95RttMs)
+  public record ParticipantTiming(boolean ready, long p95RttMs,
+      long presentationLatencyMs, long presentationUncertaintyMs)
   {
+    /** Creates timing input without learned presentation history. */
+    public ParticipantTiming(boolean ready, long p95RttMs)
+    {
+      this(ready, p95RttMs, 0, 0);
+    }
+
     /** Validates non-negative timing input. */
     public ParticipantTiming
     {
-      if (p95RttMs < 0) throw new IllegalArgumentException("p95RttMs");
+      if (p95RttMs < 0 || presentationLatencyMs < 0 || presentationUncertaintyMs < 0)
+        throw new IllegalArgumentException("participant timing");
     }
   }
 }

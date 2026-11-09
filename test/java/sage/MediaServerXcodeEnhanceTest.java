@@ -54,6 +54,23 @@ public class MediaServerXcodeEnhanceTest
     assertEquals(req.tierToken, "2160p", "Tier token must be recovered from ;tier=");
     assertEquals(EnhancementTier.fromToken(req.tierToken), EnhancementTier.ENHANCE_2160P,
         "Recovered tier token must resolve back to the emitted tier");
+    assertFalse(req.specializedOnly);
+  }
+
+  @Test
+  public void aiOnlyPolicyRoundTripsFromEmitterToParser()
+  {
+    String token = MiniPlayer.buildEffDeliveryToken(
+        "pull-xcode", "mpeg2tsremux", EnhancementTier.ENHANCE_2160P, true);
+    assertEquals(token,
+        "pull-xcode:mpeg2tsremux:enhance;tier=2160p;policy=ai_only");
+
+    MediaServer.XcodeEnhanceRequest req =
+        MediaServer.parseXcodeEnhanceRequest(bridgeForward(token));
+    assertEquals(req.baseMode, "mpeg2tsremux");
+    assertTrue(req.enhanceRequested);
+    assertEquals(req.tierToken, "2160p");
+    assertTrue(req.specializedOnly);
   }
 
   @Test
@@ -78,6 +95,7 @@ public class MediaServerXcodeEnhanceTest
         "A mode with no marker must pass through byte-for-byte");
     assertFalse(req.enhanceRequested);
     assertNull(req.tierToken);
+    assertFalse(req.specializedOnly);
   }
 
   @Test

@@ -126,7 +126,7 @@ test('snapshot projection uses only the authoritative anchor and pending command
   }, 100900), 150);
 });
 
-test('selected invitees still enter the three-digit code', () => {
+test('invited joining couples invitation identity with the entered code', () => {
   const common = {
     requestId: golden.join.requestId,
     requestSeq: golden.join.requestSeq,
@@ -160,8 +160,29 @@ test('duplicate readiness is an idempotent acknowledgement', () => {
 test('commands carry generation, target and future monotonic deadline', () => {
   assert.equal(golden.command.stateVersion, 1);
   assert.equal(golden.command.commandSeq, 1);
+  assert.equal(golden.command.directiveId, golden.ackPresented.directiveId);
   assert.equal(golden.command.targetState, 'PLAYING');
   assert.ok(golden.command.executeAtServerMonoMs > golden.snapshot.serverMonoMs);
+});
+
+test('first presented frame settles activation before drift telemetry', () => {
+  assert.equal(golden.ackExecuted.stage, 'EXECUTED');
+  assert.equal(golden.ackPresented.stage, 'PRESENTED');
+  assert.equal(golden.ackPresented.state, 'PLAYING');
+  assert.equal(golden.heartbeatAck.activationPending, false);
+});
+
+test('disruptive reposition arms before one common reveal deadline', () => {
+  assert.equal(golden.barrierCommand.phase, 'PREPARE');
+  assert.equal(golden.barrierCommand.barrier, true);
+  assert.ok(golden.barrierCommand.executeAtServerMonoMs
+      < golden.barrierCommand.visibleAtServerMonoMs);
+  assert.equal(golden.ackArmed.stage, 'ARMED');
+  assert.equal(golden.ackArmed.state, 'PAUSED');
+  assert.equal(golden.ackArmed.directiveId, golden.barrierCommand.directiveId);
+  assert.equal(golden.reveal.directiveId, golden.barrierCommand.directiveId);
+  assert.equal(golden.reveal.executeAtServerMonoMs,
+      golden.barrierCommand.visibleAtServerMonoMs);
 });
 
 test('heartbeat reports observed player media time, state and buffer telemetry', () => {
@@ -178,9 +199,14 @@ test('heartbeat reports observed player media time, state and buffer telemetry',
   assert.equal(golden.heartbeatAck.desiredState, 'PLAYING');
 });
 
-test('local Stop is a heartbeat state and preserves the room code', () => {
+test('local Stop is a heartbeat state and changes host authority', () => {
   assert.equal(golden.localStop.type, 'HEARTBEAT');
   assert.equal(golden.localStop.state, 'STOPPED');
-  assert.equal(golden.joinCodeReply.joinCode, '042');
   assert.equal(golden.hostChanged.hostParticipantId, 'guest');
+});
+
+test('join code is returned only as an explicit host request reply', () => {
+  assert.equal(golden.joinCodeReply.type, 'JOIN_CODE');
+  assert.equal(golden.joinCodeReply.requestId, 'join-code-1');
+  assert.equal(golden.joinCodeReply.joinCode, '042');
 });

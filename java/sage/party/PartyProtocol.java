@@ -17,10 +17,13 @@ public final class PartyProtocol
   public static final Set<String> REQUIRED = Set.of(
       "PARTY_V1",
       "PARTY_JOIN_CODE_V1",
+      "PARTY_INVITATION_V1",
       "PARTY_MONOTONIC_V1",
       "PARTY_SCHEDULED_V1",
       "PARTY_HEARTBEAT_V1",
       "PARTY_PLAYER_ADAPTER_V1",
+      "PARTY_PRESENTED_FRAME_V1",
+      "PARTY_ARMED_REVEAL_V1",
       "PARTY_LOCAL_STOP_V1");
   /** Optional guarantee required before admitting an in-progress recording. */
   public static final String GROWING_MEDIA = "PARTY_GROWING_MEDIA_V1";

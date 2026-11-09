@@ -17,6 +17,7 @@ import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
 import sage.Sage;
+import sage.ChannelQuality;
 import sage.TestUtils;
 import sage.client.PlaybackSurface;
 import sage.enhance.spi.ExecutionForm;
@@ -106,6 +107,13 @@ public class EnhancementAdvisorTest
       int sinkW, int sinkH, PlaybackSurface s, String pref, String status)
   {
     return EnhancementAdvisor.advise(sw, sh, inter, fps, sinkW, sinkH, s, pref, status, true);
+  }
+
+  private EnhancementAdvisor.Advice adviseCapability(int sw, int sh, boolean inter, int fps,
+      int sinkW, int sinkH, PlaybackSurface s, String pref, String status, String capability)
+  {
+    return EnhancementAdvisor.advise(sw, sh, inter, fps, sinkW, sinkH, s, null, null,
+        pref, status, capability, true, 0L, 0L, fps, "", 0);
   }
 
   private EnhancementAdvisor.Advice adviseBw(int sw, int sh, boolean inter, int fps,
@@ -520,6 +528,31 @@ public class EnhancementAdvisorTest
   }
 
   @Test
+  public void testUnknownGeometryWithUhdLineupHintRefusesUpscale()
+  {
+    EnhancementAdvisor.Advice a = EnhancementAdvisor.advise(
+        0, 0, false, 0, 3840, 2160, surface(3840, 2160, 60), null, null,
+        "auto", "none", "none", true, 0L, 0L, 0.0, "", 0,
+        ChannelQuality.UHD);
+
+    assertEquals(a.getTier(), EnhancementTier.NONE);
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.SOURCE_ALREADY_UHD);
+  }
+
+  @Test
+  public void testKnownGeometrySupersedesStaleUhdLineupHint()
+  {
+    EnhancementAdvisor.Advice a = EnhancementAdvisor.advise(
+        1920, 1080, false, 30, 3840, 2160, surface(3840, 2160, 60), null, null,
+        "auto", "none", "none", true, 0L, 100000L, 30.0, "", 0,
+        ChannelQuality.UHD);
+
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P,
+        "decoded 1080p geometry must supersede stale lineup quality");
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.OFFERED);
+  }
+
+  @Test
   public void testMinGainThresholdIsConfigurable()
   {
     // 1080 -> 1440 is only a 1.33x gain, below the 1.5x default.
@@ -578,6 +611,115 @@ public class EnhancementAdvisorTest
         advise(1920, 1080, true, 30, 3840, 2160, surface(3840, 2160, 60), "auto", "available");
     assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P,
         "Only an ACTIVE local upscaler defers; merely available does not");
+  }
+
+  @Test
+  public void testAutoDefersToHighQualityClientCapability()
+  {
+    EnhancementAdvisor.Advice a = adviseCapability(1280, 720, false, 60,
+        3840, 2160, surface(3840, 2160, 60), "auto", "available", "high_quality");
+    assertEquals(a.getTier(), EnhancementTier.NONE);
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.CLIENT_UPSCALER_CAPABLE);
+  }
+
+  @Test
+  public void testAutoDefersToAiClientCapability()
+  {
+    EnhancementAdvisor.Advice a = adviseCapability(1280, 720, false, 60,
+        3840, 2160, surface(3840, 2160, 60), "auto", "available", "ai");
+    assertEquals(a.getTier(), EnhancementTier.NONE);
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.CLIENT_UPSCALER_CAPABLE);
+  }
+
+  @Test
+  public void testAutoPrefersSpecializedServerProviderOverHighQualityClient()
+      throws Exception
+  {
+    upscaleReg.close();
+    upscaleReg = ScaleProviderRegistry.getInstance().register(new ScaleProvider()
+    {
+      public String id() { return "test-specialized-auto"; }
+      public ScaleProviderCapabilities capabilities()
+      { return new ScaleProviderCapabilities("test-specialized-auto", true, true, 1); }
+      public ScaleProviderAvailability probe(ScaleRequest r)
+      { return ScaleProviderAvailability.available(); }
+      public ScaleExecutionPlan plan(ScaleRequest r)
+      { return new ScaleExecutionPlan(ExecutionForm.FFMPEG_FILTER, "test=3840:2160", "Test"); }
+    });
+
+    EnhancementAdvisor.Advice a = adviseCapability(1280, 720, false, 60,
+        3840, 2160, surface(3840, 2160, 60), "auto", "available", "high_quality");
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P);
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.OFFERED);
+  }
+
+  @Test
+  public void testAutoStillDefersToAiClientWhenServerAiExists() throws Exception
+  {
+    upscaleReg.close();
+    upscaleReg = ScaleProviderRegistry.getInstance().register(new ScaleProvider()
+    {
+      public String id() { return "test-specialized-client-ai"; }
+      public ScaleProviderCapabilities capabilities()
+      { return new ScaleProviderCapabilities("test-specialized-client-ai", true, true, 1); }
+      public ScaleProviderAvailability probe(ScaleRequest r)
+      { return ScaleProviderAvailability.available(); }
+      public ScaleExecutionPlan plan(ScaleRequest r)
+      { return new ScaleExecutionPlan(ExecutionForm.FFMPEG_FILTER, "test=3840:2160", "Test"); }
+    });
+
+    EnhancementAdvisor.Advice a = adviseCapability(1280, 720, false, 60,
+        3840, 2160, surface(3840, 2160, 60), "auto", "available", "ai");
+    assertEquals(a.getTier(), EnhancementTier.NONE);
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.CLIENT_UPSCALER_CAPABLE);
+  }
+
+  @Test
+  public void testAutoStillServerUpscalesForStandardClient()
+  {
+    EnhancementAdvisor.Advice a = adviseCapability(1280, 720, false, 60,
+        3840, 2160, surface(3840, 2160, 60), "auto", "available", "standard");
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P);
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.OFFERED);
+  }
+
+  @Test
+  public void testAlwaysIgnoresClientUpscalerCapability()
+  {
+    EnhancementAdvisor.Advice a = adviseCapability(1280, 720, false, 60,
+        3840, 2160, surface(3840, 2160, 60), "always", "active", "ai");
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P);
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.OFFERED);
+  }
+
+  @Test
+  public void testAiOnlyRefusesStandardServerProvider()
+  {
+    EnhancementAdvisor.Advice a = adviseCapability(1280, 720, false, 60,
+        3840, 2160, surface(3840, 2160, 60), "ai_only", "none", "none");
+    assertEquals(a.getTier(), EnhancementTier.NONE);
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.NO_UPSCALE_PROVIDER);
+  }
+
+  @Test
+  public void testAiOnlyUsesSpecializedServerProvider() throws Exception
+  {
+    upscaleReg.close();
+    upscaleReg = ScaleProviderRegistry.getInstance().register(new ScaleProvider()
+    {
+      public String id() { return "test-specialized"; }
+      public ScaleProviderCapabilities capabilities()
+      { return new ScaleProviderCapabilities("test-specialized", true, true, 1); }
+      public ScaleProviderAvailability probe(ScaleRequest r)
+      { return ScaleProviderAvailability.available(); }
+      public ScaleExecutionPlan plan(ScaleRequest r)
+      { return new ScaleExecutionPlan(ExecutionForm.FFMPEG_FILTER, "test=3840:2160", "Test"); }
+    });
+
+    EnhancementAdvisor.Advice a = adviseCapability(1280, 720, false, 60,
+        3840, 2160, surface(3840, 2160, 60), "ai_only", "none", "none");
+    assertEquals(a.getTier(), EnhancementTier.ENHANCE_2160P);
+    assertEquals(a.getVerdict(), EnhancementAdvisor.Verdict.OFFERED);
   }
 
   // ---------- surface decode gate ----------

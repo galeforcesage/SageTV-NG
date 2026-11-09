@@ -26,11 +26,18 @@ public interface PartyPlayerAdapter
   /** Returns actual server-selected playback metadata, or throws until prepared. */
   PartyService.Delivery delivery(int mediaFileId);
 
-  /** Describes the actual paused loaded playback path. */
+  /** Describes the actual loaded playback path before client READY. */
   default PartyService.Delivery preparedDelivery(int mediaFileId)
   {
     return delivery(mediaFileId);
   }
+
+  /**
+   * Returns the stable generation of an already-loaded delivery pipeline.
+   *
+   * @return generation, or {@code -1} when the requested media is not loaded
+   */
+  default long preparedGeneration(int mediaFileId) { return -1; }
 
   /** Stages canonical media at a server-projected Party position. */
   default void prepare(int mediaFileId, String preparationId, long positionMs)
@@ -46,6 +53,9 @@ public interface PartyPlayerAdapter
 
   /** Resolves a server-owned commercial marker end relative to joined media. */
   default long commercialEnd(int mediaFileId, long positionMs, boolean automatic) { return -1; }
+
+  /** Authorizes staging Party media without taking ownership of ordinary playback. */
+  void preparationOwner(boolean partyMayPrepare);
 
   /** Suppresses ordinary per-viewer progress logging while Party owns playback. */
   void progressOwner(boolean partyOwnsProgress);

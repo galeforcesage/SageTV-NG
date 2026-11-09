@@ -304,7 +304,9 @@ final class NgPartyConnection implements PartyService.Peer
   {
     VideoFrame vf = ui.getVideoFrame();
     MediaFile mf = vf.getCurrFile();
-    if (closed || mf == null || mf.getID() != media || vf.getPlayerState() != MediaPlayer.PAUSE_STATE)
+    int playerState = vf.getPlayerState();
+    if (closed || mf == null || mf.getID() != media
+        || (playerState != MediaPlayer.PAUSE_STATE && playerState != MediaPlayer.PLAY_STATE))
       throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
     PartyService.Delivery path = vf.getPartyDelivery(renderer);
     if (renderer.hasPartySurface())
@@ -331,6 +333,12 @@ final class NgPartyConnection implements PartyService.Peer
             && preparationGeneration == generation && principal != null && principal.equals(principal())
             && capabilities().containsAll(PartyProtocol.REQUIRED);
         if (!authorized.getAsBoolean()) return;
+        long loadedGeneration = preparedGeneration(media);
+        if (loadedGeneration >= 0)
+        {
+          service.preparationResult(this, id, VideoFrame.WATCH_OK, loadedGeneration);
+          return;
+        }
         MediaFile target = preparationMedia(media);
         if (target == null)
         { service.preparationResult(this, id, VideoFrame.WATCH_FAILED_FILES_NOT_ON_DISK, -1); return; }
@@ -347,21 +355,55 @@ final class NgPartyConnection implements PartyService.Peer
 
   private void awaitPreparation(VideoFrame.PartyPreparation stage, long deadline, long generation)
   {
-    long remaining = Math.max(0, deadline - monotonicMs.getAsLong());
-    try { stage.awaitCompletion(remaining); }
-    catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-    if (closed || preparationGeneration != generation) return;
-    if (stage.watchCode != VideoFrame.WATCH_OK)
-      service.preparationResult(this, stage.id, stage.watchCode, -1);
-    else if (!stage.active())
-      service.preparationResult(this, stage.id, VideoFrame.WATCH_FAILED_USER_REJECTED_CONFLICT, -1);
-    else if (ui.getVideoFrame().isPartyPreparationLoaded(stage))
+    while (!closed && preparationGeneration == generation && stage.active())
     {
-      ui.getVideoFrame().presentPartyPreparation(stage);
-      service.preparationResult(this, stage.id, VideoFrame.WATCH_OK, stage.generation);
+      if (stage.watchCode != VideoFrame.WATCH_OK)
+      {
+        service.preparationResult(this, stage.id, stage.watchCode, -1, "WATCH_REJECTED");
+        return;
+      }
+      if (ui.getVideoFrame().establishPartyPreparationLoaded(stage))
+      {
+        service.preparationResult(this, stage.id, VideoFrame.WATCH_OK, stage.generation);
+        try { ui.getVideoFrame().presentPartyPreparation(stage); }
+        catch (RuntimeException e)
+        {
+          if (Sage.DBG)
+            System.out.println("Party preparation UI presentation failed after LOADED: " + e);
+        }
+        return;
+      }
+      long remaining = deadline - monotonicMs.getAsLong();
+      if (remaining <= 0) break;
+      try { stage.awaitCompletion(Math.min(remaining, 50)); }
+      catch (InterruptedException e)
+      {
+        Thread.currentThread().interrupt();
+        return;
+      }
     }
+    if (closed || preparationGeneration != generation) return;
+    if (!stage.active())
+      service.preparationResult(this, stage.id,
+          VideoFrame.WATCH_FAILED_USER_REJECTED_CONFLICT, -1, "WATCH_REJECTED");
     else
-      service.preparationResult(this, stage.id, VideoFrame.WATCH_FAILED_UNKNOWN, -1);
+      service.preparationResult(this, stage.id,
+          VideoFrame.WATCH_FAILED_UNKNOWN, -1, "NO_MEDIA_PROGRESS");
+  }
+
+  @Override public long preparedGeneration(int media)
+  {
+    VideoFrame vf = ui.getVideoFrame();
+    MediaFile mf = vf.getCurrFile();
+    MiniPlayer player = vf.getPartyPlayer();
+    if (closed || mf == null || mf.getID() != media || player == null) return -1;
+    int state = player.getState();
+    if (state != MediaPlayer.PLAY_STATE && state != MediaPlayer.PAUSE_STATE) return -1;
+    long generation = player.getPartyPlaybackGeneration();
+    try { preparedDelivery(media); }
+    catch (PartyProtocol.Fault unavailable) { return -1; }
+    return !closed && vf.getCurrFile() == mf && vf.getPartyPlayer() == player
+        && player.getPartyPlaybackGeneration() == generation ? generation : -1;
   }
 
   @Override public void cancelPreparation()
@@ -404,6 +446,10 @@ final class NgPartyConnection implements PartyService.Peer
   }
 
   @Override public long skip(String action) { return ui.getVideoFrame().partySkipDelta(action); }
+  @Override public void preparationOwner(boolean authorized)
+  {
+    ui.getVideoFrame().setPartyPreparationAuthorized(authorized);
+  }
   @Override public void progressOwner(boolean owned)
   {
     ui.getVideoFrame().setPartyProgressOwned(owned);
@@ -429,6 +475,7 @@ final class NgPartyConnection implements PartyService.Peer
     long delay = Math.max(0, deadline - monotonicMs.getAsLong());
     long position = directive.targetPositionMs();
     boolean playing = "PLAYING".equals(directive.targetState());
+    boolean reveal = "REVEAL".equals(directive.kind());
     MediaFile media = ui.getVideoFrame().getCurrFile();
     if (media == null) return;
     int mediaId = media.getID();
@@ -436,7 +483,10 @@ final class NgPartyConnection implements PartyService.Peer
       synchronized (NgPartyConnection.this)
       {
         if (!closed && generation == scheduleGeneration)
-          ui.getVideoFrame().applyPartyTimeline(mediaId, position, playing);
+        {
+          if (reveal) ui.getVideoFrame().applyPartyReveal(mediaId, playing);
+          else ui.getVideoFrame().applyPartyTimeline(mediaId, position, playing);
+        }
       }
     }, delay, TimeUnit.MILLISECONDS);
   }

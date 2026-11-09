@@ -137,6 +137,18 @@ public final class ScaleProviderRegistry
     return cudaLanczos.isUsableHere();
   }
 
+  /** True when at least one specialized upscaler is registered. */
+  public boolean selectedSpecializedProviderCanUpscale()
+  {
+    for (ScaleProvider p : providers.values())
+    {
+      if (p == builtin || p == cudaLanczos) continue;
+      ScaleProviderCapabilities caps = p.capabilities();
+      if (caps != null && caps.supportsUpscale() && caps.isSpecialized()) return true;
+    }
+    return false;
+  }
+
   /**
    * The upscale preference chain for {@code request}: the ordered list of
    * upscale-capable providers selection will try, best first. Specialized AI
@@ -196,6 +208,17 @@ public final class ScaleProviderRegistry
    */
   public boolean selectedProviderCanUpscale(ScaleRequest probe)
   {
+    return selectedProviderCanUpscale(probe, false);
+  }
+
+  /** Runtime offer gate restricted to specialized providers. */
+  public boolean selectedSpecializedProviderCanUpscale(ScaleRequest probe)
+  {
+    return selectedProviderCanUpscale(probe, true);
+  }
+
+  private boolean selectedProviderCanUpscale(ScaleRequest probe, boolean specializedOnly)
+  {
     String pressureDenial = GpuGovernor.getInstance().currentOfferPressureDenialReason();
     if (pressureDenial != null)
     {
@@ -215,6 +238,8 @@ public final class ScaleProviderRegistry
       String id = p.id();
       try
       {
+        ScaleProviderCapabilities caps = p.capabilities();
+        if (specializedOnly && (caps == null || !caps.isSpecialized())) continue;
         ScaleProviderAssessment assessment = p.assess(probe);
         if (!assessmentUsable(assessment, probe))
         {
@@ -242,7 +267,9 @@ public final class ScaleProviderRegistry
         if (Sage.DBG) t.printStackTrace(System.out);
       }
     }
-    System.out.println("SCALE_PROVIDER offer-gate: no provider in the chain can render now"
+    System.out.println("SCALE_PROVIDER offer-gate: no "
+        + (specializedOnly ? "specialized " : "")
+        + "provider in the chain can render now"
         + " -> not offering upscale (delivering source)");
     return false;
   }
@@ -263,7 +290,7 @@ public final class ScaleProviderRegistry
    */
   public ScaleSelection select(ScaleRequest request)
   {
-    return select(request, false);
+    return select(request, false, false);
   }
 
   /**
@@ -280,10 +307,17 @@ public final class ScaleProviderRegistry
    */
   public ScaleSelection selectDeterministic(ScaleRequest request)
   {
-    return select(request, true);
+    return select(request, true, false);
   }
 
-  private ScaleSelection select(ScaleRequest request, boolean deterministicOnly)
+  /** Select only a specialized upscaler; never fall through to a standard scaler. */
+  public ScaleSelection selectSpecialized(ScaleRequest request)
+  {
+    return select(request, false, true);
+  }
+
+  private ScaleSelection select(ScaleRequest request, boolean deterministicOnly,
+      boolean specializedOnly)
   {
     // Deinterlace-only / non-upscaling: the built-in passthrough (the core still
     // deinterlaces). Choosing it here is not a fallback.
@@ -300,6 +334,8 @@ public final class ScaleProviderRegistry
             && provider.capabilities().isSpecialized();
         if (deterministicOnly && specialized)
           continue;  // one-rung-down fallback build: skip AI upscalers outright.
+        if (specializedOnly && !specialized)
+          continue;
 
         ScaleProviderAssessment assessment = provider.assess(request);
         if (!assessmentUsable(assessment, request))
