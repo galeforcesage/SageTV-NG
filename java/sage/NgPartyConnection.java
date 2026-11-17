@@ -6,6 +6,7 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import sage.epg.sd.gson.JsonObject;
+import sage.party.PartyPlayerAdapter;
 import sage.party.PartyProtocol;
 import sage.party.PartyService;
 import sage.party.PartyPlaybackDirective;
@@ -47,8 +48,10 @@ final class NgPartyConnection implements PartyService.Peer
   private final ThreadPoolExecutor output = executor("PartyOutput");
   private final ThreadPoolExecutor preparation = executor("PartyPrepare");
   private final Object admissionLock = new Object();
+  private final Object preparationBindingLock = new Object();
   private final java.util.concurrent.CountDownLatch admissionReady = new java.util.concurrent.CountDownLatch(1);
   private String pendingHello;
+  private PartyPlayerAdapter.PreparationBinding stagedPreparationBinding;
   private volatile long preparationGeneration;
   private volatile boolean closed;
   private java.util.concurrent.ScheduledFuture<?> scheduled;
@@ -80,7 +83,6 @@ final class NgPartyConnection implements PartyService.Peer
     service.connected(this);
     if (!service.eligible(this)) return;
     System.out.println("PartyMode transport phase=ADMISSION_READY pendingHello=" + (pendingHello != null));
-    send(service.availability(this));
     admissionReady.countDown();
   }
 
@@ -188,9 +190,14 @@ final class NgPartyConnection implements PartyService.Peer
     closed = true;
     admissionReady.countDown();
     synchronized (admissionLock) { pendingHello = null; }
+    synchronized (preparationBindingLock) { stagedPreparationBinding = null; }
     cancelScheduled();
     service.disconnected(this);
-    if (ui.getVideoFrame() != null) ui.getVideoFrame().setPartyProgressOwned(false);
+    if (ui.getVideoFrame() != null)
+    {
+      ui.getVideoFrame().setPartyProgressOwned(false);
+      renderer.restorePartySurface();
+    }
     input.shutdownNow(); output.shutdownNow(); preparation.shutdownNow();
   }
 
@@ -232,6 +239,16 @@ final class NgPartyConnection implements PartyService.Peer
 
   @Override public void send(JsonObject message)
   {
+    queueMessage(message, isArmedAck(message), null);
+  }
+
+  @Override public void sendReveal(JsonObject message, PartyPlaybackDirective directive)
+  {
+    queueMessage(message, true, () -> schedule(directive));
+  }
+
+  private void queueMessage(JsonObject message, boolean acknowledged, Runnable afterDelivery)
+  {
     if (closed) return;
     String json = message.toString();
     if (json.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > PartyProtocol.MAX_BYTES)
@@ -239,12 +256,33 @@ final class NgPartyConnection implements PartyService.Peer
     try
     {
       output.execute(() -> {
-        try { renderer.sendSetPropertyAsync(PartyProtocol.PROPERTY, json); }
+        try
+        {
+          if (acknowledged)
+          {
+            int result = renderer.sendSetProperty(PartyProtocol.PROPERTY, json);
+            if (result != 0)
+            {
+              failTransport("OUTPUT_REJECTED");
+              return;
+            }
+          }
+          else
+            renderer.sendSetPropertyAsync(PartyProtocol.PROPERTY, json);
+          if (afterDelivery != null) afterDelivery.run();
+        }
         catch (java.io.IOException e) { failTransport("OUTPUT_IO"); }
       });
     }
     catch (java.util.concurrent.RejectedExecutionException e)
     { failTransport("OUTPUT_BACKPRESSURE"); }
+  }
+
+  private static boolean isArmedAck(JsonObject message)
+  {
+    return message.has("type") && message.has("stage")
+        && "ACK".equals(message.get("type").getAsString())
+        && "ARMED".equals(message.get("stage").getAsString());
   }
 
   @Override public long duration(int id)
@@ -276,6 +314,26 @@ final class NgPartyConnection implements PartyService.Peer
     long position = ui.getVideoFrame().partyCurrentPosition(media);
     if (closed || !principal.equals(principal()))
       throw new PartyProtocol.Fault("CURRENT_POSITION_UNAVAILABLE");
+    return position;
+  }
+
+  @Override public long preparedPausedPosition(int media)
+  {
+    duration(media);
+    String principal = principal();
+    VideoFrame vf = ui.getVideoFrame();
+    MediaFile mf = vf.getCurrFile();
+    MiniPlayer player = vf.getPartyPlayer();
+    if (closed || principal == null || mf == null || mf.getID() != media || player == null
+        || player.getState() != MediaPlayer.PAUSE_STATE)
+      return -1;
+    long generation = player.getPartyPlaybackGeneration();
+    long position = vf.partyCurrentPosition(media);
+    if (closed || !principal.equals(principal()) || vf.getCurrFile() != mf
+        || vf.getPartyPlayer() != player
+        || player.getPartyPlaybackGeneration() != generation
+        || player.getState() != MediaPlayer.PAUSE_STATE)
+      return -1;
     return position;
   }
 
@@ -314,6 +372,14 @@ final class NgPartyConnection implements PartyService.Peer
       sage.client.PlaybackSurface selected = renderer.getPlaybackSurfaces().get(path.surface());
       if (selected == null || !selected.getDeliveryModes().contains(path.mode()))
         throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
+      if ("hls".equalsIgnoreCase(path.mode()))
+        throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
+      if (sage.client.PlaybackDecisionEngine.PARTY_CMAF_DELIVERY_MODE.equals(path.mode())
+          && !"mse".equalsIgnoreCase(selected.getRoute()))
+        throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
+      if ("push".equalsIgnoreCase(path.mode())
+          && !capabilities().contains(PartyProtocol.PUSH_EPOCH_ORIGIN))
+        throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
       if ("mse".equalsIgnoreCase(selected.getRoute()) && selected.getDeliveryModes().equals(java.util.List.of("pull-xcode"))
           && (!"MP4".equals(path.container()) || path.xcodeMode() == null || !path.xcodeMode().startsWith("browserhd")))
         throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
@@ -325,30 +391,99 @@ final class NgPartyConnection implements PartyService.Peer
   {
     duration(media);
     String principal = principal();
+    if (closed || principal == null || !capabilities().containsAll(PartyProtocol.REQUIRED))
+      throw new PartyProtocol.Fault("SESSION_EXPIRED");
     long generation = ++preparationGeneration;
     try
     {
       preparation.execute(() -> {
-        java.util.function.BooleanSupplier authorized = () -> !closed
-            && preparationGeneration == generation && principal != null && principal.equals(principal())
-            && capabilities().containsAll(PartyProtocol.REQUIRED);
+        java.util.function.BooleanSupplier authorized = preparationAuthorization(generation);
         if (!authorized.getAsBoolean()) return;
-        long loadedGeneration = preparedGeneration(media);
-        if (loadedGeneration >= 0)
-        {
-          service.preparationResult(this, id, VideoFrame.WATCH_OK, loadedGeneration);
-          return;
-        }
         MediaFile target = preparationMedia(media);
         if (target == null)
-        { service.preparationResult(this, id, VideoFrame.WATCH_FAILED_FILES_NOT_ON_DISK, -1); return; }
-        VideoFrame.PartyPreparation stage =
-            ui.getVideoFrame().preparePartyMedia(target, id, authorized, positionMs);
-        awaitPreparation(stage, monotonicMs.getAsLong() + PartyService.PREPARATION_TIMEOUT_MS, generation);
+        {
+          service.preparationResult(this, id,
+              PartyPlayerAdapter.PreparationResult.failed(
+                  VideoFrame.WATCH_FAILED_FILES_NOT_ON_DISK, "WATCH_REJECTED"));
+          return;
+        }
+        try
+        {
+          commitPreparationSurface(media);
+          installCommittedPreparationBinding(media, id);
+          VideoFrame.PartyPreparation stage =
+              ui.getVideoFrame().preparePartyMedia(target, id, authorized, positionMs, true);
+          awaitPreparation(stage, monotonicMs.getAsLong() + PartyService.PREPARATION_TIMEOUT_MS, generation);
+          if (!stage.loaded) renderer.restorePartySurface();
+        }
+        catch (PartyProtocol.Fault failure)
+        {
+          renderer.restorePartySurface();
+          service.preparationResult(this, id,
+              PartyPlayerAdapter.PreparationResult.failed(
+                  VideoFrame.WATCH_FAILED_UNKNOWN, failure.getMessage()));
+        }
+        catch (RuntimeException failure)
+        {
+          renderer.restorePartySurface();
+          System.out.println("PartyMode preparation outcome=ROUTE_COMMIT_FAILED exception="
+              + failure.getClass().getName() + " message=" + failure.getMessage());
+          service.preparationResult(this, id,
+              PartyPlayerAdapter.PreparationResult.failed(
+                  VideoFrame.WATCH_FAILED_UNKNOWN, "WATCH_REJECTED"));
+        }
       });
     }
     catch (java.util.concurrent.RejectedExecutionException e)
     { throw new PartyProtocol.Fault("PREPARATION_BUSY"); }
+  }
+
+  java.util.function.BooleanSupplier preparationAuthorization(long generation)
+  {
+    return () -> !closed && preparationGeneration == generation;
+  }
+
+  @Override public void installPreparationBinding(
+      PartyPlayerAdapter.PreparationBinding binding)
+  {
+    if (closed) throw new PartyProtocol.Fault("SESSION_EXPIRED");
+    synchronized (preparationBindingLock)
+    {
+      if (stagedPreparationBinding != null
+          && !stagedPreparationBinding.equals(binding))
+        throw new PartyProtocol.Fault("PREPARATION_PENDING");
+      stagedPreparationBinding = binding;
+    }
+  }
+
+  void installCommittedPreparationBinding(int media, String preparationId)
+  {
+    synchronized (preparationBindingLock)
+    {
+      PartyPlayerAdapter.PreparationBinding binding = stagedPreparationBinding;
+      if (binding == null || binding.mediaFileId() != media
+          || !binding.preparationId().equals(preparationId))
+        throw new PartyProtocol.Fault("PREPARATION_BINDING_MISMATCH");
+      renderer.installPartyOpenBinding(binding);
+      stagedPreparationBinding = null;
+    }
+  }
+
+  @Override public boolean preparationBindingReady(String binding)
+  {
+    return !closed && renderer.partyOpenBindingReady(binding);
+  }
+
+  @Override public void cancelPreparationBinding(String binding)
+  {
+    synchronized (preparationBindingLock)
+    {
+      if (stagedPreparationBinding != null
+          && (binding == null || binding.equals(
+              stagedPreparationBinding.preparationBinding())))
+        stagedPreparationBinding = null;
+    }
+    renderer.cancelPartyOpenBinding(binding);
   }
 
   MediaFile preparationMedia(int media) { return Wizard.getInstance().getFileForID(media); }
@@ -359,12 +494,16 @@ final class NgPartyConnection implements PartyService.Peer
     {
       if (stage.watchCode != VideoFrame.WATCH_OK)
       {
-        service.preparationResult(this, stage.id, stage.watchCode, -1, "WATCH_REJECTED");
+        service.preparationResult(this, stage.id,
+            PartyPlayerAdapter.PreparationResult.failed(
+                stage.watchCode, "WATCH_REJECTED"));
         return;
       }
       if (ui.getVideoFrame().establishPartyPreparationLoaded(stage))
       {
-        service.preparationResult(this, stage.id, VideoFrame.WATCH_OK, stage.generation);
+        service.preparationResult(this, stage.id,
+            PartyPlayerAdapter.PreparationResult.loaded(
+                VideoFrame.WATCH_OK, stage.generation));
         try { ui.getVideoFrame().presentPartyPreparation(stage); }
         catch (RuntimeException e)
         {
@@ -385,10 +524,12 @@ final class NgPartyConnection implements PartyService.Peer
     if (closed || preparationGeneration != generation) return;
     if (!stage.active())
       service.preparationResult(this, stage.id,
-          VideoFrame.WATCH_FAILED_USER_REJECTED_CONFLICT, -1, "WATCH_REJECTED");
+          PartyPlayerAdapter.PreparationResult.failed(
+              VideoFrame.WATCH_FAILED_USER_REJECTED_CONFLICT, "WATCH_REJECTED"));
     else
       service.preparationResult(this, stage.id,
-          VideoFrame.WATCH_FAILED_UNKNOWN, -1, "NO_MEDIA_PROGRESS");
+          PartyPlayerAdapter.PreparationResult.failed(
+              VideoFrame.WATCH_FAILED_UNKNOWN, "NO_MEDIA_PROGRESS"));
   }
 
   @Override public long preparedGeneration(int media)
@@ -409,11 +550,48 @@ final class NgPartyConnection implements PartyService.Peer
   @Override public void cancelPreparation()
   {
     preparationGeneration++;
-    if (ui.getVideoFrame() != null) ui.getVideoFrame().cancelPartyPreparation();
+    if (ui.getVideoFrame() != null)
+    {
+      ui.getVideoFrame().cancelPartyPreparation();
+      renderer.restorePartySurface();
+    }
+  }
+
+  PartyService.Delivery commitPreparationSurface(int media)
+  {
+    VideoFrame vf = ui.getVideoFrame();
+    if (vf == null) throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
+    VideoFrame.PartySurfaceFence fence = vf.acquirePartySurfaceFence();
+    long expectedPath = renderer.restorePartySurface();
+    sage.client.PlaybackSurfaceSet advertised = renderer.getPlaybackSurfaces();
+    String selectedId = null;
+    for (sage.client.PlaybackSurface surface : advertised.asMap().values())
+    {
+      if (!surface.getDeliveryModes().contains(
+          sage.client.PlaybackDecisionEngine.PARTY_CMAF_DELIVERY_MODE))
+        continue;
+      if (selectedId != null) throw new PartyProtocol.Fault("SURFACE_UNAVAILABLE");
+      selectedId = surface.getId();
+    }
+    if (selectedId == null) selectedId = plan(media, advertised).surface();
+    sage.client.PlaybackSurfaceSet selected;
+    try
+    {
+      selected = renderer.queryPartySurface(selectedId);
+    }
+    catch (java.io.IOException e)
+    {
+      throw new PartyProtocol.Fault("SURFACE_QUERY_FAILED");
+    }
+    PartyService.Delivery planned = plan(media, selected);
+    if (!selectedId.equals(planned.surface()))
+      throw new PartyProtocol.Fault("SURFACE_CHANGED");
+    vf.commitPartySurface(fence, renderer, selected, expectedPath);
+    return planned;
   }
 
   PartyService.Delivery plan(int media)
-  { return plan(media, renderer.getPlaybackSurfaces(), false); }
+  { return plan(media, renderer.getPlaybackSurfaces(), true); }
 
   PartyService.Delivery plan(int media, sage.client.PlaybackSurfaceSet surfaces)
   { return plan(media, surfaces, true); }
@@ -431,10 +609,11 @@ final class NgPartyConnection implements PartyService.Peer
     int bitrate = format.getBitrate() / 1000;
     int bw = (int)Math.min(Integer.MAX_VALUE, renderer.getEstimatedBandwidth() / 1000);
     java.util.List<sage.client.PlaybackDecisionEngine.SurfaceDecision> ranked =
-        sage.client.PlaybackDecisionEngine.evaluateSurfaces(surfaces,
+        MiniPlayer.evaluateNgSurfaces(renderer, surfaces,
             format.getFormatName(), video.getFormatName(), audio == null ? "" : audio.getFormatName(),
             video.getWidth(), video.getHeight(), bitrate, bw, video.isInterlaced(), format,
-            renderer.getCurrentClientAudioLanguage(), renderer.getClientConstraints(), conditioned);
+            renderer.getCurrentClientAudioLanguage(), renderer.getClientConstraints(), conditioned,
+            capabilities().contains(PartyProtocol.PUSH_EPOCH_ORIGIN));
     if (ranked.isEmpty()) throw new PartyProtocol.Fault("MEDIA_PATH_NOT_READY");
     sage.client.PlaybackDecisionEngine.SurfaceDecision winner = ranked.get(0);
     int selectedKbps = Math.max(bitrate, winner.decision.targetBitrateKbps);
@@ -449,6 +628,7 @@ final class NgPartyConnection implements PartyService.Peer
   @Override public void preparationOwner(boolean authorized)
   {
     ui.getVideoFrame().setPartyPreparationAuthorized(authorized);
+    if (!authorized) renderer.restorePartySurface();
   }
   @Override public void progressOwner(boolean owned)
   {
@@ -468,7 +648,7 @@ final class NgPartyConnection implements PartyService.Peer
   {
     cancelScheduled();
     if (closed || !"push".equals(renderer.getCurrentSurfaceDeliveryMode())
-        || "SOFT".equals(directive.kind()))
+        || "SOFT".equals(directive.kind()) || "NONE".equals(directive.kind()))
       return;
     long generation = scheduleGeneration;
     long deadline = directive.executeAtServerMonoMs();
@@ -476,6 +656,8 @@ final class NgPartyConnection implements PartyService.Peer
     long position = directive.targetPositionMs();
     boolean playing = "PLAYING".equals(directive.targetState());
     boolean reveal = "REVEAL".equals(directive.kind());
+    boolean stateOnly = "PLAY".equals(directive.kind())
+        || "PAUSE".equals(directive.kind());
     MediaFile media = ui.getVideoFrame().getCurrFile();
     if (media == null) return;
     int mediaId = media.getID();
@@ -485,6 +667,7 @@ final class NgPartyConnection implements PartyService.Peer
         if (!closed && generation == scheduleGeneration)
         {
           if (reveal) ui.getVideoFrame().applyPartyReveal(mediaId, playing);
+          else if (stateOnly) ui.getVideoFrame().applyPartyState(mediaId, playing);
           else ui.getVideoFrame().applyPartyTimeline(mediaId, position, playing);
         }
       }

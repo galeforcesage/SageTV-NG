@@ -21,6 +21,41 @@ import static org.testng.Assert.*;
 public class PlaybackDecisionEngineTest
 {
   @Test
+  public void dedicatedPartyCmafIsInvisibleToOrdinarySelectionAndWinsPartySelection()
+  {
+    PlaybackSurfaceSet surfaces = PlaybackSurfaceSet.build("pwa_party_cmaf",
+        id -> new String[] {"mse", "1", "party-cmaf", "H264", "AAC", "MP4"});
+    assertTrue(PlaybackDecisionEngine.evaluateSurfaces(surfaces, "MP4", "H264", "AAC",
+        1920, 1080, 8000, 20000, false).isEmpty(),
+        "Party-only CMAF must never alter ordinary playback selection");
+    PlaybackDecisionEngine.SurfaceDecision selected =
+        PlaybackDecisionEngine.evaluateSurfaces(surfaces,
+            "MP4", "H264", "AAC", 1920, 1080, 8000, 20000,
+            false, null, null, null, true).get(0);
+    assertEquals(selected.chosenDeliveryMode,
+        PlaybackDecisionEngine.PARTY_CMAF_DELIVERY_MODE);
+    assertEquals(selected.decision.decision, PlaybackDecisionEngine.Decision.REMUX);
+    assertEquals(selected.decision.targetContainer, "MP4");
+
+    PlaybackSurfaceSet wrongRoute = PlaybackSurfaceSet.build("pwa_party_cmaf",
+        id -> new String[] {"htmlvideo", "1", "party-cmaf", "H264", "AAC", "MP4"});
+    assertTrue(PlaybackDecisionEngine.evaluateSurfaces(wrongRoute,
+        "MP4", "H264", "AAC", 1920, 1080, 8000, 20000,
+        false, null, null, null, true).isEmpty(),
+        "Party CMAF is valid only on the fetch-controlled MSE route");
+
+    PlaybackSurfaceSet mixed = PlaybackSurfaceSet.build(
+        "pwa_native,pwa_party_cmaf", id -> "pwa_native".equals(id)
+            ? new String[] {"htmlvideo", "100", "pull", "H264", "AAC", "MP4"}
+            : new String[] {"mse", "1", "party-cmaf", "H264", "AAC", "MP4"});
+    selected = PlaybackDecisionEngine.evaluateSurfaces(mixed,
+        "MP4", "H264", "AAC", 1920, 1080, 8000, 20000,
+        false, null, null, null, true).get(0);
+    assertEquals(selected.surface.getId(), "pwa_party_cmaf",
+        "A dedicated Party CMAF surface excludes native and msproxy-capable ordinary surfaces");
+  }
+
+  @Test
   public void partyOnlyMseConditioningRemuxesCompatibleMp4WithoutChangingOrdinaryPolicy()
   {
     PlaybackSurfaceSet surfaces = PlaybackSurfaceSet.build("pwa_party_mse",
@@ -46,6 +81,25 @@ public class PlaybackDecisionEngineTest
         "MP4", "H264", "AAC", 1920, 1080, 8000, 1000, false, null, null, null, true).get(0);
     assertEquals(selected.decision.decision, PlaybackDecisionEngine.Decision.TRANSCODE);
     assertEquals(selected.chosenXcodeMode, "browserhd");
+  }
+
+  @Test
+  public void partyPushRequiresNegotiatedEpochOriginExtension()
+  {
+    PlaybackSurfaceSet surfaces = PlaybackSurfaceSet.build("android_push",
+        id -> new String[] {
+            "native", "1", "push", "MPEG2-VIDEO,H264", "AC3,AAC",
+            "MPEG2-PS;push=true;pull=false,MPEG2-TS;push=true;pull=false" });
+
+    assertTrue(PlaybackDecisionEngine.evaluateSurfaces(surfaces,
+        "MPEG2-PS", "MPEG2-VIDEO", "AC3", 1920, 1080, 8000, 20000,
+        false, null, null, null, true, false).isEmpty(),
+        "Unextended Party direct push must remain fail-closed");
+    PlaybackDecisionEngine.SurfaceDecision selected =
+        PlaybackDecisionEngine.evaluateSurfaces(surfaces,
+            "MPEG2-PS", "MPEG2-VIDEO", "AC3", 1920, 1080, 8000, 20000,
+            false, null, null, null, true, true).get(0);
+    assertEquals(selected.chosenDeliveryMode, "push");
   }
 
   private static PlaybackSurface surface(String id, int priority)

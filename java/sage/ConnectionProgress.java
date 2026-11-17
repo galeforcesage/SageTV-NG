@@ -26,8 +26,10 @@ final class ConnectionProgress
   private long lastProgressAtMs;
   private long bytes;
   private long messages;
-  private long smoothedRoundTripMs = -1L;
-  private long roundTripVariationMs;
+  private long smoothedReplyLatencyMs = -1L;
+  private long replyLatencyVariationMs;
+  private String phase = "ACCEPTED";
+  private String terminalCause;
 
   ConnectionProgress(long nowMs)
   {
@@ -49,20 +51,20 @@ final class ConnectionProgress
     markProgress(nowMs);
   }
 
-  synchronized void recordRoundTrip(long nowMs, long sampleMs)
+  synchronized void recordReplyLatency(long nowMs, long sampleMs)
   {
     if (sampleMs < 0L)
       return;
-    if (smoothedRoundTripMs < 0L)
+    if (smoothedReplyLatencyMs < 0L)
     {
-      smoothedRoundTripMs = sampleMs;
-      roundTripVariationMs = sampleMs / 2L;
+      smoothedReplyLatencyMs = sampleMs;
+      replyLatencyVariationMs = sampleMs / 2L;
     }
     else
     {
-      long error = absDifference(smoothedRoundTripMs, sampleMs);
-      roundTripVariationMs = (3L * roundTripVariationMs + error) / 4L;
-      smoothedRoundTripMs = (7L * smoothedRoundTripMs + sampleMs) / 8L;
+      long error = absDifference(smoothedReplyLatencyMs, sampleMs);
+      replyLatencyVariationMs = (3L * replyLatencyVariationMs + error) / 4L;
+      smoothedReplyLatencyMs = (7L * smoothedReplyLatencyMs + sampleMs) / 8L;
     }
     markProgress(nowMs);
   }
@@ -85,6 +87,19 @@ final class ConnectionProgress
     return remainingWait(waitStartedAtMs, nowMs, idleBudgetMs, absoluteBudgetMs) == 0L;
   }
 
+  synchronized String timeoutCause(long waitStartedAtMs, long nowMs,
+      long idleBudgetMs, long absoluteBudgetMs)
+  {
+    long effectiveLastProgress = Math.max(waitStartedAtMs, lastProgressAtMs);
+    long absoluteDeadline = absoluteBudgetMs > 0L
+        ? saturatedAdd(waitStartedAtMs, absoluteBudgetMs) : Long.MAX_VALUE;
+    if (absoluteDeadline <= nowMs)
+      return "absolute_timeout";
+    long idleDeadline = idleBudgetMs > 0L
+        ? saturatedAdd(effectiveLastProgress, idleBudgetMs) : Long.MAX_VALUE;
+    return idleDeadline <= nowMs ? "idle_timeout" : null;
+  }
+
   synchronized long getStartedAtMs()
   {
     return startedAtMs;
@@ -105,14 +120,41 @@ final class ConnectionProgress
     return messages;
   }
 
-  synchronized long getSmoothedRoundTripMs()
+  synchronized long getSmoothedReplyLatencyMs()
   {
-    return smoothedRoundTripMs;
+    return smoothedReplyLatencyMs;
   }
 
-  synchronized long getRoundTripVariationMs()
+  synchronized long getReplyLatencyVariationMs()
   {
-    return roundTripVariationMs;
+    return replyLatencyVariationMs;
+  }
+
+  synchronized void transition(long nowMs, String nextPhase)
+  {
+    if (nextPhase == null || nextPhase.length() == 0 || terminalCause != null)
+      return;
+    phase = nextPhase;
+    markProgress(nowMs);
+  }
+
+  synchronized void terminate(long nowMs, String cause)
+  {
+    if (terminalCause != null)
+      return;
+    terminalCause = cause == null || cause.length() == 0 ? "unknown" : cause;
+    phase = "CLOSED";
+    markProgress(nowMs);
+  }
+
+  synchronized String getPhase()
+  {
+    return phase;
+  }
+
+  synchronized String getTerminalCause()
+  {
+    return terminalCause;
   }
 
   private void markProgress(long nowMs)

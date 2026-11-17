@@ -33,6 +33,7 @@ public class MiniClientSageRenderer extends SageRenderer
   private static java.util.Map clientSocketMapTimes = new java.util.HashMap();
   private static java.util.Map clientPlayerSocketMap = new java.util.HashMap();
   private static java.util.Map clientPlayerSocketMapTimes = new java.util.HashMap();
+  private static java.util.Map clientPlayerReconnectExpected = new java.util.HashMap();
   private static Object mapLock = new Object();
   private static final java.util.concurrent.atomic.AtomicLong nextTransportConnectionId =
       new java.util.concurrent.atomic.AtomicLong();
@@ -327,6 +328,38 @@ public class MiniClientSageRenderer extends SageRenderer
     return true;
   }
 
+  static boolean shouldReplacePlayerSocket(boolean currentUsable,
+      boolean reconnectExpected)
+  {
+    return !currentUsable || reconnectExpected;
+  }
+
+  static boolean shouldAcceptReconnectSocket(boolean reconnectAlreadyAccepted,
+      boolean currentUsable)
+  {
+    return !reconnectAlreadyAccepted || !currentUsable;
+  }
+
+  static String transportClosureReason(Throwable failure)
+  {
+    if (failure instanceof java.io.EOFException)
+      return "peer_eof";
+    if (failure instanceof java.net.SocketTimeoutException)
+      return failure.getMessage() != null
+          && failure.getMessage().toLowerCase(java.util.Locale.ROOT).contains("absolute")
+              ? "absolute_timeout" : "idle_timeout";
+    if (failure instanceof java.net.SocketException)
+      return "peer_reset";
+    return "protocol_error";
+  }
+
+  static boolean mayBeTimeoutClosure(Throwable failure)
+  {
+    return failure instanceof java.net.SocketTimeoutException
+        || failure instanceof java.nio.channels.AsynchronousCloseException
+        || failure instanceof java.nio.channels.ClosedChannelException;
+  }
+
   public static void startUIServer(final boolean allowNonlocalhostConnection)
   {
     if (ss != null) return;
@@ -513,13 +546,14 @@ public class MiniClientSageRenderer extends SageRenderer
     String transportClientName = "unknown";
     String transportRole = "unknown";
     ConnectionProgress introductionProgress = new ConnectionProgress(Sage.eventTime());
+    long timeout = Sage.getInt("ui/remote_ui_connection_timeout", 15000);
+    long absoluteTimeout = Sage.getLong("ui/remote_ui_connection_absolute_timeout_ms",
+        Math.max(60000L, timeout * 4L));
     if (Sage.DBG) System.out.println("MINICLIENT_CONNECTION id=" + connectionId +
         " phase=ACCEPTED role=" + transportRole);
     try
     {
-      long timeout = Sage.getInt("ui/remote_ui_connection_timeout", 15000);
-      long absoluteTimeout = Sage.getLong("ui/remote_ui_connection_absolute_timeout_ms",
-          Math.max(60000L, timeout * 4L));
+      introductionProgress.transition(Sage.eventTime(), "INTRO_READING");
       sake.socket().setKeepAlive(true);
       sake.socket().setTcpNoDelay(true);
       // Keep long-lived UI/player connections warm so an idle client (e.g. sitting on a
@@ -572,6 +606,7 @@ public class MiniClientSageRenderer extends SageRenderer
             " phase=INTRO_COMPLETE client=" + transportClientName +
             " role=" + transportRole + " bytes=" + introductionProgress.getBytes() +
             " elapsedMs=" + (Sage.eventTime() - introductionProgress.getStartedAtMs()));
+        introductionProgress.transition(Sage.eventTime(), "INTRO_COMPLETE");
         boolean uiChannel = nextByte == 0;
         // If this is a reconnect then the reply is important and we can't send the wrong value
         int replyVal = 2;
@@ -596,6 +631,10 @@ public class MiniClientSageRenderer extends SageRenderer
           {
             replaceMappedSocket(clientSocketMap, clientSocketMapTimes,
                 clientName, sake, Sage.eventTime());
+            // A fresh UI transport owns the next player-channel attachment.
+            // This permits the new logical UI launch to supersede a pooled
+            // channel from the old UI while still rejecting later duplicates.
+            clientPlayerReconnectExpected.put(clientName, Boolean.TRUE);
             mapLock.notifyAll();
           }
           // Register the replacement first. The old UI tears down
@@ -606,6 +645,7 @@ public class MiniClientSageRenderer extends SageRenderer
           UIManager.createAltUI(clientName);
           if (Sage.DBG) System.out.println("MINICLIENT_CONNECTION id=" + connectionId +
               " phase=CHANNEL_REGISTERED client=" + transportClientName + " role=ui");
+          introductionProgress.transition(Sage.eventTime(), "CHANNEL_REGISTERED");
         }
         else if (nextByte == 1)
         {
@@ -614,15 +654,27 @@ public class MiniClientSageRenderer extends SageRenderer
           synchronized (mapLock)
           {
             java.nio.channels.SocketChannel oldSocket =
-                (java.nio.channels.SocketChannel) replaceMappedSocket(
-                    clientPlayerSocketMap, clientPlayerSocketMapTimes,
-                    clientName, sake, Sage.eventTime());
+                (java.nio.channels.SocketChannel) clientPlayerSocketMap.get(clientName);
+            boolean reconnectExpected = Boolean.TRUE.equals(
+                clientPlayerReconnectExpected.remove(clientName));
+            boolean oldUsable = oldSocket != null && oldSocket.isOpen()
+                && oldSocket.isConnected();
+            if (!shouldReplacePlayerSocket(oldUsable, reconnectExpected))
+            {
+              if (Sage.DBG) System.out.println("MINICLIENT_CONNECTION id=" + connectionId
+                  + " phase=CLOSED client=" + transportClientName
+                  + " role=player reason=stale_or_duplicate");
+              return false;
+            }
+            replaceMappedSocket(clientPlayerSocketMap, clientPlayerSocketMapTimes,
+                clientName, sake, Sage.eventTime());
             if (oldSocket != null && oldSocket != sake)
               try { oldSocket.close(); } catch (Exception e) {}
             mapLock.notifyAll();
           }
           if (Sage.DBG) System.out.println("MINICLIENT_CONNECTION id=" + connectionId +
               " phase=CHANNEL_REGISTERED client=" + transportClientName + " role=player");
+          introductionProgress.transition(Sage.eventTime(), "CHANNEL_REGISTERED");
         }
         else if (nextByte == 2)
         {
@@ -735,7 +787,8 @@ public class MiniClientSageRenderer extends SageRenderer
           if (oldUI != null)
           {
             if (Sage.DBG) System.out.println("MCSR got a reconnect request and we found the matching UI for " + clientName + " setup the reconnection!");
-            ((MiniClientSageRenderer) oldUI.getRootPanel().getRenderEngine()).useReconnectSocket(sake);
+            if (!((MiniClientSageRenderer) oldUI.getRootPanel().getRenderEngine()).useReconnectSocket(sake))
+              return false;
           }
         }
         return true;
@@ -759,9 +812,16 @@ public class MiniClientSageRenderer extends SageRenderer
     }
     catch (Exception e)
     {
+      long now = Sage.eventTime();
+      String timeoutCause = introductionProgress.timeoutCause(
+          introductionProgress.getStartedAtMs(), now, timeout, absoluteTimeout);
+      introductionProgress.terminate(now,
+          timeoutCause != null && mayBeTimeoutClosure(e)
+              ? timeoutCause : transportClosureReason(e));
       if (Sage.DBG) System.out.println("MINICLIENT_CONNECTION id=" + connectionId +
-          " phase=CLOSED client=" + transportClientName + " role=" + transportRole +
-          " reason=" + e.getClass().getSimpleName() +
+          " phase=" + introductionProgress.getPhase() +
+          " client=" + transportClientName + " role=" + transportRole +
+          " reason=" + introductionProgress.getTerminalCause() +
           " bytes=" + introductionProgress.getBytes() +
           " progressAgeMs=" + Math.max(0L,
               Sage.eventTime() - introductionProgress.getLastProgressAtMs()) +
@@ -6877,6 +6937,10 @@ public class MiniClientSageRenderer extends SageRenderer
     if (Sage.DBG && DEBUG_NATIVE2D) System.out.println("forceMediaReconnect()");
     try
     {
+      synchronized (mapLock)
+      {
+        clientPlayerReconnectExpected.put(uiMgr.getLocalUIClientName(), Boolean.TRUE);
+      }
       prepUICmdHeader(4);
       sockBuf.putInt(GFXCMD_MEDIA_RECONNECT << CMD_LEN_BITS | 0);
       sendBufferNow();
@@ -7184,6 +7248,25 @@ public class MiniClientSageRenderer extends SageRenderer
   }
 
   private boolean sentUIMgrKill = false;
+
+  void prepareForUIMgrShutdown()
+  {
+    sentUIMgrKill = true;
+    synchronized (reconnectLock)
+    {
+      reconnectLock.notifyAll();
+    }
+    try
+    {
+      sendSetProperty("RECONNECT_SUPPORTED", "FALSE");
+    }
+    catch (java.io.IOException e)
+    {
+      if (Sage.DBG) System.out.println(
+          "Unable to disable MiniClient reconnect during UI shutdown: " + e);
+    }
+  }
+
   private void killUIMgrAsync()
   {
     if (sentUIMgrKill) return;
@@ -7222,6 +7305,7 @@ public class MiniClientSageRenderer extends SageRenderer
 
   private boolean startedReconnectDaemon = false;
   private boolean reconnectCompleted = false;
+  private boolean reconnectSocketAccepted = false;
   private Object reconnectLock = new Object();
 
   private synchronized void closeMiniUITransportForReconnect()
@@ -7259,13 +7343,15 @@ public class MiniClientSageRenderer extends SageRenderer
     // When an error occurs on the connection we don't immediately destroy everything since the client may try to reconnect.
     // A normal reconnect would kill their old session; so if they don't support the new logic then we're fine.
     // We also don't allow reconnects if the event channel is encrypted or we haven't started the first frame of rendering.
-    if (renderStartTime == 0 || recvr.isEncryptionOn() || !SageTV.isAlive() || sentUIMgrKill)
+    if (!shouldAttemptReconnect(renderStartTime, recvr.isEncryptionOn(),
+        SageTV.isAlive(), sentUIMgrKill))
     {
       killUIMgrAsync();
       return true;
     }
     synchronized (reconnectLock)
     {
+      reconnectSocketAccepted = false;
       if (startedReconnectDaemon) return false;
       reconnectCompleted = false;
       startedReconnectDaemon = true;
@@ -7296,12 +7382,29 @@ public class MiniClientSageRenderer extends SageRenderer
     return false;
   }
 
-  private void useReconnectSocket(java.nio.channels.SocketChannel newChan)
+  static boolean shouldAttemptReconnect(long renderStartTime, boolean encryptionOn,
+      boolean serverAlive, boolean uiShutdown)
+  {
+    return renderStartTime != 0 && !encryptionOn && serverAlive && !uiShutdown;
+  }
+
+  private boolean useReconnectSocket(java.nio.channels.SocketChannel newChan)
   {
     invalidatePartyAuthorization();
+    if (sentUIMgrKill)
+      return false;
     // Make sure we know about this because it's possible the client is doing it before we're aware of the situation
     synchronized (reconnectLock)
     {
+      boolean currentUsable = clientSocket != null && clientSocket.isOpen()
+          && clientSocket.isConnected();
+      if (!shouldAcceptReconnectSocket(reconnectSocketAccepted, currentUsable))
+      {
+        if (Sage.DBG) System.out.println(
+            "MCSR rejected a stale or duplicate reconnect socket for " + uiMgr.getLocalUIClientName());
+        return false;
+      }
+      reconnectSocketAccepted = true;
       startedReconnectDaemon = true;
     }
     if (Sage.DBG) System.out.println("MCSR is setting up the reconnection for the client w/ a new socket...");
@@ -7331,7 +7434,7 @@ public class MiniClientSageRenderer extends SageRenderer
         if (Sage.DBG) System.out.println("ERROR in setting up zip socket on reconnect..destroy the connection err=" + e);
         killUIMgrAsync();
         startedReconnectDaemon = false;
-        return;
+        return false;
       }
     }
     recvr.setNewStream(clientSocket);
@@ -7344,6 +7447,7 @@ public class MiniClientSageRenderer extends SageRenderer
       reconnectLock.notifyAll();
     }
     uiMgr.trueValidate();
+    return true;
   }
 
   // Required to redo the positioning for the trial text to prevent screen burn;
@@ -9386,8 +9490,198 @@ public class MiniClientSageRenderer extends SageRenderer
   private volatile String partyPrincipal;
   private volatile boolean partyLanAuthorized;
   private volatile boolean partySessionInitialized;
+  private final Object partyOpenBindingLock = new Object();
+  private PartyOpenBinding partyOpenBinding;
+  private final java.util.Map<String, PartyOpenBinding> partyHttpBindings =
+      new java.util.LinkedHashMap<String, PartyOpenBinding>();
+  private long partyOpenOrdinal;
   private final Object partyConnectionLock = new Object();
   private volatile NgPartyConnection partyConnection;
+
+  static final class PartyOpenBinding
+  {
+    final sage.party.PartyPlayerAdapter.PreparationBinding binding;
+    final long openOrdinal;
+    final boolean httpCarrier;
+    boolean commandAck;
+    boolean openWritten;
+    boolean openSucceeded;
+    boolean httpObserved;
+    String httpSessionId;
+
+    PartyOpenBinding(sage.party.PartyPlayerAdapter.PreparationBinding binding,
+        long openOrdinal, boolean httpCarrier)
+    {
+      this.binding = binding;
+      this.openOrdinal = openOrdinal;
+      this.httpCarrier = httpCarrier;
+      httpSessionId = binding.playbackSessionId();
+      commandAck = httpCarrier;
+    }
+  }
+
+  void installPartyOpenBinding(
+      sage.party.PartyPlayerAdapter.PreparationBinding binding)
+  {
+    synchronized (partyOpenBindingLock)
+    {
+      if (partyOpenBinding != null && !partyOpenBinding.openSucceeded)
+        throw new sage.party.PartyProtocol.Fault("PREPARATION_PENDING");
+      sage.client.PlaybackSurface selected;
+      sage.client.PlaybackSurfaceSet committedPartySurfaces = partyPlaybackSurfaces;
+      if (committedPartySurfaces != null && committedPartySurfaces.size() == 1)
+        selected = committedPartySurfaces.asMap().values().iterator().next();
+      else
+        selected = getPlaybackSurfaces().get(getCurrentSurfaceId());
+      boolean httpCarrier = selected != null
+          && "mse".equalsIgnoreCase(selected.getRoute());
+      if (httpCarrier && binding.playbackSessionId() == null)
+        throw new sage.party.PartyProtocol.Fault("PREPARATION_BINDING_MISMATCH");
+      partyOpenBinding =
+          new PartyOpenBinding(binding, partyOpenOrdinal + 1, httpCarrier);
+      if (httpCarrier)
+      {
+        java.util.Iterator<PartyOpenBinding> oldBindings =
+            partyHttpBindings.values().iterator();
+        while (oldBindings.hasNext())
+          if (binding.playbackSessionId().equals(
+              oldBindings.next().httpSessionId))
+            oldBindings.remove();
+        partyHttpBindings.put(binding.preparationBinding(), partyOpenBinding);
+      }
+    }
+  }
+
+  PartyOpenBinding pendingPartyOpenBinding()
+  {
+    synchronized (partyOpenBindingLock)
+    {
+      if (partyOpenBinding == null || partyOpenBinding.openOrdinal != partyOpenOrdinal + 1
+          || partyOpenBinding.openWritten)
+        return null;
+      return partyOpenBinding;
+    }
+  }
+
+  boolean hasPendingPartyHttpBinding(int mediaFileId, String sessionId)
+  {
+    synchronized (partyOpenBindingLock)
+    {
+      for (PartyOpenBinding pending : partyHttpBindings.values())
+      {
+        if (pending.httpCarrier && !pending.httpObserved
+            && pending.binding.mediaFileId() == mediaFileId
+            && ((sessionId == null || sessionId.isEmpty())
+                || pending.httpSessionId.equals(sessionId)))
+          return true;
+      }
+      return false;
+    }
+  }
+
+  void partyOpenCommandAck(PartyOpenBinding binding, boolean accepted)
+  {
+    synchronized (partyOpenBindingLock)
+    {
+      if (partyOpenBinding == binding)
+      {
+        binding.commandAck = accepted;
+        if (!accepted)
+        {
+          partyHttpBindings.remove(binding.binding.preparationBinding());
+          partyOpenBinding = null;
+        }
+      }
+    }
+  }
+
+  void partyOpenWritten(PartyOpenBinding binding)
+  {
+    synchronized (partyOpenBindingLock)
+    {
+      partyOpenOrdinal++;
+      if (binding != null && partyOpenBinding == binding
+          && binding.openOrdinal == partyOpenOrdinal)
+        binding.openWritten = true;
+      else if (partyOpenBinding != null
+          && partyOpenBinding.openOrdinal <= partyOpenOrdinal)
+        partyOpenBinding = null;
+    }
+  }
+
+  void partyOpenCompleted(PartyOpenBinding binding, boolean success)
+  {
+    synchronized (partyOpenBindingLock)
+    {
+      if (binding != null && partyOpenBinding == binding)
+      {
+        binding.openSucceeded = success && binding.commandAck && binding.openWritten;
+        if (!binding.openSucceeded)
+        {
+          partyHttpBindings.remove(binding.binding.preparationBinding());
+          partyOpenBinding = null;
+        }
+      }
+    }
+  }
+
+  boolean partyOpenBindingReady(String binding)
+  {
+    synchronized (partyOpenBindingLock)
+    {
+      PartyOpenBinding pending = partyHttpBindings.get(binding);
+      if (pending == null) pending = partyOpenBinding;
+      return pending != null && pending.openSucceeded
+          && (!pending.httpCarrier || pending.httpObserved)
+          && java.security.MessageDigest.isEqual(
+              pending.binding.preparationBinding().getBytes(
+                  java.nio.charset.StandardCharsets.US_ASCII),
+              binding.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+    }
+  }
+
+  boolean acceptPartyHttpBinding(String binding, int mediaFileId, String sessionId)
+  {
+    synchronized (partyOpenBindingLock)
+    {
+      if (binding == null || sessionId == null || sessionId.isEmpty())
+        return false;
+      PartyOpenBinding pending = partyHttpBindings.get(binding);
+      if (pending == null || !pending.httpCarrier
+          || pending.binding.mediaFileId() != mediaFileId
+          || !pending.httpSessionId.equals(sessionId))
+        return false;
+      pending.httpObserved = true;
+      return true;
+    }
+  }
+
+  void cancelPartyOpenBinding(String binding)
+  {
+    synchronized (partyOpenBindingLock)
+    {
+      if (partyOpenBinding == null || binding == null
+          || java.security.MessageDigest.isEqual(
+              partyOpenBinding.binding.preparationBinding().getBytes(
+                  java.nio.charset.StandardCharsets.US_ASCII),
+              binding.getBytes(java.nio.charset.StandardCharsets.US_ASCII)))
+        partyOpenBinding = null;
+      if (binding == null)
+        partyHttpBindings.clear();
+      else
+        partyHttpBindings.remove(binding);
+    }
+  }
+
+  boolean partyDirectPushEpochOriginActive()
+  {
+    synchronized (partyOpenBindingLock)
+    {
+      return partyOpenBinding != null && !partyOpenBinding.httpCarrier
+          && partyOpenBinding.openSucceeded
+          && hasClientCapability(sage.party.PartyProtocol.PUSH_EPOCH_ORIGIN);
+    }
+  }
 
   private NgPartyConnection partyConnection()
   {
@@ -11529,6 +11823,11 @@ public class MiniClientSageRenderer extends SageRenderer
             Sage.getLong("ui/android_miniclient_reply_timeout_ms", 10000L));
         long absoluteWaitMax = Math.max(idleWaitMax,
             Sage.getLong("ui/miniclient_reply_absolute_timeout_ms", 120000L));
+        if (closeOnTimeout && waitMax > 0L)
+        {
+          idleWaitMax = Math.min(idleWaitMax, waitMax);
+          absoluteWaitMax = Math.min(absoluteWaitMax, waitMax);
+        }
         long waitRemaining = connectionProgress.remainingWait(startWait, Sage.eventTime(),
             idleWaitMax, absoluteWaitMax);
         while (replyQueue.size() <= intRepliesToDiscard && alive && isAlive() &&
@@ -11672,11 +11971,11 @@ public class MiniClientSageRenderer extends SageRenderer
     }
     public void setPacketData(int inType, long inTimestamp, int inId, byte[] inData)
     {
-      data = inData;
+      data = inData == null ? new byte[0] : inData;
       type = inType;
       timestamp = inTimestamp;
       id = inId;
-      length = (data == null ? 0 : data.length);
+      length = data.length;
     }
     public void setStringList(String[] x) { stringList = x; }
     public int getType() { return type; }
@@ -11700,7 +11999,7 @@ public class MiniClientSageRenderer extends SageRenderer
     }
     public String getDataAsString()
     {
-      return data == null ? null : new String(data, 0, length);
+      return new String(data, 0, length);
     }
     public String[] getDataStringList()
     {

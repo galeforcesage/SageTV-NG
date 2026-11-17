@@ -46,18 +46,18 @@ stream the device can't play, while a "don't know" just means no enhancement.
 DISPLAY_SINK_RESOLUTION  ->  "3840x2160"
 ```
 
-The **physical resolution of the display the user is actually looking at**, not
-the surface, window, or UI framebuffer size.
+The **active output timing resolution of the display carrying video**, not the
+surface, window, UI framebuffer, or a claim about the panel's native pixel grid.
 
 | Platform | Where to get it |
 |---|---|
-| Android / Shield | `Display.getMode().getPhysicalWidth()` / `getPhysicalHeight()` |
+| Android / Shield | active video display's `Display.getMode().getPhysicalWidth()` / `getPhysicalHeight()` |
 | Tizen | `webapis.productinfo.getRealResolution()` (falls back to panel model info) |
 | PWA / desktop | `screen.width * devicePixelRatio` — report empty if uncertain |
 
-A Shield rendering its UI at 1080p on a 4K TV **must report `3840x2160`**. This is
-the field the entire feature turns on: without it the server has no honest reason
-to build a 4K stream for anybody.
+A Shield whose active HDMI timing is 3840x2160 reports `3840x2160` even when its
+UI framebuffer is 1080p. If the active timing is 1920x1080, report
+`1920x1080`; do not infer a 4K native panel behind that timing.
 
 This value is measured **once, at the capability handshake**. For a client whose
 display can change mid-session — a browser tab dragged between monitors — the tier
@@ -70,11 +70,11 @@ into building a stream nothing can play. The separator may be `x` or `X`;
 surrounding whitespace is tolerated.
 
 **Normative: this field is a measurement, not a decision.** A client MUST report
-the true physical panel whenever it knows it. Empty means **"I don't know"** — it
+the active sink timing whenever it knows it. Empty means **"I don't know"** — it
 never means "I don't want this". A client MUST NOT withhold, zero, or shrink this
 value to express a preference, and MUST NOT inflate it to request a larger
-stream; the reported number is the honest panel, and the server treats it as a
-ceiling, never as a target.
+stream; the reported number is the honest active output timing, and the server
+treats it as a ceiling, never as a target.
 
 **Withholding it does not refuse anything — it abstains.** An empty sink hands
 the decision to the server, which then settles it from the client's declared
@@ -180,6 +180,9 @@ A surface must **prove** it can decode the output before the server will send it
 Declaring HEVC support is not sufficient on its own: plenty of decoders advertise
 HEVC and top out at 1080p. Report the real `MediaCodec` /
 `MediaCapabilities.decodingInfo()` limits for the codec the surface will use.
+Width, height and frame rate describe one jointly verified operating tuple.
+Independent maxima do not prove that `MAX_OUTPUT_WIDTH × MAX_OUTPUT_HEIGHT @
+MAX_FPS` works together.
 
 Exact gate semantics, because "partly declared" is the case client teams get wrong:
 
@@ -188,7 +191,8 @@ Exact gate semantics, because "partly declared" is the case client teams get wro
   non-numeric and negative values all become 0.
 - **`MAX_FPS` is optional.** Leaving it out does not block enhancement — geometry
   is the limit that actually breaks decoders in practice. When it *is* declared,
-  a proposed output frame rate above it disqualifies the surface.
+  the exact width/height/rate tuple must have been jointly validated; a proposed
+  output frame rate above it disqualifies the surface.
 - These are positional fields **9, 10 and 11** on the existing per-surface reply,
   after the 2.1.0006 track-access fields. A client that stops at index 8 still
   parses cleanly; it just never gets enhancement.
@@ -281,7 +285,7 @@ only spend power downscaling.
 ### 2.9 Auto / Always / AI Only / Never
 
 The policy is carried by `LOCAL_ENHANCEMENT.pref`; the sink always reports the
-honest physical panel.
+honest active output timing.
 
 | Client setting | Server behavior |
 |---|---|
@@ -321,7 +325,7 @@ one.
 
 | Section | What it says the field is |
 |---|---|
-| §2.1 | the physical panel — a **measurement**. Empty means *uncertain*. |
+| §2.1 | the active sink timing — a **measurement**. Empty means *uncertain*. |
 | §2.9 | the carrier for Auto/Always/Never — empty means *opted out*, or *the client's own eligibility test said no*. A **policy decision**. |
 
 A field cannot be both a fact and an intent. Three distinct conditions —
@@ -648,9 +652,10 @@ pair** — `;sink=<W>x<H>` — in the same `;k=v` shape as `acodec`, `ac`, `ss`:
 XCODE_SETUP <mode>:enhance;tier=<tier>;ss=<currentMs>;sink=<W>x<H>
 ```
 
-- `<W>` and `<H>` are the **true physical pixels of the monitor the video now
-  occupies** — the same measurement `DISPLAY_SINK_RESOLUTION` carries (§2.1),
-  re-taken for the new screen, not CSS pixels and not the window's inner size.
+- `<W>` and `<H>` are the **active output timing pixels of the monitor carrying
+  video** — the same measurement `DISPLAY_SINK_RESOLUTION` carries (§2.1),
+  re-taken for the new screen, not CSS pixels, the window's inner size, or an
+  inferred native panel grid.
   Separator is `x` (case-insensitive). Example: `sink=2560x1440`.
 - **The server re-derives the tier from this sink; the client never computes a
   tier.** A move to a larger panel upscales further (e.g. `1080p → 1440p`), a move

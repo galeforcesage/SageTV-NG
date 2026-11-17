@@ -65,7 +65,7 @@ public final class PlaybackSurfaceSet
           // stream (via an XCODE_SETUP mode) rather than the raw file. The client
           // bridge maps CAP_EFFECTIVE_DELIVERY=pull-xcode:<mode> 1:1 to its
           // /msproxy?mode=<mode> endpoint, so it never sniffs the stream on NG.
-          "pull", "pull-xcode", "push", "hls", "dash", "webrtc")));
+          "pull", "pull-xcode", "push", "hls", "party-cmaf", "dash", "webrtc")));
 
   /** Canonical values for {@code PLAYBACK_SURFACE_<id>_AUDIO_TRACK_ACCESS} (2.1.0006). */
   public static final Set<String> CANONICAL_AUDIO_TRACK_ACCESS = Collections.unmodifiableSet(

@@ -63,13 +63,24 @@ public class ConnectionProgressTest
     progress.markBytes(100L, 10L);
     progress.markBytes(200L, 5L);
     progress.markMessage(300L);
-    progress.recordRoundTrip(400L, 800L);
-    progress.recordRoundTrip(500L, 1200L);
+    progress.recordReplyLatency(400L, 800L);
+    progress.recordReplyLatency(500L, 1200L);
 
     assertEquals(progress.getBytes(), 15L);
     assertEquals(progress.getMessages(), 1L);
-    assertEquals(progress.getSmoothedRoundTripMs(), 850L);
-    assertEquals(progress.getRoundTripVariationMs(), 400L);
+    assertEquals(progress.getSmoothedReplyLatencyMs(), 850L);
+    assertEquals(progress.getReplyLatencyVariationMs(), 400L);
+  }
+
+  @Test
+  public void timeoutCauseDistinguishesIdleFromAbsoluteExpiry()
+  {
+    ConnectionProgress progress = new ConnectionProgress(100L);
+    progress.markBytes(500L, 1L);
+
+    assertEquals(progress.timeoutCause(100L, 1400L, 1000L, 5000L), null);
+    assertEquals(progress.timeoutCause(100L, 1500L, 1000L, 5000L), "idle_timeout");
+    assertEquals(progress.timeoutCause(100L, 5100L, 1000L, 5000L), "absolute_timeout");
     assertEquals(progress.getLastProgressAtMs(), 500L);
   }
 
@@ -80,5 +91,18 @@ public class ConnectionProgressTest
     progress.markBytes(1L, Long.MAX_VALUE);
     progress.markBytes(2L, 1L);
     assertEquals(progress.getBytes(), Long.MAX_VALUE);
+  }
+
+  @Test
+  public void phaseAndTerminalCauseAreStable()
+  {
+    ConnectionProgress progress = new ConnectionProgress(0L);
+    progress.transition(10L, "INTRO_READING");
+    assertEquals(progress.getPhase(), "INTRO_READING");
+    progress.terminate(20L, "peer_eof");
+    progress.transition(30L, "READY");
+    progress.terminate(40L, "protocol_error");
+    assertEquals(progress.getPhase(), "CLOSED");
+    assertEquals(progress.getTerminalCause(), "peer_eof");
   }
 }
