@@ -188,9 +188,14 @@ public final class ScaleProviderRegistry
   /**
    * Like {@link #selectedProviderCanUpscale()} but also verifies the selected
    * provider is actually available <b>right now</b> and would render a real
-   * upscale for {@code probe} -- it runs the provider's cheap, side-effect-free
-   * {@code probe()} and {@code plan()} without acquiring a {@link ScaleGovernor}
-   * permit.
+   * upscale for {@code probe} -- it runs the provider's cheap assessment and,
+   * unless planning requires external admission, {@code plan()} without
+   * acquiring a {@link ScaleGovernor} permit.
+   *
+   * <p>A specialized provider that manages its admission and has an installed
+   * external authority is offerable from a usable, exact measured assessment.
+   * Its plan is validated only during final selection, after admission, so the
+   * offer neither requires nor consumes a broker grant.
    *
    * <p>This exists so the advisor's <i>offer</i> agrees with what {@link #select}
    * will actually <i>build</i>. The static {@link #selectedProviderCanUpscale()}
@@ -246,6 +251,15 @@ public final class ScaleProviderRegistry
           System.out.println("SCALE_PROVIDER offer-gate: provider '" + id
               + "' assessment unavailable: " + assessment + " -> trying next in chain");
           continue;
+        }
+        if (caps != null && caps.isSpecialized() && assessment.isMeasured()
+            && p.managesWarmupAdmission()
+            && GpuGovernor.getInstance().getExternalAuthority() != null)
+        {
+          System.out.println("SCALE_PROVIDER offer-gate: provider '" + id
+              + "' assessment=" + assessment
+              + " -> offering upscale pending external admission");
+          return true;
         }
         ScaleRequest assessedProbe = assessment.isMeasured()
             ? probe.withProfileIdentity(assessment.getProfile()) : probe;
