@@ -1803,8 +1803,6 @@ public final class GpuEnhancePipeline
       encode.add("-profile:v");
       encode.add(outputProfile);
     }
-    encode.add("-g");
-    encode.add(Integer.toString(Math.max(1, (int) Math.round(effRate * 2.0))));
     encode.add(outputTarget);
 
     return new ExternalPipeline(decode, encode, sidecar ? audioSidecarPath : null, audioArgv,
