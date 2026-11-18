@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import sage.enhance.spi.ExecutionForm;
@@ -218,6 +219,111 @@ public class GpuEnhanceExternalPipelineTest
         3840, 2160, "rgb24", "VSR");
     return new EnhancementPlan(EnhancementTier.ENHANCE_2160P, false, null,
         "scale_cuda", 3840, 2160, 25000L, 0L, "built", exec, null);
+  }
+
+  private static EnhancementPlan interlacedNv12Plan2160()
+  {
+    ScaleExecutionPlan exec = new ScaleExecutionPlan(ExecutionForm.EXTERNAL_PROCESS,
+        Arrays.asList("vsr_worker", "--mode", "stream"), 3840, 2160, "nv12", "VSR");
+    return new EnhancementPlan(EnhancementTier.ENHANCE_2160P, true, "yadif_cuda",
+        "scale_cuda", 3840, 2160, 25000L, 0L, "built", exec, null);
+  }
+
+  @DataProvider
+  public Object[][] inheritedOutputOptions()
+  {
+    return new Object[][] {
+        { Arrays.asList("-s", "0x0", "-r", "0", "-g", "0") },
+        { Arrays.asList("-s", "1920x1080", "-r", "29.97", "-g", "300") },
+        { Arrays.asList("-s", "0x0", "-r", "0", "-g", "0",
+            "-s", "1920x1080", "-r", "29.97", "-g", "300") }
+    };
+  }
+
+  @Test(dataProvider = "inheritedOutputOptions")
+  public void externalReencodeOwns4kFieldRateOutput(List<String> inherited)
+  {
+    List<String> base = baseBrowserhdArgv();
+    base.addAll(base.size() - 1, inherited);
+    List<String> before = new ArrayList<String>(base);
+    GpuEnhancePipeline.ExternalPipeline pipeline =
+        GpuEnhancePipeline.buildExternalReencodePipeline(base, interlacedNv12Plan2160(),
+            30, null, 0, 30000.0 / 1001.0, "/tmp/audio.ts", 0.0, null,
+            0.0, 1920, 1080);
+    assertNotNull(pipeline);
+    List<String> encode = pipeline.getEncodeArgv();
+    List<String> input = encode.subList(0, encode.indexOf("-i"));
+    List<String> output = encode.subList(encode.lastIndexOf("-i") + 2, encode.size());
+    assertTrue(idxPair(input, "-f", "rawvideo") >= 0);
+    assertTrue(idxPair(input, "-pix_fmt", "nv12") >= 0);
+    assertTrue(idxPair(input, "-video_size", "3840x2160") >= 0);
+    assertTrue(idxPair(input, "-framerate", "60000/1001") >= 0);
+    assertFalse(output.contains("-s"), "worker geometry must reach the encoder: " + output);
+    assertFalse(output.contains("-r"), "worker cadence must reach the encoder: " + output);
+    assertEquals(count(output, "-g"), 1, "replace every inherited GOP: " + output);
+    assertTrue(idxPair(output, "-g", "120") >= 0, "two-second field-rate GOP: " + output);
+    assertTrue(idxPair(output, "-c:v", "h264_nvenc") >= 0);
+    assertTrue(idxPair(output, "-forced-idr", "1") >= 0);
+    assertTrue(idxPair(output, "-acodec", "aac") >= 0);
+    assertTrue(idxPair(output, "-b:a", "128k") >= 0);
+    assertTrue(idxPair(output, "-f", "mp4") >= 0);
+    assertEquals(pipeline.getFrameRate(), 60000.0 / 1001.0, 0.000001);
+    assertEquals(pipeline.getWorkerFrameBytes(), 12441600);
+    assertEquals(base, before, "external staging must not mutate the fallback command");
+  }
+
+  @Test
+  public void externalOutputOwnershipPreservesInputOptions()
+  {
+    List<String> base = baseBrowserhdArgv();
+    base.addAll(base.indexOf("-i"), Arrays.asList("-s", "640x360", "-r", "15", "-g", "17"));
+    base.addAll(base.size() - 1, Arrays.asList("-s", "1920x1080", "-r", "29.97", "-g", "300"));
+    GpuEnhancePipeline.ExternalPipeline pipeline =
+        GpuEnhancePipeline.buildExternalReencodePipeline(base, interlacedNv12Plan2160(),
+            30, null, 0, 30000.0 / 1001.0);
+    assertNotNull(pipeline);
+    List<String> decode = pipeline.getDecodeArgv();
+    List<String> encode = pipeline.getEncodeArgv();
+    List<String> sourceInput = encode.subList(encode.indexOf("-i") + 2,
+        encode.lastIndexOf("-i"));
+    List<String> output = encode.subList(encode.lastIndexOf("-i") + 2, encode.size());
+    for (List<String> input : Arrays.asList(decode.subList(0, decode.indexOf("-i")), sourceInput))
+    {
+      assertTrue(idxPair(input, "-s", "640x360") >= 0);
+      assertTrue(idxPair(input, "-r", "15") >= 0);
+      assertTrue(idxPair(input, "-g", "17") >= 0);
+    }
+    assertFalse(output.contains("-s"));
+    assertFalse(output.contains("-r"));
+    assertEquals(count(output, "-g"), 1);
+    assertTrue(idxPair(output, "-g", "120") >= 0);
+  }
+
+  @Test(dataProvider = "inheritedOutputOptions")
+  public void nonEnhancementRetainsNegotiatedOutputOptions(List<String> inherited)
+  {
+    List<String> base = baseBrowserhdArgv();
+    base.addAll(base.size() - 1, inherited);
+    List<String> before = new ArrayList<String>(base);
+    assertNull(GpuEnhancePipeline.buildExternalReencodePipeline(base, EnhancementPlan.NONE, 60));
+    assertFalse(GpuEnhancePipeline.rewriteReencodeArgv(base, EnhancementPlan.NONE, 60));
+    assertEquals(base, before, "un-enhanced output options must stay byte-identical");
+  }
+
+  @Test
+  public void externalOutputContractUsesGenericPlanMetadata()
+  {
+    ScaleExecutionPlan exec = new ScaleExecutionPlan(ExecutionForm.EXTERNAL_PROCESS,
+        Arrays.asList("generic_scaler"), 2560, 1440, "nv12", "Generic scaler");
+    EnhancementPlan plan = new EnhancementPlan(EnhancementTier.ENHANCE_1440P,
+        false, null, "scale_cuda", 2560, 1440, 18000L, 0L, "built", exec, null);
+    GpuEnhancePipeline.ExternalPipeline pipeline =
+        GpuEnhancePipeline.buildExternalReencodePipeline(baseBrowserhdArgv(), plan, 25);
+    assertNotNull(pipeline);
+    assertTrue(idxPair(pipeline.getEncodeArgv(), "-video_size", "2560x1440") >= 0);
+    assertTrue(idxPair(pipeline.getEncodeArgv(), "-framerate", "25") >= 0);
+    assertEquals(count(pipeline.getEncodeArgv(), "-g"), 1);
+    assertTrue(idxPair(pipeline.getEncodeArgv(), "-g", "50") >= 0);
   }
 
   @Test
@@ -544,6 +650,8 @@ public class GpuEnhanceExternalPipelineTest
     assertTrue(!d.contains("-vf"), "no filter chain when nothing to deinterlace/decimate: " + d);
     assertTrue(idxPair(p.getEncodeArgv(), "-framerate", "24") >= 0,
         "native 24fps passed through, not forced to 60: " + p.getEncodeArgv());
+    assertTrue(idxPair(p.getEncodeArgv(), "-g", "48") >= 0,
+        "GOP follows the actual native output rate: " + p.getEncodeArgv());
   }
 
   @Test
@@ -556,6 +664,8 @@ public class GpuEnhanceExternalPipelineTest
     assertTrue(!d.contains("-vf"), "no decimation when the cap is disabled: " + d);
     assertTrue(idxPair(p.getEncodeArgv(), "-framerate", "60") >= 0,
         "full source rate retained at cap 0: " + p.getEncodeArgv());
+    assertTrue(idxPair(p.getEncodeArgv(), "-g", "120") >= 0,
+        "GOP follows the uncapped output rate: " + p.getEncodeArgv());
   }
 
   // ---- Exact broadcast rational frame rate + bob field-rate doubling ---------
