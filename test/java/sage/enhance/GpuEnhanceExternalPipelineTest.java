@@ -212,12 +212,17 @@ public class GpuEnhanceExternalPipelineTest
 
   private static EnhancementPlan externalPlan2160()
   {
+    return externalPlan(3840, 2160);
+  }
+
+  private static EnhancementPlan externalPlan(int width, int height)
+  {
     ScaleExecutionPlan exec = new ScaleExecutionPlan(
         ExecutionForm.EXTERNAL_PROCESS,
         Arrays.asList("vsr_worker", "--mode", "stream"),
-        3840, 2160, "rgb24", "VSR");
+        width, height, "rgb24", "VSR");
     return new EnhancementPlan(EnhancementTier.ENHANCE_2160P, false, null,
-        "scale_cuda", 3840, 2160, 25000L, 0L, "built", exec, null);
+        "scale_cuda", width, height, 25000L, 0L, "built", exec, null);
   }
 
   @Test
@@ -245,6 +250,9 @@ public class GpuEnhanceExternalPipelineTest
     // Video comes from the worker pipe at the plan's output geometry.
     assertTrue(idxPair(e, "-f", "rawvideo") >= 0, "raw video input");
     assertTrue(idxPair(e, "-video_size", "3840x2160") >= 0, "reads worker output geometry");
+    assertTrue(!e.contains("-s"), "source-era output geometry removed: " + e);
+    assertTrue(!e.contains("-r"), "source-era output cadence removed: " + e);
+    assertTrue(idxPair(e, "-g", "120") >= 0, "GOP derived from effective 60fps cadence: " + e);
     assertTrue(idxPair(e, "-i", "pipe:0") >= 0, "encode reads frames from stdin");
     assertTrue(idxPair(e, "-i", "/rec/file.mpg") >= 0, "encode re-reads source for audio");
     assertTrue(idxPair(e, "-map", "0:v:0") >= 0, "video mapped from the pipe");
@@ -268,6 +276,25 @@ public class GpuEnhanceExternalPipelineTest
         "re-imposes the plan VBR bitrate: " + e);
     assertTrue(e.contains("-maxrate") && e.contains("-bufsize"), "rate ceiling set: " + e);
     assertEquals(e.get(e.size() - 1), "-", "encode writes to the base output target (stdout)");
+  }
+
+  @Test
+  public void browserEncodeUsesProviderGeometryWithoutResolutionCeiling()
+  {
+    List<String> base = baseBrowserhdArgv();
+    int outputStart = base.indexOf("-i") + 2;
+    base.add(outputStart, "1920x1080");
+    base.add(outputStart, "-s");
+
+    GpuEnhancePipeline.ExternalPipeline p =
+        GpuEnhancePipeline.buildExternalReencodePipeline(base, externalPlan(7680, 4320), 60);
+
+    assertNotNull(p, "8K provider pipeline built");
+    List<String> e = p.getEncodeArgv();
+    assertTrue(idxPair(e, "-video_size", "7680x4320") >= 0,
+        "provider geometry drives the raw input without a 4K ceiling: " + e);
+    assertTrue(!e.contains("1920x1080") && !e.contains("-s"),
+        "source geometry cannot override provider output: " + e);
   }
 
   @Test
@@ -583,6 +610,39 @@ public class GpuEnhanceExternalPipelineTest
     assertNotNull(p, "pipeline built");
     assertTrue(idxPair(p.getEncodeArgv(), "-framerate", "60000/1001") >= 0,
         "encode tagged at the exact doubled field rate: " + p.getEncodeArgv());
+  }
+
+  @Test
+  public void browserInterlacedProviderOutputReplacesSourceGeometryCadenceAndGop()
+  {
+    List<String> base = baseBrowserhdArgv();
+    int outputStart = base.indexOf("-i") + 2;
+    base.add(outputStart, "1920x1080");
+    base.add(outputStart, "-s");
+    base.add(outputStart, "29.97");
+    base.add(outputStart, "-r");
+    base.set(base.indexOf("-g") + 1, "300");
+    ScaleExecutionPlan exec = new ScaleExecutionPlan(
+        ExecutionForm.EXTERNAL_PROCESS,
+        Arrays.asList("vsr_worker", "--mode", "stream"),
+        3840, 2160, "rgb24", "VSR");
+    EnhancementPlan plan = new EnhancementPlan(EnhancementTier.ENHANCE_2160P, true,
+        "yadif_cuda", "scale_cuda", 3840, 2160, 28000L, 40000L, "built", exec, null);
+
+    GpuEnhancePipeline.ExternalPipeline p =
+        GpuEnhancePipeline.buildExternalReencodePipeline(base, plan, 30,
+            sage.media.format.MediaFormat.MPEG2_VIDEO, 0, 30000.0 / 1001.0);
+
+    assertNotNull(p, "browser VSR pipeline built");
+    List<String> e = p.getEncodeArgv();
+    assertTrue(idxPair(e, "-video_size", "3840x2160") >= 0,
+        "provider geometry drives the raw input: " + e);
+    assertTrue(idxPair(e, "-framerate", "60000/1001") >= 0,
+        "bobbed provider frames retain their exact field rate: " + e);
+    assertTrue(!e.contains("-s") && !e.contains("-r"),
+        "source-era geometry and cadence cannot override provider frames: " + e);
+    assertTrue(idxPair(e, "-g", "120") >= 0,
+        "GOP is derived from the effective 59.94fps provider cadence: " + e);
   }
 
   @Test

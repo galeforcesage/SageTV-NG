@@ -46,6 +46,7 @@ public class PlayerTimeoutPolicyTest
       PlayerTimeoutPolicy.SUF_ATTEMPTS,
       PlayerTimeoutPolicy.SUF_BACKOFF,
       PlayerTimeoutPolicy.SUF_CONN_TIMEOUT,
+      PlayerTimeoutPolicy.SUF_CONN_ABSOLUTE_TIMEOUT,
       PlayerTimeoutPolicy.SUF_PLAYBACK_DEADLINE,
       PlayerTimeoutPolicy.SUF_PLAYBACK_ABSOLUTE_DEADLINE,
   };
@@ -55,6 +56,7 @@ public class PlayerTimeoutPolicyTest
       PlayerTimeoutPolicy.BASE_ATTEMPTS,
       PlayerTimeoutPolicy.BASE_BACKOFF,
       PlayerTimeoutPolicy.BASE_CONN_TIMEOUT,
+      PlayerTimeoutPolicy.BASE_CONN_ABSOLUTE_TIMEOUT,
       PlayerTimeoutPolicy.BASE_PLAYBACK_DEADLINE,
       PlayerTimeoutPolicy.BASE_PLAYBACK_ABSOLUTE_DEADLINE,
   };
@@ -113,6 +115,7 @@ public class PlayerTimeoutPolicyTest
     assertEquals(PlayerTimeoutPolicy.attempts(legacy), 2);
     assertEquals(PlayerTimeoutPolicy.backoffMs(legacy), 250L);
     assertEquals(PlayerTimeoutPolicy.connectionTimeoutMs(legacy), 30000L);
+    assertEquals(PlayerTimeoutPolicy.connectionAbsoluteTimeoutMs(legacy), 120000L);
     // No unified deadline for legacy -- keep independent (stacking) behavior.
     assertEquals(PlayerTimeoutPolicy.playbackDeadlineMs(legacy), 0L);
     assertEquals(PlayerTimeoutPolicy.playbackAbsoluteDeadlineMs(legacy), 0L);
@@ -124,6 +127,7 @@ public class PlayerTimeoutPolicyTest
     assertEquals(PlayerTimeoutPolicy.attempts(null), 2);
     assertEquals(PlayerTimeoutPolicy.expireWaitMs(null), 30000L);
     assertEquals(PlayerTimeoutPolicy.connectionTimeoutMs(null), 30000L);
+    assertEquals(PlayerTimeoutPolicy.connectionAbsoluteTimeoutMs(null), 120000L);
     assertEquals(PlayerTimeoutPolicy.playbackDeadlineMs(null), 0L);
     assertEquals(PlayerTimeoutPolicy.playbackAbsoluteDeadlineMs(null), 0L);
   }
@@ -197,6 +201,7 @@ public class PlayerTimeoutPolicyTest
     assertEquals(PlayerTimeoutPolicy.attempts(ng), 3);
     assertEquals(PlayerTimeoutPolicy.backoffMs(ng), 250L);
     assertEquals(PlayerTimeoutPolicy.connectionTimeoutMs(ng), 15000L);
+    assertEquals(PlayerTimeoutPolicy.connectionAbsoluteTimeoutMs(ng), 120000L);
     assertEquals(PlayerTimeoutPolicy.playbackDeadlineMs(ng), 15000L);
     assertEquals(PlayerTimeoutPolicy.playbackAbsoluteDeadlineMs(ng), 90000L);
     // ... while a legacy session in the same server is unaffected.
@@ -207,8 +212,8 @@ public class PlayerTimeoutPolicyTest
   @Test
   public void testSeedRecommendedNgDefaultsIsIdempotentAndNonClobbering()
   {
-    // Fresh seed writes all six knobs into the ng_default tier.
-    assertEquals(PlayerTimeoutPolicy.seedRecommendedNgDefaults(), 7);
+    // Fresh seed writes every recommended knob into the ng_default tier.
+    assertEquals(PlayerTimeoutPolicy.seedRecommendedNgDefaults(), 8);
     ProfileContext ng = PlayerTimeoutPolicy.of(true, null);
     assertEquals(PlayerTimeoutPolicy.expireWaitMs(ng), 15000L);
     assertEquals(PlayerTimeoutPolicy.attempts(ng), 3);

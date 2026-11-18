@@ -43,4 +43,5 @@ public class PartySessionCoordinatorTest
 
     assertEquals(lead, 3550L);
   }
+
 }

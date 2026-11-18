@@ -199,8 +199,28 @@ public class BigBrother
   {
     return setWatched(a, airWatchStart, airWatchEnd, realWatchStart, realWatchEnd, 0, checkOnly);
   }
+
+  /**
+   * Applies Party Mode's newest canonical cursor to the existing watched record.
+   * Ordinary and legacy watched updates remain monotonic through {@link #setWatched}.
+   */
+  static boolean setPartyWatchedPosition(Airing a, long airWatchStart, long airWatchEnd,
+      long realWatchStart, long realWatchEnd)
+  {
+    return setWatched(
+        a, airWatchStart, airWatchEnd, realWatchStart, realWatchEnd, 0, false, true);
+  }
+
   static boolean setWatched(Airing a, long airWatchStart, long airWatchEnd,
       long realWatchStart, long realWatchEnd, int titleNum, boolean checkOnly)
+  {
+    return setWatched(
+        a, airWatchStart, airWatchEnd, realWatchStart, realWatchEnd, titleNum, checkOnly, false);
+  }
+
+  private static boolean setWatched(Airing a, long airWatchStart, long airWatchEnd,
+      long realWatchStart, long realWatchEnd, int titleNum, boolean checkOnly,
+      boolean replaceWatchEnd)
   {
     ((byte[])Sage.q)[32] = (byte) (((byte[])Sage.q)[11] * ((byte[])Sage.q)[25]); // piracy protection
     if (a == null) return false;
@@ -263,8 +283,12 @@ public class BigBrother
         }
         else
         {
-          Wizard.getInstance().addWatched(a, airWatchStart, airWatchEnd,
-              realWatchStart, realWatchEnd, titleNum);
+          if (replaceWatchEnd)
+            Wizard.getInstance().setPartyWatchedPosition(
+                a, airWatchStart, airWatchEnd, realWatchStart, realWatchEnd);
+          else
+            Wizard.getInstance().addWatched(a, airWatchStart, airWatchEnd,
+                realWatchStart, realWatchEnd, titleNum);
 
           if (rv)
           {

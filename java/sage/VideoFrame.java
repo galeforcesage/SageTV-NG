@@ -1491,7 +1491,7 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         waitTime = -1;
         if (currJob.id == WATCH_MF)
         {
-          if (currFile == currJob.file && currFileLoaded && currFile.generalType != MediaFile.MEDIAFILE_LOCAL_PLAYBACK)
+          if (shouldRemoveRedundantWatch(currFile, currFileLoaded, currJob.file, currJob.partyPreparation))
           {
             if (Sage.DBG) System.out.println("VF Removing redundant watch request in queue processing");
             watchQueue.remove(currJob);
@@ -4663,22 +4663,49 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   private final java.util.concurrent.atomic.AtomicLong partyWatchGeneration = new java.util.concurrent.atomic.AtomicLong();
   private int partyWatchRequests;
 
+  static boolean shouldRemoveRedundantWatch(MediaFile current, boolean currentLoaded,
+      MediaFile requested, PartyPreparation preparation)
+  {
+    return current == requested && currentLoaded
+        && current.generalType != MediaFile.MEDIAFILE_LOCAL_PLAYBACK
+        && (preparation == null || !preparation.forceReload);
+  }
+
   record PartySurfaceFence(MediaFile media, MediaPlayer player, long playbackGeneration, long watchGeneration) {}
 
-  /** Captures only an idle, paused playback lifecycle suitable for changing its next-load policy. */
-  PartySurfaceFence partySurfaceFence()
+  private PartySurfaceFence partySurfaceFence(boolean allowPlaying)
   {
     synchronized (queueLock)
     {
       if (!partyPreparationAuthorized || partyWatchRequests != 0 || processingWatchRequest || !watchQueue.isEmpty()
           || currFile != null && (player == null || player.getState() == MediaPlayer.NO_STATE)
-          || player != null && player.getState() != MediaPlayer.PAUSE_STATE && player.getState() != MediaPlayer.NO_STATE)
+          || player != null && player.getState() != MediaPlayer.PAUSE_STATE
+              && player.getState() != MediaPlayer.NO_STATE
+              && (!allowPlaying || player.getState() != MediaPlayer.PLAY_STATE))
         throw new sage.party.PartyProtocol.Fault("SURFACE_SWITCH_UNSAFE");
       if (player != null && !(player instanceof MiniPlayer))
         throw new sage.party.PartyProtocol.Fault("SURFACE_SWITCH_UNSAFE");
       return new PartySurfaceFence(currFile, player,
           player == null ? -1 : ((MiniPlayer)player).getPartyPlaybackGeneration(), partyWatchGeneration.get());
     }
+  }
+
+  /** Pauses ordinary playback and captures a stable lifecycle for changing its next-load policy. */
+  PartySurfaceFence acquirePartySurfaceFence()
+  {
+    PartySurfaceFence before = partySurfaceFence(true);
+    MediaPlayer active = before.player();
+    if (active != null && active.getState() == MediaPlayer.PLAY_STATE && !active.pause())
+      throw new sage.party.PartyProtocol.Fault("SURFACE_SWITCH_UNSAFE");
+    PartySurfaceFence after = partySurfaceFence(false);
+    if (!before.equals(after)) throw new sage.party.PartyProtocol.Fault("SURFACE_CHANGED");
+    return after;
+  }
+
+  /** Captures only an idle, paused playback lifecycle suitable for changing its next-load policy. */
+  PartySurfaceFence partySurfaceFence()
+  {
+    return partySurfaceFence(false);
   }
 
   boolean partySurfaceCurrent(PartySurfaceFence fence)
@@ -4853,13 +4880,19 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
   /** Releases a Party frame already prepared at the canonical position without seeking again. */
   void applyPartyReveal(int mediaFileId, boolean playing)
   {
+    applyPartyState(mediaFileId, playing);
+  }
+
+  /** Applies a Party play/pause state transition without disturbing the aligned media position. */
+  void applyPartyState(int mediaFileId, boolean playing)
+  {
     MediaFile mf = currFile;
     if (!partyProgressOwned || mf == null || mf.getID() != mediaFileId) return;
     if (partyPreparation != null && partyPreparation.media == mf) partyPreparation.held = false;
     submitJob(new VFJob(playing ? PLAY : PAUSE));
   }
 
-  /** Uses existing permission/account watched policy on explicit leave/end, never on a report. */
+  /** Persists Party-only canonical progress through the existing permission/account policy. */
   public void commitPartyProgress(int media, long position)
   {
     MediaFile mf = Wizard.getInstance().getFileForID(media);
@@ -4867,8 +4900,8 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
     {
       Airing airing = mf.getContentAiring();
       if (airing != null)
-        BigBrother.setWatched(airing, mf.getRecordTime(), mf.getRecordTime() + position,
-            realWatchStart, Sage.time(), false);
+        BigBrother.setPartyWatchedPosition(airing, mf.getRecordTime(),
+            mf.getRecordTime() + position, realWatchStart, Sage.time());
     }
   }
 
@@ -4888,7 +4921,9 @@ public final class VideoFrame extends BasicVideoFrame implements Runnable
         renderer.getCurrentSurfaceTargetAudioCodec(), (int)Math.min(Integer.MAX_VALUE, kbps * 2L), kbps,
         ((MiniPlayer)player).isTranscoding()
             || "pull-xcode".equals(renderer.getCurrentSurfaceDeliveryMode())
-            || "hls".equals(renderer.getCurrentSurfaceDeliveryMode()),
+            || "hls".equals(renderer.getCurrentSurfaceDeliveryMode())
+            || sage.client.PlaybackDecisionEngine.PARTY_CMAF_DELIVERY_MODE.equals(
+                renderer.getCurrentSurfaceDeliveryMode()),
         surface == null ? null : surface.getRoute(), ((MiniPlayer)player).getPartyXcodeMode(),
         sage.client.PlaybackSurfaceSet.canonicalContainer(((MiniPlayer)player).getPartyOutputContainer()));
   }

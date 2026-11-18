@@ -301,7 +301,8 @@ public class HTTPLSServer implements Runnable
           }
         }
 
-        String sessionID = (String)paramMap.get("x-playback-session-id");
+        String playbackSessionID = (String)paramMap.get("x-playback-session-id");
+        String sessionID = playbackSessionID;
         if (sessionID == null)
           sessionID = clientMac + "-" + mfId + "-" + segmentNum;
         // Keep the fMP4 (CMAF) transcoder in a separate cache slot from any TS
@@ -321,6 +322,25 @@ public class HTTPLSServer implements Runnable
         {
           if (Sage.DBG) System.out.println("Invalid ClientMAC in iOS HTTP Request of: " + clientMac);
           break;
+        }
+        if (uiMgr != null && uiMgr.getRootPanel() != null
+            && uiMgr.getRootPanel().getRenderEngine() instanceof MiniClientSageRenderer)
+        {
+          MiniClientSageRenderer renderer =
+              (MiniClientSageRenderer)uiMgr.getRootPanel().getRenderEngine();
+          String partyBinding =
+              (String)paramMap.get("x-sage-party-preparation-binding");
+          if ((partyBinding != null && !renderer.acceptPartyHttpBinding(
+                  partyBinding, mfId, playbackSessionID))
+              || (partyBinding == null
+                  && renderer.hasPendingPartyHttpBinding(
+                      mfId, playbackSessionID)))
+          {
+            sendHTTPErrorResponse(409, "Conflict",
+                "Party preparation binding is required.");
+            keepAlive = false;
+            break;
+          }
         }
         if (segmentNum >= mf.getNumSegments())
         {
@@ -3025,6 +3045,7 @@ public class HTTPLSServer implements Runnable
     java.util.HashMap copy = new java.util.HashMap(source);
     maskHeader(copy, "authorization");
     maskHeader(copy, "proxy-authorization");
+    maskHeader(copy, "x-sage-party-preparation-binding");
     return copy;
   }
 

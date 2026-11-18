@@ -18,11 +18,15 @@ partially viewed recording watched.
 Direct push playback resets its cached position on a full seek and checks
 reported positions against the new seek floor and the parser's sent-data
 boundary before using them for display or relative skips. Out-of-window reports
-are logged and retain the last accepted position. Pending relative skips remember
+are logged and use a server estimate that advances from the last accepted
+position only while playing and never beyond parsed media actually sent. Pending relative skips remember
 the clamped recording boundary, not an unreachable negative or past-end request.
 The direct-push sent boundary is sampled from parsed PTS **after** each payload
-transfer, independently of bitrate/DTS statistics. MPEG-PS can omit DTS and end a
-payload on an audio packet; neither condition means that no media was sent.
+transfer, independently of bitrate/DTS statistics, and must remain contiguous
+with the current seek epoch. A parser timestamp many minutes ahead of the prior
+frontier is rejected rather than authorizing a jump to live edge. MPEG-PS can
+omit DTS and end a payload on an audio packet; neither condition means that no
+media was sent.
 
 Pending-target coalescing and recording/live-edge clamps default on only for
 sessions accepted by the existing NG capability handshake, using
@@ -33,10 +37,12 @@ Unsupported NG playback-rate requests return 1.0 without seeking.
 existing unprefixed settings, defaults, and rate-to-skip behavior; local players
 and hardware clients without the NG handshake do not inherit the new defaults.
 
-These server changes do not implement a client-rendered clock or an epoch
-carrier in position replies. A server-local seek counter cannot identify the
-epoch of an untagged client report. Pull-transcode clients still own reopening
-their media connection at the requested target and discarding old demux state.
+These server changes do not add an epoch field to legacy position replies.
+Party direct push has a separate negotiated pre-byte epoch/origin command that
+maps raw rendered media timestamps into recording time after each FLUSH. A
+server-local seek counter alone still cannot identify the epoch of an untagged
+legacy report. Pull-transcode clients still own reopening their media connection
+at the requested target and discarding old demux state.
 
 Active, growing recordings served through the parameterized Protocol 2.1
 pull-xcode path are producer-paced by media time. FFmpeg normally reads at 1x,
@@ -66,9 +72,12 @@ has rendered. Enhancement watchdogs are cancelled and joined before intentional
 seek/stop teardown, so a superseded worker cannot trigger crash cooldown or act
 on the next pipeline.
 
-NG direct-push reported-position clocks do not extrapolate a repeated client
-timestamp from wall time. A frozen renderer report stays frozen; legacy
-interpolation remains unchanged.
+NG direct-push reported-position clocks do not extrapolate a repeated valid
+client timestamp from wall time. A frozen valid renderer report stays frozen.
+When a report is outside the current seek/sent-data window, the server instead
+advances its last accepted estimate only while playing and caps it at the
+post-seek PTS frontier. This prevents an invalid IJK clock from pinning FF/REW
+to the position where playback began. Legacy interpolation remains unchanged.
 
 Completed CMAF/HLS recordings expose their full playlist from media sequence zero,
 even when LL-HLS is enabled. Sliding windows, delta skips, blocking reloads and
@@ -124,7 +133,8 @@ negotiated by the same mechanism as `STREAMINFO` / `DETAILED_BUFFER_STATS` /
 | Capability | Unlocks | Requires |
 |---|---|---|
 | `TRICKPLAY_POSITION_V1` | Correct relative-skip base; eligibility for the fast path | Section 2, 3 |
-| `SEEK_EPOCH_V1` | Reserved for a future versioned wire extension; do not advertise yet | Section 4 |
+| `SEEK_EPOCH_V1` | Reserved for a future general per-report epoch extension; do not advertise yet | Section 4 |
+| `PARTY_PUSH_EPOCH_ORIGIN_V1` | Party direct-push command-42 epoch/origin mapping | Section 4.2 |
 | `DVR_WINDOW_V1` | Accurate scrubber/live-edge UI; out-of-range clamping | Section 5 |
 
 `TRICKPLAY_POSITION_V1` is the single most important one — it is the root-cause fix.
@@ -190,6 +200,21 @@ Client → Server (reply, unchanged framing):
 `TRICKPLAY_POSITION_V1` changes **nothing about the bytes** — it is a promise about what
 `clientReportedMediaTime` and `clientReportedPlayState` *contain*.
 
+For NG direct MPEG push, server delivery is additionally paced by parsed media time rather
+than by `freeSpace` alone. The server parses every outbound chunk and stops queueing when
+the delivered-media frontier is 15 seconds ahead of the current rendered-position estimate
+(`miniplayer/ng_direct_push_max_lead_ms`; a non-positive value disables the cap). This keeps
+an unbounded client buffer from consuming an entire recording before playback starts or
+after a seek. Legacy clients and server-transcoded/pull delivery retain their existing flow
+control.
+
+`MEDIACMD_FLUSH` remains the direct-push queue/decoder boundary. The existing
+post-flush mux-time trailer and requested target are not authoritative recording
+origins. Party direct push therefore negotiates `PARTY_PUSH_EPOCH_ORIGIN_V1`
+and uses command 42 to carry one stream epoch and one same-sample pair of landed
+recording position and raw media timestamp before any new-epoch PUSHBUFFER
+bytes are accepted. Legacy framing is unchanged.
+
 ### 3.2 Invariants (MUST)
 
 1. **On-screen, not buffered.** `clientReportedMediaTime` is the visible frame's time
@@ -227,7 +252,7 @@ it describes, so a report sampled *before* a reposition can never be applied *af
 which is precisely the "backward skip goes forward" / "session poisoned, everything flushes
 to 0:00" failure class.
 
-### 4.1 Current wire status
+### 4.1 General wire status
 No epoch field is present in the existing 5-byte detailed `MEDIACMD_GETMEDIATIME`
 response or 9-byte detailed `MEDIACMD_PUSHBUFFER` response. The server rejects positions
 outside the known post-seek delivered-media window and coalesces rapid relative seeks from
@@ -235,10 +260,40 @@ the last intended target. It cannot prove that an in-window report belongs to th
 epoch. `SEEK_EPOCH_V1` is reserved; advertising it does not currently change framing and
 must not be used to imply that reports are tagged.
 
-A future epoch carrier must use a separately negotiated, versioned response extension;
-it must not append bytes to the legacy detailed responses based only on the current token.
+A future general epoch carrier must use a separately negotiated, versioned
+extension; it must not append bytes to legacy detailed responses based only on
+the current token.
 
-### 4.2 Future versioned extension: client MUST
+### 4.2 Party direct-push epoch/origin command
+
+When `PARTY_PUSH_EPOCH_ORIGIN_V1` is negotiated, the server sends command 42
+after FLUSH succeeds and after it parses a sample from the new epoch, but before
+the first new-epoch PUSHBUFFER bytes:
+
+```text
+uint8  command = 42
+uint24 payloadLength = 28
+int32  version = 1
+int64  streamEpoch
+int64  landedRecordingPositionMs
+int64  mediaTimestampMs
+```
+
+The final two values describe the same parsed media sample. The client installs
+`recordingPosition = landedRecordingPositionMs +
+(renderedMediaTimestampMs - mediaTimestampMs)` atomically and returns a 32-bit
+ACK `1`. It must reject a lower epoch or a conflicting pair for an already
+installed epoch. The server sends no new-epoch payload after a timeout, parse
+failure, unsupported command or non-`1` ACK.
+
+Before acknowledging FLUSH, the client discards queued packets, decoder input,
+rendered frames, pending replies and EOS state from the prior epoch. It does not
+report a position until it renders a frame from the installed epoch. Initial
+push setup uses the same command before its first payload. Full FLUSH/reprime is
+the required Party path; in-place push seeking remains disabled until a future
+general per-report epoch extension proves the same ordering.
+
+### 4.3 Future general versioned extension: client MUST
 1. On epoch change: **discard** any queued data and in-flight position samples from the
    prior epoch.
 2. **Reset** the demuxer/renderer at the boundary (for MPEG-TS: re-initialize on the next
@@ -247,7 +302,7 @@ it must not append bytes to the legacy detailed responses based only on the curr
    report a position stamped with a superseded epoch.
 4. Resume reporting per Section 3 in the new client-local base.
 
-### 4.3 Future result
+### 4.4 Future general result
 The server accepts a client position only when it matches the current epoch, eliminating
 the "catch-up guessing" the inferred guard must otherwise do — and making the in-place fast
 path (Section 6) safe to enable.
@@ -420,6 +475,33 @@ client adopting the same discipline every other server-transcode client uses.
   state in `clientReportedPlayState`.
 - On epoch change: perform the equivalent of a seek/flush and decoder reconfigure; for TS,
   re-init on the next PAT/PMT.
+- **IJK full-reprime requirement:** `MEDIACMD_FLUSH` followed by new pushed TS data is a
+  new position epoch. Discard old queued packets, decoder frames, cached seek offsets, and
+  pending position samples before accepting the new PAT/PMT and first rendered frame.
+- Report the rendered frame in a proven recording-relative timeline. The current direct
+  MPEG push trailer alone does not prove that origin after FLUSH. If the renderer already
+  exposes a recording-relative stream position, report it directly. If it exposes a
+  raw or zero-based post-flush media clock, do not add the requested seek target; negotiate
+  `PARTY_PUSH_EPOCH_ORIGIN_V1`, install command 42's origin pair, and report the rendered
+  media timestamp in that mapped epoch.
+- A field observation showed the broken mapping clearly: after a server seek to about
+  `726589 ms`, IJK reported about `1452917 ms`—approximately the seek target twice. The
+  server rejected that value because it was beyond the sent-data frontier. The client fix
+  is to remove the duplicate target/origin addition, not to relax the server window.
+- Do not emit a position reply until it describes a frame from the new epoch. During
+  flush/rebuffer, retain the last valid position and report buffering/paused state rather
+  than a pre-flush or synthetically rebased value.
+- Report `freeSpace` as the actual remaining capacity of the bounded demux/input queue,
+  after subtracting queued and in-flight bytes. Never report an effectively unbounded
+  value such as `Integer.MAX_VALUE`; that permits the server to enqueue an entire recording
+  before playback or after a seek.
+- Acknowledge `MEDIACMD_FLUSH` only after old demux packets, decoder input, rendered frames,
+  pending push replies, and prior-epoch EOS state can no longer affect playback. Start the
+  new epoch from its PAT/PMT and first decodable frame, and allow playback to begin without
+  waiting for the advertised queue capacity to fill.
+- Treat a server EOS marker as input exhaustion, not immediate rendered completion. Report
+  EOS only after all accepted packets and decoded frames for that epoch have drained. A
+  temporary end of a growing recording is buffering, not EOS.
 
 ### 7.2 PWA / Web (MSE + hls.js or native)
 - Canonical position = `video.currentTime` mapped to the stream's client-local base (the
@@ -487,9 +569,13 @@ implementation of this contract:
 4. **No poisoning:** issue a bad/edge skip, then a normal FF; confirm the normal FF still
    works (no flush-to-0 cascade). Once a versioned epoch extension exists, also confirm
    stale-epoch reports are dropped.
-5. **DVR window:** for an in-progress recording, confirm forward skips saturate at the live
+5. **IJK re-prime base:** seek to a non-zero target and verify the first post-flush report
+   is in the server mux-time trailer's timeline. It must not be approximately twice the
+   target, and after several minutes of playback the next FF must use the current frame
+   rather than the seek target.
+6. **DVR window:** for an in-progress recording, confirm forward skips saturate at the live
    edge and the scrubber reflects the sliding window.
-6. **Future fast path:** with `PUSH_BUFFER_SEEKING` + `TRICKPLAY_POSITION_V1` plus a
+7. **Future fast path:** with `PUSH_BUFFER_SEEKING` + `TRICKPLAY_POSITION_V1` plus a
    versioned epoch extension, confirm forward in-buffer targets land sub-second (branch
    `in-place(seekPull0)`), while backward / out-of-buffer targets take the reprime branch.
 

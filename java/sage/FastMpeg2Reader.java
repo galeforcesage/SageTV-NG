@@ -783,6 +783,16 @@ public final class FastMpeg2Reader
       return calcOffsetPTS(parsedPES.pts) / 90;
   }
 
+  /**
+   * Returns the raw media timestamp paired with {@link #getLastParsedTimeMillis()}.
+   *
+   * @return raw PES timestamp in milliseconds, or {@code -1} before a timestamp is parsed
+   */
+  public long getLastParsedRawTimestampMillis()
+  {
+    return parsedPES == null || parsedPES.pts < 0 ? -1 : parsedPES.pts / 90;
+  }
+
   public long getLastParsedDTSMillis()
   {
     if (parsedPES == null || parsedPES.dts <= 0)
@@ -792,6 +802,14 @@ public final class FastMpeg2Reader
   }
 
   public long getLastParsedTimePackBytePos() { return (parsedPES == null || parsedPES.pts <= 0) ? 0 : parsedPES.ptsPackBytePos; }
+
+  static boolean hasStartCode(java.nio.ByteBuffer buffer, int offset, int limit, int code)
+  {
+    int safeLimit = Math.min(limit, buffer.limit());
+    return offset >= 0 && offset + 3 < safeLimit
+        && buffer.get(offset) == 0 && buffer.get(offset + 1) == 0
+        && buffer.get(offset + 2) == 1 && (buffer.get(offset + 3) & 0xFF) == code;
+  }
 
   public long getLastParsedDTSPackBytePos() { return (parsedPES == null || parsedPES.dts <= 0) ? 0 : parsedPES.dtsPackBytePos; }
 
@@ -1263,8 +1281,7 @@ public final class FastMpeg2Reader
                               else if (mpeg2Video)
                               {
                                 int pesDataOffset = (buf.get(i + 5) & 0xFF) + 6;
-                                if (buf.getShort(i + pesDataOffset) == 0 /*&& buf.get(i + pesDataOffset + 1) == 0*/ && buf.get(i + pesDataOffset + 2) == 1 &&
-                                    (buf.get(i + pesDataOffset + 3) & 0xFF) == 0xB3)
+                                if (hasStartCode(buf, i + pesDataOffset, len, 0xB3))
                                 {
                                   // Found the I Frame
                                   waitForIFrame = false;
@@ -1447,8 +1464,7 @@ public final class FastMpeg2Reader
                             if ((stream_id & 0x20) != 0)
                             {
                               int pesDataOffset = (buf.get(i + 5) & 0xFF) + 6;
-                              if (buf.getShort(i + pesDataOffset) == 0 /*&& buf.get(i + pesDataOffset + 1) == 0*/ && buf.get(i + pesDataOffset + 2) == 1 &&
-                                  (buf.get(i + pesDataOffset + 3) & 0xFF) == 0xB3)
+                              if (hasStartCode(buf, i + pesDataOffset, len, 0xB3))
                               {
                                 // Found the I Frame
                                 waitForIFrame = false;
@@ -1462,8 +1478,8 @@ public final class FastMpeg2Reader
                                 msecStartForSkip = calcOffsetPTS(parsedPES.pts)/90;
                                 continue iframeloop;
                               }
-                              else if (vc1RemapMode && buf.getShort(i + pesDataOffset) == 0 /*&& buf.get(i + pesDataOffset + 1) == 0*/ && buf.get(i + pesDataOffset + 2) == 1 &&
-                                  (buf.get(i + pesDataOffset + 3) & 0xFF) == 0x0F)
+                              else if (vc1RemapMode &&
+                                  hasStartCode(buf, i + pesDataOffset, len, 0x0F))
                               {
                                 // Found the I Frame
                                 waitForIFrame = false;
@@ -1714,7 +1730,10 @@ public final class FastMpeg2Reader
   {
     if (Sage.DBG) System.out.println("Mpeg2Reader seeking to pos=" + 0);
     if (ins != null)
+    {
       ins.position(0);
+      invalidateParsedTimestampsAfterFileSeek();
+    }
     else
       inxs.seekToPosition(0);
     bitsDone = 0;
@@ -1730,8 +1749,15 @@ public final class FastMpeg2Reader
       seekToBeginning();
     } else {
       ins.position(pos);
+      invalidateParsedTimestampsAfterFileSeek();
       bitsDone = pos*8;
     }
+  }
+
+  private void invalidateParsedTimestampsAfterFileSeek()
+  {
+    parsedPES.dtsPackBytePos = parsedPES.ptsPackBytePos = 0;
+    parsedPES.dts = parsedPES.pts = -1;
   }
 
   public void seek(long seekTime) throws IOException
@@ -1784,6 +1810,7 @@ public final class FastMpeg2Reader
       if (streamTranscodeMode != null)
         transcodePTSOffset = seekTime*90;
       ins.position(targetPos);
+      invalidateParsedTimestampsAfterFileSeek();
       bitsDone = targetPos*8;
     }
     else

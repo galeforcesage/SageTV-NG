@@ -5,7 +5,7 @@ package sage.party;
  *
  * @param stateVersion canonical timeline generation
  * @param commandSeq command sequence associated with the directive
- * @param kind execution kind such as {@code COMMAND}, {@code HARD}, or {@code SOFT}
+ * @param kind execution kind such as {@code COMMAND}, {@code NONE}, or {@code HARD}
  * @param targetPositionMs media position at the execution deadline
  * @param targetState target playback state
  * @param targetRate target playback rate

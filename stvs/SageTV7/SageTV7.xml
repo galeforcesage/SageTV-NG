@@ -12436,8 +12436,13 @@
            <ns0:Conditional Name="IsInCommercial(GetCurrentMediaFile(), GetMediaTime())" Sym="COMSKIP-790a">
             <ns0:Branch Name="true" Sym="COMSKIP-790b">
              <ns0:Action Name="CommSkipEndTime = GetCommercialEndTime(GetCurrentMediaFile(), GetMediaTime())" Sym="COMSKIP-792">
-              <ns0:Conditional Name="CommSkipEndTime &gt; 0" Sym="COMSKIP-793">
-               <ns0:Action Name="Seek(CommSkipEndTime)" Sym="COMSKIP-794" />
+              <ns0:Conditional Name="CommSkipEndTime &gt; 0 &amp;&amp; CommSkipEndTime &lt; Min(GetAiringEndTime(GetCurrentMediaFile()), GetAvailableSeekingEnd()) - 30000" Sym="COMSKIP-793">
+               <ns0:Branch Name="true" Sym="COMSKIP-793-TRUE">
+                <ns0:Action Name="Seek(CommSkipEndTime)" Sym="COMSKIP-794" />
+               </ns0:Branch>
+               <ns0:Branch Name="false" Sym="COMSKIP-793-FALSE">
+                <ns0:Action Name="SkipForward()" Sym="COMSKIP-793-FALLBACK" />
+               </ns0:Branch>
               </ns0:Conditional>
              </ns0:Action>
             </ns0:Branch>

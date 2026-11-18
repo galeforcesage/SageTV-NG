@@ -1883,6 +1883,8 @@ public class UIManager implements Runnable, UIClient
     arMustGetLockNext = false;
     if (Sage.DBG) System.out.println("Killing UIMgr " + this);
     allUIs.remove(this);
+    if (rootPanel != null && rootPanel.getRenderEngine() instanceof MiniClientSageRenderer)
+      ((MiniClientSageRenderer) rootPanel.getRenderEngine()).prepareForUIMgrShutdown();
     if (uiTimer != null)
     {
       uiTimer.cancel();

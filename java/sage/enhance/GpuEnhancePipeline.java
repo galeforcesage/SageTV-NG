@@ -1712,8 +1712,10 @@ public final class GpuEnhancePipeline
             sidecarAudio, sourceOriginSeconds) : null;
 
     // ---- Walk the base OUTPUT section: gather source audio maps (retargeted to
-    // input 1) and everything worth keeping, dropping -vf / -map / inherited rate
-    // control / the final output target. ----
+    // input 1) and everything worth keeping. Geometry, cadence and GOP belong to
+    // the provider output once video comes from the raw-frame pipe; retaining the
+    // source-era -s/-r/-g pairs would override that contract (for example,
+    // 3840x2160@59.94 worker frames forced back to 1920x1080@29.97). ----
     int outStart = iIdx + 2;
     int outEnd = baseReencodeArgv.size() - 1; // exclusive of the output target
     java.util.List<String> keptOutputOpts = new java.util.ArrayList<String>();
@@ -1725,6 +1727,7 @@ public final class GpuEnhancePipeline
       if ("-vf".equals(tok)) { i++; continue; }            // scaling now done by the worker
       if ("-rc".equals(tok) || "-b:v".equals(tok)
           || "-maxrate".equals(tok) || "-bufsize".equals(tok)) { i++; continue; }
+      if ("-s".equals(tok) || "-r".equals(tok) || "-g".equals(tok)) { i++; continue; }
       if ("-stdinctrl".equals(tok)) continue;
       if ("-map".equals(tok) && i + 1 < outEnd)
       {
@@ -1793,6 +1796,8 @@ public final class GpuEnhancePipeline
       encode.add("-profile:v");
       encode.add(outputProfile);
     }
+    encode.add("-g");
+    encode.add(Integer.toString(Math.max(1, (int) Math.round(effRate * 2.0))));
     encode.add(outputTarget);
 
     return new ExternalPipeline(decode, encode, sidecar ? audioSidecarPath : null, audioArgv,

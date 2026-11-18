@@ -5511,6 +5511,20 @@ public class Wizard implements EPGDBPublic2
   Watched addWatched(Airing watchAir, long watchStart, long watchEnd,
       long realStart, long realEnd, int titleNum)
   {
+    return addWatched(
+        watchAir, watchStart, watchEnd, realStart, realEnd, titleNum, false);
+  }
+
+  Watched setPartyWatchedPosition(Airing watchAir, long watchStart, long watchEnd,
+      long realStart, long realEnd)
+  {
+    return addWatched(
+        watchAir, watchStart, watchEnd, realStart, realEnd, 0, true);
+  }
+
+  private Watched addWatched(Airing watchAir, long watchStart, long watchEnd,
+      long realStart, long realEnd, int titleNum, boolean replaceWatchEnd)
+  {
     try {
       acquireWriteLock(WATCH_CODE);
       Watched prior = getWatch(watchAir);
@@ -5529,7 +5543,9 @@ public class Wizard implements EPGDBPublic2
         else
         {
           ammend.watchStart = Math.min(watchStart, prior.watchStart);
-          ammend.watchEnd = Math.max(watchEnd, prior.watchEnd);
+          ammend.watchEnd = replaceWatchEnd
+              ? Math.max(ammend.watchStart, watchEnd)
+              : Math.max(watchEnd, prior.watchEnd);
           if (realStart != 0)
             ammend.realStart = Math.min(realStart, prior.realStart);
           ammend.realEnd = Math.max(realEnd, prior.realEnd);

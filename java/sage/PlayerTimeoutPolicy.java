@@ -66,6 +66,8 @@ public final class PlayerTimeoutPolicy
   public static final String BASE_ATTEMPTS      = "miniplayer/player_socket_reconnect_attempts";
   public static final String BASE_BACKOFF       = "miniplayer/player_socket_reconnect_backoff_ms";
   public static final String BASE_CONN_TIMEOUT  = "ui/remote_player_connection_timeout";
+  public static final String BASE_CONN_ABSOLUTE_TIMEOUT =
+      "ui/remote_player_connection_absolute_timeout_ms";
   /** Unified soonest-wins playback-attempt budget (NG opt-in; inactive for legacy). */
   public static final String BASE_PLAYBACK_DEADLINE = "miniplayer/player_socket_playback_deadline_ms";
   /** Absolute playback-attempt cap; progress may extend idle waits but never this cap. */
@@ -78,6 +80,8 @@ public final class PlayerTimeoutPolicy
   public static final String SUF_ATTEMPTS      = "player_socket_reconnect_attempts";
   public static final String SUF_BACKOFF       = "player_socket_reconnect_backoff_ms";
   public static final String SUF_CONN_TIMEOUT  = "remote_player_connection_timeout";
+  public static final String SUF_CONN_ABSOLUTE_TIMEOUT =
+      "remote_player_connection_absolute_timeout_ms";
   public static final String SUF_PLAYBACK_DEADLINE = "player_socket_playback_deadline_ms";
   public static final String SUF_PLAYBACK_ABSOLUTE_DEADLINE =
       "player_socket_playback_absolute_deadline_ms";
@@ -88,6 +92,7 @@ public final class PlayerTimeoutPolicy
   public static final int  LEGACY_ATTEMPTS        = 2;
   public static final long LEGACY_BACKOFF_MS      = 250L;
   public static final long LEGACY_CONN_TIMEOUT_MS = 30000L;
+  public static final long LEGACY_CONN_ABSOLUTE_TIMEOUT_MS = 120000L;
 
   // --- NG opt-in defaults: the RECOMMENDED values to write into the
   //     ng_default property tier (miniplayer/profile/ng_default/<suffix>).
@@ -100,6 +105,7 @@ public final class PlayerTimeoutPolicy
   public static final int  NG_ATTEMPTS        = 3;
   public static final long NG_BACKOFF_MS      = 250L;
   public static final long NG_CONN_TIMEOUT_MS = 15000L;
+  public static final long NG_CONN_ABSOLUTE_TIMEOUT_MS = 120000L;
   /**
    * NG unified soonest-wins budget for a single playback attempt. Defaults to
    * the NG expire wait so that, once wired, a stalled attempt fails at the
@@ -245,6 +251,16 @@ public final class PlayerTimeoutPolicy
         LEGACY_CONN_TIMEOUT_MS));
   }
 
+  /** Absolute cap for one player-command reply, independent of byte progress. */
+  public static long connectionAbsoluteTimeoutMs(ProfileContext ctx)
+  {
+    long idle = connectionTimeoutMs(ctx);
+    long resolved = resolveLong(ctx, SUF_CONN_ABSOLUTE_TIMEOUT,
+        BASE_CONN_ABSOLUTE_TIMEOUT, ctx != null && ctx.isNg()
+            ? NG_CONN_ABSOLUTE_TIMEOUT_MS : LEGACY_CONN_ABSOLUTE_TIMEOUT_MS);
+    return Math.max(idle, resolved);
+  }
+
   /**
    * The unified soonest-wins budget for a single playback attempt. Returns a
    * value &gt; 0 (active) only for NG sessions; legacy sessions return 0,
@@ -322,6 +338,8 @@ public final class PlayerTimeoutPolicy
     written += seedIfAbsent(SUF_ATTEMPTS,     Integer.toString(NG_ATTEMPTS));
     written += seedIfAbsent(SUF_BACKOFF,      Long.toString(NG_BACKOFF_MS));
     written += seedIfAbsent(SUF_CONN_TIMEOUT, Long.toString(NG_CONN_TIMEOUT_MS));
+    written += seedIfAbsent(SUF_CONN_ABSOLUTE_TIMEOUT,
+        Long.toString(NG_CONN_ABSOLUTE_TIMEOUT_MS));
     written += seedIfAbsent(SUF_PLAYBACK_DEADLINE, Long.toString(NG_PLAYBACK_DEADLINE_MS));
     written += seedIfAbsent(SUF_PLAYBACK_ABSOLUTE_DEADLINE,
         Long.toString(NG_PLAYBACK_ABSOLUTE_DEADLINE_MS));

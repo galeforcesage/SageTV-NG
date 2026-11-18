@@ -860,6 +860,7 @@ public class PlaybackDecisionEngine
   public static final java.util.Set<String> SERVER_SERVABLE_DELIVERY_MODES =
       java.util.Collections.unmodifiableSet(new java.util.LinkedHashSet<String>(
           java.util.Arrays.asList("pull", "pull-xcode", "push", "hls")));
+  public static final String PARTY_CMAF_DELIVERY_MODE = "party-cmaf";
 
   /**
    * Pairs a {@link PlaybackSurface} with the {@link PlaybackDecision} the
@@ -1506,7 +1507,7 @@ public class PlaybackDecisionEngine
   {
     return evaluateSurfaces(surfaces, mediaContainer, mediaVideoCodec, mediaAudioCodec,
         mediaWidth, mediaHeight, sourceBitrateKbps, availableBandwidthKbps, sourceInterlaced,
-        cf, clientLang, constraints, null, null, false);
+        cf, clientLang, constraints, null, null, false, false);
   }
 
   /**
@@ -1525,7 +1526,28 @@ public class PlaybackDecisionEngine
   {
     return evaluateSurfaces(surfaces, mediaContainer, mediaVideoCodec, mediaAudioCodec,
         mediaWidth, mediaHeight, sourceBitrateKbps, availableBandwidthKbps, sourceInterlaced,
-        cf, clientLang, constraints, null, null, partyConditioned);
+        cf, clientLang, constraints, partyConditioned, false);
+  }
+
+  /**
+   * Evaluates Party policy with an optional negotiated direct-push epoch/origin carrier.
+   */
+  public static java.util.List<SurfaceDecision> evaluateSurfaces(
+      PlaybackSurfaceSet surfaces,
+      String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
+      int mediaWidth, int mediaHeight,
+      int sourceBitrateKbps, int availableBandwidthKbps,
+      boolean sourceInterlaced,
+      sage.media.format.ContainerFormat cf,
+      String clientLang,
+      ClientConstraints constraints,
+      boolean partyConditioned,
+      boolean partyDirectPushEpochOrigin)
+  {
+    return evaluateSurfaces(surfaces, mediaContainer, mediaVideoCodec, mediaAudioCodec,
+        mediaWidth, mediaHeight, sourceBitrateKbps, availableBandwidthKbps, sourceInterlaced,
+        cf, clientLang, constraints, null, null, partyConditioned,
+        partyDirectPushEpochOrigin);
   }
 
   /**
@@ -1549,7 +1571,7 @@ public class PlaybackDecisionEngine
   {
     return evaluateSurfaces(surfaces, mediaContainer, mediaVideoCodec, mediaAudioCodec,
         mediaWidth, mediaHeight, sourceBitrateKbps, availableBandwidthKbps, sourceInterlaced,
-        cf, clientLang, constraints, exoConstraints, ijkConstraints, false);
+        cf, clientLang, constraints, exoConstraints, ijkConstraints, false, false);
   }
 
   public static java.util.List<SurfaceDecision> evaluateSurfaces(
@@ -1565,18 +1587,51 @@ public class PlaybackDecisionEngine
       ClientConstraints ijkConstraints,
       boolean partyConditioned)
   {
+    return evaluateSurfaces(surfaces, mediaContainer, mediaVideoCodec, mediaAudioCodec,
+        mediaWidth, mediaHeight, sourceBitrateKbps, availableBandwidthKbps, sourceInterlaced,
+        cf, clientLang, constraints, exoConstraints, ijkConstraints, partyConditioned, false);
+  }
+
+  public static java.util.List<SurfaceDecision> evaluateSurfaces(
+      PlaybackSurfaceSet surfaces,
+      String mediaContainer, String mediaVideoCodec, String mediaAudioCodec,
+      int mediaWidth, int mediaHeight,
+      int sourceBitrateKbps, int availableBandwidthKbps,
+      boolean sourceInterlaced,
+      sage.media.format.ContainerFormat cf,
+      String clientLang,
+      ClientConstraints constraints,
+      ClientConstraints exoConstraints,
+      ClientConstraints ijkConstraints,
+      boolean partyConditioned,
+      boolean partyDirectPushEpochOrigin)
+  {
     if (surfaces == null || surfaces.isEmpty())
       return java.util.Collections.<SurfaceDecision>emptyList();
 
     boolean multiAudio = (cf != null && cf.getAudioFormats(false) != null
         && cf.getAudioFormats(false).length > 1);
+    boolean hasPartyCmaf = partyConditioned && surfaces.asMap().values().stream()
+        .anyMatch(s -> s.getDeliveryModes().contains(PARTY_CMAF_DELIVERY_MODE));
 
     java.util.List<SurfaceDecision> results = new java.util.ArrayList<SurfaceDecision>();
     for (PlaybackSurface s : surfaces.asMap().values())
     {
+      if (hasPartyCmaf && !s.getDeliveryModes().contains(PARTY_CMAF_DELIVERY_MODE))
+        continue;
       ClientConstraints surfaceConstraints = constraintsForSurface(
           s, constraints, exoConstraints, ijkConstraints);
-      if (!surfaceHasAnyServableMode(s))
+      if (partyConditioned && s.getDeliveryModes().contains(PARTY_CMAF_DELIVERY_MODE)
+          && (!"mse".equalsIgnoreCase(s.getRoute()) || !s.supportsContainer("MP4")
+              || s.getDeliveryModes().size() != 1))
+      {
+        if (sage.Sage.DBG) System.out.println("PlaybackDecisionEngine.evaluateSurfaces: "
+            + "skipping malformed Party CMAF surface '" + s.getId()
+            + "' route=" + s.getRoute() + " delivery=" + s.getDeliveryModes()
+            + " containers=" + s.getContainers());
+        continue;
+      }
+      if (!surfaceHasAnyServableMode(s, partyConditioned))
       {
         if (sage.Sage.DBG) System.out.println("PlaybackDecisionEngine.evaluateSurfaces: "
             + "skipping surface '" + s.getId() + "' — declared DELIVERY_MODES=" + s.getDeliveryModes()
@@ -1626,13 +1681,28 @@ public class PlaybackDecisionEngine
           mediaVideoCodec, mediaWidth, mediaHeight, sourceFps, sourceVideoBitrate);
 
       if (partyConditioned && d.decision == Decision.DIRECT_PLAY
+          && s.getDeliveryModes().contains(PARTY_CMAF_DELIVERY_MODE))
+        d = new PlaybackDecision(Decision.REMUX,
+            "Selected Party CMAF path requires fragmented MP4", "MP4",
+            d.targetVideoCodec, d.targetAudioCodec, d.targetBitrateKbps);
+      else if (partyConditioned && d.decision == Decision.DIRECT_PLAY
           && "mse".equalsIgnoreCase(s.getRoute()) && s.supportsContainer("MP4")
           && s.getDeliveryModes().size() == 1 && s.getDeliveryModes().contains("pull-xcode"))
         d = new PlaybackDecision(Decision.REMUX,
             "Selected Party MSE path requires fragmented MP4", "MP4",
             d.targetVideoCodec, d.targetAudioCodec, d.targetBitrateKbps);
 
-      String mode = pickDeliveryModeForDecision(s, d.decision, mediaContainer);
+      String mode = partyConditioned && s.getDeliveryModes().contains(PARTY_CMAF_DELIVERY_MODE)
+          ? PARTY_CMAF_DELIVERY_MODE
+          : pickDeliveryModeForDecision(s, d.decision, mediaContainer);
+      if (partyConditioned && (("push".equals(mode) && !partyDirectPushEpochOrigin)
+          || "hls".equals(mode)))
+      {
+        if (sage.Sage.DBG) System.out.println("PlaybackDecisionEngine.evaluateSurfaces: "
+            + "skipping Party-ineligible unbound delivery mode '" + mode
+            + "' for surface '" + s.getId() + "'");
+        continue;
+      }
       if (mode == null)
       {
         if (sage.Sage.DBG) System.out.println("PlaybackDecisionEngine.evaluateSurfaces: "
@@ -1984,11 +2054,12 @@ public class PlaybackDecisionEngine
    * {@link #evaluateSurfaces} to skip surfaces the server has no way to
    * feed bytes to (e.g. a hypothetical webrtc-only surface today).
    */
-  private static boolean surfaceHasAnyServableMode(PlaybackSurface s)
+  private static boolean surfaceHasAnyServableMode(PlaybackSurface s, boolean partyConditioned)
   {
     if (s == null) return false;
     java.util.List<String> declared = s.getDeliveryModes();
     if (declared == null || declared.isEmpty()) return false;
+    if (partyConditioned && declared.contains(PARTY_CMAF_DELIVERY_MODE)) return true;
     for (String m : declared) if (SERVER_SERVABLE_DELIVERY_MODES.contains(m)) return true;
     return false;
   }

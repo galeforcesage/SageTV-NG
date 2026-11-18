@@ -51,6 +51,9 @@ public class NativePlaybackOwnershipBridgeTest
   {
     MiniClientSageRenderer renderer = mock(MiniClientSageRenderer.class, CALLS_REAL_METHODS);
     field(renderer, MiniClientSageRenderer.class, "partySurfaceLock", new Object());
+    field(renderer, MiniClientSageRenderer.class, "partyOpenBindingLock", new Object());
+    field(renderer, MiniClientSageRenderer.class, "partyHttpBindings",
+        new java.util.LinkedHashMap<String, MiniClientSageRenderer.PartyOpenBinding>());
     field(renderer, MiniClientSageRenderer.class, "clientSocket", pair.accepted);
     doReturn("admitted").when(renderer).getPartyPrincipal();
     doReturn(true).when(renderer).isNgCapableSession();

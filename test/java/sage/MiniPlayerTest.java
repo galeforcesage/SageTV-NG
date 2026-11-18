@@ -3,7 +3,10 @@ package sage;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNull;
+import static org.testng.Assert.assertThrows;
 import static org.testng.Assert.assertTrue;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.Test;
@@ -18,6 +21,29 @@ import org.testng.annotations.Test;
  */
 public class MiniPlayerTest
 {
+  @Test
+  public void playerReplyWaitUsesProgressButHonorsPlaybackAbsoluteCap()
+  {
+    ConnectionProgress reply = new ConnectionProgress(0L);
+    PlayerTimeoutPolicy.PlaybackDeadline playback =
+        PlayerTimeoutPolicy.PlaybackDeadline.startingAt(0L, 15000L, 120000L);
+
+    assertEquals(MiniPlayer.remainingPlayerReplyWait(
+        reply, 0L, 5000L, 30000L, 120000L, playback), 10000L);
+
+    reply.markBytes(12000L, 2L);
+    playback.markProgress(12000L);
+    assertEquals(MiniPlayer.remainingPlayerReplyWait(
+        reply, 0L, 13000L, 30000L, 120000L, playback), 14000L,
+        "Partial reply bytes extend both idle windows");
+
+    reply.markBytes(119999L, 1L);
+    playback.markProgress(119999L);
+    assertEquals(MiniPlayer.remainingPlayerReplyWait(
+        reply, 0L, 120000L, 30000L, 120000L, playback), 0L,
+        "Trickle progress cannot outlive the absolute playback cap");
+  }
+
   private static final String OVERRIDE_PROP = "miniplayer/legacy_h264_push_override";
 
   @Test
@@ -43,6 +69,89 @@ public class MiniPlayerTest
         "A renderer stuck at one frame must not advance by a minute merely because server state is PLAY");
     setPlayerField(player, "clientReportedMediaTime", 1431000);
     assertEquals(player.getMediaTimeMillis(), 1431000L);
+  }
+
+  @Test
+  public void testNgDirectPushInvalidReportFallsBackToSentBoundedClock() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    MiniPlayer player = new MiniPlayer()
+    {
+      @Override
+      protected boolean isNgTrickplaySession() { return true; }
+    };
+    long seekFloor = 726589L;
+    long sentThrough = 1291075L;
+    setPlayerField(player, "currState", MediaPlayer.PLAY_STATE);
+    setPlayerField(player, "myRate", 1.0f);
+    setPlayerField(player, "pushMode", true);
+    setPlayerField(player, "detailedPushBufferStats", true);
+    setPlayerField(player, "mpegSrc", new FastMpeg2Reader(new java.io.File("unused-clock-test.mpg")));
+    setPlayerField(player, "directPushSeekFloor", seekFloor);
+    setPlayerField(player, "directPushSentThrough", sentThrough);
+    setPlayerField(player, "lastMediaTime", seekFloor);
+    setPlayerField(player, "lastMediaTimeBase", seekFloor);
+    setPlayerField(player, "pushDisplayEstimate", seekFloor);
+    setPlayerField(player, "pushDisplayEstimateUpdateTime", Sage.eventTime() - 600000L);
+    setPlayerField(player, "clientReportedMediaTime", 1998180);
+
+    assertEquals(player.getMediaTimeMillis(), sentThrough,
+        "An impossible IJK position must fall back to playback progress bounded by sent PTS");
+    assertEquals(player.getSeekBaseMediaTimeMillis(), sentThrough,
+        "The next FF/REW must use the current bounded estimate, not the old seek floor");
+  }
+
+  @Test
+  public void testNgDirectPushInvalidReportClockFreezesWhilePaused() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    MiniPlayer player = new MiniPlayer()
+    {
+      @Override
+      protected boolean isNgTrickplaySession() { return true; }
+    };
+    setPlayerField(player, "currState", MediaPlayer.PAUSE_STATE);
+    setPlayerField(player, "myRate", 1.0f);
+    setPlayerField(player, "pushMode", true);
+    setPlayerField(player, "detailedPushBufferStats", true);
+    setPlayerField(player, "mpegSrc", new FastMpeg2Reader(new java.io.File("unused-clock-test.mpg")));
+    setPlayerField(player, "directPushSeekFloor", 726589L);
+    setPlayerField(player, "directPushSentThrough", 1291075L);
+    setPlayerField(player, "lastMediaTime", 900000L);
+    setPlayerField(player, "lastMediaTimeBase", 900000L);
+    setPlayerField(player, "pushDisplayEstimate", 900000L);
+    setPlayerField(player, "pushDisplayEstimateUpdateTime", Sage.eventTime() - 600000L);
+    setPlayerField(player, "clientReportedMediaTime", 1998180);
+
+    assertEquals(player.getMediaTimeMillis(), 900000L,
+        "The server fallback must not invent progress while the renderer is paused");
+  }
+
+  @Test
+  public void testNgDirectPushMediaTimePollingDoesNotResetPacingClock() throws Throwable
+  {
+    TestUtils.initializeSageTVForTesting();
+    MiniPlayer player = new MiniPlayer()
+    {
+      @Override
+      protected boolean isNgTrickplaySession() { return true; }
+    };
+    long now = Sage.eventTime();
+    setPlayerField(player, "currState", MediaPlayer.PLAY_STATE);
+    setPlayerField(player, "myRate", 1.0f);
+    setPlayerField(player, "pushMode", true);
+    setPlayerField(player, "detailedPushBufferStats", true);
+    setPlayerField(player, "mpegSrc", new FastMpeg2Reader(new java.io.File("unused-clock-test.mpg")));
+    setPlayerField(player, "directPushSeekFloor", 1000L);
+    setPlayerField(player, "directPushSentThrough", 30000L);
+    setPlayerField(player, "clientReportedMediaTime", 5000);
+    setPlayerField(player, "pushDisplayEstimate", 5000L);
+    setPlayerField(player, "pushDisplayEstimateUpdateTime", now - 10000L);
+
+    assertEquals(player.getMediaTimeMillis(), 5000L);
+    assertEquals(invokePlayerMethod(player, "refreshPushDisplayEstimate",
+        new Class<?>[] {long.class}, now), 15000L,
+        "Frequent subtitle polling must not pin direct-push pacing to a stale buffer reply");
   }
 
   @Test
@@ -311,6 +420,284 @@ public class MiniPlayerTest
   }
 
   @Test
+  public void testDirectPushParserTimestampMustRemainContiguousWithinSeekEpoch()
+  {
+    assertTrue(MiniPlayer.directPushParserTimestampInWindow(489807L, 489807L, -1L));
+    assertTrue(MiniPlayer.directPushParserTimestampInWindow(520000L, 489807L, 500000L));
+    assertFalse(MiniPlayer.directPushParserTimestampInWindow(1324726L, 489807L, 500000L),
+        "A stale live-edge PTS must not advance a seven-minute seek to twenty-two minutes");
+    assertFalse(MiniPlayer.directPushParserTimestampInWindow(79544878L, 107658L, 109722L),
+        "A false rollover timestamp must not poison the sent frontier");
+    assertFalse(MiniPlayer.directPushParserTimestampInWindow(100000L, 489807L, 500000L),
+        "A pre-seek timestamp must not cross into the new epoch");
+  }
+
+  @Test
+  public void testPartyPushEpochMapsThePairedMediaTimestamp()
+  {
+    assertEquals(MiniPlayer.mapPartyPushMediaTimestamp(
+        726400L, 900L, 1100L), 726600L);
+    assertEquals(MiniPlayer.mapPartyPushMediaTimestamp(
+        120000L, 95400L, 95400L), 120000L);
+    long wrapMs = FastMpeg2Reader.MAX_PTS / 90;
+    assertEquals(MiniPlayer.mapPartyPushMediaTimestamp(
+        500000L, wrapMs - 100L, 50L), 500150L);
+  }
+
+  @Test
+  public void testPartyPushEpochCommandUsesVersionedPreByteFraming()
+  {
+    java.nio.ByteBuffer command = java.nio.ByteBuffer.allocate(32);
+    MiniPlayer.encodePartyPushEpochCommand(
+        command, 7L, 726400L, 95400L);
+    command.flip();
+
+    int header = command.getInt();
+    assertEquals(header >>> 24, MiniPlayer.MEDIACMD_PARTY_PUSH_EPOCH);
+    assertEquals(header & 0xFFFFFF, 28);
+    assertEquals(command.getInt(), 1);
+    assertEquals(command.getLong(), 7L);
+    assertEquals(command.getLong(), 726400L);
+    assertEquals(command.getLong(), 95400L);
+    assertFalse(command.hasRemaining());
+  }
+
+  @Test
+  public void testNgSurfaceSelectionUsesBackendSpecificConstraints()
+  {
+    final java.util.Map<String, String[]> props =
+        new java.util.HashMap<String, String[]>();
+    props.put("android_ijk", new String[] {
+        "native", "60", "push,pull", "HEVC", "AC3", "MATROSKA",
+        "all", "server", "", "0", "0", "0", "6", "none"
+    });
+    props.put("android_media3", new String[] {
+        "native", "100", "push,pull", "HEVC", "AC3", "MATROSKA",
+        "all", "server", "", "0", "0", "0", "6", "none"
+    });
+    sage.client.PlaybackSurfaceSet surfaces = sage.client.PlaybackSurfaceSet.build(
+        "android_ijk,android_media3", props::get);
+    sage.client.ClientConstraints defaultIjk = sage.client.ClientConstraints.parse(
+        "ijkplayer", "HEVC;decoder=hw;maxW=1920;maxH=1080;maxFps=60",
+        "AC3", "MATROSKA");
+    sage.client.ClientConstraints exo = sage.client.ClientConstraints.parse(
+        "exoplayer", "HEVC;decoder=hw;maxW=7680;maxH=4320;maxFps=60",
+        "AC3", "MATROSKA");
+    sage.client.ClientConstraints ijk = sage.client.ClientConstraints.parse(
+        "ijkplayer", "HEVC;decoder=hw;maxW=1920;maxH=1080;maxFps=60",
+        "AC3", "MATROSKA");
+    sage.media.format.VideoFormat video = new sage.media.format.VideoFormat();
+    video.setFormatName(sage.media.format.MediaFormat.HEVC);
+    video.setWidth(7680);
+    video.setHeight(4320);
+    video.setFps(60f);
+    sage.media.format.ContainerFormat container = new sage.media.format.ContainerFormat();
+    container.setFormatName("MATROSKA");
+    container.setStreamFormats(new sage.media.format.BitstreamFormat[] { video });
+    MiniClientSageRenderer renderer = mock(MiniClientSageRenderer.class);
+    doReturn(exo).when(renderer).getClientConstraintsExo();
+    doReturn(ijk).when(renderer).getClientConstraintsIjk();
+
+    java.util.List<sage.client.PlaybackDecisionEngine.SurfaceDecision> ranked =
+        MiniPlayer.evaluateNgSurfaces(renderer, surfaces,
+            "MATROSKA", "HEVC", "AC3", 7680, 4320, 0, 0,
+            false, container, "eng", defaultIjk, false, false);
+
+    assertEquals(ranked.get(0).surface.getId(), "android_media3");
+    assertEquals(ranked.get(0).decision.decision,
+        sage.client.PlaybackDecisionEngine.Decision.DIRECT_PLAY);
+    assertEquals(ranked.get(1).surface.getId(), "android_ijk");
+    assertEquals(ranked.get(1).decision.decision,
+        sage.client.PlaybackDecisionEngine.Decision.TRANSCODE);
+  }
+
+  @Test
+  public void testNgSurfaceSelectionUsesNegotiatedPartyPushOrigin()
+  {
+    sage.client.PlaybackSurfaceSet surfaces = sage.client.PlaybackSurfaceSet.build(
+        "android_push", id -> new String[] {
+            "native", "1", "push", "MPEG2-VIDEO,H264", "AC3,AAC",
+            "MPEG2-PS;push=true;pull=false,MPEG2-TS;push=true;pull=false"
+        });
+    MiniClientSageRenderer renderer = mock(MiniClientSageRenderer.class);
+
+    assertTrue(MiniPlayer.evaluateNgSurfaces(renderer, surfaces,
+        "MPEG2-PS", "MPEG2-VIDEO", "AC3", 1920, 1080, 8000, 20000,
+        false, null, null, null, true, false).isEmpty(),
+        "Party direct push must remain excluded without the origin capability");
+    assertEquals(MiniPlayer.evaluateNgSurfaces(renderer, surfaces,
+        "MPEG2-PS", "MPEG2-VIDEO", "AC3", 1920, 1080, 8000, 20000,
+        false, null, null, null, true, true).get(0).chosenDeliveryMode, "push");
+  }
+
+  @Test
+  public void testPartyOpenBindingPrecedesOpenAndRequiresAck() throws Exception
+  {
+    java.util.concurrent.ExecutorService worker =
+        java.util.concurrent.Executors.newSingleThreadExecutor();
+    try (SocketPair pair = new SocketPair())
+    {
+      MiniClientSageRenderer renderer = partyRenderer();
+      renderer.installPartyOpenBinding(new sage.party.PartyPlayerAdapter.PreparationBinding(
+          "party", "prep", "binding", 42));
+      MiniPlayer player = new MiniPlayer();
+      setPlayerField(player, "mcsr", renderer);
+      setPlayerField(player, "clientSocket", pair.accepted);
+      pair.bridge.setSoTimeout(5000);
+      java.io.DataInputStream input =
+          new java.io.DataInputStream(pair.bridge.getInputStream());
+      java.io.DataOutputStream output =
+          new java.io.DataOutputStream(pair.bridge.getOutputStream());
+
+      java.util.concurrent.Future<Boolean> opened =
+          worker.submit(() -> player.openURL0("push:test"));
+      int bindingHeader = input.readInt();
+      assertEquals(bindingHeader >>> 24, MiniPlayer.MEDIACMD_PARTY_OPEN_BINDING);
+      input.readFully(new byte[bindingHeader & 0xFFFFFF]);
+      assertFalse(opened.isDone(), "OPEN must wait for command 41 acceptance");
+      output.writeInt(1);
+
+      int openHeader = input.readInt();
+      assertEquals(openHeader >>> 24, MiniPlayer.MEDIACMD_OPENURL);
+      input.readFully(new byte[openHeader & 0xFFFFFF]);
+      output.writeInt(1);
+      assertTrue(opened.get(5, java.util.concurrent.TimeUnit.SECONDS));
+    }
+    finally
+    {
+      worker.shutdownNow();
+    }
+  }
+
+  @Test
+  public void testPartyPushEpochAckPrecedesBytesForEveryGeneration() throws Exception
+  {
+    java.util.concurrent.ExecutorService worker =
+        java.util.concurrent.Executors.newSingleThreadExecutor();
+    try (SocketPair pair = new SocketPair())
+    {
+      MiniClientSageRenderer renderer = mock(MiniClientSageRenderer.class);
+      doReturn(true).when(renderer).partyDirectPushEpochOriginActive();
+      MiniPlayer player = new MiniPlayer();
+      FastMpeg2Reader reader = new FastMpeg2Reader(
+          new java.io.File("unused-party-origin-test.mpg"));
+      reader.parsedPES.pts = 95400L * 90L;
+      setObjectField(reader, FastMpeg2Reader.class, "firstPTS", 0L);
+      setPlayerField(player, "mcsr", renderer);
+      setPlayerField(player, "mpegSrc", reader);
+      setPlayerField(player, "clientSocket", pair.accepted);
+      setPlayerField(player, "clientInStream", newFastPusherReply(player, pair.accepted));
+      pair.bridge.setSoTimeout(5000);
+      java.io.DataInputStream input =
+          new java.io.DataInputStream(pair.bridge.getInputStream());
+      java.io.DataOutputStream output =
+          new java.io.DataOutputStream(pair.bridge.getOutputStream());
+
+      assertEpochBeforeBytes(player, pair, input, output, worker, 0L, true);
+      setPlayerField(player, "seekEpoch", 7);
+      assertEpochBeforeBytes(player, pair, input, output, worker, 7L, false);
+      assertEquals(getPlayerField(player, "partyPushEpochAnnounced"), 0L,
+          "A rejected command 42 must not admit the new seek generation");
+      assertEpochBeforeBytes(player, pair, input, output, worker, 7L, true);
+      player.flushPush0();
+      assertEpochBeforeBytes(player, pair, input, output, worker, 8L, true);
+
+      doReturn(false).when(renderer).partyDirectPushEpochOriginActive();
+      setPlayerField(player, "seekEpoch", 9);
+      assertTrue((Boolean)invokePlayerMethod(
+          player, "ensurePartyPushEpochOrigin0", new Class<?>[0]));
+      pair.bridge.setSoTimeout(100);
+      assertThrows(java.net.SocketTimeoutException.class, input::readByte);
+    }
+    finally
+    {
+      worker.shutdownNow();
+    }
+  }
+
+  @Test
+  public void testNgDirectPushThrottlesAtConfiguredMediaLead()
+  {
+    assertFalse(MiniPlayer.directPushShouldThrottle(-1L, 65246L, 15000L),
+        "Pacing must wait for the first post-seek parser timestamp");
+    assertFalse(MiniPlayer.directPushShouldThrottle(80245L, 65246L, 15000L));
+    assertTrue(MiniPlayer.directPushShouldThrottle(80246L, 65246L, 15000L));
+    assertFalse(MiniPlayer.directPushShouldThrottle(1779000L, 1770000L, 0L),
+        "A non-positive lead explicitly disables pacing");
+  }
+
+  @Test
+  public void testNgDirectPushSeekBootstrapStopsRunawayBeforeTimestampFrontier()
+  {
+    assertFalse(MiniPlayer.directPushBootstrapShouldThrottle(
+        636114L, 636114L, 4L * 1024 * 1024 - 1, 4L * 1024 * 1024));
+    assertTrue(MiniPlayer.directPushBootstrapShouldThrottle(
+        636114L, 636114L, 4L * 1024 * 1024, 4L * 1024 * 1024),
+        "A seek epoch without advancing timestamps must not race to the live edge");
+    assertFalse(MiniPlayer.directPushBootstrapShouldThrottle(
+        636115L, 636114L, 4L * 1024 * 1024, 4L * 1024 * 1024),
+        "The normal media-time lead limiter takes over once the frontier advances");
+  }
+
+  @Test
+  public void testNgDirectPushSeekEpochStartsAtRequestedPosition() throws Throwable
+  {
+    MiniPlayer player = new MiniPlayer()
+    {
+      @Override
+      protected boolean isNgTrickplaySession() { return true; }
+    };
+
+    invokePlayerMethod(player, "resetDirectPushSeekEpoch",
+        new Class<?>[] { long.class }, 636114L);
+
+    assertEquals(getPlayerField(player, "directPushSeekFloor"), 636114L);
+    assertEquals(getPlayerField(player, "directPushSentThrough"), 636114L);
+    assertEquals(getPlayerField(player, "directPushSeekBootstrapBytes"), 0L);
+    assertEquals(getPlayerField(player, "lastMediaTimeBase"), 636114L);
+    assertEquals(getPlayerField(player, "clientReportedMediaTime"), 636114);
+  }
+
+  @Test
+  public void testNgDirectPushPacingScopeExcludesLegacyAndTranscodedSessions() throws Throwable
+  {
+    MiniPlayer ngPlayer = new MiniPlayer()
+    {
+      @Override
+      protected boolean isNgTrickplaySession() { return true; }
+    };
+    setPlayerField(ngPlayer, "detailedPushBufferStats", true);
+    setPlayerField(ngPlayer, "pushMode", true);
+    setPlayerField(ngPlayer, "mpegSrc",
+        new FastMpeg2Reader(new java.io.File("unused-pacing-test.mpg")));
+    assertTrue((Boolean) invokePlayerMethod(
+        ngPlayer, "isNgDirectPushPacingSession", new Class<?>[0]));
+
+    setPlayerField(ngPlayer, "serverSideTranscoding", true);
+    assertFalse((Boolean) invokePlayerMethod(
+        ngPlayer, "isNgDirectPushPacingSession", new Class<?>[0]));
+
+    MiniPlayer legacyPlayer = new MiniPlayer();
+    setPlayerField(legacyPlayer, "detailedPushBufferStats", true);
+    setPlayerField(legacyPlayer, "pushMode", true);
+    setPlayerField(legacyPlayer, "mpegSrc",
+        new FastMpeg2Reader(new java.io.File("unused-pacing-test.mpg")));
+    assertFalse((Boolean) invokePlayerMethod(
+        legacyPlayer, "isNgDirectPushPacingSession", new Class<?>[0]));
+  }
+
+  @Test
+  public void testNgDirectPushMuxTrailerUsesSourceRelativePtsAnchor()
+  {
+    assertEquals(MiniPlayer.pushMuxTimestampMillis(428240L, 456L, true), 428240L,
+        "The first post-flush NG push must identify its absolute recording-time origin");
+    assertEquals(MiniPlayer.pushMuxTimestampMillis(0L, 456L, true), 456L,
+        "DTS remains the fallback until a post-flush PTS is parsed");
+    assertEquals(MiniPlayer.pushMuxTimestampMillis(428240L, 456L, false), 456L,
+        "Legacy push clients retain the established DTS trailer");
+  }
+
+  @Test
   public void testDirectPushMediaClockAcceptsPtsBoundaryWithoutDtsStats() throws Throwable
   {
     TestUtils.initializeSageTVForTesting();
@@ -362,6 +749,97 @@ public class MiniPlayerTest
     java.lang.reflect.Method method = MiniPlayer.class.getDeclaredMethod(name, parameterTypes);
     method.setAccessible(true);
     return method.invoke(player, args);
+  }
+
+  private static final class SocketPair implements AutoCloseable
+  {
+    final java.net.Socket bridge;
+    final java.nio.channels.SocketChannel accepted;
+
+    SocketPair() throws Exception
+    {
+      try (java.nio.channels.ServerSocketChannel listener =
+          java.nio.channels.ServerSocketChannel.open())
+      {
+        listener.bind(new java.net.InetSocketAddress(
+            java.net.InetAddress.getLoopbackAddress(), 0));
+        bridge = new java.net.Socket();
+        bridge.connect(listener.getLocalAddress());
+        accepted = listener.accept();
+      }
+    }
+
+    @Override public void close() throws Exception
+    {
+      bridge.close();
+      accepted.close();
+    }
+  }
+
+  private static MiniClientSageRenderer partyRenderer() throws Exception
+  {
+    MiniClientSageRenderer renderer = mock(
+        MiniClientSageRenderer.class, org.mockito.Mockito.CALLS_REAL_METHODS);
+    setObjectField(renderer, MiniClientSageRenderer.class,
+        "partySurfaceLock", new Object());
+    setObjectField(renderer, MiniClientSageRenderer.class,
+        "partyOpenBindingLock", new Object());
+    setObjectField(renderer, MiniClientSageRenderer.class,
+        "partyHttpBindings",
+        new java.util.LinkedHashMap<String, MiniClientSageRenderer.PartyOpenBinding>());
+    doReturn(sage.client.PlaybackSurfaceSet.empty())
+        .when(renderer).getPlaybackSurfaces();
+    doReturn("").when(renderer).getCurrentSurfaceId();
+    return renderer;
+  }
+
+  private static Object newFastPusherReply(
+      MiniPlayer player, java.nio.channels.SocketChannel channel) throws Exception
+  {
+    Class<?> type = Class.forName("sage.MiniPlayer$FastPusherReply");
+    java.lang.reflect.Constructor<?> constructor =
+        type.getDeclaredConstructor(MiniPlayer.class, java.nio.channels.SocketChannel.class);
+    constructor.setAccessible(true);
+    return constructor.newInstance(player, channel);
+  }
+
+  private static void assertEpochBeforeBytes(MiniPlayer player, SocketPair pair,
+      java.io.DataInputStream input, java.io.DataOutputStream output,
+      java.util.concurrent.ExecutorService worker, long epoch, boolean accept)
+      throws Exception
+  {
+    pair.bridge.setSoTimeout(5000);
+    java.util.concurrent.Future<Boolean> announced = worker.submit(() -> {
+      boolean ready = (Boolean)invokePlayerMethod(
+          player, "ensurePartyPushEpochOrigin0", new Class<?>[0]);
+      if (ready)
+        pair.accepted.write(java.nio.ByteBuffer.wrap(new byte[] {(byte)0x5A}));
+      return ready;
+    });
+    int header = input.readInt();
+    assertEquals(header >>> 24, MiniPlayer.MEDIACMD_PARTY_PUSH_EPOCH);
+    assertEquals(header & 0xFFFFFF, 28);
+    assertEquals(input.readInt(), 1);
+    assertEquals(input.readLong(), epoch);
+    assertEquals(input.readLong(), 95400L);
+    assertEquals(input.readLong(), 95400L);
+    pair.bridge.setSoTimeout(100);
+    assertThrows(java.net.SocketTimeoutException.class, input::readByte);
+    output.writeInt(accept ? 1 : 0);
+    assertEquals(announced.get(5, java.util.concurrent.TimeUnit.SECONDS), accept);
+    if (accept)
+    {
+      pair.bridge.setSoTimeout(5000);
+      assertEquals(input.readUnsignedByte(), 0x5A);
+    }
+  }
+
+  private static void setObjectField(
+      Object target, Class<?> type, String name, Object value) throws Exception
+  {
+    java.lang.reflect.Field field = type.getDeclaredField(name);
+    field.setAccessible(true);
+    field.set(target, value);
   }
 
   @Test
@@ -539,6 +1017,16 @@ public class MiniPlayerTest
   {
     assertEquals(MiniPlayer.buildEffDeliveryToken("hls", null), "hls",
         "hls delivery (no xcode mode) must be emitted bare, unchanged");
+  }
+
+  @Test
+  public void testPartyCmafDeliveryUnchanged()
+  {
+    assertEquals(MiniPlayer.buildEffDeliveryToken("party-cmaf", null), "party-cmaf",
+        "Party CMAF must remain an exact dedicated bridge route token");
+    assertEquals(MiniPlayer.buildEffDeliveryToken("party-cmaf", "unexpected-mode",
+        sage.enhance.EnhancementTier.DEINTERLACE_ONLY, true), "party-cmaf",
+        "Party CMAF must remain bare even when generic xcode/enhancement state is active");
   }
 
   @Test

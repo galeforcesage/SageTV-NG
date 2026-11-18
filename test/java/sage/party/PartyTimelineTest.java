@@ -65,7 +65,7 @@ public class PartyTimelineTest
   }
 
   @Test
-  public void barrierCanFenceRescheduleAndAbortPendingTransition()
+  public void barrierCannotProjectUntilCommittedRevealDeadline()
   {
     PartyTimeline timeline = new PartyTimeline(60000, false, 0, 1000);
     PartyCommand command =
@@ -74,8 +74,25 @@ public class PartyTimelineTest
     timeline.reschedule(command.commandSeq(), 9007199254740991L);
 
     assertEquals(timeline.positionAt(5000), 0L);
+    PartyCommand revealed = timeline.reschedule(command.commandSeq(), 6000);
+    assertEquals(timeline.positionAt(5999), 0L);
+    assertEquals(timeline.positionAt(6000), 20000L);
+    assertSame(timeline.advance(6000), revealed);
+    assertEquals(timeline.state(), "PLAYING");
+  }
+
+  @Test
+  public void failedBarrierCanAbortPendingTransition()
+  {
+    PartyTimeline timeline = new PartyTimeline(60000, false, 0, 1000);
+    PartyCommand command =
+        timeline.schedule("JUMP", 20000, "PLAYING", 1, 2000, "host");
+
+    timeline.reschedule(command.commandSeq(), 9007199254740991L);
     timeline.cancelPending(command.commandSeq());
+
     assertNull(timeline.pending());
     assertEquals(timeline.state(), "PAUSED");
+    assertEquals(timeline.positionAt(10000), 0L);
   }
 }

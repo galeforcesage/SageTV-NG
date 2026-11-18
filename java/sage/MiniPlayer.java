@@ -118,7 +118,9 @@ public class MiniPlayer implements DVDMediaPlayer
    * support). {@code pickDeliveryModeForDecision()} only ever returns bare
    * {@code "pull"} for {@code Decision.DIRECT_PLAY}
    * ({@link sage.client.PlaybackDecisionEngine}), so this is unambiguous.
-   * {@code push}/{@code hls} pass through unchanged.
+   * {@code push}/{@code hls} pass through unchanged. The exclusive
+   * {@code party-cmaf} route is always emitted as that exact bare token;
+   * generic xcode and enhancement metadata must not change its bridge mapping.
    *
    * @param chosenSurfaceDelivery the winning surface's resolved delivery mode
    *                              ({@code pull}/{@code push}/{@code pull-xcode}/{@code hls});
@@ -331,6 +333,9 @@ public class MiniPlayer implements DVDMediaPlayer
   {
     if (chosenSurfaceDelivery == null || chosenSurfaceDelivery.length() == 0)
       return null;
+    if (sage.client.PlaybackDecisionEngine.PARTY_CMAF_DELIVERY_MODE.equals(
+        chosenSurfaceDelivery))
+      return sage.client.PlaybackDecisionEngine.PARTY_CMAF_DELIVERY_MODE;
     String base;
     if (chosenSurfaceXcodeMode != null && chosenSurfaceXcodeMode.length() > 0)
       base = chosenSurfaceDelivery + ":" + chosenSurfaceXcodeMode;
@@ -758,6 +763,14 @@ public class MiniPlayer implements DVDMediaPlayer
   static java.nio.channels.SocketChannel acquirePlayerSocketChannel(PlayerSocketProvider provider,
       PlayerTimeoutPolicy.ProfileContext ctx)
   {
+    return acquirePlayerSocketChannel(provider, ctx,
+        PlayerTimeoutPolicy.PlaybackDeadline.forContext(
+            ctx == null ? PlayerTimeoutPolicy.LEGACY : ctx, Sage.eventTime()));
+  }
+
+  static java.nio.channels.SocketChannel acquirePlayerSocketChannel(PlayerSocketProvider provider,
+      PlayerTimeoutPolicy.ProfileContext ctx, PlayerTimeoutPolicy.PlaybackDeadline deadline)
+  {
     if (provider == null)
       return null;
     if (ctx == null)
@@ -766,8 +779,8 @@ public class MiniPlayer implements DVDMediaPlayer
     long backoffMs = PlayerTimeoutPolicy.backoffMs(ctx);
     // One budget for the whole acquisition. Inactive (legacy) deadlines impose no
     // cap, so the historical attempts x expireWait stacking is preserved exactly.
-    PlayerTimeoutPolicy.PlaybackDeadline deadline =
-        PlayerTimeoutPolicy.PlaybackDeadline.forContext(ctx, Sage.eventTime());
+    if (deadline == null)
+      deadline = PlayerTimeoutPolicy.PlaybackDeadline.forContext(ctx, Sage.eventTime());
     boolean deadlineAware = (provider instanceof DeadlinePlayerSocketProvider);
     for (int attempt = 0; attempt < maxAttempts; attempt++)
     {
@@ -811,7 +824,13 @@ public class MiniPlayer implements DVDMediaPlayer
 
   private java.nio.channels.SocketChannel clientSocket;
   private FastPusherReply clientInStream;
+  private PlayerTimeoutPolicy.PlaybackDeadline playbackAttemptDeadline =
+      PlayerTimeoutPolicy.PlaybackDeadline.none();
   private java.nio.ByteBuffer sockBuf = java.nio.ByteBuffer.allocateDirect(65536);
+  private final java.util.concurrent.locks.ReentrantLock mediaOpenLock =
+      new java.util.concurrent.locks.ReentrantLock();
+  private boolean mediaOpenExchangeActive;
+  private MiniClientSageRenderer.PartyOpenBinding activePartyOpenBinding;
 
   public static final int MEDIACMD_INIT = 0;
   public static final int MEDIACMD_DEINIT = 1;
@@ -839,6 +858,10 @@ public class MiniPlayer implements DVDMediaPlayer
   // without probing the stream. Only sent when the client advertises the "STREAMINFO"
   // capability during NG negotiation. Legacy clients never see this command.
   public static final int MEDIACMD_STREAMINFO = 40;
+  /** NG Party one-shot preparation binding, sent before STREAMINFO and OPENURL. */
+  public static final int MEDIACMD_PARTY_OPEN_BINDING = 41;
+  /** NG Party direct-push epoch/origin mapping, sent before new-epoch bytes. */
+  public static final int MEDIACMD_PARTY_PUSH_EPOCH = 42;
 
   // Client reply bitmask for MEDIACMD_STREAMINFO (returned as the int ACK):
   //   bit 0: client parsed the JSON payload successfully
@@ -1201,6 +1224,7 @@ public class MiniPlayer implements DVDMediaPlayer
   public synchronized void free()
   {
     invalidateNativeOwnership();
+    if (mcsr != null) mcsr.cancelPartyOpenBinding(null);
     partyPlaybackGeneration++;
     // --- NG Context wiring: close provider session ---
     ngContextWiring.onPlaybackClose();
@@ -1274,9 +1298,13 @@ public class MiniPlayer implements DVDMediaPlayer
     clientReportedMediaTime = 0;
     directPushSeekFloor = 0;
     directPushSentThrough = -1;
+    directPushSeekBootstrapBytes = -1;
     lastRejectedDirectPushPosition = Long.MIN_VALUE;
     lastParserTimestamp = 0;
     lastParserTimestampBytePos = 0;
+    partyPushEpochAnnounced = Long.MIN_VALUE;
+    partyPushEpochRecordingOrigin = -1;
+    partyPushEpochMediaOrigin = -1;
 
     pushThreadCreated = false;
     needToPlay = false;
@@ -1364,12 +1392,19 @@ public class MiniPlayer implements DVDMediaPlayer
       {
         if (!directPushPositionInWindow(currMediaTime, directPushSeekFloor, directPushSentThrough))
         {
+          long retainedPosition = lastMediaTime;
+          if (isNgTrickplaySession())
+          {
+            retainedPosition = refreshPushDisplayEstimate(Sage.eventTime());
+            lastMediaTime = lastMediaTimeBase = retainedPosition;
+            lastMediaTimeCacheTime = Sage.eventTime();
+          }
           if (Sage.DBG && currMediaTime != lastRejectedDirectPushPosition)
             System.out.println("NG-POSDIAG rejecting direct-push position=" + currMediaTime
                 + " seekFloor=" + directPushSeekFloor + " sentThrough=" + directPushSentThrough
-                + " retainedPosition=" + lastMediaTime + " epoch=" + seekEpoch);
+                + " retainedPosition=" + retainedPosition + " epoch=" + seekEpoch);
           lastRejectedDirectPushPosition = currMediaTime;
-          return lastMediaTime;
+          return retainedPosition;
         }
       }
       if (lastMediaTimeBase == currMediaTime && currState == PLAY_STATE && !isNgTrickplaySession())
@@ -1416,15 +1451,9 @@ public class MiniPlayer implements DVDMediaPlayer
   // push-mode server-side-transcode path.
   public synchronized long getSeekBaseMediaTimeMillis()
   {
-    // IMPORTANT: this display-model estimate is valid ONLY on the push server-side-
-    // transcode path, where the transcode pump maintains the seek floor and delivered
-    // output frontier. On the direct-MPEG push path
-    // (serverSideTranscoding == false -- e.g. an Android client decoding H.264/AC3 natively)
-    // those fields stay 0, so the estimate would collapse to 0 and every relative skip would
-    // be computed from the START of the file (FF from 30s lands back at 10s, REW always -> 0,
-    // Jump -> 2.5min-from-start). That is a real regression observed in the field, so the
-    // non-transcode push path MUST fall through to getMediaTimeMillis() (the proven native
-    // position calc). Hence the serverSideTranscoding guard below.
+    // Direct MPEG push falls through to getMediaTimeMillis(), which prefers a valid
+    // client position and uses the sent-PTS-bounded estimate only after rejecting an
+    // out-of-window report. Server-side transcode always uses the bounded estimate.
     if (serverSideTranscoding && detailedPushBufferStats && pushMode && rpSrc == null)
     {
       if (isNgTrickplaySession())
@@ -1476,8 +1505,9 @@ public class MiniPlayer implements DVDMediaPlayer
     {
       long elapsed = pushDisplayEstimateUpdateTime > 0
           ? Math.max(0L, now - pushDisplayEstimateUpdateTime) : 0L;
+      long seekFloor = serverSideTranscoding ? timestampOffset : directPushSeekFloor;
       pushDisplayEstimate = advancePushDisplayEstimate(pushDisplayEstimate, elapsed,
-          currState == PLAY_STATE, timestampOffset, directPushSentThrough);
+          currState == PLAY_STATE, seekFloor, directPushSentThrough);
       pushDisplayEstimateUpdateTime = now;
       return pushDisplayEstimate;
     }
@@ -1794,6 +1824,24 @@ public class MiniPlayer implements DVDMediaPlayer
     return false;
   }
 
+  static java.util.List<sage.client.PlaybackDecisionEngine.SurfaceDecision>
+      evaluateNgSurfaces(MiniClientSageRenderer renderer,
+          sage.client.PlaybackSurfaceSet surfaces,
+          String mediaContainer, String mediaVideo, String mediaAudio,
+          int mediaWidth, int mediaHeight, int sourceBitrateKbps,
+          int availableBandwidthKbps, boolean sourceInterlaced,
+          sage.media.format.ContainerFormat format, String clientAudioLanguage,
+          sage.client.ClientConstraints constraints, boolean partyConditioned,
+          boolean partyDirectPushEpochOrigin)
+  {
+    return sage.client.PlaybackDecisionEngine.evaluateSurfaces(surfaces,
+        mediaContainer, mediaVideo, mediaAudio,
+        mediaWidth, mediaHeight, sourceBitrateKbps, availableBandwidthKbps,
+        sourceInterlaced, format, clientAudioLanguage, constraints,
+        renderer.getClientConstraintsExo(), renderer.getClientConstraintsIjk(),
+        partyConditioned, partyDirectPushEpochOrigin);
+  }
+
   private volatile long partyPlaybackGeneration;
 
   /** Returns a renderer-local generation invalidated on load, fast load and close. */
@@ -1810,7 +1858,14 @@ public class MiniPlayer implements DVDMediaPlayer
     catch (PlaybackException | RuntimeException e)
     {
       invalidateNativeOwnership();
+      if (mcsr != null && activePartyOpenBinding != null)
+        mcsr.cancelPartyOpenBinding(
+            activePartyOpenBinding.binding.preparationBinding());
       throw e;
+    }
+    finally
+    {
+      if (mediaOpenExchangeActive) endMediaOpenExchange0();
     }
   }
 
@@ -2038,11 +2093,12 @@ public class MiniPlayer implements DVDMediaPlayer
               }
               if (ngEcf != null && ngEcf.getBitrate() > 0) ngEkbps = ngEcf.getBitrate() / 1000;
               java.util.List<sage.client.PlaybackDecisionEngine.SurfaceDecision> ngEranked =
-                  sage.client.PlaybackDecisionEngine.evaluateSurfaces(ngEarlySurfaces,
+                  evaluateNgSurfaces(mcsr, ngEarlySurfaces,
                       currMF.getContainerFormat(), currMF.getPrimaryVideoFormat(),
                       currMF.getPrimaryAudioFormat(), ngEw, ngEh, ngEkbps, 0, ngEint, ngEcf,
                       mcsr.getCurrentClientAudioLanguage(), mcsr.getClientConstraints(),
-                      mcsr.hasPartySurface());
+                      mcsr.hasPartySurface(),
+                      mcsr.hasClientCapability(sage.party.PartyProtocol.PUSH_EPOCH_ORIGIN));
               if (!ngEranked.isEmpty())
               {
                 sage.client.PlaybackDecisionEngine.SurfaceDecision ngEarlyWinner = ngEranked.get(0);
@@ -2237,7 +2293,8 @@ public class MiniPlayer implements DVDMediaPlayer
               clientInStream.readInt();
               if (detailedPushBufferStats)
               {
-                clientReportedMediaTime = clientInStream.readInt();
+                clientReportedMediaTime = normalizePartyPushClientTimestamp(
+                    clientInStream.readInt());
                 clientReportedPlayState = clientInStream.readByte();
               }
               long t1 = Sage.eventTime();
@@ -2259,7 +2316,8 @@ public class MiniPlayer implements DVDMediaPlayer
               clientInStream.readInt();
               if (detailedPushBufferStats)
               {
-                clientReportedMediaTime = clientInStream.readInt();
+                clientReportedMediaTime = normalizePartyPushClientTimestamp(
+                    clientInStream.readInt());
                 clientReportedPlayState = clientInStream.readByte();
               }
               long t2 = Sage.eventTime();
@@ -2286,7 +2344,8 @@ public class MiniPlayer implements DVDMediaPlayer
                 clientInStream.readInt();
                 if (detailedPushBufferStats)
                 {
-                  clientReportedMediaTime = clientInStream.readInt();
+                  clientReportedMediaTime = normalizePartyPushClientTimestamp(
+                      clientInStream.readInt());
                   clientReportedPlayState = clientInStream.readByte();
                 }
               }
@@ -2531,11 +2590,11 @@ public class MiniPlayer implements DVDMediaPlayer
           // back to server locale as before).
           String clientAudioLang = (mcsr != null) ? mcsr.getCurrentClientAudioLanguage() : null;
           java.util.List<sage.client.PlaybackDecisionEngine.SurfaceDecision> ranked =
-              sage.client.PlaybackDecisionEngine.evaluateSurfaces(surfaces,
+              evaluateNgSurfaces(mcsr, surfaces,
                   mediaContainer, mediaVideo, mediaAudio,
                   mediaW, mediaH, sourceBitrateKbps, availableBwKbps, srcInterlaced,
-                  cf, clientAudioLang, constraints, exoConstraints, ijkConstraints,
-                  mcsr.hasPartySurface());
+                  cf, clientAudioLang, constraints, mcsr.hasPartySurface(),
+                  mcsr.hasClientCapability(sage.party.PartyProtocol.PUSH_EPOCH_ORIGIN));
           if (!ranked.isEmpty())
           {
             sage.client.PlaybackDecisionEngine.SurfaceDecision winner = ranked.get(0);
@@ -2671,10 +2730,11 @@ public class MiniPlayer implements DVDMediaPlayer
             {
               String clientAudioLang2 = mcsr.getCurrentClientAudioLanguage();
               java.util.List<sage.client.PlaybackDecisionEngine.SurfaceDecision> ranked2 =
-                  sage.client.PlaybackDecisionEngine.evaluateSurfaces(retriedSurfaces,
+                  evaluateNgSurfaces(mcsr, retriedSurfaces,
                       mediaContainer, mediaVideo, mediaAudio,
                       mediaW, mediaH, sourceBitrateKbps, availableBwKbps, srcInterlaced,
-                      cf, clientAudioLang2, constraints, mcsr.hasPartySurface());
+                      cf, clientAudioLang2, constraints, mcsr.hasPartySurface(),
+                      mcsr.hasClientCapability(sage.party.PartyProtocol.PUSH_EPOCH_ORIGIN));
               if (!ranked2.isEmpty())
               {
                 sage.client.PlaybackDecisionEngine.SurfaceDecision winner2 =
@@ -3290,6 +3350,15 @@ public class MiniPlayer implements DVDMediaPlayer
           // proven iOS HLS session shape (clientDoesPull=httpls=true, no push).
           // Flag-guarded for instant rollback; inert for any client that did not
           // advertise HLS_FMP4.
+          else if (sage.client.PlaybackDecisionEngine.PARTY_CMAF_DELIVERY_MODE.equals(
+              chosenSurfaceDelivery))
+          {
+            if (Sage.DBG) System.out.println("MiniPlayer: Party CMAF delivery -> hls transport"
+                + " (surface=" + chosenSurfaceId + ") using bound finalized-segment fMP4/CMAF");
+            ngEarlyDelivery = "hls";
+            httpls = true;
+            clientDoesPull = true;
+          }
           else if (mcsr != null && mcsr.supportsHlsFmp4()
               && (enhanceTier == null || !enhanceTier.isActive())
               && chosenSurfaceXcodeMode != null
@@ -4559,6 +4628,7 @@ public class MiniPlayer implements DVDMediaPlayer
         sage.media.format.ContainerFormat currFileFormat = currMF.getFileFormat();
         if (currFileFormat != null && "true".equals(currFileFormat.getMetadataProperty("VARIED_FORMAT")))
           currFileFormat = sage.media.format.FormatParser.getFileFormat(file);
+        if (!beginMediaOpenExchange0()) throw new PlaybackException();
         // ── NG STREAMINFO for RemotePusher path ──
         if (ngSession && mcsr != null && mcsr.hasClientCapability("STREAMINFO") && currFileFormat != null)
         {
@@ -5054,6 +5124,7 @@ public class MiniPlayer implements DVDMediaPlayer
             }
           }
         }
+        if (!beginMediaOpenExchange0()) throw new PlaybackException();
         // ── NG STREAMINFO: send full metadata BEFORE openURL so the client can
         // pre-configure its pipeline. Only sent to NG clients that advertise the
         // "STREAMINFO" capability. Legacy clients skip this entirely — their path
@@ -5192,6 +5263,7 @@ public class MiniPlayer implements DVDMediaPlayer
         else
           theURL = file.getAbsolutePath();
         } // end Gate #8 else (legacy URL construction)
+        if (!beginMediaOpenExchange0()) throw new PlaybackException();
         // ── NG STREAMINFO for pull/direct-play (same logic, different path) ──
         if (ngSession && mcsr != null && mcsr.hasClientCapability("STREAMINFO"))
         {
@@ -5559,6 +5631,11 @@ public class MiniPlayer implements DVDMediaPlayer
                 decoderLock.wait(20);}catch(Exception e){}
               continue;
             }
+            if (shouldThrottleNgDirectPush())
+            {
+              try{decoderLock.wait(25);}catch(Exception e){}
+              continue;
+            }
             if (rpSrc == null && (transcoded || timeshifted) &&
                 (transcoded ? tcSrc.availableToRead() :
                   mpegSrc.availableToRead2(pushBufferSize))< (transcoded ? 0 : pushBufferSize))
@@ -5733,10 +5810,7 @@ public class MiniPlayer implements DVDMediaPlayer
                   lastMediaTime = seekTimeMillis;
                   if (detailedPushBufferStats && !byteBasedSeeking && rpSrc == null)
                   {
-                    directPushSeekFloor = seekTimeMillis;
-                    lastMediaTimeBase = seekTimeMillis;
-                    clientReportedMediaTime = (int) seekTimeMillis;
-                    lastRejectedDirectPushPosition = Long.MIN_VALUE;
+                    resetDirectPushSeekEpoch(seekTimeMillis);
                   }
                 }
                 lastMediaTimeCacheTime = Sage.eventTime();
@@ -6595,10 +6669,7 @@ public class MiniPlayer implements DVDMediaPlayer
                   lastMediaTime = seekTimeMillis;
                   if (detailedPushBufferStats && !byteBasedSeeking && rpSrc == null)
                   {
-                    directPushSeekFloor = seekTimeMillis;
-                    lastMediaTimeBase = seekTimeMillis;
-                    clientReportedMediaTime = (int) seekTimeMillis;
-                    lastRejectedDirectPushPosition = Long.MIN_VALUE;
+                    resetDirectPushSeekEpoch(seekTimeMillis);
                   }
                 }
                 lastMediaTimeCacheTime = Sage.eventTime();
@@ -6720,6 +6791,38 @@ public class MiniPlayer implements DVDMediaPlayer
     return mcsr != null && mcsr.isNgCapableSession();
   }
 
+  private boolean isNgDirectPushPacingSession()
+  {
+    return isNgTrickplaySession() && detailedPushBufferStats && pushMode && rpSrc == null
+        && !serverSideTranscoding && !transcoded && !byteBasedSeeking && mpegSrc != null;
+  }
+
+  private boolean shouldThrottleNgDirectPush()
+  {
+    if (!isNgDirectPushPacingSession())
+      return false;
+    long bootstrapByteLimit =
+        Sage.getLong("miniplayer/ng_direct_push_seek_bootstrap_bytes", 4L * 1024 * 1024);
+    if (directPushBootstrapShouldThrottle(directPushSentThrough, directPushSeekFloor,
+        directPushSeekBootstrapBytes, bootstrapByteLimit))
+      return true;
+    long maxLead = Sage.getLong("miniplayer/ng_direct_push_max_lead_ms", 15000L);
+    return directPushShouldThrottle(
+        directPushSentThrough, refreshPushDisplayEstimate(Sage.eventTime()), maxLead);
+  }
+
+  private void resetDirectPushSeekEpoch(long seekTimeMillis)
+  {
+    directPushSeekFloor = seekTimeMillis;
+    directPushSentThrough = seekTimeMillis;
+    directPushSeekBootstrapBytes = 0;
+    lastMediaTimeBase = seekTimeMillis;
+    clientReportedMediaTime = (int) seekTimeMillis;
+    lastRejectedDirectPushPosition = Long.MIN_VALUE;
+    if (isNgTrickplaySession())
+      resetPushDisplayEstimate(seekTimeMillis);
+  }
+
   static boolean trickplayPolicyEnabled(String namespace, String policy, boolean ngSession,
       boolean ngDefault)
   {
@@ -6775,6 +6878,7 @@ public class MiniPlayer implements DVDMediaPlayer
   public void stop()
   {
     invalidateNativeOwnership();
+    if (mcsr != null) mcsr.cancelPartyOpenBinding(null);
     persistSessionBandwidthFromTranscoder();
     if (currState == PLAY_STATE || currState == PAUSE_STATE)
     {
@@ -7292,6 +7396,10 @@ public class MiniPlayer implements DVDMediaPlayer
   protected long initDriver0(int videoFormat)
   {
     if (Sage.DBG) System.out.println("initDriver0()");
+    PlayerTimeoutPolicy.ProfileContext timeoutContext =
+        PlayerTimeoutPolicy.forRenderer(mcsr);
+    playbackAttemptDeadline = PlayerTimeoutPolicy.PlaybackDeadline.forContext(
+        timeoutContext, Sage.eventTime());
     clientSocket = acquirePlayerSocketChannel(new DeadlinePlayerSocketProvider()
     {
       public java.nio.channels.SocketChannel getChannel()
@@ -7308,7 +7416,7 @@ public class MiniPlayer implements DVDMediaPlayer
         if (mcsr != null)
           mcsr.forceMediaReconnect();
       }
-    }, PlayerTimeoutPolicy.forRenderer(mcsr));
+    }, timeoutContext, playbackAttemptDeadline);
 
     String clientName = (uiMgr == null ? "EXTERNAL" : uiMgr.getLocalUIClientName());
     if (clientSocket == null)
@@ -7322,6 +7430,7 @@ public class MiniPlayer implements DVDMediaPlayer
         try { clientInStream.close(); } catch (Exception e) {}
         clientInStream = null;
       }
+      playbackAttemptDeadline = PlayerTimeoutPolicy.PlaybackDeadline.none();
       return 0;
     }
     boolean retry = true;
@@ -7336,18 +7445,33 @@ public class MiniPlayer implements DVDMediaPlayer
         sockBuf.flip();
         while (sockBuf.hasRemaining())
           clientSocket.write(sockBuf);
+        playbackAttemptDeadline.markProgress(Sage.eventTime());
         if (Sage.DBG) System.out.println("MiniPlayer established for " + clientName);
-        return clientInStream.readInt()!=0 ? 1 : 0;
+        int initialized = clientInStream.readInt(playbackAttemptDeadline);
+        if (initialized == 0)
+          playbackAttemptDeadline = PlayerTimeoutPolicy.PlaybackDeadline.none();
+        return initialized != 0 ? 1 : 0;
       }
       catch (java.io.IOException e)
       {
         if (Sage.DBG) System.out.println("Error w/ MiniPlayer socket of:" + e);
         if (!retry)
+        {
+          playbackAttemptDeadline = PlayerTimeoutPolicy.PlaybackDeadline.none();
           return 0;
+        }
         if (Sage.DBG) System.out.println("Retrying MiniPlayer connection....");
         try{clientSocket.close();}catch(Exception e2){}
+        try { clientInStream.close(); } catch(Exception e1){}
+        clientInStream = null;
         retry = false;
-        clientSocket = (mcsr == null) ? MiniClientSageRenderer.getPlayerSocketChannel(null, null) : mcsr.getPlayerSocketChannel();
+        clientSocket = (mcsr == null) ? MiniClientSageRenderer.getPlayerSocketChannel(null, null)
+            : mcsr.getPlayerSocketChannel(playbackAttemptDeadline);
+        if (clientSocket == null || playbackAttemptDeadline.expired(Sage.eventTime()))
+        {
+          playbackAttemptDeadline = PlayerTimeoutPolicy.PlaybackDeadline.none();
+          return 0;
+        }
       }
     }
   }
@@ -7368,9 +7492,37 @@ public class MiniPlayer implements DVDMediaPlayer
         && sentThrough >= seekFloor && position <= sentThrough + 2000L;
   }
 
+  static boolean directPushParserTimestampInWindow(long timestamp,
+      long seekFloor, long sentThrough)
+  {
+    if (timestamp < Math.max(0L, seekFloor - 2000L))
+      return false;
+    long frontier = sentThrough >= seekFloor ? sentThrough : seekFloor;
+    return timestamp <= frontier + 60000L;
+  }
+
+  static boolean directPushShouldThrottle(long sentThrough, long displayPosition, long maxLead)
+  {
+    return maxLead > 0 && sentThrough >= displayPosition
+        && sentThrough - displayPosition >= maxLead;
+  }
+
+  static boolean directPushBootstrapShouldThrottle(long sentThrough, long seekFloor,
+      long bytesSent, long byteLimit)
+  {
+    return byteLimit > 0 && bytesSent >= byteLimit && sentThrough <= seekFloor;
+  }
+
+  static long pushMuxTimestampMillis(long ptsMillis, long dtsMillis, boolean ngDirectPush)
+  {
+    return ngDirectPush && ptsMillis > 0 ? ptsMillis : dtsMillis;
+  }
+
   private long directPushSeekFloor;
   private volatile long directPushSentThrough = -1;
+  private long directPushSeekBootstrapBytes = -1;
   private long lastRejectedDirectPushPosition = Long.MIN_VALUE;
+  private long lastRejectedDirectPushParserTimestamp = Long.MIN_VALUE;
   private final Object pushDisplayEstimateLock = new Object();
   private volatile boolean clientPositionEpochTrusted;
   private long lastTrustedClientPosition = -1;
@@ -7448,56 +7600,141 @@ public class MiniPlayer implements DVDMediaPlayer
             && mode.equals(renderer.getCurrentSurfaceDeliveryMode()) && surface.equals(renderer.getCurrentSurfaceId()));
   }
 
+  private boolean beginMediaOpenExchange0()
+  {
+    if (mediaOpenExchangeActive) return true;
+    mediaOpenLock.lock();
+    mediaOpenExchangeActive = true;
+    activePartyOpenBinding = mcsr == null ? null : mcsr.pendingPartyOpenBinding();
+    if (!requiresPartyOpenCommand(activePartyOpenBinding)) return true;
+    if (sendPartyOpenBinding0(activePartyOpenBinding)) return true;
+    endMediaOpenExchange0();
+    return false;
+  }
+
+  static boolean requiresPartyOpenCommand(
+      MiniClientSageRenderer.PartyOpenBinding binding)
+  {
+    return binding != null && !binding.httpCarrier;
+  }
+
+  private void endMediaOpenExchange0()
+  {
+    activePartyOpenBinding = null;
+    if (mediaOpenExchangeActive)
+    {
+      mediaOpenExchangeActive = false;
+      mediaOpenLock.unlock();
+    }
+  }
+
+  private boolean sendPartyOpenBinding0(
+      MiniClientSageRenderer.PartyOpenBinding pending)
+  {
+    try
+    {
+      if (clientSocket == null)
+        clientSocket = mcsr == null
+            ? MiniClientSageRenderer.getPlayerSocketChannel(null, null)
+            : mcsr.getPlayerSocketChannel();
+      if (clientSocket == null) return false;
+      if (clientInStream == null) clientInStream = new FastPusherReply(clientSocket);
+      sage.epg.sd.gson.JsonObject json = new sage.epg.sd.gson.JsonObject();
+      json.addProperty("v", 1);
+      json.addProperty("partyId", pending.binding.partyId());
+      json.addProperty("preparationId", pending.binding.preparationId());
+      json.addProperty("preparationBinding", pending.binding.preparationBinding());
+      json.addProperty("mediaFileId", pending.binding.mediaFileId());
+      json.addProperty("openOrdinal", pending.openOrdinal);
+      byte[] payload = json.toString().getBytes(Sage.I18N_CHARSET);
+      sockBuf.clear();
+      sockBuf.putInt(MEDIACMD_PARTY_OPEN_BINDING << 24 | payload.length + 1 + 4);
+      sockBuf.putInt(payload.length + 1);
+      sockBuf.put(payload);
+      sockBuf.put((byte)0);
+      sockBuf.flip();
+      while (sockBuf.hasRemaining()) clientSocket.write(sockBuf);
+      playbackAttemptDeadline.markProgress(Sage.eventTime());
+      boolean accepted = clientInStream.readInt(playbackAttemptDeadline) == 1;
+      mcsr.partyOpenCommandAck(pending, accepted);
+      return accepted;
+    }
+    catch (Exception failure)
+    {
+      if (mcsr != null) mcsr.partyOpenCommandAck(pending, false);
+      if (Sage.DBG)
+        System.out.println("MiniPlayer: Party open binding failed: "
+            + failure.getClass().getSimpleName());
+      return false;
+    }
+  }
+
   protected boolean openURL0(String url)
   {
     if (Sage.DBG) System.out.println("openURL0(" + url + ")");
+    if (!mediaOpenExchangeActive && !beginMediaOpenExchange0()) return false;
+    MiniClientSageRenderer.PartyOpenBinding partyBinding = activePartyOpenBinding;
     int retryCount = clientSocket == null ? 2 : 1;
     if (clientSocket == null)
     {
-      clientSocket = (mcsr == null) ? MiniClientSageRenderer.getPlayerSocketChannel(null, null) : mcsr.getPlayerSocketChannel();
+      clientSocket = (mcsr == null) ? MiniClientSageRenderer.getPlayerSocketChannel(null, null)
+          : mcsr.getPlayerSocketChannel(playbackAttemptDeadline);
       if (clientSocket == null)
+      {
+        endMediaOpenExchange0();
         return false;
+      }
       if (Sage.DBG) System.out.println("MiniPlayer established for " + (uiMgr == null ? "EXTERNAL" : uiMgr.getLocalUIClientName()));
     }
-    while (retryCount > 0)
+    try
     {
-      retryCount--;
-      try
+      while (retryCount > 0)
       {
-        if (clientInStream == null)
+        retryCount--;
+        try
         {
-          clientInStream = new FastPusherReply(clientSocket);
+          if (clientInStream == null)
+            clientInStream = new FastPusherReply(clientSocket);
+          byte []b = url.getBytes(Sage.I18N_CHARSET);
+          sockBuf.clear();
+          sockBuf.putInt(MEDIACMD_OPENURL<<24 | b.length+1+4);
+          sockBuf.putInt(b.length+1);
+          sockBuf.put(b, 0, b.length);
+          sockBuf.put((byte)0);
+          sockBuf.flip();
+          while (sockBuf.hasRemaining())
+            clientSocket.write(sockBuf);
+          playbackAttemptDeadline.markProgress(Sage.eventTime());
+          if (mcsr != null) mcsr.partyOpenWritten(partyBinding);
+          int res = clientInStream.readInt(playbackAttemptDeadline);
+          if (mcsr != null) mcsr.partyOpenCompleted(partyBinding, res != 0);
+          return res!=0;
         }
-        // 11/17/2015 Narflex - This was I18N_CHARSET for all cases in V7; then for
-        // some reason we made it I18N_CHARSET for EMBEDDED only...and getBytes() for
-        // the other cases. I'm changing it back to the old way of always I18N_CHARSET.
-        byte []b = url.getBytes(Sage.I18N_CHARSET);
-        sockBuf.clear();
-        sockBuf.putInt(MEDIACMD_OPENURL<<24 | b.length+1+4);
-        sockBuf.putInt(b.length+1);
-        sockBuf.put(b, 0, b.length);
-        sockBuf.put((byte)0);
-        sockBuf.flip();
-        while (sockBuf.hasRemaining())
-          clientSocket.write(sockBuf);
-        int res = clientInStream.readInt();
-        return res!=0;
-      }catch(Exception e)
-      {
-        if (retryCount > 0)
+        catch(Exception e)
         {
-          if (Sage.DBG) System.out.println("Error w/ MiniPlayer socket of:" + e);
-          if (Sage.DBG) System.out.println("Retrying MiniPlayer connection....");
-          try{clientSocket.close();}catch(Exception e2){}
-          clientSocket = (mcsr == null) ? MiniClientSageRenderer.getPlayerSocketChannel(null, null) : mcsr.getPlayerSocketChannel();
-          try { clientInStream.close(); } catch(Exception e1){}
-          clientInStream = null;
+          if (mcsr != null) mcsr.partyOpenCompleted(partyBinding, false);
+          if (partyBinding != null) retryCount = 0;
+          if (retryCount > 0)
+          {
+            if (Sage.DBG) System.out.println("Error w/ MiniPlayer socket of:" + e);
+            if (Sage.DBG) System.out.println("Retrying MiniPlayer connection....");
+            try{clientSocket.close();}catch(Exception e2){}
+            clientSocket = (mcsr == null) ? MiniClientSageRenderer.getPlayerSocketChannel(null, null)
+                : mcsr.getPlayerSocketChannel(playbackAttemptDeadline);
+            try { clientInStream.close(); } catch(Exception e1){}
+            clientInStream = null;
+          }
+          System.out.println(e);
+          e.printStackTrace();
         }
-        System.out.println(e);
-        e.printStackTrace();
       }
+      return false;
     }
-    return false;
+    finally
+    {
+      playbackAttemptDeadline = PlayerTimeoutPolicy.PlaybackDeadline.none();
+      endMediaOpenExchange0();
+    }
   }
 
   /**
@@ -7914,7 +8151,8 @@ public class MiniPlayer implements DVDMediaPlayer
         sockBuf.flip();
         while (sockBuf.hasRemaining())
           clientSocket.write(sockBuf);
-        long currMediaTime = clientInStream.readInt();
+        long currMediaTime = normalizePartyPushClientTimestamp(
+            clientInStream.readInt());
         if (currMediaTime == 0xFFFFFFFF)
         {
           // Indicates EOS from the client
@@ -8068,7 +8306,7 @@ public class MiniPlayer implements DVDMediaPlayer
   protected boolean pausePush0()
   {
     if (Sage.DBG) System.out.println("pausePush0()");
-    if (serverSideTranscoding && isNgTrickplaySession())
+    if (detailedPushBufferStats && pushMode && rpSrc == null && isNgTrickplaySession())
       refreshPushDisplayEstimate(Sage.eventTime());
     try
     {
@@ -8092,7 +8330,7 @@ public class MiniPlayer implements DVDMediaPlayer
   protected boolean playPush0()
   {
     if (Sage.DBG) System.out.println("playPush0()");
-    if (serverSideTranscoding && isNgTrickplaySession())
+    if (detailedPushBufferStats && pushMode && rpSrc == null && isNgTrickplaySession())
       refreshPushDisplayEstimate(Sage.eventTime());
     try
     {
@@ -8118,6 +8356,8 @@ public class MiniPlayer implements DVDMediaPlayer
     if (Sage.DBG) System.out.println("flushPush0()");
     lastParserTimestamp = 0;
     directPushSentThrough = -1;
+    directPushSeekBootstrapBytes = -1;
+    lastRejectedDirectPushParserTimestamp = Long.MIN_VALUE;
     lastParserTimestampBytePos = 0;
     synchronized (pushDisplayEstimateLock)
     {
@@ -8153,6 +8393,79 @@ public class MiniPlayer implements DVDMediaPlayer
     // --- end NG Context wiring ---
     return false;
   }
+
+  private boolean ensurePartyPushEpochOrigin0()
+  {
+    if (mcsr == null || !mcsr.partyDirectPushEpochOriginActive())
+      return true;
+    if (partyPushEpochAnnounced == seekEpoch)
+      return true;
+    if (mpegSrc == null)
+      return false;
+    long mediaTimestampMs = mpegSrc.getLastParsedRawTimestampMillis();
+    if (mediaTimestampMs < 0)
+      return false;
+    long parsedPositionMs = mpegSrc.getLastParsedTimeMillis();
+    long recordingPositionMs = serverSideTranscoding
+        ? timestampOffset + parsedPositionMs : parsedPositionMs;
+    try
+    {
+      encodePartyPushEpochCommand(sockBuf, seekEpoch,
+          recordingPositionMs, mediaTimestampMs);
+      sockBuf.flip();
+      while (sockBuf.hasRemaining())
+        clientSocket.write(sockBuf);
+      if (clientInStream.readInt() != 1)
+        return false;
+      partyPushEpochAnnounced = seekEpoch;
+      partyPushEpochRecordingOrigin = recordingPositionMs;
+      partyPushEpochMediaOrigin = mediaTimestampMs;
+      return true;
+    }
+    catch (Exception failure)
+    {
+      if (Sage.DBG)
+        System.out.println("MiniPlayer: Party push epoch/origin failed: "
+            + failure.getClass().getSimpleName());
+      return false;
+    }
+  }
+
+  static long mapPartyPushMediaTimestamp(long recordingOriginMs,
+      long mediaOriginMs, long mediaTimestampMs)
+  {
+    long delta = mediaTimestampMs - mediaOriginMs;
+    long ptsWrapMs = FastMpeg2Reader.MAX_PTS / 90;
+    if (delta < -(ptsWrapMs / 2))
+      delta += ptsWrapMs;
+    else if (delta > ptsWrapMs / 2)
+      delta -= ptsWrapMs;
+    return recordingOriginMs + delta;
+  }
+
+  static void encodePartyPushEpochCommand(java.nio.ByteBuffer target,
+      long streamEpoch, long recordingPositionMs, long mediaTimestampMs)
+  {
+    target.clear();
+    target.putInt(MEDIACMD_PARTY_PUSH_EPOCH << 24 | 28);
+    target.putInt(1);
+    target.putLong(streamEpoch);
+    target.putLong(recordingPositionMs);
+    target.putLong(mediaTimestampMs);
+  }
+
+  private int normalizePartyPushClientTimestamp(int mediaTimestampMs)
+  {
+    if (partyPushEpochAnnounced != seekEpoch
+        || partyPushEpochRecordingOrigin < 0 || partyPushEpochMediaOrigin < 0)
+      return mediaTimestampMs;
+    long mapped = mapPartyPushMediaTimestamp(partyPushEpochRecordingOrigin,
+        partyPushEpochMediaOrigin, mediaTimestampMs);
+    if (serverSideTranscoding)
+      mapped -= timestampOffset;
+    return (int)Math.max(0, Math.min(Integer.MAX_VALUE, mapped));
+  }
+
   private long lastTime = -1;
   private long pushedBytes = 0;
   private int numWaits = 0;
@@ -8175,7 +8488,9 @@ public class MiniPlayer implements DVDMediaPlayer
       }
       boolean alreadyFilledBuffer = false;
       if (buf != null && size > 0 && !transcoded && (flags & PUSHBUFFER_SUBPIC_FLAG) == 0 &&
-          (bufferFillPause || sendSeekPullNext || !useNioTransfers || (bdp != null && mpegSrc.canSkipOnNextRead())))
+          (bufferFillPause || sendSeekPullNext || !useNioTransfers || isNgDirectPushPacingSession()
+              || (mcsr != null && mcsr.partyDirectPushEpochOriginActive())
+              || (bdp != null && mpegSrc.canSkipOnNextRead())))
       {
         alreadyFilledBuffer = true;
         buf.clear().limit(size);
@@ -8228,11 +8543,17 @@ public class MiniPlayer implements DVDMediaPlayer
 
         }
       }
+      if (alreadyFilledBuffer && size > 0 && !ensurePartyPushEpochOrigin0())
+        return false;
       sockBuf.clear();
       sockBuf.putInt(MEDIACMD_PUSHBUFFER<<24 | (size+(detailedPushBufferStats ? 18 : 8) ));
       sockBuf.putInt(size);
       sockBuf.putInt(flags);
-      long currParserTimestamp = (mpegSrc != null) ? mpegSrc.getLastParsedDTSMillis() : (tcSrc != null ? tcSrc.getLastParsedTimeMillis() : 0);
+      long currParserTimestamp = (mpegSrc != null)
+          ? pushMuxTimestampMillis(
+              mpegSrc.getLastParsedTimeMillis(), mpegSrc.getLastParsedDTSMillis(),
+              isNgDirectPushPacingSession())
+          : (tcSrc != null ? tcSrc.getLastParsedTimeMillis() : 0);
       if (detailedPushBufferStats)
       {
         // Send an extra 10 bytes for statistics info. Bandwidths are short term average measurements from the last push
@@ -8299,7 +8620,22 @@ public class MiniPlayer implements DVDMediaPlayer
       {
         // Read after transfer: NIO transfer parses the packet while sending it.
         // PS packets may carry PTS without DTS, and the last packet may be audio.
-        directPushSentThrough = Math.max(directPushSentThrough, mpegSrc.getLastParsedTimeMillis());
+        long parserTimestamp = mpegSrc.getLastParsedTimeMillis();
+        if (directPushParserTimestampInWindow(
+            parserTimestamp, directPushSeekFloor, directPushSentThrough))
+        {
+          directPushSentThrough = Math.max(directPushSentThrough, parserTimestamp);
+          if (directPushSentThrough > directPushSeekFloor)
+            directPushSeekBootstrapBytes = -1;
+        }
+        else if (Sage.DBG && parserTimestamp != lastRejectedDirectPushParserTimestamp)
+        {
+          System.out.println("NG-POSDIAG rejecting parser timestamp=" + parserTimestamp
+              + " seekFloor=" + directPushSeekFloor + " sentThrough=" + directPushSentThrough
+              + " parserBytePos=" + mpegSrc.getLastParsedTimePackBytePos()
+              + " epoch=" + seekEpoch);
+          lastRejectedDirectPushParserTimestamp = parserTimestamp;
+        }
         if (serverSideTranscoding && mpegSrc.getTranscoder() instanceof FFMPEGTranscoder)
         {
           long deliveredTime =
@@ -8308,8 +8644,10 @@ public class MiniPlayer implements DVDMediaPlayer
             directPushSentThrough = Math.max(directPushSentThrough,
                 timestampOffset + deliveredTime);
         }
-        if (serverSideTranscoding && isNgTrickplaySession())
+        if (isNgTrickplaySession())
           refreshPushDisplayEstimate(Sage.eventTime());
+        if (directPushSeekBootstrapBytes >= 0)
+          directPushSeekBootstrapBytes += size;
       }
       long t2 = Sage.eventTime();
       pushedBytes += size;
@@ -8322,7 +8660,8 @@ public class MiniPlayer implements DVDMediaPlayer
         freeSpace = clientInStream.readInt();
         if (detailedPushBufferStats)
         {
-          clientReportedMediaTime = clientInStream.readInt();
+          clientReportedMediaTime = normalizePartyPushClientTimestamp(
+              clientInStream.readInt());
           clientReportedPlayState = clientInStream.readByte();
           noteNgClientDisplayPosition(Sage.eventTime());
           // Phase 0 discovery (NG-POSDIAG): continuously compare what the client REPORTS as
@@ -8763,6 +9102,17 @@ public class MiniPlayer implements DVDMediaPlayer
     }
   }
 
+  static long remainingPlayerReplyWait(ConnectionProgress progress, long startedAtMs,
+      long nowMs, long idleTimeoutMs, long absoluteTimeoutMs,
+      PlayerTimeoutPolicy.PlaybackDeadline playbackDeadline)
+  {
+    long remaining = progress.remainingWait(startedAtMs, nowMs,
+        idleTimeoutMs, absoluteTimeoutMs);
+    if (playbackDeadline != null && playbackDeadline.isActive())
+      remaining = Math.min(remaining, playbackDeadline.remaining(nowMs));
+    return remaining;
+  }
+
   private class FastPusherReply implements Runnable
   {
     public FastPusherReply(java.nio.channels.SocketChannel is)
@@ -8773,7 +9123,9 @@ public class MiniPlayer implements DVDMediaPlayer
       // Resolve the reply-timeout against the (now-established) session's
       // profile. Legacy sessions keep the historical 30000ms; NG sessions may
       // opt into a tighter reply wait. Overwrites the legacy inline default.
-      timeout = PlayerTimeoutPolicy.connectionTimeoutMs(PlayerTimeoutPolicy.forRenderer(mcsr));
+      PlayerTimeoutPolicy.ProfileContext ctx = PlayerTimeoutPolicy.forRenderer(mcsr);
+      timeout = PlayerTimeoutPolicy.connectionTimeoutMs(ctx);
+      playerReplyAbsoluteTimeout = PlayerTimeoutPolicy.connectionAbsoluteTimeoutMs(ctx);
     }
 
     public void run()
@@ -8816,7 +9168,8 @@ public class MiniPlayer implements DVDMediaPlayer
             }
             if (detailedPushBufferStats)
             {
-              clientReportedMediaTime = readIntX();
+              clientReportedMediaTime = normalizePartyPushClientTimestamp(
+                  readIntX());
               clientReportedPlayState = readByteX();
               lastDetailedBufferUpdate = Sage.eventTime();
               noteNgClientDisplayPosition(lastDetailedBufferUpdate);
@@ -8942,44 +9295,38 @@ public class MiniPlayer implements DVDMediaPlayer
       checkLazies();
       return readIntX();
     }
+    public synchronized int readInt(PlayerTimeoutPolicy.PlaybackDeadline deadline)
+        throws java.io.IOException
+    {
+      checkLazies();
+      return readIntX(deadline);
+    }
     public int getLazyReplyCount()
     {
       return extraRepliesToRead;
     }
     private byte readByteX() throws java.io.IOException
     {
+      return readByteX(PlayerTimeoutPolicy.PlaybackDeadline.none());
+    }
+    private byte readByteX(PlayerTimeoutPolicy.PlaybackDeadline deadline)
+        throws java.io.IOException
+    {
       bb.clear();
       bb.limit(1);
-      try
-      {
-        TimeoutHandler.registerTimeout(timeout, in);
-        int num = in.read(bb);
-        if (num < 0)
-          throw new java.io.EOFException();
-      }
-      finally
-      {
-        TimeoutHandler.clearTimeout(in);
-      }
+      readFullyProgressAware(bb, deadline);
       bb.flip();
       return bb.get();
     }
     private int readIntX() throws java.io.IOException
     {
+      return readIntX(PlayerTimeoutPolicy.PlaybackDeadline.none());
+    }
+    private int readIntX(PlayerTimeoutPolicy.PlaybackDeadline deadline)
+        throws java.io.IOException
+    {
       bb.clear().limit(4);
-      try
-      {
-        TimeoutHandler.registerTimeout(timeout, in);
-        do{
-          int x = in.read(bb);
-          if (x < 0)
-            throw new java.io.EOFException();
-        }while(bb.remaining() > 0);
-      }
-      finally
-      {
-        TimeoutHandler.clearTimeout(in);
-      }
+      readFullyProgressAware(bb, deadline);
       bb.flip();
       return bb.getInt();
     }
@@ -8987,21 +9334,44 @@ public class MiniPlayer implements DVDMediaPlayer
     {
       checkLazies();
       bb.clear().limit(2);
-      try
-      {
-        TimeoutHandler.registerTimeout(timeout, in);
-        do{
-          int x = in.read(bb);
-          if (x < 0)
-            throw new java.io.EOFException();
-        }while(bb.remaining() > 0);
-      }
-      finally
-      {
-        TimeoutHandler.clearTimeout(in);
-      }
+      readFullyProgressAware(bb, PlayerTimeoutPolicy.PlaybackDeadline.none());
       bb.flip();
       return bb.getShort();
+    }
+    private void readFullyProgressAware(java.nio.ByteBuffer target,
+        PlayerTimeoutPolicy.PlaybackDeadline deadline) throws java.io.IOException
+    {
+      long startedAt = Sage.eventTime();
+      ConnectionProgress progress = new ConnectionProgress(startedAt);
+      while (target.hasRemaining())
+      {
+        long now = Sage.eventTime();
+        long wait = remainingPlayerReplyWait(progress, startedAt, now,
+            timeout, playerReplyAbsoluteTimeout, deadline);
+        if (wait <= 0L)
+          throw new java.net.SocketTimeoutException(
+              "MiniPlayer reply exceeded idle/absolute playback deadline");
+        try
+        {
+          TimeoutHandler.registerTimeout(wait, in);
+          int count = in.read(target);
+          if (count < 0)
+            throw new java.io.EOFException();
+          if (count > 0)
+          {
+            long progressedAt = Sage.eventTime();
+            progress.markBytes(progressedAt, count);
+            if (deadline != null)
+              deadline.markProgress(progressedAt);
+          }
+          else
+            Thread.yield();
+        }
+        finally
+        {
+          TimeoutHandler.clearTimeout(in);
+        }
+      }
     }
     private synchronized void checkLazies() throws java.io.IOException
     {
@@ -9030,7 +9400,8 @@ public class MiniPlayer implements DVDMediaPlayer
               freeSpace = Math.max(0, x - (extraRepliesToRead - 1) * pushBufferSize);
             if (detailedPushBufferStats)
             {
-              clientReportedMediaTime = readIntX();
+              clientReportedMediaTime = normalizePartyPushClientTimestamp(
+                  readIntX());
               clientReportedPlayState = readByteX();
               noteNgClientDisplayPosition(Sage.eventTime());
             }
@@ -9225,6 +9596,9 @@ public class MiniPlayer implements DVDMediaPlayer
   // on live streams. Increment 1b will additionally consume it to reject stale-epoch
   // position reports. Purely server-side; no wire change.
   protected int seekEpoch;
+  private long partyPushEpochAnnounced = Long.MIN_VALUE;
+  private long partyPushEpochRecordingOrigin = -1;
+  private long partyPushEpochMediaOrigin = -1;
   // Throttle wall time for the continuous NG-POSDIAG position-truth log.
   protected long lastPosDiagTime;
   protected boolean byteBasedSeeking;
@@ -9540,6 +9914,8 @@ public class MiniPlayer implements DVDMediaPlayer
 
   private boolean useAsyncReplies = true;
   private long timeout = Sage.getInt("ui/remote_player_connection_timeout", 30000);
+  private long playerReplyAbsoluteTimeout =
+      Sage.getLong("ui/remote_player_connection_absolute_timeout_ms", 120000L);
   private boolean bwDebug = Sage.getBoolean("miniplayer/bwstats", false);
 
   private java.nio.channels.FileChannel pushDumpStream;
