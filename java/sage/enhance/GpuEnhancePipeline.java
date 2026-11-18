@@ -1495,16 +1495,17 @@ public final class GpuEnhancePipeline
    * it must NOT switch the output to the HEVC/mpegts {@link #buildEncoderArgs}
    * emits (browser MSE cannot decode HEVC). Instead it <b>reuses the base
    * command's own output section</b> — its {@code h264_nvenc} video codec, its
-   * preset/profile/g/forced-idr, its AAC audio parameters and its fragmented-MP4
+   * preset/profile/forced-idr, its AAC audio parameters and its fragmented-MP4
    * container flags ({@code -f mp4 -movflags +frag_keyframe+empty_moov+
    * default_base_moof}) — merely swapping the <i>source</i> of the video from the
    * decoded input to the worker's upscaled raw-frame pipe, and re-imposing the
-   * plan's VBR envelope. The result is byte-compatible with what the browser
-   * already plays, only upscaled.
+   * plan's VBR envelope. Geometry and cadence follow the worker's raw stream,
+   * with a two-second GOP derived from that effective output rate.
    *
    * <p>Only the video filters ({@code -vf ...}, now redundant — the worker did the
-   * scaling), any inherited rate control, and the base stream {@code -map}s are
-   * dropped; every other output token is preserved verbatim. Requires an NVENC
+   * scaling), inherited output size/rate/GOP and rate control, and the base
+   * stream {@code -map}s are dropped; every other output token is preserved
+   * verbatim. Input-side options are unchanged. Requires an NVENC
    * video codec in the base output section (any other encoder is refused, the
    * fail-closed direction), and a plan carrying an external worker with positive
    * output geometry.
@@ -1741,6 +1742,11 @@ public final class GpuEnhancePipeline
       }
       keptOutputOpts.add(tok);
     }
+    // The worker owns output geometry/cadence; inherited profile values would
+    // downscale or decimate its raw frames after inference.
+    removeFlagPair(keptOutputOpts, -1, "-s");
+    removeFlagPair(keptOutputOpts, -1, "-r");
+    removeFlagPair(keptOutputOpts, -1, "-g");
 
     // ---- Encode stage: worker frames (input 0) + source audio (input 1) ----
     java.util.List<String> encode = new java.util.ArrayList<String>();
@@ -1771,9 +1777,10 @@ public final class GpuEnhancePipeline
       for (String am : audioMaps) { encode.add("-map"); encode.add(am); }
     else
       { encode.add("-map"); encode.add("1:a?"); }
-    // The base output section verbatim minus filters/maps/rate: keeps h264_nvenc,
-    // preset/profile/g/forced-idr, AAC audio params and the fMP4 container flags.
+    // Keep the negotiated codec/audio/container, not the old output geometry,
+    // cadence or GOP. Match buildEncoderArgs' two-second GOP convention.
     encode.addAll(keptOutputOpts);
+    encode.add("-g"); encode.add(Integer.toString(Math.max(1, (int) Math.round(effRate)) * 2));
     // Re-impose the enhancement's VBR envelope (the base rate, if any, was dropped).
     long rate = plan.getBitrateKbps();
     if (rate <= 0) rate = 20000L;
