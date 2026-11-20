@@ -1,5 +1,5 @@
-This file outlines the overall directory layout for the SageTV codebase,
- what all the various components in it and what you need to build it on
+This file outlines the overall directory layout for the SageTV-NG codebase,
+ what are all the various components in it and what you need to build it on
  different platforms.
 
 Directory Layout
